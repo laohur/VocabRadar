@@ -187,9 +187,11 @@ body {
   gap: 7px;
   font-size: 14px;
   cursor: pointer;
-  padding-bottom: 8px;
 }
 .chk span { white-space: nowrap; }
+/* 第二百二十六次（用户："同一行，应当水平对齐"）：去掉 .chk 原有的 padding-bottom:8px——
+   它使复选框在 .field-row（flex-end）中比同行的输入框/下拉整体高出 8px，造成行内错位；
+   去掉后复选框与输入框底边严格对齐。 */
 /* 第二百二十三次：不可选复选框——Firefox 无内置翻译的「浏览器自身」、未内置语言包的 OCR 语言
    （JS 加 .disabled 类 + input[disabled]；不用 :has() 是 Firefox 115 不支持） */
 .chk.disabled { opacity: 0.45; cursor: not-allowed; }
@@ -219,11 +221,18 @@ body {
 #textStyleGrid,
 #annStyleGrid,
 #vannStyleGrid { grid-template-columns: repeat(5, 1fr); }
-/* 第二百二十三次（用户："文本样式留白过多应该缩短，每行多列一个"）：字幕文字样式网格
-   3→4 列并压缩卡片留白（padding/gap/demo 高度），规则限定本网格、不影响前三栏 */
+/* 第二百二十三次（用户："文本样式留白过多应该缩短，每行多列一个"）：字幕文字样式网格 3→4 列 */
+/* 第二百二十六次（用户："文本样式逼仄，底框应当短些高点，同样尺寸"）：样式卡底框改为统一
+   窄高尺寸——不再撑满整列（逼仄感来源），窄而高的灰底框居中、样例文字居中，全部卡片同尺寸 */
 #subtitleStyleGrid { grid-template-columns: repeat(4, 1fr); gap: 8px; }
 #subtitleStyleGrid .style-card { padding: 5px; gap: 4px; }
-#subtitleStyleGrid .style-card .demo { min-height: 26px; }
+#subtitleStyleGrid .style-card .demo {
+  width: 78%;
+  height: 44px;
+  min-height: 44px;
+  margin: 0 auto;
+  font-size: 12px;
+}
 @media (max-width: 720px) {
   .style-grid { grid-template-columns: repeat(2, 1fr); }
   /* 窄屏回退 2 列需显式覆盖（#subtitleStyleGrid 的 4 列特异性高于 .style-grid） */

@@ -105,21 +105,19 @@
               <input id="llmApiKey" type="password" placeholder="sk-...">
             </div>
           </div>
+          <!-- 第二百二十六次（用户："两个提示词，背景最大长度，都应当一行"）：三字段合并同一行，
+               标签缩短、完整说明挪入悬浮提示（data-title-key）。 -->
           <div class="field-row">
-            <div class="field field-wide">
-              <label for="chatWordPrompt" data-key="fieldChatWordPrompt">单词类查询提示词（{} = 选中文本，{lang} = 释义语言）</label>
+            <div class="field" style="flex:1 1 220px;">
+              <label for="chatWordPrompt" data-key="fieldChatWordPrompt" data-title-key="tipChatWordPrompt">单词提示词</label>
               <input id="chatWordPrompt" type="text">
             </div>
-          </div>
-          <div class="field-row">
-            <div class="field field-wide">
-              <label for="chatSidebarPrompt" data-key="fieldChatSidebarPrompt">侧栏提示词（{lang} = 释义语言；正文作为上下文另行发送）</label>
+            <div class="field" style="flex:1 1 220px;">
+              <label for="chatSidebarPrompt" data-key="fieldChatSidebarPrompt" data-title-key="tipChatSidebarPrompt">侧栏提示词</label>
               <input id="chatSidebarPrompt" type="text">
             </div>
-          </div>
-          <div class="field-row">
-            <div class="field field-wide">
-              <label for="chatContextMaxBytes"><span data-key="fieldChatContextMax">送入对话的作为背景的网页/字幕正文至多</span></label>
+            <div class="field inline">
+              <label for="chatContextMaxBytes" data-title-key="tipChatContextMax"><span data-key="fieldChatContextMax">背景正文至多</span></label>
               <input id="chatContextMaxBytes" type="number" min="1000" step="1000" placeholder="10000">
               <span data-key="guideContextBytesSuffix">字节。</span>
             </div>
@@ -148,39 +146,39 @@
             <label class="chk"><input type="checkbox" id="transChLingva"><span data-key="transChLingva">Lingva</span></label>
           </div>
           <div class="sub-head" data-key="subHeadAsr">语音识别模型</div>
-          <!-- 第二百二十四次（用户："改为两行单选，细项各自铺开，默认本地，whisper-tiny是具体模型名称"）：
-               行1=引擎单选（本地/API，默认本地）；行2=细项铺开——本地为 whisper-* 具体模型名单选
-               （value 仍存 tiny/base/…，offscreen 的 SUPPORTED_MODELS 只认这些，显示名才带 whisper- 前缀），
-               API 为 OpenAI 兼容 地址/转写模型/Key。radio value 定名 local/api
-               （第二百二十五次由 'llm' 改名——名实相符，《命名清查》裁定；读侧兼容旧残留 'llm'）。
-               转写端点只有 OpenAI 兼容一种主流格式（Anthropic 无音频转写），故 API 细项不放格式单选。 -->
+          <!-- 第二百二十六次（用户："asr 两行单选，第一行是本地，whisper模型是下拉，第二行是api。ocr同理"）：
+               每行=引擎单选+该引擎细项（两行常驻、不再显隐切换）：
+               行1=本地○+Whisper 模型下拉（value 仍存 tiny/base/…，offscreen 的 SUPPORTED_MODELS 只认这些，
+               显示名带 whisper- 前缀）；行2=API○+OpenAI 兼容 地址/转写模型/Key（转写端点只有 OpenAI 兼容
+               一种主流格式，Anthropic 无音频转写，故无格式选项）。radio value 定名 local/api
+               （第二百二十五次由 'llm' 改名）。选中哪行即启用哪个引擎，未选行的细项仅作预配置。 -->
           <p class="style-desc" data-key="asrModelDesc">语音识别引擎：本地 Whisper（模型越大越准也越慢，首次使用需下载），或 OpenAI 兼容转写 API（填接口地址/模型名/Key）。与上面的对话模型互不相关。</p>
           <div class="field-row">
-            <span class="radio-label" data-key="fieldAsrEngine">ASR 引擎</span>
-            <label class="g-radio"><input type="radio" name="asrEngine" value="local" checked><span data-key="asrEngineLocal">本地（Whisper）</span></label>
-            <label class="g-radio"><input type="radio" name="asrEngine" value="api"><span data-key="asrEngineApi">API（OpenAI 兼容）</span></label>
+            <label class="g-radio"><input type="radio" name="asrEngine" value="local" checked><span data-key="asrEngineLocal">本地</span></label>
+            <div class="field inline">
+              <label for="asrModelSize" data-key="fieldAsrModel">Whisper 模型</label>
+              <select id="asrModelSize">
+                <option value="tiny">whisper-tiny</option>
+                <option value="tiny.en">whisper-tiny.en</option>
+                <option value="base">whisper-base</option>
+                <option value="base.en">whisper-base.en</option>
+                <option value="small">whisper-small</option>
+                <option value="small.en">whisper-small.en</option>
+                <option value="medium">whisper-medium</option>
+                <option value="medium.en">whisper-medium.en</option>
+                <option value="large-v3">whisper-large-v3</option>
+                <option value="turbo">whisper-large-v3-turbo</option>
+              </select>
+            </div>
           </div>
-          <div class="field-row" data-asr-local-cfg="1">
-            <span class="radio-label" data-key="fieldAsrModel">Whisper 模型</span>
-            <label class="g-radio"><input type="radio" name="asrModelSize" value="tiny"><span>whisper-tiny</span></label>
-            <label class="g-radio"><input type="radio" name="asrModelSize" value="tiny.en"><span>whisper-tiny.en</span></label>
-            <label class="g-radio"><input type="radio" name="asrModelSize" value="base"><span>whisper-base</span></label>
-            <label class="g-radio"><input type="radio" name="asrModelSize" value="base.en"><span>whisper-base.en</span></label>
-            <label class="g-radio"><input type="radio" name="asrModelSize" value="small"><span>whisper-small</span></label>
-            <label class="g-radio"><input type="radio" name="asrModelSize" value="small.en"><span>whisper-small.en</span></label>
-            <label class="g-radio"><input type="radio" name="asrModelSize" value="medium"><span>whisper-medium</span></label>
-            <label class="g-radio"><input type="radio" name="asrModelSize" value="medium.en"><span>whisper-medium.en</span></label>
-            <label class="g-radio"><input type="radio" name="asrModelSize" value="large-v3"><span>whisper-large-v3</span></label>
-            <label class="g-radio"><input type="radio" name="asrModelSize" value="turbo"><span>whisper-large-v3-turbo</span></label>
-          </div>
-          <div class="field-row" data-asr-api-cfg="1" style="display:none;">
-            <span class="radio-label" data-key="asrApiFmt">OpenAI 兼容格式</span>
+          <div class="field-row">
+            <label class="g-radio"><input type="radio" name="asrEngine" value="api"><span data-key="asrEngineApi">API</span></label>
             <div class="field inline">
               <label for="asrLlmBaseUrl" data-key="fieldLlmBaseUrl">接口地址</label>
               <input id="asrLlmBaseUrl" type="text" placeholder="https://api.openai.com/v1">
             </div>
             <div class="field inline">
-              <label for="asrLlmModel" data-key="fieldAsrLlmModel">LLM 转写模型</label>
+              <label for="asrLlmModel" data-key="fieldAsrLlmModel">转写模型</label>
               <input id="asrLlmModel" type="text" placeholder="whisper-1">
             </div>
             <div class="field inline">
@@ -189,28 +187,28 @@
             </div>
           </div>
           <div class="sub-head" data-key="subHeadOcr">OCR</div>
-          <!-- 第二百二十四次（用户："ocr同理改两行单选；三种语言界面 目标 释义，不要写死、不要特指，
-               默认全选"；并纠正 223 次误把语言名 English/中文 当复选框标签）：
-               行1=引擎单选（本地/API，默认本地）；行2=本地细项——三个复选框标签固定为角色名
-               界面/目标/释义（不随语言名变），各自的勾选"值"由 JS 按当前 界面语言/目标语言/释义语言
-               动态映射为 Tesseract 语言代码（renderOcrLangRow），storage 仍按代码存 ocrLanguages。
-               API 细项=格式单选（OpenAI 兼容/Anthropic，视觉识别两种后台均已实现）+地址/模型/Key。 -->
+          <!-- 第二百二十六次（用户："ocr同理"）：每行=引擎单选+该引擎细项（两行常驻）：
+               行1=本地○+Tesseract 语言三复选（标签固定为角色名 界面/目标/释义，不随语言名变、
+               不要特指、默认全选；各自的勾选"值"由 JS 按当前 界面语言/目标语言/释义语言 动态映射
+               为 Tesseract 语言代码，renderOcrLangRow）；行2=API○+格式下拉（OpenAI 兼容/Anthropic，
+               视觉识别两种后台均已实现）+地址/模型/Key。 -->
           <p class="style-desc" data-key="ocrEngineDesc">截图/视频帧的文字识别引擎：本地 Tesseract（在界面/目标/释义三种语言中勾选要识别的语言），或大模型视觉识别 API（需模型支持图片输入）。</p>
-          <div class="field-row">
-            <span class="radio-label" data-key="fieldOcrEngine">OCR 引擎</span>
-            <label class="g-radio"><input type="radio" name="ocrEngine" value="tesseract" checked><span data-key="ocrEngineLocal">本地（Tesseract）</span></label>
-            <label class="g-radio"><input type="radio" name="ocrEngine" value="api"><span data-key="ocrEngineApi">API（视觉识别）</span></label>
-          </div>
-          <div class="field-row" data-ocr-local-cfg="1" id="ocrLangRow">
+          <div class="field-row" id="ocrLangRow">
+            <label class="g-radio"><input type="radio" name="ocrEngine" value="tesseract" checked><span data-key="ocrEngineLocal">本地</span></label>
             <span class="radio-label" data-key="fieldOcrLangs">Tesseract 语言</span>
             <label class="chk"><input type="checkbox" id="ocrLangUi"><span data-key="ocrRoleUi">界面</span></label>
             <label class="chk"><input type="checkbox" id="ocrLangTarget"><span data-key="ocrRoleTarget">目标</span></label>
             <label class="chk"><input type="checkbox" id="ocrLangMeaning"><span data-key="ocrRoleMeaning">释义</span></label>
           </div>
-          <div class="field-row" data-ocr-api-cfg="1" style="display:none;">
-            <span class="radio-label" data-key="ocrApiFmt">API 格式</span>
-            <label class="g-radio"><input type="radio" name="ocrLlmProvider" value="openai" checked><span data-key="fmtOpenai">OpenAI 兼容</span></label>
-            <label class="g-radio"><input type="radio" name="ocrLlmProvider" value="anthropic"><span data-key="fmtAnthropic">Anthropic</span></label>
+          <div class="field-row">
+            <label class="g-radio"><input type="radio" name="ocrEngine" value="api"><span data-key="ocrEngineApi">API</span></label>
+            <div class="field inline">
+              <label for="ocrLlmProvider" data-key="ocrApiFmt">API 格式</label>
+              <select id="ocrLlmProvider">
+                <option value="openai" data-key="fmtOpenai">OpenAI 兼容</option>
+                <option value="anthropic" data-key="fmtAnthropic">Anthropic</option>
+              </select>
+            </div>
             <div class="field inline">
               <label for="ocrLlmBaseUrl" data-key="fieldLlmBaseUrl">接口地址</label>
               <input id="ocrLlmBaseUrl" type="text">

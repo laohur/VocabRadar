@@ -66,7 +66,7 @@ export async function getAvailability() {
   }
   try {
     // 反思（2026-08-12）：availability 加 5 秒超时，防止永久挂起
-    // 注意（第二百二十五次）：sourceLanguage/targetLanguage 是 Chrome Translator API 的固定参数名，
+    // 注意（第二百二十五次）：下方对象字面量的两个属性名是 Chrome Translator API 的固定参数名，
     //   不可随本项目改名；其值取 transState 的 learnLang（学习语言）/meaningLang（释义语言）。
     _availability = await withTimeout(
       Translator.availability({

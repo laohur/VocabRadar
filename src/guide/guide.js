@@ -22,9 +22,13 @@
 //   本地 Whisper 为 whisper-tiny 等具体模型名单选（value 仍存 tiny/base/…）；②OCR 语言复选标签
 //   改回角色名 界面/目标/释义（223 次误用语言名 English/中文 当标签，用户纠正"不要特指"），
 //   值仍动态映射 tess 代码、默认全选；③翻译行提示词与 LLM 复选框确认同行（收窄防换行）。
-// 第二百二十五次（命名清查执行）：①存储语言键改名 sourceLanguage→learnLanguage、targetLanguage→
-//   meaningLanguage（后台 SW 顶层一次性迁移）；②引擎值 'llm' 定名 'api'（读侧兼容旧残留）；
-//   ③死键/死代码清理（subtitleOverlay、sidebarCollapsed、_asrFallbackMode、SEND_* 等）。
+// 第二百二十五次（命名清查执行）：①存储语言键按本义改名（学习语言/释义语言两键，全库统一）；
+//   ②引擎值 'llm' 定名 'api'（读侧兼容旧残留）；③死键/死代码清理（subtitleOverlay、
+//   sidebarCollapsed、_asrFallbackMode、SEND_* 等）。
+// 第二百二十六次（用户反馈）：①旧键迁移块删除（升级用户语言回落默认，需重选一次）；
+//   ②字幕文字样式卡底框改统一窄高尺寸；③字段行水平对齐（.chk 去底部内边距）；
+//   ④两个提示词与背景正文上限合并为一行；⑤ASR/OCR 改为"每行=引擎单选+细项"两行式
+//   （行1 本地+Whisper 下拉，行2 API+地址/模型/Key；行1 细项=语言复选，行2 细项=格式+地址/模型/Key）。
 
 import {
   initLang, setLang, t,
@@ -102,15 +106,13 @@ const MSG = {
   fieldLlmModel: { en: 'Model', zh: '模型名' },
   fieldLlmBaseUrl: { en: 'Endpoint', zh: '接口地址' },
   fieldLlmApiKey: { en: 'API Key', zh: 'API Key' },
-  // 第一百八十四次：默认提示词拆两套 —— 单词类查询（右键查询、点开的单词）与侧栏（正文/字幕）
-  fieldChatWordPrompt: {
-    en: 'Chat prompt for words ({} = selected text, {lang} = meaning language)',
-    zh: '单词类查询提示词（{} = 选中文本，{lang} = 释义语言）'
-  },
-  fieldChatSidebarPrompt: {
-    en: 'Chat prompt for sidebars ({lang} = meaning language; body text is sent as context)',
-    zh: '侧栏提示词（{lang} = 释义语言；正文作为上下文另行发送）'
-  },
+  // 第二百二十六次（用户："两种提示词，背景最大长度，都应当一行"）：标签缩短、
+  //   完整占位符说明挪入悬浮提示（data-title-key），三字段同处一行。
+  fieldChatWordPrompt: { en: 'Word prompt', zh: '单词提示词' },
+  fieldChatSidebarPrompt: { en: 'Sidebar prompt', zh: '侧栏提示词' },
+  tipChatWordPrompt: { en: '{} = selected text; {lang} = meaning language', zh: '{} = 选中文本，{lang} = 释义语言' },
+  tipChatSidebarPrompt: { en: '{lang} = meaning language; the page/subtitle text is sent as context', zh: '{lang} = 释义语言；正文作为上下文另行发送' },
+  tipChatContextMax: { en: 'Background (web/subtitle text) sent to the chat: at most this many bytes', zh: '送入对话的作为背景的网页/字幕正文至多 N 字节' },
   groupTextHint: { en: 'Word Hints on Pages', zh: '网页生词提示' },
   groupWebSidebar: { en: 'Text Sidebar', zh: '文本侧栏' },
   groupSidebar: { en: 'Video Sidebar', zh: '视频侧栏' },
@@ -122,14 +124,14 @@ const MSG = {
   // 第二百二十四次：Whisper 模型行为单选行标签（选项为 whisper-tiny 等具体模型名，语言中立不走 i18n）
   fieldAsrModel: { en: 'Whisper model', zh: 'Whisper 模型' },
   // 第二百一十二次：对话上下文字段随界面语言（用户："界面语言是啥就用啥语言"）
-  fieldChatContextMax: { en: 'Background (web/subtitle text) sent to the chat: at most', zh: '送入对话的作为背景的网页/字幕正文至多' },
+  fieldChatContextMax: { en: 'Background text at most', zh: '背景正文至多' },
   guideContextBytesSuffix: { en: 'bytes.', zh: '字节。' },
   // 第二百二十三次（用户："翻译行挪入模型分组；OCR 引擎改下拉两行式"）：
   //   subHeadTrans/transDesc 为翻译小节标题与说明；OCR 引擎下拉选项 ocrEngineLocal/ocrEngineApi；
   //   原 fieldTransChannels 行标签文案并入 transDesc（键删除）；ocrLanguages 复选动态渲染（不写死）。
-  fieldOcrEngine: { en: 'OCR Engine', zh: 'OCR 引擎' },
-  ocrEngineLocal: { en: 'Local (Tesseract)', zh: '本地（Tesseract）' },
-  ocrEngineApi: { en: 'API (vision LLM)', zh: 'API（视觉识别）' },
+  // 第二百二十六次：引擎单选文字精简为 本地/API；fieldOcrEngine 行标签键随行结构删除。
+  ocrEngineLocal: { en: 'Local', zh: '本地' },
+  ocrEngineApi: { en: 'API', zh: 'API' },
   fieldOcrLangs: { en: 'Tesseract languages', zh: 'Tesseract 语言' },
   // 第二百二十四次（用户："界面 目标 释义，不要写死、不要特指，默认全选"）：OCR 语言复选的角色名标签
   //   ——标签恒为角色名，勾选"值"由 JS 按当前 界面/目标/释义 语言动态映射 tess 代码
@@ -153,14 +155,12 @@ const MSG = {
   transChBaidu: { en: 'Baidu', zh: '百度翻译' },
   transChBing: { en: 'Bing', zh: 'Bing' },
   transChLingva: { en: 'Lingva', zh: 'Lingva' },
-  // 第二百二十三次（用户："ASR/OCR 引擎改下拉两行式"）：asrEngineLocal/asrEngineApi 为下拉选项；
-  //   转写端点只有 OpenAI 兼容一种主流格式（Anthropic 无音频转写、后台直接报错），故 ASR 的 API
-  //   细项不放格式下拉；OCR 视觉识别 OpenAI/Anthropic 两种均已实现，故其 API 细项带格式下拉。
-  fieldAsrEngine: { en: 'ASR Engine', zh: 'ASR 引擎' },
-  asrEngineLocal: { en: 'Local (Whisper)', zh: '本地（Whisper）' },
-  asrEngineApi: { en: 'API (OpenAI-compatible)', zh: 'API（OpenAI 兼容）' },
-  asrApiFmt: { en: 'OpenAI-compatible format', zh: 'OpenAI 兼容格式' },
-  fieldAsrLlmModel: { en: 'LLM Transcription Model', zh: 'LLM 转写模型' },
+  // 第二百二十六次（用户："asr 两行单选，第一行是本地，whisper模型是下拉，第二行是api。ocr同理"）：
+  //   引擎单选文字精简为 本地/API（细项标签与说明承载 Whisper/Tesseract 语境）；
+  //   fieldAsrEngine/fieldOcrEngine/asrApiFmt 三个行标签键随行结构删除。
+  asrEngineLocal: { en: 'Local', zh: '本地' },
+  asrEngineApi: { en: 'API', zh: 'API' },
+  fieldAsrLlmModel: { en: 'Transcription model', zh: '转写模型' },
   ocrApiFmt: { en: 'API format', zh: 'API 格式' },
   fmtOpenai: { en: 'OpenAI-compatible', zh: 'OpenAI 兼容' },
   fmtAnthropic: { en: 'Anthropic', zh: 'Anthropic' },
@@ -752,26 +752,22 @@ function renderAll(res) {
   $('annotateOov').checked = !!res.annotateOov;
   // 第二百二十五次：引擎存储值定名 'api'（与 UI 词、语义一致，《命名清查》裁定）。
   // 兼容读旧残留：223~224 次存过 'llm'，读侧归一化为 'api' 并回写一次（同样式 id 清洗模式）。
+  // 第二百二十六次：每行=引擎单选+该引擎细项（两行常驻），不再做细项行显隐切换。
   const asrEng = (res.asrEngine === 'llm' || res.asrEngine === 'api') ? 'api' : 'local';
   if (res.asrEngine === 'llm') chrome.storage.local.set({ asrEngine: 'api' });
   document.querySelectorAll('input[name="asrEngine"]').forEach((r) => { r.checked = (r.value === asrEng); });
-  document.querySelector('[data-asr-api-cfg]').style.display = (asrEng === 'api') ? '' : 'none';
-  document.querySelector('[data-asr-local-cfg]').style.display = (asrEng === 'api') ? 'none' : '';
   const ocrEng = (res.ocrEngine === 'llm' || res.ocrEngine === 'api') ? 'api' : 'tesseract';
   if (res.ocrEngine === 'llm') chrome.storage.local.set({ ocrEngine: 'api' });
   document.querySelectorAll('input[name="ocrEngine"]').forEach((r) => { r.checked = (r.value === ocrEng); });
-  document.querySelector('[data-ocr-api-cfg]').style.display = (ocrEng === 'api') ? '' : 'none';
-  document.querySelector('[data-ocr-local-cfg]').style.display = (ocrEng === 'api') ? 'none' : '';
   // OCR 本地语言复选（界面/目标/释义三角色，值动态映射 tess 代码，默认全选——见 renderOcrLangRow）
   renderOcrLangRow(res);
   // ASR API 细项回填（地址/Key 此前无 UI；模型名保留 whisper-1 兜底）
   $('asrLlmBaseUrl').value = res.asrLlmBaseUrl || '';
   $('asrLlmApiKey').value = res.asrLlmApiKey || '';
   $('asrLlmModel').value = res.asrLlmModel || 'whisper-1';
-  // OCR API 细项回填（格式单选 openai/anthropic，缺省 openai；地址/模型 placeholder 随格式给预置值）
-  const ocrFmt = (res.ocrLlmProvider === 'anthropic') ? 'anthropic' : 'openai';
-  document.querySelectorAll('input[name="ocrLlmProvider"]').forEach((r) => { r.checked = (r.value === ocrFmt); });
-  applyOcrProviderHints(ocrFmt);
+  // OCR API 细项回填（格式下拉 openai/anthropic，缺省 openai；地址/模型 placeholder 随格式给预置值）
+  $('ocrLlmProvider').value = (res.ocrLlmProvider === 'anthropic') ? 'anthropic' : 'openai';
+  applyOcrProviderHints($('ocrLlmProvider').value);
   $('ocrLlmBaseUrl').value = res.ocrLlmBaseUrl || '';
   $('ocrLlmModel').value = res.ocrLlmModel || '';
   $('ocrLlmApiKey').value = res.ocrLlmApiKey || '';
@@ -804,14 +800,9 @@ function renderAll(res) {
   _setRadio('webSidebarAnnMode', res.webSidebarAnnMode || 'side');
   _setRadio('videoSidebarAnnMode', res.videoSidebarAnnMode || 'side');
   _setRadio('videoOverlayAnnMode', res.videoOverlayAnnMode || 'side');
-  // Whisper 模型单选回填（radio value 仍为 tiny/base/…；storage 残留 offscreen 不支持的值时回落 base）
-  const asrSize = res.asrModelSize || 'base';
-  let asrSizeHit = false;
-  document.querySelectorAll('input[name="asrModelSize"]').forEach((r) => { r.checked = (r.value === asrSize); if (r.checked) asrSizeHit = true; });
-  if (!asrSizeHit) {
-    const fb = document.querySelector('input[name="asrModelSize"][value="base"]');
-    if (fb) fb.checked = true;
-  }
+  // Whisper 模型下拉回填（第二百二十六次：由单选铺开改回下拉；storage 残留 offscreen 不支持的值时回落 base）
+  $('asrModelSize').value = res.asrModelSize || 'base';
+  if (!$('asrModelSize').value) $('asrModelSize').value = 'base';
   // 第一百零二次：asrFirstChunkSec 引导页控件已移除（唯一来源 src/data/config.json）
 
   // 模型行（第一百七十次）：来源下拉 + API 配置回填
@@ -1163,41 +1154,29 @@ async function init() {
     e.target.value = v;
     chrome.storage.local.set({ chatContextMaxBytes: v }, () => log('对话上下文上限(字节)=', v));
   });
-  // 第二百二十四次：引擎/Whisper 模型/OCR 格式均改单选（radio）——细项行随选中显隐与保存。
+  // 第二百二十六次：引擎单选（每行=引擎+该引擎细项，两行常驻，无显隐联动）——变更只保存。
   // 第二百二十五次：radio value 定名 local/api（原 'llm'）。
   document.querySelectorAll('input[name="asrEngine"]').forEach((r) => {
     r.addEventListener('change', () => {
       if (!r.checked) return;
-      const v = r.value;
-      chrome.storage.local.set({ asrEngine: v }, () => log('ASR 引擎=', v));
-      document.querySelector('[data-asr-api-cfg]').style.display = (v === 'api') ? '' : 'none';
-      document.querySelector('[data-asr-local-cfg]').style.display = (v === 'api') ? 'none' : '';
+      chrome.storage.local.set({ asrEngine: r.value }, () => log('ASR 引擎=', r.value));
     });
   });
   document.querySelectorAll('input[name="ocrEngine"]').forEach((r) => {
     r.addEventListener('change', () => {
       if (!r.checked) return;
-      const v = r.value;
-      chrome.storage.local.set({ ocrEngine: v }, () => log('OCR 引擎=', v));
-      document.querySelector('[data-ocr-api-cfg]').style.display = (v === 'api') ? '' : 'none';
-      document.querySelector('[data-ocr-local-cfg]').style.display = (v === 'api') ? 'none' : '';
+      chrome.storage.local.set({ ocrEngine: r.value }, () => log('OCR 引擎=', r.value));
     });
   });
-  // Whisper 模型单选（radio value 保持 tiny/base/…，与 offscreen SUPPORTED_MODELS 一致）
-  document.querySelectorAll('input[name="asrModelSize"]').forEach((r) => {
-    r.addEventListener('change', () => {
-      if (!r.checked) return;
-      chrome.storage.local.set({ asrModelSize: r.value }, () => log('ASR 模型=', r.value));
-    });
+  // Whisper 模型下拉（value 保持 tiny/base/…，与 offscreen SUPPORTED_MODELS 一致）
+  $('asrModelSize').addEventListener('change', (e) => {
+    chrome.storage.local.set({ asrModelSize: e.target.value }, () => log('ASR 模型=', e.target.value));
   });
-  // OCR API 格式单选（openai/anthropic，视觉识别两种后台均已实现）
-  document.querySelectorAll('input[name="ocrLlmProvider"]').forEach((r) => {
-    r.addEventListener('change', () => {
-      if (!r.checked) return;
-      const v = r.value;
-      chrome.storage.local.set({ ocrLlmProvider: v }, () => log('OCR API 格式=', v));
-      applyOcrProviderHints(v);
-    });
+  // OCR API 格式下拉（openai/anthropic，视觉识别两种后台均已实现）
+  $('ocrLlmProvider').addEventListener('change', (e) => {
+    const v = (e.target.value === 'anthropic') ? 'anthropic' : 'openai';
+    chrome.storage.local.set({ ocrLlmProvider: v }, () => log('OCR API 格式=', v));
+    applyOcrProviderHints(v);
   });
   // ASR API 细项（OpenAI 兼容转写）：地址/模型/Key 保存（此前 asrLlmModel 无保存监听——缺口补齐）
   $('asrLlmBaseUrl').addEventListener('change', (e) => {

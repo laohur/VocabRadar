@@ -74,25 +74,11 @@ function log(...args) {
   } catch (_) { /* ignore */ }
 })();
 
-// 第二百二十五次一次性迁移：语言存储键改名（《命名清查》裁定，名实相符）——
-//   sourceLanguage（要学习的目标语言）→ learnLanguage
-//   targetLanguage（释义/注释语言）→ meaningLanguage
-// 幂等：新键已存在则跳过；旧键保留在 storage 不删（已无任何代码读取，降级友好）。
-// SW 顶层每次唤醒都执行，早于任何消息处理；扩展更新时 onInstalled 更会先行触发。
-// 唯一允许出现旧键名的地方就是本块（迁移代码不得不提旧名）。
-(async () => {
-  try {
-    const get = (keys) => new Promise((r) => chrome.storage.local.get(keys, r));
-    const old = await get(['sourceLanguage', 'targetLanguage', 'learnLanguage', 'meaningLanguage']);
-    const patch = {};
-    if (old.learnLanguage === undefined && old.sourceLanguage !== undefined) patch.learnLanguage = old.sourceLanguage;
-    if (old.meaningLanguage === undefined && old.targetLanguage !== undefined) patch.meaningLanguage = old.targetLanguage;
-    if (Object.keys(patch).length) {
-      await new Promise((r) => chrome.storage.local.set(patch, r));
-      console.log('[VocabRadar][sw] 语言键已迁移:', JSON.stringify(patch));
-    }
-  } catch (_) { /* 迁移失败不阻塞启动；各读取端有默认值兜底 */ }
-})();
+// 第二百二十六次：应用户要求删除上一次的旧语言键迁移块——storage 旧键名相关代码全部归零。
+//   代价（如实说明）：226 次之前版本升级上来的用户，语言设定回落默认值（学习语言 en、
+//   释义语言 zh），需在引导页/popup 重选一次。代码中仍保留的两处语言字样只剩
+//   Chrome 内置 Translator API 的官方参数名（lib/translator/builtin-translator.js 与
+//   popup/popup.js 的 availability/create 调用），属外部 API 契约，不可改名。
 
 const DEFAULT_SETTINGS = {
   learnLanguage: 'en',
