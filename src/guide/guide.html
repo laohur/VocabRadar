@@ -96,7 +96,8 @@
               <label for="llmModel" data-key="fieldLlmModel">模型名</label>
               <input id="llmModel" type="text" placeholder="">
             </div>
-            <div class="field">
+            <!-- 第二百二十七次（用户："空大，网址可以长点"）：接口地址弹性加长，吃掉行尾空白 -->
+            <div class="field" style="flex:1 1 240px;">
               <label for="llmBaseUrl" data-key="fieldLlmBaseUrl">接口地址</label>
               <input id="llmBaseUrl" type="text" placeholder="">
             </div>
@@ -105,19 +106,23 @@
               <input id="llmApiKey" type="password" placeholder="sk-...">
             </div>
           </div>
-          <!-- 第二百二十六次（用户："两个提示词，背景最大长度，都应当一行"）：三字段合并同一行，
-               标签缩短、完整说明挪入悬浮提示（data-title-key）。 -->
+          <!-- 第二百二十七次（用户："两种提示词，背景最大长度，都应当各自一行"）：改回三行，
+               恢复完整标签（{}={{lang}} 说明直接写在标签上，不再用悬浮提示）。 -->
           <div class="field-row">
-            <div class="field" style="flex:1 1 220px;">
-              <label for="chatWordPrompt" data-key="fieldChatWordPrompt" data-title-key="tipChatWordPrompt">单词提示词</label>
+            <div class="field field-wide">
+              <label for="chatWordPrompt" data-key="fieldChatWordPrompt">单词类查询提示词（{} = 选中文本，{lang} = 释义语言）</label>
               <input id="chatWordPrompt" type="text">
             </div>
-            <div class="field" style="flex:1 1 220px;">
-              <label for="chatSidebarPrompt" data-key="fieldChatSidebarPrompt" data-title-key="tipChatSidebarPrompt">侧栏提示词</label>
+          </div>
+          <div class="field-row">
+            <div class="field field-wide">
+              <label for="chatSidebarPrompt" data-key="fieldChatSidebarPrompt">侧栏提示词（{lang} = 释义语言；正文作为上下文另行发送）</label>
               <input id="chatSidebarPrompt" type="text">
             </div>
-            <div class="field inline">
-              <label for="chatContextMaxBytes" data-title-key="tipChatContextMax"><span data-key="fieldChatContextMax">背景正文至多</span></label>
+          </div>
+          <div class="field-row">
+            <div class="field field-wide">
+              <label for="chatContextMaxBytes"><span data-key="fieldChatContextMax">送入对话的作为背景的网页/字幕正文至多</span></label>
               <input id="chatContextMaxBytes" type="number" min="1000" step="1000" placeholder="10000">
               <span data-key="guideContextBytesSuffix">字节。</span>
             </div>
@@ -130,9 +135,12 @@
           <p class="style-desc" data-key="transDesc">生词释义的在线翻译渠道（勾选启用，按序回退）：LLM 渠道走上方对话大模型，默认不选；其余渠道默认全启用。</p>
           <div class="field-row">
             <label class="chk"><input type="checkbox" id="transChLlm"><span data-key="transChLlm">LLM</span></label>
-            <!-- 第二百二十四次：提示词与 LLM 复选框同行（用户确认）；flex-basis 收窄到 220px，
-                 确保窄窗口下也不换行拆到两行 -->
-            <input id="llmTranslatePrompt" type="text" placeholder="Please translate &quot;{}&quot; in {lang}." style="flex:1 1 220px; min-width:180px;">
+            <!-- 第二百二十七次（用户："翻译 提示词黑框，跟别的不一样"）：原输入框裸放在 .field-row 里
+                 拿不到 .field input 的统一外观（默认浏览器边框发黑）——包进 .field 走统一样式；
+                 与 LLM 复选框同行不变。 -->
+            <div class="field" style="flex:1 1 320px; min-width:240px;">
+              <input id="llmTranslatePrompt" type="text" placeholder="Please translate &quot;{}&quot; in {lang}.">
+            </div>
           </div>
           <div class="field-row">
             <label class="chk"><input type="checkbox" id="transChBuiltin"><span data-key="transChBuiltin">浏览器自身</span></label>
@@ -173,7 +181,7 @@
           </div>
           <div class="field-row">
             <label class="g-radio"><input type="radio" name="asrEngine" value="api"><span data-key="asrEngineApi">API</span></label>
-            <div class="field inline">
+            <div class="field inline" style="flex:1 1 200px;">
               <label for="asrLlmBaseUrl" data-key="fieldLlmBaseUrl">接口地址</label>
               <input id="asrLlmBaseUrl" type="text" placeholder="https://api.openai.com/v1">
             </div>
@@ -206,10 +214,10 @@
               <label for="ocrLlmProvider" data-key="ocrApiFmt">API 格式</label>
               <select id="ocrLlmProvider">
                 <option value="openai" data-key="fmtOpenai">OpenAI 兼容</option>
-                <option value="anthropic" data-key="fmtAnthropic">Anthropic</option>
+                <option value="anthropic" data-key="fmtAnthropic">Anthropic 兼容</option>
               </select>
             </div>
-            <div class="field inline">
+            <div class="field inline" style="flex:1 1 200px;">
               <label for="ocrLlmBaseUrl" data-key="fieldLlmBaseUrl">接口地址</label>
               <input id="ocrLlmBaseUrl" type="text">
             </div>

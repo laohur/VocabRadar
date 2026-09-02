@@ -106,13 +106,17 @@ const MSG = {
   fieldLlmModel: { en: 'Model', zh: '模型名' },
   fieldLlmBaseUrl: { en: 'Endpoint', zh: '接口地址' },
   fieldLlmApiKey: { en: 'API Key', zh: 'API Key' },
-  // 第二百二十六次（用户："两种提示词，背景最大长度，都应当一行"）：标签缩短、
-  //   完整占位符说明挪入悬浮提示（data-title-key），三字段同处一行。
-  fieldChatWordPrompt: { en: 'Word prompt', zh: '单词提示词' },
-  fieldChatSidebarPrompt: { en: 'Sidebar prompt', zh: '侧栏提示词' },
-  tipChatWordPrompt: { en: '{} = selected text; {lang} = meaning language', zh: '{} = 选中文本，{lang} = 释义语言' },
-  tipChatSidebarPrompt: { en: '{lang} = meaning language; the page/subtitle text is sent as context', zh: '{lang} = 释义语言；正文作为上下文另行发送' },
-  tipChatContextMax: { en: 'Background (web/subtitle text) sent to the chat: at most this many bytes', zh: '送入对话的作为背景的网页/字幕正文至多 N 字节' },
+  // 第二百二十七次（用户："两种提示词，背景最大长度，都应当各自一行"）：改回各自一行，
+  //   恢复完整标签（226 次的悬浮提示键 tipChat* 随之删除）；"Anthropic 兼容"表述对齐
+  //   "OpenAI 兼容"（自定义网关同样可用，并非只有官方端点）。
+  fieldChatWordPrompt: {
+    en: 'Chat prompt for words ({} = selected text, {lang} = meaning language)',
+    zh: '单词类查询提示词（{} = 选中文本，{lang} = 释义语言）'
+  },
+  fieldChatSidebarPrompt: {
+    en: 'Chat prompt for sidebars ({lang} = meaning language; body text is sent as context)',
+    zh: '侧栏提示词（{lang} = 释义语言；正文作为上下文另行发送）'
+  },
   groupTextHint: { en: 'Word Hints on Pages', zh: '网页生词提示' },
   groupWebSidebar: { en: 'Text Sidebar', zh: '文本侧栏' },
   groupSidebar: { en: 'Video Sidebar', zh: '视频侧栏' },
@@ -124,7 +128,7 @@ const MSG = {
   // 第二百二十四次：Whisper 模型行为单选行标签（选项为 whisper-tiny 等具体模型名，语言中立不走 i18n）
   fieldAsrModel: { en: 'Whisper model', zh: 'Whisper 模型' },
   // 第二百一十二次：对话上下文字段随界面语言（用户："界面语言是啥就用啥语言"）
-  fieldChatContextMax: { en: 'Background text at most', zh: '背景正文至多' },
+  fieldChatContextMax: { en: 'Background (web/subtitle text) sent to the chat: at most', zh: '送入对话的作为背景的网页/字幕正文至多' },
   guideContextBytesSuffix: { en: 'bytes.', zh: '字节。' },
   // 第二百二十三次（用户："翻译行挪入模型分组；OCR 引擎改下拉两行式"）：
   //   subHeadTrans/transDesc 为翻译小节标题与说明；OCR 引擎下拉选项 ocrEngineLocal/ocrEngineApi；
@@ -163,7 +167,7 @@ const MSG = {
   fieldAsrLlmModel: { en: 'Transcription model', zh: '转写模型' },
   ocrApiFmt: { en: 'API format', zh: 'API 格式' },
   fmtOpenai: { en: 'OpenAI-compatible', zh: 'OpenAI 兼容' },
-  fmtAnthropic: { en: 'Anthropic', zh: 'Anthropic' },
+  fmtAnthropic: { en: 'Anthropic-compatible', zh: 'Anthropic 兼容' },   // 第二百二十七次：对齐"OpenAI 兼容"表述（自定义网关可用，非仅官方端点）
   // 第一百零二次：asrFirstChunkSec 引导页输入已按用户裁定移除（唯一来源 config.json），
   // MSG 词条 fieldAsrFirstChunk/asrFirstChunkDesc 一并删除
   chkRareWords: { en: 'Annotate out-of-vocabulary words', zh: '注释表外词' },
