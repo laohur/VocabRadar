@@ -214,8 +214,10 @@ body {
 .sub-head + .style-desc { margin-top: 6px; }
 
 /* === 样式网格 === */
-/* 第二百二十八次：说明文字与上下控件的间距收紧（同栏内语义相近应贴近） */
-.style-desc { margin: 8px 0 8px; font-size: 13px; color: var(--g-muted); }
+/* 第二百二十八次：说明文字与上下控件的间距收紧（同栏内语义相近应贴近）。
+   第二百二十九次（用户："引导页正文的文字咋都是灰色"）：说明文字改回正文色——
+   灰色只留给字段标签这类次级信息。 */
+.style-desc { margin: 8px 0 8px; font-size: 13px; color: var(--g-text); }
 .style-grid {
   display: grid;
   grid-template-columns: repeat(3, 1fr);

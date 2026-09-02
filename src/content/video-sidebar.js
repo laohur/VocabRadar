@@ -32,7 +32,7 @@ import { warmYouTubeCaptionInnertube } from '../lib/subtitle/index.js';
 import { initAsrProgress, showASRProgress, hideASRProgress, updateASRProgressFill } from './vs-asr-progress.js';
 // 第一百二十四次：顶行统一构建器——视频/文本侧栏共用同一代码文件（用户裁定）
 import { buildTopbarHTML, ensureTopbarCss } from '../lib/sidebar-topbar.js';
-import { initLang, getLang, setLang, onLangChange, t, UI_LANGS, TRANSLATE_LANGS, LANG_NAMES } from '../lib/i18n.js';
+import { initLang, getLang, setLang, onLangChange, t, UI_LANGS, TRANSLATE_LANGS, LANG_NAMES, LANG_NAMES_EN } from '../lib/i18n.js';
 import { summarize } from '../lib/summarizer.js';
 import { startASR, stopASR, isASRReady, hasASRCache, getCachedSubtitles, getASRCoverage, getASRFrontier, getASRStats } from '../lib/asr-client.js';
 // 第九十六次：下载音频按钮——B站音轨信息（urls[]/标题）；YouTube 走 youtube-audio.js 按需动态 import
@@ -600,6 +600,7 @@ function bindEvents(options = {}) {
     uiLangSel.appendChild(opt);
   }
   // 填充目标/释义语言选项（42种）
+  // 第二百二十八次（用户："释义语言统一英文名称"）：释义下拉用英文名，学习下拉仍本地化名
   for (const lang of TRANSLATE_LANGS) {
     const opt1 = document.createElement('option');
     opt1.value = lang;
@@ -608,7 +609,7 @@ function bindEvents(options = {}) {
 
     const opt2 = document.createElement('option');
     opt2.value = lang;
-    opt2.textContent = LANG_NAMES[lang] || lang;
+    opt2.textContent = LANG_NAMES_EN[lang] || lang;
     tgtLangSel.appendChild(opt2);
   }
 

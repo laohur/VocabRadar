@@ -622,7 +622,20 @@ async function beginRecording(stream, kind) {
     recordBtn.textContent = '⏹ ' + t('ws.stop');
   }
 
-  const useBrowserAsr = (kind === 'audio' || kind === 'video');
+  // 第二百二十九次（用户："实时语言识别的模型优先级，LLM 浏览器 本地模型，有啥用啥"）：
+  //   录音/录像的实时识别引擎按可用性择优——
+  //   ①LLM：引擎选了 API 且已配置 地址/Key → 走下方 START_ASR 分段管线（SW 按
+  //     asrEngine='api' 分流到 LLM 转写，实时分片）；
+  //   ②浏览器：SpeechRecognition 可用 → 浏览器实时识别（本分支）；
+  //   ③本地：其余情况（含浏览器不支持）→ 同一分段管线走本地 whisper。
+  //   旧版浏览器不支持时直接 return，识别静默落空（与原注释声称的"回退 Whisper"不符）。
+  let llmReady = false;
+  try {
+    const er = await chrome.storage.local.get({ asrEngine: 'local', asrLlmBaseUrl: '', asrLlmApiKey: '' });
+    llmReady = (er.asrEngine === 'api' || er.asrEngine === 'llm') && !!(er.asrLlmBaseUrl || er.asrLlmApiKey);
+  } catch (e) { /* 默认本地 */ }
+  const srSupported = !!(window.SpeechRecognition || window.webkitSpeechRecognition);
+  const useBrowserAsr = (kind === 'audio' || kind === 'video') && !llmReady && srSupported;
 
   if (useBrowserAsr) {
     if (S.msgListener) {

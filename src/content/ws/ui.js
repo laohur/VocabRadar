@@ -5,7 +5,7 @@
 // 说明：由 web-sidebar-impl.js 机械拆分而来，代码逐字保留，未改动任何逻辑。
 //       跨模块共享状态一律来自 ./core.js，写入走 core 导出的 set_xxx 接缝，绝不另存副本。
 
-import { LANG_NAMES, TRANSLATE_LANGS, UI_LANGS, setLang, t } from '../../lib/i18n.js';
+import { LANG_NAMES, LANG_NAMES_EN, TRANSLATE_LANGS, UI_LANGS, setLang, t } from '../../lib/i18n.js';
 import { buildTopbarHTML, ensureTopbarCss } from '../../lib/sidebar-topbar.js';
 import { SUBTITLE_TEXT_STYLES, findStyle } from '../../lib/styles.js';
 import { reviveSidebarIfPossible, startVideoController } from '../video-controller.js';
@@ -318,6 +318,7 @@ function bindLanguagePanel() {
   }
 
   // 填充目标/释义语言选项（42种）
+  // 第二百二十八次（用户："释义语言统一英文名称"）：释义下拉用英文名，学习下拉仍本地化名
   for (const lang of TRANSLATE_LANGS) {
     const opt1 = document.createElement('option');
     opt1.value = lang;
@@ -326,7 +327,7 @@ function bindLanguagePanel() {
 
     const opt2 = document.createElement('option');
     opt2.value = lang;
-    opt2.textContent = LANG_NAMES[lang] || lang;
+    opt2.textContent = LANG_NAMES_EN[lang] || lang;
     tgtLangSel.appendChild(opt2);
   }
 

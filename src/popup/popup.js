@@ -11,7 +11,7 @@
 //   3) loadSettings/detectTranslator/checkBilibiliLogin 失败时降级显示，不抛错；
 //   4) init 完成后显式移除 #popupLoading 提示，避免误判"没弹"。
 
-import { initLang, getLang, setLang, onLangChange, t, UI_LANGS, TRANSLATE_LANGS, LANG_NAMES } from '../lib/i18n.js';
+import { initLang, getLang, setLang, onLangChange, t, UI_LANGS, TRANSLATE_LANGS, LANG_NAMES, LANG_NAMES_EN } from '../lib/i18n.js';
 
 // 在 popup 顶部显示错误横幅（避免白屏无法诊断）
 function showPopupError(err) {
@@ -73,10 +73,13 @@ function populateTranslateLangOptions() {
     if (!sel) continue;
     // 已填充则跳过（防止重复填充）
     if (sel.options.length > 0) continue;
+    // 第二百二十八次（用户："释义语言统一英文名称"）：释义语言下拉用英文名，
+    //   学习语言下拉仍用本地化名（LANG_NAMES）。
+    const names = (id === 'meaningLanguage') ? LANG_NAMES_EN : LANG_NAMES;
     for (const lang of TRANSLATE_LANGS) {
       const opt = document.createElement('option');
       opt.value = lang;
-      opt.textContent = LANG_NAMES[lang] || lang;
+      opt.textContent = names[lang] || lang;
       sel.appendChild(opt);
     }
   }

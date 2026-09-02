@@ -120,11 +120,15 @@
               <input id="chatSidebarPrompt" type="text" style="flex:1 1 200px; min-width:200px;">
             </div>
           </div>
+          <!-- 第二百二十九次（用户："填空短些，右对齐"）：标签居左，短填空（120px、数字右对齐）
+               与"字节"后缀推到行尾右对齐 -->
           <div class="field-row">
-            <div class="field inline">
+            <div class="field inline" style="flex:1 1 100%;">
               <label for="chatContextMaxBytes"><span data-key="fieldChatContextMax">送入对话的作为背景的网页/字幕正文至多</span></label>
-              <input id="chatContextMaxBytes" type="number" min="1000" step="1000" placeholder="10000">
-              <span data-key="guideContextBytesSuffix">字节。</span>
+              <span style="margin-left:auto; display:inline-flex; align-items:center; gap:8px;">
+                <input id="chatContextMaxBytes" type="number" min="1000" step="1000" placeholder="10000" style="width:120px; text-align:right;">
+                <span data-key="guideContextBytesSuffix">字节。</span>
+              </span>
             </div>
           </div>
           <!-- 第二百二十三次（用户："翻译 后面跟着一排候选框，第一行LLM（默认没选）后跟提示词
@@ -181,15 +185,17 @@
           </div>
           <div class="field-row">
             <label class="g-radio"><input type="radio" name="asrEngine" value="api"><span data-key="asrEngineApi">API</span></label>
-            <div class="field inline" style="flex:1 1 200px;">
+            <!-- 第二百二十九次（用户："asr ocr api的网址默认长度翻倍，细项之间等距"）：
+                 地址弹性 2 倍（默认基准 300px），模型/Key 各 1 倍（150px），行内 gap 统一 10px 等距 -->
+            <div class="field inline" style="flex:2 1 300px;">
               <label for="asrLlmBaseUrl" data-key="fieldLlmBaseUrl">接口地址</label>
               <input id="asrLlmBaseUrl" type="text" placeholder="https://api.openai.com/v1">
             </div>
-            <div class="field inline">
+            <div class="field inline" style="flex:1 1 150px;">
               <label for="asrLlmModel" data-key="fieldAsrLlmModel">转写模型</label>
               <input id="asrLlmModel" type="text" placeholder="whisper-1">
             </div>
-            <div class="field inline">
+            <div class="field inline" style="flex:1 1 150px;">
               <label for="asrLlmApiKey" data-key="fieldLlmApiKey">API Key</label>
               <input id="asrLlmApiKey" type="password" placeholder="sk-...">
             </div>
@@ -220,15 +226,16 @@
                 <option value="anthropic" data-key="fmtAnthropic">Anthropic 兼容</option>
               </select>
             </div>
-            <div class="field inline" style="flex:1 1 200px;">
+            <!-- 第二百二十九次：地址弹性 2 倍（默认基准 300px），模型/Key 各 1 倍（150px），等距同上 -->
+            <div class="field inline" style="flex:2 1 300px;">
               <label for="ocrLlmBaseUrl" data-key="fieldLlmBaseUrl">接口地址</label>
               <input id="ocrLlmBaseUrl" type="text">
             </div>
-            <div class="field inline">
+            <div class="field inline" style="flex:1 1 150px;">
               <label for="ocrLlmModel" data-key="fieldLlmModel">模型名</label>
               <input id="ocrLlmModel" type="text">
             </div>
-            <div class="field inline">
+            <div class="field inline" style="flex:1 1 150px;">
               <label for="ocrLlmApiKey" data-key="fieldLlmApiKey">API Key</label>
               <input id="ocrLlmApiKey" type="password" placeholder="sk-...">
             </div>

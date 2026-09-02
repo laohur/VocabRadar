@@ -19,24 +19,41 @@
 //   - LANG_NAMES 扩展到全部42种语言，便于下拉菜单显示本地化名称
 //   - （第二百二十五次：旧别名 SUPPORTED_LANGS 已随命名清查删除，全库统一只用 UI_LANGS）
 
-// === UI 语言列表：前十大语言（按总使用人数） ===
+// === UI 语言列表：前十大语言（按总使用人数从大到小排，第二百二十八次调整 fr/ar 顺序） ===
 // 仅用于 #uiLangSelect 界面语言下拉菜单
 // 与 preprocess.py UI_LANGS 一致
-export const UI_LANGS = ['en', 'zh', 'hi', 'es', 'ar', 'fr', 'bn', 'pt', 'ru', 'ja'];
+export const UI_LANGS = ['en', 'zh', 'hi', 'es', 'fr', 'ar', 'bn', 'pt', 'ru', 'ja'];
 
 // （第二百二十五次：旧别名 SUPPORTED_LANGS 已删除——全库引用已统一为 UI_LANGS）
 
 // === 目标/释义语言列表：wordfreq 全部支持的语言（42种） ===
 // 用于 #learnLanguage 和 #meaningLanguage 下拉菜单
-// 与 preprocess.py 动态扫描的 small_*.msgpack.gz 文件列表一致
+// 与 preprocess.py 动态扫描的 small_*.msgpack.gz 文件列表一致（集合一致，顺序仅供展示）
 // 注：UI语言仅10种，但目标/释义语言扩展到42种（用户要求"几十种"）
+// 第二百二十八次（用户："三种语言列表都从规模往下排"）：按语言使用规模（总使用人数）
+//   从大到小排序，替代原字母序；仅影响下拉展示顺序，词典/词频按语言代码取用不受影响。
 export const TRANSLATE_LANGS = [
-  'ar', 'bg', 'bn', 'ca', 'cs', 'da', 'de', 'el', 'en', 'es',
-  'fa', 'fi', 'fil', 'fr', 'he', 'hi', 'hu', 'id', 'is', 'it',
-  'ja', 'ko', 'lt', 'lv', 'mk', 'ms', 'nb', 'nl', 'pl', 'pt',
-  'ro', 'ru', 'sh', 'sk', 'sl', 'sv', 'ta', 'tr', 'uk', 'ur',
-  'vi', 'zh'
+  'en', 'zh', 'hi', 'es', 'fr', 'ar', 'bn', 'pt', 'ru', 'ur',
+  'id', 'de', 'ja', 'tr', 'fil', 'vi', 'ta', 'ko', 'fa', 'it',
+  'ms', 'pl', 'uk', 'nl', 'ro', 'sh', 'el', 'hu', 'cs', 'sv',
+  'he', 'bg', 'da', 'fi', 'nb', 'sk', 'ca', 'lt', 'sl', 'mk',
+  'lv', 'is'
 ];
+
+// === 各语言英文名称（第二百二十八次，用户："释义语言统一英文名称"） ===
+// 释义语言下拉用英文名统一呈现（学习语言/界面语言下拉仍用本地化名 LANG_NAMES）。
+// 覆盖 TRANSLATE_LANGS 全部 42 种，键集合与之一致。
+export const LANG_NAMES_EN = {
+  en: 'English', zh: 'Chinese', hi: 'Hindi', es: 'Spanish', fr: 'French',
+  ar: 'Arabic', bn: 'Bengali', pt: 'Portuguese', ru: 'Russian', ur: 'Urdu',
+  id: 'Indonesian', de: 'German', ja: 'Japanese', tr: 'Turkish', fil: 'Filipino',
+  vi: 'Vietnamese', ta: 'Tamil', ko: 'Korean', fa: 'Persian', it: 'Italian',
+  ms: 'Malay', pl: 'Polish', uk: 'Ukrainian', nl: 'Dutch', ro: 'Romanian',
+  sh: 'Serbo-Croatian', el: 'Greek', hu: 'Hungarian', cs: 'Czech', sv: 'Swedish',
+  he: 'Hebrew', bg: 'Bulgarian', da: 'Danish', fi: 'Finnish', nb: 'Norwegian Bokmål',
+  sk: 'Slovak', ca: 'Catalan', lt: 'Lithuanian', sl: 'Slovenian', mk: 'Macedonian',
+  lv: 'Latvian', is: 'Icelandic'
+};
 
 // === 各语言的本地化名称（用于下拉菜单显示） ===
 // 反思（2026-08-02）：用户在自己母语中看到的语言名称，便于识别

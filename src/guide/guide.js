@@ -32,7 +32,7 @@
 
 import {
   initLang, setLang, t,
-  LANG_NAMES, UI_LANGS, TRANSLATE_LANGS
+  LANG_NAMES, LANG_NAMES_EN, UI_LANGS, TRANSLATE_LANGS
 } from '../lib/i18n.js';
 import {
   TEXT_STYLES, ANN_STYLES, VANN_STYLES,
@@ -299,12 +299,15 @@ function _setRadio(name, value) {
   if (el) el.checked = true;
 }
 
-function renderLangSelect(selectEl, langs, selected) {
+function renderLangSelect(selectEl, langs, selected, names) {
+  // 第二百二十八次：names 可选——释义语言下拉传 LANG_NAMES_EN 统一英文名（用户裁定），
+  // 其余下拉缺省用本地化名 LANG_NAMES。
+  const nameOf = names || LANG_NAMES;
   selectEl.innerHTML = '';
   for (const code of langs) {
     const opt = document.createElement('option');
     opt.value = code;
-    opt.textContent = LANG_NAMES[code] || code;
+    opt.textContent = nameOf[code] || code;
     opt.selected = (code === selected);
     selectEl.appendChild(opt);
   }
@@ -753,7 +756,7 @@ function renderAll(res) {
   // 语言控件
   renderLangSelect($('uiLang'), UI_LANGS, res.uiLanguage);
   renderLangSelect($('learnLanguage'), TRANSLATE_LANGS, res.learnLanguage);
-  renderLangSelect($('meaningLanguage'), TRANSLATE_LANGS, res.meaningLanguage);
+  renderLangSelect($('meaningLanguage'), TRANSLATE_LANGS, res.meaningLanguage, LANG_NAMES_EN);
   $('rankThreshold').value = res.rankThreshold;
   $('annotateOov').checked = !!res.annotateOov;
   // 第二百二十五次：引擎存储值定名 'api'（与 UI 词、语义一致，《命名清查》裁定）。
@@ -808,7 +811,12 @@ function renderAll(res) {
   _setRadio('videoOverlayAnnMode', res.videoOverlayAnnMode || 'side');
   // Whisper 模型下拉回填（第二百二十六次：由单选铺开改回下拉；storage 残留 offscreen 不支持的值时回落 base）
   $('asrModelSize').value = res.asrModelSize || 'base';
-  if (!$('asrModelSize').value) $('asrModelSize').value = 'base';
+  if (!$('asrModelSize').value) {
+    // 第二百二十九次：非法残留值（如下拉里见到页面 URL 之类的串）回落 base 并回写，
+    //   防止每次进入引导页都回落显示、storage 却永远是脏值。
+    $('asrModelSize').value = 'base';
+    chrome.storage.local.set({ asrModelSize: 'base' });
+  }
   // 第一百零二次：asrFirstChunkSec 引导页控件已移除（唯一来源 src/data/config.json）
 
   // 模型行（第一百七十次）：来源下拉 + API 配置回填
