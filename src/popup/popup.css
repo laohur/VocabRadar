@@ -1,0 +1,362 @@
+/* VocabRadar popup 设置面板样式
+ *
+ * 设计风格（2026-07-08 重构）：Material Design 3 + 马卡龙绿主题。
+ *   与 sidebar.css 共用同一套 MD3 设计令牌（马卡龙绿 tonal palette），
+ *   popup 为独立 HTML，在此单独声明 :root 变量。
+ *   - surface tonal elevation 划分层级，去掉 border 线条。
+ *   - 圆角 M3 shape scale（卡片 12px / 按钮 8px）。
+ *   - active/选中用 primary-container 浅马卡龙绿 + 深字。
+ */
+
+/* === MD3 马卡龙绿设计令牌（与 sidebar.css 一致）=== */
+:root {
+  --beaver-primary: #2e6b43;
+  --beaver-primary-dark: #1c4d32;
+  --beaver-primary-light: #a8e6cf;
+  --beaver-on-primary: #ffffff;
+  --beaver-on-primary-container: #0d2014;
+
+  --beaver-secondary-container: #d1e8d8;
+  --beaver-on-secondary-container: #0d2014;
+
+  --beaver-brown: #6d4c41;
+
+  --beaver-bg: #fbfdf9;
+  --beaver-bg-soft: #f5f8f3;
+  --beaver-bg-container: #eff3ec;
+  --beaver-bg-container-high: #e9eee7;
+
+  --beaver-text: #1a1f1a;
+  --beaver-text-soft: #424942;
+  --beaver-text-disabled: #72797a;
+  --beaver-outline: #c2c9bf;
+
+  --beaver-radius: 12px;
+  --beaver-radius-sm: 8px;
+  --beaver-radius-lg: 16px;
+
+  --beaver-shadow-1: 0 1px 2px rgba(26,31,26,.10), 0 1px 3px rgba(26,31,26,.06);
+  --beaver-shadow-2: 0 2px 6px rgba(26,31,26,.12), 0 1px 2px rgba(26,31,26,.08);
+
+  --beaver-error: #ba1a1a;
+  --beaver-error-container: #ffdad6;
+  --beaver-on-error-container: #410002;
+}
+
+body {
+  font-family: -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif;
+  width: 280px;
+  margin: 0;
+  padding: 12px;
+  font-size: 13px;
+  color: var(--beaver-text);
+  background: var(--beaver-bg);
+}
+
+/* 反思（2026-08-11 第二十二次）：火狐 options_ui 以整页标签打开时，280px 太窄且不居中。
+     用户反馈「要居中显示」「加了多余的虚线边」。
+     修正：视口宽度 >400px 时（整页打开），body 改为 max-width + margin:auto 居中。
+     虚线边来自火狐默认 focus outline，统一去除。 */
+@media (min-width: 400px) {
+  body {
+    width: auto;
+    max-width: 480px;
+    margin: 24px auto;
+    padding: 24px;
+    border-radius: 16px;
+    box-shadow: 0 2px 12px rgba(26,31,26,0.08);
+  }
+}
+
+/* 去除火狐默认虚线 focus 外框 */
+*:focus {
+  outline: none;
+}
+select:focus, input:focus, button:focus {
+  outline: none;
+}
+
+h1 {
+  font-size: 16px;
+  margin: 0 0 10px;
+  color: var(--beaver-brown);
+}
+
+.popup-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.popup-header h1 {
+  margin: 0;
+}
+
+/* 第一百七十六次（用户："图示字符显示不出来，换成小图标"）：标题左端产品图标，
+   替代原先无字形的 🦫 emoji。32px 源图缩到 18px 显示，保证高分屏清晰。 */
+.popup-header h1 {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.popup-header h1 .ph-logo {
+  width: 18px;
+  height: 18px;
+  flex: 0 0 auto;
+  display: block;
+}
+
+/* 反思（2026-08-02）：旧版 .ui-lang-btn 按钮已改为 .ui-lang-select 下拉菜单 */
+.ui-lang-btn,
+.ui-lang-select {
+  font-size: 12px;
+  padding: 4px 10px;
+  background: var(--beaver-bg-container);
+  color: var(--beaver-text-soft);
+  border: none;
+  border-radius: var(--beaver-radius-sm);
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.ui-lang-btn:hover,
+.ui-lang-select:hover {
+  background: var(--beaver-bg-container-high);
+  color: var(--beaver-primary);
+}
+
+/* 反思（2026-08-13 第五十次）：引导页入口按钮（(16) 打开引导页） */
+.open-guide-btn {
+  width: 24px;
+  height: 24px;
+  font-size: 13px;
+  line-height: 1;
+  background: var(--beaver-primary);
+  color: #fff;
+  border: none;
+  border-radius: 50%;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: background 0.15s;
+}
+.open-guide-btn:hover {
+  background: var(--beaver-primary-strong, #21523a);
+}
+
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+/* field-row：两个字段同行并列（目标语言+释义语言 / 最低词频+表外词） */
+.field-row {
+  display: flex;
+  align-items: flex-end;
+  gap: 10px;
+}
+
+.field-row .field {
+  flex: 1;
+  min-width: 0;
+}
+
+.field-row .row.chk {
+  white-space: nowrap;
+  padding-bottom: 4px;
+  /* 反思（2026-07-10 #90）：用户反馈「Annotate Rare Words 的复选框句子自己远，距离别人近」。
+     根因：label 默认 gap:8px 导致 checkbox 与文字间距过大。
+     修正：缩小内部 gap 到 4px，让 checkbox 与文字更紧凑。 */
+  gap: 4px;
+}
+
+.field label {
+  font-size: 12px;
+  color: var(--beaver-text-soft);
+  justify-content: flex-start;
+}
+
+.color-label {
+  min-width: 60px;
+  text-align: right;
+}
+
+/* 错误横幅：M3 error-container，init 异常时显示，避免 popup 白屏 */
+.popup-error {
+  margin: 0;
+  padding: 8px 10px;
+  background: var(--beaver-error-container);
+  color: var(--beaver-on-error-container);
+  font-size: 12px;
+  border-radius: 0 0 var(--beaver-radius-sm) var(--beaver-radius-sm);
+  word-break: break-word;
+}
+
+/* 加载中提示：M3 primary-container 浅马卡龙绿，popup 弹出后 init 完成前显示 */
+.popup-loading {
+  padding: 16px 10px;
+  text-align: center;
+  color: var(--beaver-primary);
+  font-size: 13px;
+  background: var(--beaver-primary-light);
+  border-radius: 0 0 var(--beaver-radius-sm) var(--beaver-radius-sm);
+}
+
+/* block：用 surface-container 分隔，替代 border-top */
+.block {
+  padding: 10px;
+  margin-top: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  background: var(--beaver-bg-soft);
+  border-radius: var(--beaver-radius);
+}
+
+label {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+}
+
+label.row {
+  justify-content: flex-start;
+}
+
+input[type="number"],
+select {
+  width: 110px;
+  padding: 4px 8px;
+  border: none;
+  border-radius: var(--beaver-radius-sm);
+  background: var(--beaver-bg);
+  color: var(--beaver-text);
+  box-shadow: var(--beaver-shadow-1);
+}
+
+input[type="checkbox"] {
+  accent-color: var(--beaver-primary);
+}
+
+button {
+  padding: 6px 12px;
+  border: none;
+  background: var(--beaver-bg-container);
+  color: var(--beaver-text-soft);
+  cursor: pointer;
+  border-radius: var(--beaver-radius-sm);
+  transition: background 0.15s;
+}
+
+button:hover {
+  background: var(--beaver-bg-container-high);
+  color: var(--beaver-text);
+}
+
+button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.hint {
+  color: var(--beaver-text-disabled);
+  font-size: 11px;
+  margin: 4px 0 0;
+}
+
+.status {
+  font-size: 12px;
+  margin: 0 0 4px;
+  color: var(--beaver-text-soft);
+}
+
+.hidden {
+  display: none;
+}
+
+/* sub-block：用 surface-container 嵌套，替代 border-left */
+.sub-block {
+  margin-left: 4px;
+  padding: 8px 10px;
+  background: var(--beaver-bg-container);
+  border-radius: var(--beaver-radius-sm);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.hint-row {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.hint-row .chk {
+  font-size: 12px;
+}
+
+/* 样式设定菜单（2026-08-05 重构）：生词/注释行标签 + 样例区 */
+.row-label {
+  font-size: 12px;
+  color: var(--beaver-text-soft);
+}
+
+.hint-sample-row {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 0;
+}
+
+.hint-sample {
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.hint-sample span {
+  display: inline;
+  border-radius: 3px;
+  padding: 0 2px;
+}
+
+.colors {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  color: var(--beaver-text-soft);
+}
+
+.colors input[type="color"] {
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: none;
+  border-radius: var(--beaver-radius-sm);
+  cursor: pointer;
+  background: none;
+  box-shadow: var(--beaver-shadow-1);
+  overflow: hidden;
+}
+
+/* 反思（2026-08-11 第三十八次）：用户要求「火狐取色器应当同其他浏览器上的样式一致」。
+   Firefox 中 input[type=color] 默认有 padding 和 border，需显式清除。
+   ::-moz-color-swatch 是火狐内部色块，::-webkit-color-swatch 是 Chromium 内部色块。
+   两者都设 border:none + border-radius 确保跨浏览器圆角一致。 */
+.colors input[type="color"]::-moz-color-swatch {
+  border: none !important;
+  border-radius: var(--beaver-radius-sm) !important;
+}
+
+.colors input[type="color"]::-webkit-color-swatch-wrapper {
+  padding: 0;
+}
+
+.colors input[type="color"]::-webkit-color-swatch {
+  border: none;
+  border-radius: var(--beaver-radius-sm);
+}

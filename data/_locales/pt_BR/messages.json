@@ -1,0 +1,10 @@
+{
+  "extName": {
+    "message": "VocabRadar — palavras novas em vídeo e web",
+    "description": "Nome da extensão exibido no navegador e na loja."
+  },
+  "extDesc": {
+    "message": "Descubra suas palavras novas: vídeos do YouTube/Bilibili, qualquer web e chat com IA. Sem cadastro.",
+    "description": "Descrição da extensão: suas próprias palavras novas, vídeo e web, chat com IA, sem cadastro."
+  }
+}

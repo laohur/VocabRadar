@@ -1,0 +1,76 @@
+{
+  "manifest_version": 3,
+  "default_locale": "en",
+  "name": "__MSG_extName__",
+  "version": "0.2.0",
+  "description": "__MSG_extDesc__",
+  "permissions": ["storage", "activeTab", "cookies", "contextMenus", "offscreen", "audioCapture", "videoCapture", "scripting"],
+  "host_permissions": [
+    "*://*.bilibili.com/*",
+    "*://*.youtube.com/*",
+    "<all_urls>"
+  ],
+  "background": { "service_worker": "src/background/service-worker.js", "type": "module" },
+  "icons": {
+    "16": "src/data/icons/icon16.png",
+    "32": "src/data/icons/icon32.png",
+    "48": "src/data/icons/icon48.png",
+    "128": "src/data/icons/icon128.png"
+  },
+  "action": { "default_title": "__MSG_extName__" },
+  "content_scripts": [
+    {
+      "matches": ["*://*.bilibili.com/*"],
+      "js": ["src/content/bilibili.js"],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": ["*://*.youtube.com/*"],
+      "js": ["src/content/youtube.js"],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": ["*://*.youtube.com/*", "*://*.bilibili.com/*"],
+      "js": ["src/lib/page-fetch.js"],
+      "run_at": "document_start",
+      "world": "MAIN",
+      "all_frames": false
+    },
+    {
+      "matches": ["<all_urls>"],
+      "exclude_matches": ["*://*.bilibili.com/*", "*://*.youtube.com/*"],
+      "js": ["src/content/generic.js"],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": ["<all_urls>"],
+      "js": ["src/content/text-hint.js"],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": ["<all_urls>"],
+      "js": ["src/content/web-sidebar.js"],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": ["<all_urls>"],
+      "js": ["src/content/dict-prefetch.js"],
+      "run_at": "document_start"
+    }
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": ["src/data/*", "src/data/wordfreq/*", "src/data/icons/*", "src/lib/*", "src/lib/vendor/*", "src/lib/vendor/tessdata/*", "src/content/*", "src/content/chunks/*", "src/offscreen/*", "src/guide/*"],
+      "matches": ["<all_urls>"]
+    }
+  ],
+  "content_security_policy": {
+    "extension_pages": "script-src 'self' 'wasm-unsafe-eval'; object-src 'self'; media-src 'self' blob:; connect-src 'self' https://cdn.jsdelivr.net https://unpkg.com https://huggingface.co https://hf-mirror.com https://*.xenova.com https://*.hf.co https://api.mymemory.translated.net https://translate.googleapis.com https://fanyi.youdao.com https://fanyi.baidu.com https://dict.youdao.com https://libretranslate.com https://api.argos-translate.com https://translate.terraprint.co https://www.bing.com https://lingva.ml https://translate.plausibility.cloud https://lingva.lunar.icu https://api.groq.com https://openrouter.ai https://generativelanguage.googleapis.com https://api.openai.com https://api.deepseek.com https://api.anthropic.com https://text.pollinations.ai https://oai.endpoints.kepler.ai.cloud.ovh.net https://*.endpoints.kepler.ai.cloud.ovh.net"
+  },
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "vocabradar@vocabradar.app",
+      "strict_min_version": "115.0"
+    }
+  }
+}

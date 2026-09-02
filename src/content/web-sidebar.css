@@ -1,0 +1,1372 @@
+/* VocabRadar 全站网页侧栏样式
+ *
+ * 注入策略：position:fixed 挂到 document.body。
+ *   不与视频提示 #beaver-sidebar 冲突（不同 ID + 不同类名前缀 .beaver-web-*）。
+ *
+ * 三种状态：
+ *   .collapsed — 48px 悬浮球，右上角，🦫 SVG 图标居中，点击展开
+ *   .expanded  — 380px 宽完整面板，紧贴右侧
+ *   .closed    — display:none（关闭，刷新恢复）
+ *
+ * 设计风格：复用 sidebar.css 的 Material Design 3 令牌（--beaver-* 变量），
+ *   圆角、阴影、背景色分层，不用 border。字号 16px，导航栏（tabs）小一号。
+ *
+ * 4 标签结构（2026-08-07）：句 / 词汇 / 🎤 / 📷 独立标签，
+ *   ASR 与 OCR 分开，每个标签有独立面板内容区。
+ *   句标签为主功能（页面文本扫描），展开即扫描页面正文。
+ */
+
+/* === Material Design 3 设计令牌兜底（与 sidebar.css 同源）=== */
+:root {
+  --beaver-primary: #2e6b43;
+  --beaver-primary-dark: #1c4d32;
+  --beaver-primary-light: #a8e6cf;
+  --beaver-on-primary: #ffffff;
+  --beaver-on-primary-container: #0d2014;
+
+  --beaver-secondary-container: #d1e8d8;
+  --beaver-on-secondary-container: #0d2014;
+
+  --beaver-brown: #6d4c41;
+
+  --beaver-bg: #fbfdf9;
+  --beaver-bg-soft: #f5f8f3;
+  --beaver-bg-active: #a8e6cf;
+  --beaver-bg-container: #eff3ec;
+  --beaver-bg-container-high: #e9eee7;
+
+  --beaver-btn-bg: #eff3ec;
+  --beaver-btn-bg-hover: #e9eee7;
+
+  --beaver-text: #1a1f1a;
+  --beaver-text-soft: #424942;
+  --beaver-text-disabled: #72797a;
+
+  --beaver-outline: #c2c9bf;
+
+  --beaver-ann-bg: #a8e6cf;
+  --beaver-ann-fg: #0d2014;
+
+  --beaver-radius: 12px;
+  --beaver-radius-sm: 8px;
+  --beaver-radius-lg: 16px;
+
+  --beaver-shadow-1: 0 1px 2px rgba(26,31,26,.10), 0 1px 3px rgba(26,31,26,.06);
+  --beaver-shadow-2: 0 2px 6px rgba(26,31,26,.12), 0 1px 2px rgba(26,31,26,.08);
+  --beaver-shadow-3: 0 4px 12px rgba(26,31,26,.12), 0 1px 3px rgba(26,31,26,.08);
+
+  /* 兜底默认配色（与 popup 默认值一致），sidebar.js / web-sidebar-impl.js 会用用户设置覆盖
+   * 反思（2026-08-11 第三十八次）：生词=深底浅字（强），注释=浅底深字（弱），二者反相对比 */
+  --beaver-first-bg: #0d2014;
+  --beaver-first-fg: #a8e6cf;
+  --beaver-later-bg: #0d2014;
+  --beaver-later-fg: #a8e6cf;
+}
+
+/* === 防御性 CSS 重置 ===
+ * 反思（2026-08-12）：Bing 等网站全局 CSS（通配符 *、元素选择器 button/input 等）
+ *   覆盖侧栏样式导致悬浮球不可见。关键属性加 !important 确保不被覆盖。
+ */
+#beaver-web-sidebar {
+  position: fixed !important;
+  z-index: 2147483646 !important;
+  font-family: -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif !important;
+  font-size: 16px !important;
+  color: var(--beaver-text) !important;
+  line-height: 1.5 !important;
+  pointer-events: auto !important;
+  box-sizing: border-box !important;
+  overflow: visible !important;  /* 悬浮球需要阴影溢出 */
+  margin: 0 !important;
+  padding: 0 !important;
+  border: none !important;
+  text-shadow: none !important;
+  text-transform: none !important;
+  letter-spacing: normal !important;
+  vertical-align: baseline !important;
+  white-space: normal !important;
+  opacity: 1 !important;
+  visibility: visible !important;
+  display: block !important;
+  direction: ltr !important;
+}
+
+/* 子元素防御性重置
+ * 反思（2026-08-12）：Bing 等网站的通配符 * 重置和元素选择器
+ *   会覆盖侧栏内部元素样式。加 !important 确保关键属性不被覆盖。
+ * 反思（2026-08-16 第六十七次）：margin/padding 去 !important——
+ *   !important 会把侧栏自身的条目间距也清零（sub-item margin/padding 失效
+ *   → 句子文字紧贴边框）。侧栏内部规则（如 #beaver-web-sidebar .beaver-web-sub-item）
+ *   特异性 (1,1,0) 已高于本站普通 reset，去掉 !important 后由内部规则接管。 */
+#beaver-web-sidebar * {
+  box-sizing: border-box !important;
+  margin: 0;
+  padding: 0;
+  font-family: inherit !important;
+  font-size: inherit !important;
+  font-weight: inherit !important;
+  line-height: inherit !important;
+  letter-spacing: normal !important;
+  text-transform: none !important;
+  text-decoration: none !important;
+  vertical-align: baseline !important;
+  text-shadow: none !important;
+}
+
+/* 表单元素单独重置：Bing 等网站的 button/input/select 全局样式
+ *   会覆盖侧栏内按钮/输入框样式。用 all:unset + 重新设置基础样式。
+ * 反思（2026-08-12 第四十一次）：all:unset 会覆盖 hidden 属性导致 <input type="file" hidden> 可见。
+ *   修正：input[type="file"] 单独用 display:none !important 保证隐藏。
+ * 反思（2026-08-16 第六十七次）：margin/padding/background/color 去 !important——
+ *   background:transparent !important 会把词单按钮选中态（.beaver-web-tool-btn.active
+ *   的 background:var(--beaver-primary)）压成透明（按钮选中无颜色），margin/padding
+ *   !important 会把按钮内边距清零。去掉后侧栏内部类规则按特异性正常接管（
+ *   #beaver-web-sidebar .beaver-web-tool-btn (1,1,0) > #beaver-web-sidebar button (1,0,1)）。 */
+#beaver-web-sidebar button,
+#beaver-web-sidebar input,
+#beaver-web-sidebar select,
+#beaver-web-sidebar textarea {
+  all: unset;
+  box-sizing: border-box !important;
+  font-family: inherit !important;
+  font-size: inherit !important;
+  font-weight: inherit !important;
+  line-height: inherit !important;
+  letter-spacing: normal !important;
+  text-transform: none !important;
+  text-shadow: none !important;
+  margin: 0;
+  padding: 0;
+  border: none !important;
+  background: transparent;
+  color: inherit;
+  outline: none !important;
+  vertical-align: baseline !important;
+  -webkit-appearance: none !important;
+  appearance: none !important;
+}
+
+/* 文件输入控件必须隐藏：all:unset 会覆盖 hidden 属性导致 <input type="file"> 可见 */
+#beaver-web-sidebar input[type="file"] {
+  display: none !important;
+}
+
+/* === 三种状态 ===
+ * 反思（2026-08-09 第十次）：用户要求"悬浮球默认在右上角"。
+ *   旧版 top:75vh（3/4高度），用户明确要求改为右上角（top:20px）。
+ *   与 injectCriticalCSS 中的同步关键样式 top:20px 一致。
+ * 反思（2026-08-12）：collapsed 关键属性加 !important 防止被网站覆盖。 */
+#beaver-web-sidebar.collapsed {
+  width: 48px !important;
+  height: 48px !important;
+  right: 16px !important;
+  top: 20px !important;
+  bottom: auto !important;
+  left: auto !important;
+  border-radius: 50% !important;
+  background: var(--beaver-primary) !important;
+  box-shadow: 0 4px 12px rgba(26, 31, 26, 0.25) !important;
+  transition: transform 0.2s ease, box-shadow 0.2s ease !important;
+  cursor: pointer !important;
+}
+
+#beaver-web-sidebar.collapsed:hover {
+  transform: scale(1.1);
+  box-shadow: 0 6px 16px rgba(26, 31, 26, 0.35);
+}
+
+#beaver-web-sidebar.collapsed .beaver-web-panel {
+  display: none;
+}
+
+#beaver-web-sidebar.collapsed .beaver-web-collapse-tab {
+  display: flex;
+}
+
+/* === 展开态：从右上角悬浮球位置向右下方展开 ===
+ * 反思（2026-08-13）：用户要求"悬浮球向右下方展开为文本侧栏。悬浮球应当在右上角"。
+ *   旧版 expanded 用 top:50%+translateY(-50%) 垂直居中，不符合"从球位置向下展开"。
+ *   修正：展开态 top:20px（与悬浮球一致），right:16px，从右上角向下展开。
+ *   高度 75vh，拖动后 .dragged 态覆盖为 JS 设 left/top 自由定位。
+ *   留出血：padding 内边距加大，内容不紧贴边缘。
+ * 第一百三十四次（用户裁定"手柄反人类/不动的底板/位置乱窜"根因）：本块原有
+ *   width/height/right/top !important——author !important 压过 JS 内联样式，
+ *   拖动/调尺寸写内联全部无效或半效（JS 记忆与实际渲染脱节＝一切漂移之源）！
+ *   全部去 !important：默认值走 .expanded:not(.dragged)，JS 内联成为唯一写入者。 */
+#beaver-web-sidebar.expanded {
+  /* 第一百三十七次（用户裁定）：默认宽高比 **1:2**——380×760 基准，随视口钳制 */
+  width: min(380px, calc(100vw - 24px));
+  height: min(760px, calc(100vh - 24px));
+  border-radius: var(--beaver-radius, 12px);
+  background: var(--beaver-bg);
+  box-shadow: 0 4px 16px rgba(26, 31, 26, 0.18);
+  transition: width 0.2s ease;
+  overflow: hidden;
+}
+/* 未拖动时的默认锚点（右上角）；.dragged 后由 JS 内联 left/top 全权接管 */
+#beaver-web-sidebar.expanded:not(.dragged) {
+  right: 16px;
+  top: 20px;
+  bottom: auto;
+  left: auto;
+  transform: none;
+}
+
+/* 第一百三十四次：底板残影加固——两态互斥显示用 !important 钉死，
+ * 杜绝任何 class 组合/页面干扰下"球与面板同屏"（用户所见"不动的底板背景"） */
+#beaver-web-sidebar.collapsed .beaver-web-panel {
+  display: none !important;
+}
+#beaver-web-sidebar.collapsed .beaver-web-collapse-tab {
+  display: flex;
+}
+
+#beaver-web-sidebar.expanded .beaver-web-collapse-tab {
+  display: none !important;
+}
+
+#beaver-web-sidebar.expanded .beaver-web-panel {
+  display: flex;
+}
+
+#beaver-web-sidebar.closed {
+  display: none;
+}
+
+/* === 悬浮球：48px 圆形 ===
+ * 第一百七十一次（用户裁定"悬浮球不补充圆边，而是裁剪原图"）：
+ *   图标铺满整球并由 border-radius:50%+overflow:hidden 裁切，
+ *   故不再需要绿色圆底留白（background 由 .collapsed 规则给出，图标已完全覆盖）。
+ */
+#beaver-web-sidebar .beaver-web-collapse-tab {
+  width: 48px;
+  height: 48px;
+  display: none;  /* collapsed 态显示 */
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  border-radius: 50%;
+  overflow: hidden;
+}
+
+#beaver-web-sidebar .beaver-web-collapse-icon {
+  display: block;
+  width: 100%;
+  height: 100%;
+  border-radius: 50%;
+}
+
+/* === 展开面板：flex 纵向布局 ===
+ * 面板内容区 flex:1 + overflow-y:auto + min-height:0，
+ * 确保内容多时只有面板滚动，footer 始终固定底部。
+ */
+#beaver-web-sidebar .beaver-web-panel {
+  display: none;  /* expanded 态显示 */
+  flex-direction: column;
+  width: 420px;   /* 第一百二十三次：随 expanded 等宽调整 380→420 */
+  height: 100%;
+  background: var(--beaver-bg);
+  overflow: hidden;
+  position: relative;  /* 语言浮层 position:absolute 相对于此 */
+  border-radius: var(--beaver-radius, 12px);
+}
+
+/* === 标题栏 ===
+ * 第一百二十二次：顶行与视频侧栏统一——同 padding(10px 14px)、同标题字号(1.15em)、
+ * 同首按钮=切换形态（🎬 视频 / 📄 文本），统称"侧栏"，内容照旧。 */
+#beaver-web-sidebar .beaver-web-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 14px;
+  background: var(--beaver-bg-soft);
+  flex-shrink: 0;
+}
+
+#beaver-web-sidebar .beaver-web-title {
+  font-size: 1.15em;
+  font-weight: 600;
+  color: var(--beaver-brown);
+}
+
+#beaver-web-sidebar .beaver-web-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px; /* 第一百二十三次：按钮拥挤反馈——4px→8px */
+}
+
+#beaver-web-sidebar .beaver-web-icon-btn {
+  background: var(--beaver-btn-bg);
+  border: none;
+  cursor: pointer;
+  color: var(--beaver-text-soft);
+  padding: 0;
+  min-width: 32px;
+  min-height: 32px;
+  border-radius: var(--beaver-radius-sm);
+  font-size: 14px;
+  box-shadow: var(--beaver-shadow-1);
+  transition: background 0.15s;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+#beaver-web-sidebar .beaver-web-icon-btn:hover {
+  background: var(--beaver-btn-bg-hover);
+  color: var(--beaver-text);
+}
+
+/* === 语言按钮（🌐）与浮层 ===
+ * 复用 sidebar.css .beaver-lang-btn / .beaver-lang-panel 模式。
+ */
+#beaver-web-sidebar .beaver-web-lang-btn {
+  background: var(--beaver-btn-bg);
+  border: none;
+  border-radius: var(--beaver-radius-sm);
+  padding: 0;
+  min-width: 36px;
+  min-height: 32px;
+  cursor: pointer;
+  font-size: 16px;          /* 🌐 emoji 需正文字号 */
+  line-height: 1;
+  color: var(--beaver-text-soft);
+  transition: all 0.15s;
+  box-shadow: var(--beaver-shadow-1);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+#beaver-web-sidebar .beaver-web-lang-btn:hover {
+  background: var(--beaver-btn-bg-hover);
+  color: var(--beaver-primary);
+}
+
+#beaver-web-sidebar .beaver-web-lang-btn.active {
+  background: var(--beaver-primary-light);
+  color: var(--beaver-on-primary-container);
+}
+
+/* 语言设置浮层：默认隐藏，.show 类显示 */
+#beaver-web-sidebar .beaver-web-lang-panel {
+  display: none;
+  position: absolute;
+  top: 44px;
+  right: 12px;
+  z-index: 20;
+  min-width: 220px;
+  padding: 10px 12px;
+  background: var(--beaver-bg-container-high);
+  border-radius: var(--beaver-radius);
+  box-shadow: var(--beaver-shadow-2);
+  flex-direction: column;
+  gap: 8px;
+}
+
+#beaver-web-sidebar .beaver-web-lang-panel.show {
+  display: flex;
+}
+
+/* === 第一百二十三次：⋯ 设定浮层（复用语言面板定位/显隐，条目为全宽按钮） === */
+#beaver-web-sidebar .beaver-web-settings-pop {
+  min-width: 180px;
+}
+#beaver-web-sidebar .beaver-web-settings-item {
+  display: block;
+  width: 100%;
+  padding: 6px 10px;
+  border-radius: var(--beaver-radius-sm, 8px);
+  background: transparent;
+  color: var(--beaver-text-soft);
+  text-align: left;
+  font-size: 0.95em;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+#beaver-web-sidebar .beaver-web-settings-item:hover {
+  background: var(--beaver-bg-container-high);
+  color: var(--beaver-text);
+}
+
+#beaver-web-sidebar .beaver-web-lang-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+#beaver-web-sidebar .beaver-web-lang-label {
+  font-size: 0.9em;
+  color: var(--beaver-text-soft);
+  flex-shrink: 0;
+}
+
+#beaver-web-sidebar .beaver-web-lang-select {
+  flex: 1;
+  min-width: 0;
+  padding: 4px 8px;
+  border: none;
+  border-radius: var(--beaver-radius-sm);
+  background: var(--beaver-bg);
+  color: var(--beaver-text);
+  cursor: pointer;
+  box-shadow: var(--beaver-shadow-1);
+  font-size: 0.9em;
+  -webkit-appearance: auto;
+  appearance: auto;
+}
+
+#beaver-web-sidebar .beaver-web-lang-select:focus {
+  outline: none;
+  box-shadow: 0 0 0 2px var(--beaver-primary-light);
+}
+
+/* === 标签页（导航栏，字号小一号）===
+ * 2 个标签：句 / 词汇
+ * 第一百三十四次（用户反馈"占地超宽，还会越来越宽"）：旧 flex:1 把每个标签
+ *   拉到半条面板宽且随面板变宽持续拉伸——改为内容自适应宽度、居中排布、
+ *   超长省略，标签行不再随任何尺寸变化增宽。 */
+#beaver-web-sidebar .beaver-web-tabs {
+  display: flex;
+  justify-content: center;
+  gap: 4px;
+  background: var(--beaver-bg-soft);
+  flex-shrink: 0;
+  min-width: 0;
+  overflow: hidden;
+}
+
+#beaver-web-sidebar .beaver-web-tab {
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 200px;
+  padding: 8px 20px;
+  text-align: center;
+  cursor: pointer;
+  color: var(--beaver-text-soft);
+  font-size: 0.9em;  /* 导航栏字号小一号 */
+  transition: all 0.15s;
+  border-radius: var(--beaver-radius-sm) var(--beaver-radius-sm) 0 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+#beaver-web-sidebar .beaver-web-tab:hover {
+  background: var(--beaver-bg-container-high);
+}
+
+#beaver-web-sidebar .beaver-web-tab.active {
+  color: var(--beaver-on-primary-container);
+  background: var(--beaver-primary-light);
+  font-weight: 500;
+}
+
+/* === 工具栏 ===
+ * 反思（2026-08-16 第六十九次）：按钮/工具条空隙规格同文本——左右一空格、上下半空格。 */
+#beaver-web-sidebar .beaver-web-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 6px 4px;
+  flex-wrap: wrap;
+  background: var(--beaver-bg-soft);
+  flex-shrink: 0;
+}
+
+#beaver-web-sidebar .beaver-web-tool-label {
+  color: var(--beaver-text-soft);
+  font-size: 0.9em;
+}
+
+#beaver-web-sidebar .beaver-web-toolbar input[type="number"] {
+  width: 60px;
+  padding: 4px 6px;
+  border: none;
+  background: var(--beaver-bg);
+  border-radius: var(--beaver-radius-sm);
+  box-shadow: var(--beaver-shadow-1);
+  font-size: 0.9em;
+}
+
+#beaver-web-sidebar .beaver-web-tool-btn {
+  background: var(--beaver-btn-bg);
+  border: none;
+  border-radius: var(--beaver-radius-sm);
+  padding: 6px 8px;
+  min-height: 30px;
+  cursor: pointer;
+  color: var(--beaver-text-soft);
+  box-shadow: var(--beaver-shadow-1);
+  font-size: 0.95em;
+  transition: all 0.15s;
+  white-space: nowrap;
+}
+
+#beaver-web-sidebar .beaver-web-tool-btn:hover {
+  background: var(--beaver-btn-bg-hover);
+}
+
+#beaver-web-sidebar .beaver-web-tool-btn.active {
+  color: var(--beaver-on-primary);
+  background: var(--beaver-primary);
+}
+
+/* === 公共参数行（rank 等公共参数，在标签行之上）===
+ * 反思（2026-08-12 第四十六次）：用户要求"rank 在标签行之上，这是公共参数"。
+ *   从 toolbar 移出 rank，独立为公共参数行，所有标签页共享。 */
+#beaver-web-sidebar .beaver-web-common-bar {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 6px 4px;
+  background: var(--beaver-bg-container);
+  flex-shrink: 0;
+  border-bottom: 1px solid var(--beaver-bg-container-high);
+}
+
+#beaver-web-sidebar .beaver-web-common-bar input[type="number"] {
+  width: 60px;
+  padding: 4px 6px;
+  border: none;
+  background: var(--beaver-bg);
+  border-radius: var(--beaver-radius-sm);
+  box-shadow: var(--beaver-shadow-1);
+  font-size: 0.9em;
+}
+
+/* === 标签页工具栏（按标签页显示/隐藏）=== */
+#beaver-web-sidebar .beaver-web-toolbar[data-tab-toolbar] {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 6px 4px;
+  flex-wrap: wrap;
+  background: var(--beaver-bg-soft);
+  flex-shrink: 0;
+}
+
+#beaver-web-sidebar .beaver-web-toolbar[data-tab-toolbar].hidden {
+  display: none !important;
+}
+
+/* 反思（2026-08-14 第五十八次）：移除 web-sidebar 字幕样式浮层（含按钮与样例卡网格）。
+ *   字幕样式选择集中在引导页（subtitleStyle 全局 key），文本侧栏不再提供该入口。 */
+
+
+/* === 标签面板容器 ===
+ * 每个标签对应一个 .beaver-web-tab-panel，展开时 flex:1 填充剩余空间。
+ * hidden 类隐藏非当前标签。
+ * 内部 .beaver-web-panel-scroll 为可滚动内容区。
+ */
+#beaver-web-sidebar .beaver-web-tab-panel {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;  /* 允许 flex 收缩 */
+  overflow: hidden;
+}
+
+#beaver-web-sidebar .beaver-web-tab-panel.hidden {
+  display: none;
+}
+
+/* === 练习页（第一百三十五次）：小程序二维码，与视频侧栏 mp 面板同源观感 === */
+#beaver-web-sidebar .beaver-web-mp-panel {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  padding: 16px;
+  height: 100%;
+  overflow: auto;
+}
+#beaver-web-sidebar .beaver-web-mp-img {
+  width: min(240px, 70%);
+  background: #fff;
+  padding: 8px;
+  border-radius: var(--beaver-radius, 12px);
+  box-shadow: var(--beaver-shadow-1);
+}
+#beaver-web-sidebar .beaver-web-mp-tip {
+  text-align: center;
+  color: var(--beaver-text-soft);
+  font-size: 0.95em;
+  line-height: 1.6;
+}
+
+/* 可滚动内容区
+ * 反思（2026-08-13）：用户要求"文本侧栏过于局促，要留点出血"。
+ * 反思（2026-08-15 第五十九次）：用户再次反馈"侧栏过于局促"，加大留白。
+ * 反思（2026-08-16 第六十八次）：与条目外边距同源收敛——面板内距 24px→18px。
+ * 反思（2026-08-16 第六十九次）：用户裁定空隙规格"左右一空格（≈4px）、上下半空格（≈2px）"，
+ *   且"按钮和文字都一样"——四周空隙统一收敛到 4px/2px 级（不再 18px+）。
+ *   面板内距 2px 4px，条目自身 margin 0（段间距由 flex gap 提供），避免空隙叠加。 */
+#beaver-web-sidebar .beaver-web-panel-scroll {
+  flex: 1;
+  overflow-y: auto;
+  padding: 2px 4px;
+  min-height: 0;
+  background: var(--beaver-bg);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  /* 第一百八十三次（用户："句子的进度条应当跟词汇的一致"，进度条即面板右侧滚动条）：
+   *   句/词两个面板本就共用本条规则，观感却不同——根因在滚动条规格没被完全钉住：
+   *   ① 只写了 ::-webkit-scrollbar（Firefox 落回系统默认宽滚动条，两 tab 内容量不同时更明显）；
+   *   ② 无 scrollbar-gutter，内容不溢出的一侧不占槽、溢出的一侧占 6px，切 tab 时宽度跳动。
+   *   修正：补标准属性 scrollbar-width/scrollbar-color（跨引擎同宽同色）+ scrollbar-gutter: stable
+   *   （两 tab 恒定预留同一滚动槽），使两侧滚动条完全一致。 */
+  scrollbar-width: thin;
+  scrollbar-color: var(--beaver-text-disabled) transparent;
+  scrollbar-gutter: stable;
+}
+
+#beaver-web-sidebar .beaver-web-panel-scroll::-webkit-scrollbar {
+  width: 6px;
+}
+
+/* 第一百八十三次：补轨道透明——旧版只定义 thumb，轨道走浏览器默认（浅色底上呈灰槽），
+ *   句 tab 通常有溢出、词 tab 常无，两侧轨道观感不一致。 */
+#beaver-web-sidebar .beaver-web-panel-scroll::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+#beaver-web-sidebar .beaver-web-panel-scroll::-webkit-scrollbar-thumb {
+  background: var(--beaver-text-disabled);
+  border-radius: 3px;
+}
+
+/* 空提示：在空白区域居中（flex 容器内 margin:auto 垂直水平居中） */
+#beaver-web-sidebar .beaver-web-empty-tip {
+  margin: auto;
+  padding: 24px 12px;
+  text-align: center;
+  color: var(--beaver-text-disabled);
+  font-size: 0.9em;
+}
+
+/* === 输入区：ASR + OCR 两个独立区 ===
+ * ASR 区（蓝色调）含上传音视频/录音/录屏；
+ * OCR 区（绿色调）含上传图片/拍照。
+ */
+#beaver-web-sidebar .beaver-web-input-area {
+  padding: 6px 4px;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+/* ASR 区：蓝色调（与 OCR 区视觉区分） */
+#beaver-web-sidebar .beaver-web-asr-area {
+  background: #eef3f9;
+  border-radius: 0;
+}
+
+/* OCR 区：绿色调（与 ASR 区视觉区分） */
+#beaver-web-sidebar .beaver-web-ocr-area {
+  background: #eef7f1;
+  border-radius: 0;
+}
+
+#beaver-web-sidebar .beaver-web-input-label {
+  font-size: 0.8em;
+  color: var(--beaver-text-soft);
+  font-weight: 500;
+  letter-spacing: 0.5px;
+}
+
+#beaver-web-sidebar .beaver-web-input-btns {
+  display: flex;
+  gap: 4px;
+  flex-wrap: wrap;
+}
+
+/* 反思（2026-08-13 第五十次）：继续增强——按钮更高更像按钮（min-height 40px），
+ *   文字稍大，便于点击。 */
+#beaver-web-sidebar .beaver-web-input-btn {
+  flex: 0 1 auto;
+  min-width: 0;
+  min-height: 30px;
+  padding: 6px 8px;
+  background: var(--beaver-bg);
+  border: none;
+  border-radius: var(--beaver-radius-sm);
+  cursor: pointer;
+  color: var(--beaver-text);
+  font-size: 0.95em;
+  box-shadow: var(--beaver-shadow-1);
+  transition: all 0.15s;
+  white-space: nowrap;
+}
+
+#beaver-web-sidebar .beaver-web-input-btn:hover {
+  background: var(--beaver-bg-container-high);
+}
+
+#beaver-web-sidebar .beaver-web-input-btn:active {
+  transform: scale(0.97);
+}
+
+/* 录制中按钮：红色 + 脉冲动画 */
+#beaver-web-sidebar .beaver-web-input-btn.recording {
+  background: #d32f2f;
+  color: #fff;
+  box-shadow: 0 0 0 0 rgba(211, 47, 47, 0.7);
+  animation: beaver-web-record-pulse 1.4s infinite;
+}
+
+@keyframes beaver-web-record-pulse {
+  0% {
+    box-shadow: 0 0 0 0 rgba(211, 47, 47, 0.7);
+  }
+  70% {
+    box-shadow: 0 0 0 8px rgba(211, 47, 47, 0);
+  }
+  100% {
+    box-shadow: 0 0 0 0 rgba(211, 47, 47, 0);
+  }
+}
+
+/* === 媒体预览区（视频/图片）=== */
+#beaver-web-sidebar .beaver-web-media-area {
+  padding: 4px;
+  background: var(--beaver-bg-soft);
+  flex-shrink: 0;
+}
+
+#beaver-web-sidebar .beaver-web-media-area video,
+#beaver-web-sidebar .beaver-web-media-area img {
+  max-width: 100%;
+  max-height: 200px;
+  border-radius: var(--beaver-radius-sm);
+  display: block;
+  margin: 0 auto;
+}
+
+#beaver-web-sidebar .beaver-web-file-info {
+  margin-top: 2px;
+  font-size: 0.8em;
+  color: var(--beaver-text-soft);
+  text-align: center;
+  word-break: break-all;
+}
+
+/* === 句子条目（与 sidebar.js .beaver-sub-item 同风格）===
+ * 反思（2026-08-15 第六十次修正）：用户澄清"出血"= 文本段独立、段与段有距离、
+ *   与边框左右有距离，能分清。且明确"不是加底色、不是加行距"。
+ * 反思（2026-08-16 第六十六次）：补上段上边距（原 margin 0 20px 20px 顶部贴边框）。
+ * 反思（2026-08-16 第六十八次）：空隙太大收敛：段左右 padding 18px→8px、
+ *   外边距 20px→10px、上下 12/16→6/8px。
+ * 反思（2026-08-16 第六十九次）：空隙规格定稿——左右一空格（≈4px）、上下半空格（≈2px）。
+ *   段间距由 panel-scroll flex gap 提供，条目 margin 归零，水平空隙 4px（面板）+ 2px（段内留白）。 */
+#beaver-web-sidebar .beaver-web-sub-item {
+  padding: 0 2px;
+  margin: 0;
+}
+
+#beaver-web-sidebar .beaver-web-sub-item:hover {
+  background: transparent;
+}
+
+#beaver-web-sidebar .beaver-web-sub-item:last-child {
+  margin-bottom: 0;
+}
+
+#beaver-web-sidebar .beaver-web-sub-text {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  align-items: flex-start;
+  gap: 4px;
+  color: var(--beaver-text);
+  line-height: 1.5;
+}
+
+#beaver-web-sidebar .beaver-web-sub-time {
+  color: var(--beaver-text-disabled);
+  font-family: Consolas, monospace;
+  font-size: 0.85em;
+  white-space: nowrap;
+  user-select: none;
+}
+
+#beaver-web-sidebar .beaver-web-sub-content {
+  min-width: 0;
+  word-break: break-word;
+}
+
+/* 句子正文生词高亮 */
+#beaver-web-sidebar .beaver-web-sub-text .beaver-web-word {
+  display: inline-block;
+  vertical-align: baseline;
+  color: var(--beaver-first-fg, #0d2014);
+  background: var(--beaver-first-bg, #a8e6cf);
+  padding: 0 2px;
+  border-radius: 2px;
+  font-weight: inherit;
+}
+
+#beaver-web-sidebar .beaver-web-sub-text .beaver-web-word.later {
+  color: var(--beaver-later-fg, #0d2014);
+  background: var(--beaver-later-bg, #a8e6cf);
+}
+
+/* 简略模式正文内联注释 */
+/* 反思（2026-08-13 第五十三次）：改 inline-block，胶囊形/圆角/背景才能正确渲染 */
+#beaver-web-sidebar .beaver-web-sub-text .beaver-web-ann-inline {
+  display: inline-block;
+  color: var(--beaver-ann-fg);
+  background: var(--beaver-ann-bg);
+  padding: 0 2px;
+  border-radius: 2px;
+}
+
+/* 注释容器 */
+#beaver-web-sidebar .beaver-web-ann-container {
+  margin-top: 2px;
+}
+
+/* 详细模式注释行 */
+#beaver-web-sidebar .beaver-web-ann-line {
+  display: block;
+  color: var(--beaver-text-soft);
+  line-height: 1.5;
+  margin: 2px 0;
+  padding: 0;
+}
+
+#beaver-web-sidebar .beaver-web-ann-content {
+  display: block;
+}
+
+/* 反思（2026-08-15 第六十五次）：文本侧栏段独立化（用户反复要求）——
+ *   单词/喇叭音标/词形还原/几阶/标签/释义各为独立文本段，
+ *   段与段之间上下左右都不黏连：上下用块级堆叠 + 2px 间隔，左右用两侧留白。
+ * 反思（2026-08-16 第六十六次）：统一各段左右空隙（rank/tags/detail-trans 原 margin
+ *   左 0 贴边，现全部 6px 与单词段对齐），并加大注释行上下间隔（行与行、行与正文分开）。
+ * 反思（2026-08-16 第六十七次）：用户反馈"各项注释你给换行"——第六十六次把
+ *   word/rank/detail-trans 设 display:block，每项各自独占一行（单词一行、几阶一行、
+ *   释义一行），视觉散乱且纵向拉长。修正：同一条注释的各元素改为内联流动
+ *   （inline/inline-block），沿一行自然换行，元素间用左右空隙分隔；喇叭与音标保持紧贴。 */
+#beaver-web-sidebar .beaver-web-ann-line .beaver-web-ann-word {
+  display: inline-block;
+  max-width: 100%;
+  background: var(--beaver-primary);
+  color: var(--beaver-on-primary);
+  padding: 0 4px;
+  border-radius: 3px;
+  font-weight: 500;
+  margin: 0 4px 2px 0;
+}
+
+#beaver-web-sidebar .beaver-web-ann-line .beaver-web-ann-speak {
+  margin: 0;
+}
+
+#beaver-web-sidebar .beaver-web-ann-line .beaver-web-ann-phonetic {
+  display: inline;
+  color: var(--beaver-text-soft);
+  /* 反思（2026-08-09）：用户要求"注音不要倾斜"，去掉 font-style: italic */
+  font-size: 0.9em;
+  /* 反思（2026-08-10）：用户要求"喇叭音标应当紧贴"，左侧 margin 保持 0 紧贴喇叭按钮 */
+  margin-left: 0;
+  padding: 0 4px 0 0;
+}
+
+#beaver-web-sidebar .beaver-web-ann-line .beaver-web-ann-rank {
+  display: inline;
+  color: var(--beaver-text-soft);
+  font-size: 0.85em;
+  padding: 0 4px 0 0;
+  margin: 0;
+}
+
+#beaver-web-sidebar .beaver-web-ann-line .beaver-web-ann-tags {
+  display: inline-block;
+  vertical-align: baseline;
+  background: var(--beaver-secondary-container);
+  color: var(--beaver-on-secondary-container);
+  padding: 0 4px;
+  margin: 0 4px 2px 0;
+  border-radius: 3px;
+  font-size: 0.85em;
+}
+
+#beaver-web-sidebar .beaver-web-ann-line .beaver-web-ann-detail-trans {
+  display: inline;
+  color: var(--beaver-text);
+  padding: 0 4px 0 0;
+  margin: 0;
+  word-break: break-word;
+  line-height: 1.5;
+}
+
+#beaver-web-sidebar .beaver-web-ann-line .beaver-web-ann-detail-trans.pending {
+  color: var(--beaver-text-disabled);
+  font-style: italic;
+}
+
+/* === 生词表条目（与 sidebar.js .beaver-word-item 同风格）===
+ * 反思（2026-08-15 第六十次修正）：与句子条目一致，去卡片底色，改外边距 + 水平留白
+ * 反思（2026-08-16 第六十八次）：条目压行：单词/喇叭/音标/释义/几阶/标签沿一行内联流动。
+ * 反思（2026-08-16 第六十九次）：空隙规格同句子条目——左右一空格、上下半空格，margin 归零。 */
+#beaver-web-sidebar .beaver-web-word-item {
+  padding: 0 2px;
+  margin: 0;
+}
+
+#beaver-web-sidebar .beaver-web-word-item:hover {
+  background: transparent;
+}
+
+#beaver-web-sidebar .beaver-web-word-item:last-child {
+  margin-bottom: 0;
+}
+
+#beaver-web-sidebar .beaver-web-word-item .beaver-w-word {
+  display: inline-block;
+  max-width: 100%;
+  background: var(--beaver-first-bg, #a8e6cf);
+  color: var(--beaver-first-fg, #0d2014);
+  padding: 0 4px;
+  border-radius: 3px;
+  font-weight: 500;
+  margin: 1px 4px 1px 0;
+}
+
+#beaver-web-sidebar .beaver-web-word-item .beaver-w-speak {
+  margin: 0 2px;
+}
+
+#beaver-web-sidebar .beaver-web-word-item .beaver-w-phonetic {
+  display: inline;
+  color: var(--beaver-text-soft);
+  /* 反思（2026-08-09）：用户要求"注音不要倾斜"，去掉 font-style: italic */
+  font-size: 0.9em;
+  /* 反思（2026-08-10）：用户要求"喇叭音标应当紧贴"，左侧 margin 保持 0 紧贴喇叭按钮；
+     与喇叭构成同一段，左右空白由喇叭左侧与音标右侧留白包裹 */
+  margin-left: 0;
+  padding: 0 4px 0 0;
+}
+
+#beaver-web-sidebar .beaver-web-word-item .beaver-w-lemma {
+  display: inline;
+  color: var(--beaver-text-soft);
+  font-size: 0.85em;
+  padding: 0 4px 0 0;
+}
+
+#beaver-web-sidebar .beaver-web-word-item .beaver-w-trans {
+  display: inline-block;
+  color: var(--beaver-text);
+  padding: 0 4px 0 0;
+  margin: 1px 4px 1px 0;
+  word-break: break-word;
+}
+
+#beaver-web-sidebar .beaver-web-word-item .beaver-w-tags {
+  display: inline-block;
+  vertical-align: baseline;
+  background: var(--beaver-secondary-container);
+  color: var(--beaver-on-secondary-container);
+  padding: 0 4px;
+  margin: 1px 4px;
+  border-radius: 3px;
+  font-size: 0.85em;
+}
+
+#beaver-web-sidebar .beaver-web-word-item .beaver-w-rank {
+  display: inline-block;
+  color: var(--beaver-text-soft);
+  font-size: 0.85em;
+  padding: 0 4px;
+  margin: 1px 4px 1px 0;
+}
+
+/* === 词单模式 ===
+ * CSS 隐藏音标/释义/标签/词阶/词形/喇叭按钮，只剩单词文本。
+ * 反思（2026-08-09）：用户要求"词单你加啥喇叭"——词单模式隐藏喇叭按钮。
+ * 反思（2026-08-16 第六十八次）：词单模式补隐藏 .beaver-w-lemma（词形）——
+ *   旧隐藏列表漏掉词形，词单仍显示 "词形: run" 一类行（用户："词表中你不是纯单词"）。
+ */
+#beaver-web-sidebar .beaver-web-word-only .beaver-web-word-item {
+  padding: 0;
+}
+
+#beaver-web-sidebar .beaver-web-word-only .beaver-w-phonetic,
+#beaver-web-sidebar .beaver-web-word-only .beaver-w-trans,
+#beaver-web-sidebar .beaver-web-word-only .beaver-w-tags,
+#beaver-web-sidebar .beaver-web-word-only .beaver-w-rank,
+#beaver-web-sidebar .beaver-web-word-only .beaver-w-speak,
+#beaver-web-sidebar .beaver-web-word-only .beaver-w-lemma {
+  display: none !important;
+}
+
+#beaver-web-sidebar .beaver-web-word-only .beaver-w-word {
+  font-size: 1em;
+  font-weight: 400;
+  background: transparent;
+  color: var(--beaver-text);
+  padding: 0;
+  margin: 0;
+  width: auto;
+}
+
+/* === ASR 进度条 === */
+#beaver-web-sidebar .beaver-web-asr-progress {
+  padding: 4px;
+  background: var(--beaver-bg-soft);
+  color: var(--beaver-text-soft);
+  flex-shrink: 0;
+}
+
+#beaver-web-sidebar .beaver-web-asr-progress-info {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 4px;
+  font-size: 0.85em;
+}
+
+#beaver-web-sidebar .beaver-web-asr-progress-stage {
+  color: var(--beaver-text);
+}
+
+#beaver-web-sidebar .beaver-web-asr-progress-detail {
+  color: var(--beaver-text-disabled);
+}
+
+#beaver-web-sidebar .beaver-web-asr-progress-bar {
+  width: 100%;
+  height: 6px;
+  background: var(--beaver-bg-active);
+  border-radius: 3px;
+  overflow: hidden;
+}
+
+#beaver-web-sidebar .beaver-web-asr-progress-fill {
+  height: 100%;
+  background: var(--beaver-primary);
+  border-radius: 3px;
+  transition: width 0.3s ease;
+}
+
+/* === 标签内底部按钮区（ASR/OCR 识别按钮）=== */
+#beaver-web-sidebar .beaver-web-tab-footer {
+  display: flex;
+  gap: 4px;
+  padding: 6px 4px;
+  background: var(--beaver-bg-soft);
+  flex-shrink: 0;
+}
+
+/* === 侧栏底部工具栏（复制按钮，与视频侧栏布局一致） === */
+#beaver-web-sidebar .beaver-web-footer {
+  display: flex;
+  gap: 4px;
+  padding: 6px 4px;
+  background: var(--beaver-bg-soft);
+  flex-shrink: 0;
+  border-top: 1px solid var(--beaver-border, rgba(0,0,0,0.08));
+}
+
+#beaver-web-sidebar .beaver-web-action-btn {
+  flex: 1;
+  padding: 6px 8px;
+  min-height: 30px;
+  border: none;
+  background: var(--beaver-btn-bg);
+  border-radius: var(--beaver-radius-sm);
+  cursor: pointer;
+  color: var(--beaver-text-soft);
+  pointer-events: auto;
+  transition: all 0.15s;
+  min-width: 0;
+  box-shadow: var(--beaver-shadow-1);
+  font-size: 0.95em;
+}
+
+#beaver-web-sidebar .beaver-web-action-btn:hover:not(:disabled) {
+  background: var(--beaver-btn-bg-hover);
+}
+
+#beaver-web-sidebar .beaver-web-action-btn.active {
+  background: var(--beaver-primary);
+  color: var(--beaver-on-primary);
+}
+
+/* 禁用按钮：灰色 + tooltip */
+#beaver-web-sidebar .beaver-web-action-btn:disabled {
+  background: var(--beaver-bg-container);
+  color: var(--beaver-text-disabled);
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+/* === 拍照弹窗（摄像头预览 + 拍照/取消按钮）=== */
+#beaver-web-sidebar .beaver-web-camera-modal {
+  position: absolute;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.85);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  z-index: 100;
+  padding: 12px;
+  gap: 12px;
+}
+
+#beaver-web-sidebar .beaver-web-camera-video {
+  max-width: 100%;
+  max-height: 70%;
+  border-radius: var(--beaver-radius);
+  background: #000;
+}
+
+#beaver-web-sidebar .beaver-web-camera-actions {
+  display: flex;
+  gap: 10px;
+}
+
+#beaver-web-sidebar .beaver-web-camera-capture,
+#beaver-web-sidebar .beaver-web-camera-close {
+  padding: 6px 8px;
+  border: none;
+  border-radius: var(--beaver-radius-sm);
+  cursor: pointer;
+  font-size: 0.95em;
+  font-family: inherit;
+  transition: all 0.15s;
+}
+
+#beaver-web-sidebar .beaver-web-camera-capture {
+  background: var(--beaver-primary);
+  color: var(--beaver-on-primary);
+}
+
+#beaver-web-sidebar .beaver-web-camera-capture:hover {
+  background: var(--beaver-primary-dark);
+}
+
+#beaver-web-sidebar .beaver-web-camera-close {
+  background: var(--beaver-btn-bg);
+  color: var(--beaver-text);
+}
+
+#beaver-web-sidebar .beaver-web-camera-close:hover {
+  background: var(--beaver-btn-bg-hover);
+}
+
+/* === 冒泡提示 === */
+.beaver-web-toast {
+  position: fixed;
+  background: rgba(50, 50, 50, 0.95);
+  color: #fff;
+  /* 第一百二十七次：漂浮提示字号地板——Material body=16sp，显式声明防页面继承缩小 */
+  font-size: 16px;
+  padding: 8px 14px;
+  border-radius: var(--beaver-radius, 12px);
+  z-index: 2147483647;
+  pointer-events: auto;
+  user-select: text;
+  -webkit-user-select: text;
+  max-width: 320px;
+  word-break: break-all;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.2);
+  animation: beaver-web-fade-in 0.2s ease;
+  cursor: text;
+}
+
+.beaver-web-toast.error {
+  background: rgba(140, 30, 30, 0.95);
+}
+
+.beaver-web-toast .beaver-web-toast-close {
+  margin-left: 10px;
+  color: #fff;
+  cursor: pointer;
+  opacity: 0.7;
+}
+
+.beaver-web-toast .beaver-web-toast-close:hover {
+  opacity: 1;
+}
+
+@keyframes beaver-web-fade-in {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+
+/* === 喇叭朗读按钮（2026-08-08）=== */
+/* 反思：用户要求"音标前加一个发音按钮"，点击朗读单词（Web Speech API）。2026-08-09 耳机改喇叭。 */
+#beaver-web-sidebar .beaver-w-speak,
+#beaver-web-sidebar .beaver-web-ann-speak {
+  display: inline-block;
+  vertical-align: baseline;
+  background: none;
+  border: none;
+  cursor: pointer;
+  font-size: 0.85em;
+  /* 反思（2026-08-10）：用户要求"喇叭音标应当紧贴"，右侧 padding 归零使喇叭紧贴音标 */
+  padding: 0 0 0 2px;
+  margin-left: 2px;
+  line-height: 1;
+  opacity: 0.7;
+  transition: opacity 0.15s ease;
+}
+
+#beaver-web-sidebar .beaver-w-speak:hover,
+#beaver-web-sidebar .beaver-web-ann-speak:hover {
+  opacity: 1;
+}
+
+/* === 拖动样式（2026-08-08）=== */
+/* 反思：用户要求"悬浮球、侧栏都应当可拖动"，任意拖动而非左右 */
+/* 反思（2026-08-12 第四十一次）：火狐拖动时文字被选中干扰拖动。
+   加 user-select:none + -moz-user-select:none 防止火狐选中文字。 */
+/* 反思（2026-08-13 第四十九次）：加 touch-action:none 防止触摸屏拖动时
+   浏览器接管手势滚动/缩放，导致 Pointer Events 拖动中断。 */
+#beaver-web-sidebar .beaver-web-collapse-tab {
+  cursor: grab;
+  user-select: none;
+  -webkit-user-select: none;
+  -moz-user-select: none;
+  -webkit-user-drag: none;
+  touch-action: none;
+}
+#beaver-web-sidebar .beaver-web-header {
+  cursor: grab;
+  user-select: none;
+  -webkit-user-select: none;
+  -moz-user-select: none;
+  -webkit-user-drag: none;
+  touch-action: none;
+}
+/* 拖动后自由定位，脱离 top/right/bottom/transform 固定
+ * 反思（2026-08-09）：去掉 !important——!important 会覆盖内联 style.top，
+ *   导致 position:fixed + top:auto + bottom:auto 使侧栏跳到静态位置（页面底部），
+ *   侧栏飞出视口消失。改为不使用 !important，靠源码顺序（.dragged 在 .collapsed/.expanded 之后）
+ *   同优先级后者胜出。内联 style 会进一步覆盖此处 CSS。 */
+#beaver-web-sidebar.dragged {
+  bottom: auto;
+  right: auto;
+  top: auto;
+  transform: none;
+}
+#beaver-web-sidebar.dragged.expanded {
+  /* 拖动后展开面板保持圆角，高度由 JS 或用户调整决定 */
+}
+
+/* === 可调尺寸手柄（2026-08-09 重设计）===
+ * 第一百三十四次（用户反馈"右下角调整反人类"）：16px 角块命中区太小且只有
+ *   斜向一种操作。改为三向命中：右缘整条(10px 宽,ew-resize) + 下缘整条
+ *   (10px 高,ns-resize) + 右下角(20px,nwse-resize)，光标随区域反馈。
+ *   热区元素由模板新增 #beaver-web-resize-edge-r / -edge-b，事件同 makeResizable。 */
+#beaver-web-sidebar .beaver-web-resize-handle {
+  position: absolute;
+  bottom: 0;
+  right: 0;
+  width: 20px;
+  height: 20px;
+  cursor: nwse-resize;
+  z-index: 50;
+  background: linear-gradient(135deg, transparent 40%, var(--beaver-outline) 40%, var(--beaver-outline) 50%, transparent 50%, transparent 60%, var(--beaver-outline) 60%, var(--beaver-outline) 70%, transparent 70%);
+  border-bottom-right-radius: var(--beaver-radius, 12px);
+  display: none;
+}
+#beaver-web-sidebar .beaver-web-resize-edge-r {
+  position: absolute;
+  top: 0;
+  right: 0;
+  width: 10px;
+  height: 100%;
+  cursor: ew-resize;
+  z-index: 49;
+  display: none;
+}
+#beaver-web-sidebar .beaver-web-resize-edge-b {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  width: 100%;
+  height: 10px;
+  cursor: ns-resize;
+  z-index: 49;
+  display: none;
+}
+#beaver-web-sidebar.expanded .beaver-web-resize-handle,
+#beaver-web-sidebar.expanded .beaver-web-resize-edge-r,
+#beaver-web-sidebar.expanded .beaver-web-resize-edge-b {
+  display: block;
+}
+
+/* === 文本侧栏注释样式预设（引导页选择，annotationStyle 驱动，样式定义与 src/lib/styles.js ANN_STYLES 一致） ===
+ * 反思（2026-08-13 第五十一次）：文本侧栏注释样式差异化（粗体/斜体/下划线/阴影/字号），
+ *   不再只是颜色互换。作用于：句子生词高亮(.beaver-web-word)、句内联注释(.beaver-web-ann-inline)、
+ *   详细注释词头(.beaver-web-ann-word)。全部 !important 覆盖基础配色。
+ *   root 类名 beaver-ann-style-{id} 由 web-sidebar-impl.js 读取 storage.annotationStyle 动态切换。 */
+#beaver-web-sidebar.beaver-ann-style-mint .beaver-web-sub-text .beaver-web-word,
+#beaver-web-sidebar.beaver-ann-style-mint .beaver-web-sub-text .beaver-web-word.later { background: #a8e6cf !important; color: #0d2014 !important; border-radius: 999px !important; font-weight: 600 !important; }
+#beaver-web-sidebar.beaver-ann-style-mint .beaver-web-ann-inline,
+#beaver-web-sidebar.beaver-ann-style-mint .beaver-web-ann-line .beaver-web-ann-word { background: #0d2014 !important; color: #ffffff !important; border-radius: 999px !important; }
+#beaver-web-sidebar.beaver-ann-style-gold .beaver-web-sub-text .beaver-web-word,
+#beaver-web-sidebar.beaver-ann-style-gold .beaver-web-sub-text .beaver-web-word.later { background: #ffd54f !important; color: #332700 !important; border-radius: 2px !important; font-weight: 600 !important; }
+#beaver-web-sidebar.beaver-ann-style-gold .beaver-web-ann-inline,
+#beaver-web-sidebar.beaver-ann-style-gold .beaver-web-ann-line .beaver-web-ann-word { background: #fff8e1 !important; color: #8a6d00 !important; border-radius: 2px !important; font-size: 15px !important; }
+#beaver-web-sidebar.beaver-ann-style-marker .beaver-web-sub-text .beaver-web-word,
+#beaver-web-sidebar.beaver-ann-style-marker .beaver-web-sub-text .beaver-web-word.later { background: rgba(255,213,79,.45) !important; color: #332700 !important; border-radius: 0 !important; font-weight: 600 !important; }
+#beaver-web-sidebar.beaver-ann-style-marker .beaver-web-ann-inline,
+#beaver-web-sidebar.beaver-ann-style-marker .beaver-web-ann-line .beaver-web-ann-word { background: transparent !important; color: #b28704 !important; border-radius: 0 !important; }
+#beaver-web-sidebar.beaver-ann-style-red-underline .beaver-web-sub-text .beaver-web-word,
+#beaver-web-sidebar.beaver-ann-style-red-underline .beaver-web-sub-text .beaver-web-word.later { background: transparent !important; color: #d81b60 !important; border-radius: 0 !important; text-decoration: underline !important; }
+#beaver-web-sidebar.beaver-ann-style-red-underline .beaver-web-ann-inline,
+#beaver-web-sidebar.beaver-ann-style-red-underline .beaver-web-ann-line .beaver-web-ann-word { background: transparent !important; color: #d81b60 !important; border-radius: 0 !important; }
+#beaver-web-sidebar.beaver-ann-style-plain .beaver-web-sub-text .beaver-web-word,
+#beaver-web-sidebar.beaver-ann-style-plain .beaver-web-sub-text .beaver-web-word.later { background: transparent !important; color: #1565c0 !important; border-radius: 0 !important; }
+#beaver-web-sidebar.beaver-ann-style-plain .beaver-web-ann-inline,
+#beaver-web-sidebar.beaver-ann-style-plain .beaver-web-ann-line .beaver-web-ann-word { background: transparent !important; color: #1565c0 !important; border-radius: 0 !important; }
+#beaver-web-sidebar.beaver-ann-style-capsule .beaver-web-sub-text .beaver-web-word,
+#beaver-web-sidebar.beaver-ann-style-capsule .beaver-web-sub-text .beaver-web-word.later { background: #64b5f6 !important; color: #0d1b33 !important; border-radius: 999px !important; font-weight: 600 !important; }
+#beaver-web-sidebar.beaver-ann-style-capsule .beaver-web-ann-inline,
+#beaver-web-sidebar.beaver-ann-style-capsule .beaver-web-ann-line .beaver-web-ann-word { background: #0d1b33 !important; color: #64b5f6 !important; border-radius: 999px !important; }
+#beaver-web-sidebar.beaver-ann-style-shadow-pop .beaver-web-sub-text .beaver-web-word,
+#beaver-web-sidebar.beaver-ann-style-shadow-pop .beaver-web-sub-text .beaver-web-word.later { background: #6d4c41 !important; color: #fff8f0 !important; border-radius: 3px !important; font-weight: 600 !important; box-shadow: 0 2px 3px rgba(0,0,0,.45), 0 5px 8px rgba(0,0,0,.25) !important; }
+#beaver-web-sidebar.beaver-ann-style-shadow-pop .beaver-web-ann-inline,
+#beaver-web-sidebar.beaver-ann-style-shadow-pop .beaver-web-ann-line .beaver-web-ann-word { background: #fff8f0 !important; color: #6d4c41 !important; border-radius: 3px !important; }
+#beaver-web-sidebar.beaver-ann-style-ink .beaver-web-sub-text .beaver-web-word,
+#beaver-web-sidebar.beaver-ann-style-ink .beaver-web-sub-text .beaver-web-word.later { background: #263238 !important; color: #eceff1 !important; border-radius: 2px !important; font-weight: 600 !important; }
+#beaver-web-sidebar.beaver-ann-style-ink .beaver-web-ann-inline,
+#beaver-web-sidebar.beaver-ann-style-ink .beaver-web-ann-line .beaver-web-ann-word { background: #eceff1 !important; color: #263238 !important; border-radius: 2px !important; font-size: 12px !important; }
+#beaver-web-sidebar.beaver-ann-style-big .beaver-web-sub-text .beaver-web-word,
+#beaver-web-sidebar.beaver-ann-style-big .beaver-web-sub-text .beaver-web-word.later { background: transparent !important; color: #00695c !important; border-radius: 0 !important; font-weight: 600 !important; font-size: 19px !important; }
+#beaver-web-sidebar.beaver-ann-style-big .beaver-web-ann-inline,
+#beaver-web-sidebar.beaver-ann-style-big .beaver-web-ann-line .beaver-web-ann-word { background: transparent !important; color: #00695c !important; border-radius: 0 !important; font-size: 17px !important; }
+#beaver-web-sidebar.beaver-ann-style-night .beaver-web-sub-text .beaver-web-word,
+#beaver-web-sidebar.beaver-ann-style-night .beaver-web-sub-text .beaver-web-word.later { background: #37474f !important; color: #ffcc80 !important; border-radius: 2px !important; font-weight: 600 !important; }
+#beaver-web-sidebar.beaver-ann-style-night .beaver-web-ann-inline,
+#beaver-web-sidebar.beaver-ann-style-night .beaver-web-ann-line .beaver-web-ann-word { background: #ffcc80 !important; color: #37474f !important; border-radius: 2px !important; }
+#beaver-web-sidebar.beaver-ann-style-serif-italic .beaver-web-sub-text .beaver-web-word,
+#beaver-web-sidebar.beaver-ann-style-serif-italic .beaver-web-sub-text .beaver-web-word.later { background: transparent !important; color: #4a148c !important; border-radius: 0 !important; font-style: italic !important; }
+#beaver-web-sidebar.beaver-ann-style-serif-italic .beaver-web-ann-inline,
+#beaver-web-sidebar.beaver-ann-style-serif-italic .beaver-web-ann-line .beaver-web-ann-word { background: transparent !important; color: #6a1b9a !important; border-radius: 0 !important; font-style: italic !important; }
+#beaver-web-sidebar.beaver-ann-style-outline .beaver-web-sub-text .beaver-web-word,
+#beaver-web-sidebar.beaver-ann-style-outline .beaver-web-sub-text .beaver-web-word.later { background: transparent !important; color: #1a237e !important; border-radius: 0 !important; font-weight: 600 !important; text-shadow: 0 1px 0 #fff, 0 -1px 0 #fff, 1px 0 0 #fff, -1px 0 0 #fff, 0 2px 3px rgba(0,0,0,.5) !important; }
+#beaver-web-sidebar.beaver-ann-style-outline .beaver-web-ann-inline,
+#beaver-web-sidebar.beaver-ann-style-outline .beaver-web-ann-line .beaver-web-ann-word { background: transparent !important; color: #1a237e !important; border-radius: 0 !important; }
+#beaver-web-sidebar.beaver-ann-style-rose .beaver-web-sub-text .beaver-web-word,
+#beaver-web-sidebar.beaver-ann-style-rose .beaver-web-sub-text .beaver-web-word.later { background: #f48fb1 !important; color: #3d0019 !important; border-radius: 999px !important; font-style: italic !important; font-weight: 600 !important; }
+#beaver-web-sidebar.beaver-ann-style-rose .beaver-web-ann-inline,
+#beaver-web-sidebar.beaver-ann-style-rose .beaver-web-ann-line .beaver-web-ann-word { background: transparent !important; color: #c2185b !important; border-radius: 999px !important; }
+#beaver-web-sidebar.beaver-ann-style-sky .beaver-web-sub-text .beaver-web-word,
+#beaver-web-sidebar.beaver-ann-style-sky .beaver-web-sub-text .beaver-web-word.later { background: #80deea !important; color: #003038 !important; border-radius: 999px !important; font-style: italic !important; }
+#beaver-web-sidebar.beaver-ann-style-sky .beaver-web-ann-inline,
+#beaver-web-sidebar.beaver-ann-style-sky .beaver-web-ann-line .beaver-web-ann-word { background: #003038 !important; color: #80deea !important; border-radius: 999px !important; }
+#beaver-web-sidebar.beaver-ann-style-lime .beaver-web-sub-text .beaver-web-word,
+#beaver-web-sidebar.beaver-ann-style-lime .beaver-web-sub-text .beaver-web-word.later { background: #d4e157 !important; color: #222b00 !important; border-radius: 0 !important; font-weight: 600 !important; text-decoration: underline !important; }
+#beaver-web-sidebar.beaver-ann-style-lime .beaver-web-ann-inline,
+#beaver-web-sidebar.beaver-ann-style-lime .beaver-web-ann-line .beaver-web-ann-word { background: #222b00 !important; color: #d4e157 !important; border-radius: 0 !important; font-size: 15px !important; }

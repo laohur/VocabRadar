@@ -1,0 +1,442 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+  <meta charset="UTF-8">
+  <title>VocabRadar · 引导</title>
+  <!-- 反思（2026-08-21 第八十八次）：ASR/OCR 结果栏侧栏面板复用现有「视频侧栏」「文本侧栏」的
+       M3 马卡龙设计体系——直接引入 sidebar.css / web-sidebar.css 的 --beaver-* 设计令牌（同源），
+       面板样式用这些令牌（不用平行副本），不新建设计体系。 -->
+  <link rel="stylesheet" href="guide.css">
+  <link rel="stylesheet" href="../content/sidebar.css">
+  <link rel="stylesheet" href="../content/web-sidebar.css">
+</head>
+<body>
+  <!-- ===== 顶部标题 ===== -->
+  <header class="guide-header">
+    <!-- 第一百七十六次（用户："图示字符显示不出来，换成小图标"）：原 🦫（U+1F9AB）在
+         Windows 10 旧版 Segoe UI Emoji 无字形，显示成豆腐块。引导页是扩展自身页面，
+         直接引真实产品图标。 -->
+    <div class="guide-title"><img class="guide-logo" src="../data/icons/icon32.png" alt="">VocabRadar · Guide</div>
+    <!-- 反思（2026-08-16 第七十次）：构建版本戳，与视频页 overlay 启动日志的 BUILD_STAMP 对照，
+         判定"默认样式被改/设定栏没选中"是否旧构建残留。 -->
+    <span class="guide-ver" id="guideVer"></span>
+    <!-- 第一百七十七次（用户："引导页面右上角加上小房子 home，跳转到 vocabradar.com"）：
+         右上角官网入口。用内联 SVG 小房子而非 emoji，避免 Windows 10 字形缺失显示豆腐块。 -->
+    <a class="guide-home" href="https://vocabradar.com" target="_blank" rel="noopener noreferrer" title="vocabradar.com">
+      <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <path d="M3 10.5 12 3l9 7.5"></path>
+        <path d="M5 9.8V20h5v-5.5h4V20h5V9.8"></path>
+      </svg>
+    </a>
+  </header>
+
+  <!-- ===== 四子标签（设定栏 / ASR / OCR / 说明栏），默认设定栏 ===== -->
+  <nav class="guide-tabs" id="guideTabs">
+    <button class="guide-tab active" data-tab="settings" data-key="tabSettings">设定栏</button>
+    <button class="guide-tab" data-tab="asr" data-key="tabAsr">ASR</button>
+    <button class="guide-tab" data-tab="ocr" data-key="tabOcr">OCR</button>
+    <button class="guide-tab" data-tab="help" data-key="tabHelp">说明栏</button>
+  </nav>
+
+  <main class="guide-main">
+
+    <!-- ===== 设定栏：按功能分组，开关与样式同组 ===== -->
+    <section class="guide-panel active" id="panel-settings" data-panel="settings">
+
+      <!-- 全局参数（第二百二十三次：翻译渠道行挪入「模型」分组，本组只留语言/阈值/注释开关） -->
+      <div class="group" id="group-global">
+        <div class="group-head">
+          <span class="group-name" data-key="groupGlobal">全局参数</span>
+        </div>
+        <div class="group-body">
+          <div class="field-row">
+            <div class="field">
+              <label for="uiLang" data-key="fieldUiLang">界面语言</label>
+              <select id="uiLang"></select>
+            </div>
+            <div class="field">
+              <label for="sourceLanguage" data-key="fieldSource">目标语言（要学习的目标）</label>
+              <select id="sourceLanguage"></select>
+            </div>
+            <div class="field">
+              <label for="targetLanguage" data-key="fieldTarget">注释语言（用来释义）</label>
+              <select id="targetLanguage"></select>
+            </div>
+            <div class="field">
+              <label for="rankThreshold" data-key="fieldThreshold">词频阈值</label>
+              <input id="rankThreshold" type="number" min="0" step="1000">
+            </div>
+            <label class="chk">
+              <input id="annotateOov" type="checkbox">
+              <span data-key="chkRareWords">注释表外词</span>
+            </label>
+            <label class="chk">
+              <input id="annotateRepeat" type="checkbox">
+              <span data-key="chkAnnotateRepeat">注释重复生词</span>
+            </label>
+          </div>
+        </div>
+      </div>
+
+      <!-- 模型（第二百二十三次重排：对话大模型 / 翻译 / 语音识别模型 / OCR 四小节；
+           LLM 四参数一行、两提示词与正文最大长度各一行；ASR/OCR 引擎为下拉两行式） -->
+      <div class="group" id="group-model">
+        <div class="group-head">
+          <span class="group-name" data-key="groupModel">模型</span>
+        </div>
+        <div class="group-body">
+          <div class="sub-head" data-key="subHeadChat">对话大模型</div>
+          <p class="style-desc" data-key="modelDesc">对话（💬）功能所用的大模型接口。按 API 格式分三类：免费直连（无需账号）、OpenAI 格式、Anthropic 格式；后两类需自行申请 Key。</p>
+          <div class="field-row">
+            <div class="field">
+              <label for="llmProvider" data-key="fieldLlmProvider">对话模型来源</label>
+              <select id="llmProvider"></select>
+            </div>
+            <div class="field">
+              <label for="llmModel" data-key="fieldLlmModel">模型名</label>
+              <input id="llmModel" type="text" placeholder="">
+            </div>
+            <div class="field">
+              <label for="llmBaseUrl" data-key="fieldLlmBaseUrl">接口地址</label>
+              <input id="llmBaseUrl" type="text" placeholder="">
+            </div>
+            <div class="field" id="llmApiKeyField">
+              <label for="llmApiKey" data-key="fieldLlmApiKey">API Key</label>
+              <input id="llmApiKey" type="password" placeholder="sk-...">
+            </div>
+          </div>
+          <div class="field-row">
+            <div class="field field-wide">
+              <label for="chatWordPrompt" data-key="fieldChatWordPrompt">单词类查询提示词（{} = 选中文本，{lang} = 释义语言）</label>
+              <input id="chatWordPrompt" type="text">
+            </div>
+          </div>
+          <div class="field-row">
+            <div class="field field-wide">
+              <label for="chatSidebarPrompt" data-key="fieldChatSidebarPrompt">侧栏提示词（{lang} = 释义语言；正文作为上下文另行发送）</label>
+              <input id="chatSidebarPrompt" type="text">
+            </div>
+          </div>
+          <div class="field-row">
+            <div class="field field-wide">
+              <label for="chatContextMaxBytes"><span data-key="fieldChatContextMax">送入对话的作为背景的网页/字幕正文至多</span></label>
+              <input id="chatContextMaxBytes" type="number" min="1000" step="1000" placeholder="10000">
+              <span data-key="guideContextBytesSuffix">字节。</span>
+            </div>
+          </div>
+          <!-- 第二百二十三次（用户："翻译 后面跟着一排候选框，第一行LLM（默认没选）后跟提示词
+               Please translate "{}" in {lang}.，下一行其他几个默认选中。火狐本身没翻译自然灰色不可选"）：
+               从「全局参数」组挪入模型分组。保存监听在 guide.js 补齐（此前勾选不落 storage）；
+               浏览器无 Translator API（如 Firefox）时「浏览器自身」由 JS 灰显禁用。 -->
+          <div class="sub-head" data-key="subHeadTrans">翻译</div>
+          <p class="style-desc" data-key="transDesc">生词释义的在线翻译渠道（勾选启用，按序回退）：LLM 渠道走上方对话大模型，默认不选；其余渠道默认全启用。</p>
+          <div class="field-row">
+            <label class="chk"><input type="checkbox" id="transChLlm"><span data-key="transChLlm">LLM</span></label>
+            <!-- 第二百二十四次：提示词与 LLM 复选框同行（用户确认）；flex-basis 收窄到 220px，
+                 确保窄窗口下也不换行拆到两行 -->
+            <input id="llmTranslatePrompt" type="text" placeholder="Please translate &quot;{}&quot; in {lang}." style="flex:1 1 220px; min-width:180px;">
+          </div>
+          <div class="field-row">
+            <label class="chk"><input type="checkbox" id="transChBuiltin"><span data-key="transChBuiltin">浏览器自身</span></label>
+            <label class="chk"><input type="checkbox" id="transChBaidusug"><span data-key="transChBaidusug">百度联想</span></label>
+            <label class="chk"><input type="checkbox" id="transChYoudaodict"><span data-key="transChYoudaodict">有道词典</span></label>
+            <label class="chk"><input type="checkbox" id="transChMymemory"><span data-key="transChMymemory">MyMemory</span></label>
+            <label class="chk"><input type="checkbox" id="transChGoogle"><span data-key="transChGoogle">Google</span></label>
+            <label class="chk"><input type="checkbox" id="transChYoudao"><span data-key="transChYoudao">有道翻译</span></label>
+            <label class="chk"><input type="checkbox" id="transChBaidu"><span data-key="transChBaidu">百度翻译</span></label>
+            <label class="chk"><input type="checkbox" id="transChBing"><span data-key="transChBing">Bing</span></label>
+            <label class="chk"><input type="checkbox" id="transChLingva"><span data-key="transChLingva">Lingva</span></label>
+          </div>
+          <div class="sub-head" data-key="subHeadAsr">语音识别模型</div>
+          <!-- 第二百二十四次（用户："改为两行单选，细项各自铺开，默认本地，whisper-tiny是具体模型名称"）：
+               行1=引擎单选（本地/API，默认本地）；行2=细项铺开——本地为 whisper-* 具体模型名单选
+               （value 仍存 tiny/base/…，offscreen 的 SUPPORTED_MODELS 只认这些，显示名才带 whisper- 前缀），
+               API 为 OpenAI 兼容 地址/转写模型/Key。radio value 必须是 local/llm——后台 service-worker
+               与 guide/asr.js 消费端判 'llm'（旧版存 'api' 是断线 bug，223 次已归一化）。
+               转写端点只有 OpenAI 兼容一种主流格式（Anthropic 无音频转写），故 API 细项不放格式单选。 -->
+          <p class="style-desc" data-key="asrModelDesc">语音识别引擎：本地 Whisper（模型越大越准也越慢，首次使用需下载），或 OpenAI 兼容转写 API（填接口地址/模型名/Key）。与上面的对话模型互不相关。</p>
+          <div class="field-row">
+            <span class="radio-label" data-key="fieldAsrEngine">ASR 引擎</span>
+            <label class="g-radio"><input type="radio" name="asrEngine" value="local" checked><span data-key="asrEngineLocal">本地（Whisper）</span></label>
+            <label class="g-radio"><input type="radio" name="asrEngine" value="llm"><span data-key="asrEngineApi">API（OpenAI 兼容）</span></label>
+          </div>
+          <div class="field-row" data-asr-local-cfg="1">
+            <span class="radio-label" data-key="fieldAsrModel">Whisper 模型</span>
+            <label class="g-radio"><input type="radio" name="asrModelSize" value="tiny"><span>whisper-tiny</span></label>
+            <label class="g-radio"><input type="radio" name="asrModelSize" value="tiny.en"><span>whisper-tiny.en</span></label>
+            <label class="g-radio"><input type="radio" name="asrModelSize" value="base"><span>whisper-base</span></label>
+            <label class="g-radio"><input type="radio" name="asrModelSize" value="base.en"><span>whisper-base.en</span></label>
+            <label class="g-radio"><input type="radio" name="asrModelSize" value="small"><span>whisper-small</span></label>
+            <label class="g-radio"><input type="radio" name="asrModelSize" value="small.en"><span>whisper-small.en</span></label>
+            <label class="g-radio"><input type="radio" name="asrModelSize" value="medium"><span>whisper-medium</span></label>
+            <label class="g-radio"><input type="radio" name="asrModelSize" value="medium.en"><span>whisper-medium.en</span></label>
+            <label class="g-radio"><input type="radio" name="asrModelSize" value="large-v3"><span>whisper-large-v3</span></label>
+            <label class="g-radio"><input type="radio" name="asrModelSize" value="turbo"><span>whisper-large-v3-turbo</span></label>
+          </div>
+          <div class="field-row" data-asr-api-cfg="1" style="display:none;">
+            <span class="radio-label" data-key="asrApiFmt">OpenAI 兼容格式</span>
+            <div class="field inline">
+              <label for="asrLlmBaseUrl" data-key="fieldLlmBaseUrl">接口地址</label>
+              <input id="asrLlmBaseUrl" type="text" placeholder="https://api.openai.com/v1">
+            </div>
+            <div class="field inline">
+              <label for="asrLlmModel" data-key="fieldAsrLlmModel">LLM 转写模型</label>
+              <input id="asrLlmModel" type="text" placeholder="whisper-1">
+            </div>
+            <div class="field inline">
+              <label for="asrLlmApiKey" data-key="fieldLlmApiKey">API Key</label>
+              <input id="asrLlmApiKey" type="password" placeholder="sk-...">
+            </div>
+          </div>
+          <div class="sub-head" data-key="subHeadOcr">OCR</div>
+          <!-- 第二百二十四次（用户："ocr同理改两行单选；三种语言界面 目标 释义，不要写死、不要特指，
+               默认全选"；并纠正 223 次误把语言名 English/中文 当复选框标签）：
+               行1=引擎单选（本地/API，默认本地）；行2=本地细项——三个复选框标签固定为角色名
+               界面/目标/释义（不随语言名变），各自的勾选"值"由 JS 按当前 界面语言/目标语言/释义语言
+               动态映射为 Tesseract 语言代码（renderOcrLangRow），storage 仍按代码存 ocrLanguages。
+               API 细项=格式单选（OpenAI 兼容/Anthropic，视觉识别两种后台均已实现）+地址/模型/Key。 -->
+          <p class="style-desc" data-key="ocrEngineDesc">截图/视频帧的文字识别引擎：本地 Tesseract（在界面/目标/释义三种语言中勾选要识别的语言），或大模型视觉识别 API（需模型支持图片输入）。</p>
+          <div class="field-row">
+            <span class="radio-label" data-key="fieldOcrEngine">OCR 引擎</span>
+            <label class="g-radio"><input type="radio" name="ocrEngine" value="tesseract" checked><span data-key="ocrEngineLocal">本地（Tesseract）</span></label>
+            <label class="g-radio"><input type="radio" name="ocrEngine" value="llm"><span data-key="ocrEngineApi">API（视觉识别）</span></label>
+          </div>
+          <div class="field-row" data-ocr-local-cfg="1" id="ocrLangRow">
+            <span class="radio-label" data-key="fieldOcrLangs">Tesseract 语言</span>
+            <label class="chk"><input type="checkbox" id="ocrLangUi"><span data-key="ocrRoleUi">界面</span></label>
+            <label class="chk"><input type="checkbox" id="ocrLangTarget"><span data-key="ocrRoleTarget">目标</span></label>
+            <label class="chk"><input type="checkbox" id="ocrLangMeaning"><span data-key="ocrRoleMeaning">释义</span></label>
+          </div>
+          <div class="field-row" data-ocr-api-cfg="1" style="display:none;">
+            <span class="radio-label" data-key="ocrApiFmt">API 格式</span>
+            <label class="g-radio"><input type="radio" name="ocrLlmProvider" value="openai" checked><span data-key="fmtOpenai">OpenAI 兼容</span></label>
+            <label class="g-radio"><input type="radio" name="ocrLlmProvider" value="anthropic"><span data-key="fmtAnthropic">Anthropic</span></label>
+            <div class="field inline">
+              <label for="ocrLlmBaseUrl" data-key="fieldLlmBaseUrl">接口地址</label>
+              <input id="ocrLlmBaseUrl" type="text">
+            </div>
+            <div class="field inline">
+              <label for="ocrLlmModel" data-key="fieldLlmModel">模型名</label>
+              <input id="ocrLlmModel" type="text">
+            </div>
+            <div class="field inline">
+              <label for="ocrLlmApiKey" data-key="fieldLlmApiKey">API Key</label>
+              <input id="ocrLlmApiKey" type="password" placeholder="sk-...">
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 网页生词提示 -->
+      <div class="group" data-collapsible>
+        <div class="group-head">
+          <button class="group-toggle" type="button">▸</button>
+          <span class="group-name" data-key="groupTextHint">网页生词提示</span>
+          <label class="group-switch" title="">
+            <input id="textHintEnabled" type="checkbox">
+            <span data-key="switchOn">开启</span>
+          </label>
+        </div>
+        <div class="group-body" style="display:none;">
+          <p class="style-desc" data-key="textStyleDesc">全站生词高亮配色。</p>
+          <!-- 反思（2026-08-15 第六十次修正）：侧邻复选框移在样式网格上方（用户要求"在上，不在样式选完之后"）。 -->
+          <label class="chk">
+            <input id="hintSideAnnotation" type="checkbox">
+            <span data-key="chkSideAnnotation">生词旁侧邻提示</span>
+          </label>
+          <div class="style-grid" id="textStyleGrid"></div>
+        </div>
+      </div>
+
+      <!-- 文本侧栏 -->
+      <div class="group" data-collapsible>
+        <div class="group-head">
+          <button class="group-toggle" type="button">▸</button>
+          <span class="group-name" data-key="groupWebSidebar">文本侧栏</span>
+          <label class="group-switch">
+            <input id="webSidebarEnabled" type="checkbox">
+            <span data-key="switchOn">开启</span>
+          </label>
+        </div>
+        <div class="group-body" style="display:none;">
+          <p class="style-desc" data-key="annStyleDesc">文本侧栏句子中 生词(释义) 注释样式。</p>
+          <div class="radio-row">
+            <span class="radio-label" data-key="annLayout">注释布局</span>
+            <label class="g-radio"><input type="radio" name="webSidebarAnnMode" value="side" checked><span data-key="annModeSide">侧邻</span></label>
+            <label class="g-radio"><input type="radio" name="webSidebarAnnMode" value="detail"><span data-key="annModeDetail">详细</span></label>
+          </div>
+          <div class="style-grid" id="annStyleGrid"></div>
+        </div>
+      </div>
+
+      <!-- 视频侧栏 -->
+      <div class="group" data-collapsible>
+        <div class="group-head">
+          <button class="group-toggle" type="button">▸</button>
+          <span class="group-name" data-key="groupSidebar">视频侧栏</span>
+          <label class="group-switch">
+            <input id="sidebarEnabled" type="checkbox">
+            <span data-key="switchOn">开启</span>
+          </label>
+        </div>
+        <div class="group-body" style="display:none;">
+          <p class="style-desc" data-key="vannStyleDesc">视频侧栏句子中 生词(释义) 注释样式。</p>
+          <div class="radio-row">
+            <span class="radio-label" data-key="annLayout">注释布局</span>
+            <label class="g-radio"><input type="radio" name="videoSidebarAnnMode" value="side" checked><span data-key="annModeSide">侧邻</span></label>
+            <label class="g-radio"><input type="radio" name="videoSidebarAnnMode" value="detail"><span data-key="annModeDetail">详细</span></label>
+          </div>
+          <div class="style-grid" id="vannStyleGrid"></div>
+        </div>
+      </div>
+
+      <!-- 视频叠加字幕 -->
+      <div class="group" data-collapsible>
+        <div class="group-head">
+          <button class="group-toggle" type="button">▸</button>
+          <span class="group-name" data-key="groupOverlay">视频叠加字幕</span>
+          <label class="group-switch">
+            <input id="overlayEnabled" type="checkbox">
+            <span data-key="switchOn">开启</span>
+          </label>
+        </div>
+        <div class="group-body" style="display:none;">
+          <p class="style-desc" data-key="subStyleDesc">字幕的外观与位置是两维独立选择，选中后立即应用到视频字幕。</p>
+          <div class="radio-row">
+            <span class="radio-label" data-key="annLayout">注释布局</span>
+            <label class="g-radio"><input type="radio" name="videoOverlayAnnMode" value="side" checked><span data-key="annModeSide">侧邻</span></label>
+            <label class="g-radio"><input type="radio" name="videoOverlayAnnMode" value="detail"><span data-key="annModeDetail">详细</span></label>
+          </div>
+          <!-- 反思（2026-08-16 第七十一次）：⑤ 用户裁定顺序——文字样式 → 效果预览 → 位置。
+               预览保持原生长宽比（横屏 16:9 / 竖屏 9:16），位置样式独立选择。 -->
+          <div class="sub-sec-label" data-key="subTextStyle">文字样式</div>
+          <div class="style-grid" id="subtitleStyleGrid"></div>
+          <div class="sub-sec-label" data-key="subPreview">效果预览</div>
+          <div class="sub-preview-row" id="subPreviewRow"></div>
+          <div class="sub-sec-label" data-key="subPosition">位置样式（距底部）</div>
+          <div class="style-grid" id="subPositionGrid"></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ===== ASR 栏：语音识别（与设定栏/说明栏并列） ===== -->
+    <!-- 反思（2026-08-14 第五十八次）：按用户要求重排布局——第一行 输入/上传+录制来源单选，
+         其次 展示区（空态提示居中），再其次 识别按钮，之下 识别结果区。 -->
+    <section class="guide-panel" id="panel-asr" data-panel="asr">
+      <div class="group func-group">
+        <div class="group-head">
+          <span class="group-name" data-key="asrTitle">语音识别（ASR）</span>
+        </div>
+        <div class="group-body">
+          <p class="style-desc" data-key="asrDesc">识别无字幕视频/录音的语音，实时输出句子并标注生词释义。</p>
+          <!-- 第一行：输入 上传文件 + 录制按钮，录制按钮后跟 (audio, video, screen) 括号内单选 -->
+          <div class="g-source-row">
+            <button class="func-btn" id="g-upload-av" data-key="uploadAv">📁 上传文件</button>
+            <button class="func-btn g-record-btn" id="g-asr-record-btn" data-key="record">🎙 录制</button>
+            <span class="g-radio-label">(</span>
+            <!-- 反思（2026-08-16 第七十一次）：⑥ radio 本地化——span 加 data-key（文案走 i18n），
+                 label 加 data-title-key（悬浮提示走 *_Title 键），不再硬编码 audio/video/screen 英文。 -->
+            <label class="g-radio" data-title-key="ws.recordAudioTitle"><input type="radio" name="g-asr-source" id="g-record-audio" value="audio" checked><span class="g-radio-text" data-key="ws.recordAudio">audio</span></label>
+            <label class="g-radio" data-title-key="ws.recordVideoTitle"><input type="radio" name="g-asr-source" id="g-record-video" value="video"><span class="g-radio-text" data-key="ws.recordVideo">video</span></label>
+            <label class="g-radio" data-title-key="ws.recordScreenTitle"><input type="radio" name="g-asr-source" id="g-record-screen" value="screen"><span class="g-radio-text" data-key="ws.recordScreen">screen</span></label>
+            <span class="g-radio-label">)</span>
+            <input type="file" id="g-av-input" accept="video/*,audio/*" hidden>
+          </div>
+          <!-- 其次：展示 + 视频侧栏（2026-08-21 第八十九次：右侧为真实视频侧栏内联挂载容器
+               （content/sidebar.js options.mount），识别结果经 updateSubtitles 输入侧栏展示；
+               原扁平 Recognition Results 栏已移除） -->
+          <div class="g-sidebar-row">
+            <div class="g-media-area" id="g-asr-media">
+              <div class="g-media-hint" id="g-asr-hint">
+                <span data-key="asrHint">上传文件、录音、录像或录屏后，点击「开始识别」</span>
+              </div>
+              <video id="g-asr-video" controls style="display:none;"></video>
+              <div class="g-file-info" id="g-asr-file-info" style="display:none;"></div>
+            </div>
+            <div class="g-sidebar g-sidebar-mount" id="g-asr-sidebar-mount"></div>
+          </div>
+          <!-- 再其次：识别 -->
+          <div class="g-recognize-row">
+            <button class="func-btn" id="g-asr-btn" data-key="recognize" disabled>🎤 开始识别</button>
+          </div>
+          <!-- 进度 -->
+          <div class="g-progress" id="g-asr-progress" style="display:none;">
+            <div class="g-progress-info">
+              <span class="g-progress-stage" id="g-asr-progress-stage"></span>
+              <span class="g-progress-detail" id="g-asr-progress-detail"></span>
+            </div>
+            <div class="g-progress-bar">
+              <div class="g-progress-fill" id="g-asr-progress-fill" style="width:0%"></div>
+            </div>
+          </div>
+<!-- 之下：展示注释结果（第六十九次新增：生词汇总块，随识别实时更新） -->
+          <div class="g-ann-summary" id="g-asr-ann-summary" hidden>
+            <div class="g-results-head" data-key="annResultsTitle">展示注释结果</div>
+            <div class="g-ann-summary-body" id="g-asr-ann-summary-body"></div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ===== OCR 栏：文字识别（与设定栏/说明栏并列） ===== -->
+    <!-- 反思（2026-08-14 第五十八次）：与 ASR 同构——第一行 输入/上传+拍照，其次 展示区+文本侧栏并排，
+         再其次 识别按钮，之下 展示注释结果汇总（2026-08-20 第八十七次补充①：识别结果输入侧栏展示）。 -->
+    <section class="guide-panel" id="panel-ocr" data-panel="ocr">
+      <div class="group func-group">
+        <div class="group-head">
+          <span class="group-name" data-key="ocrTitle">文字识别（OCR）</span>
+        </div>
+        <div class="group-body">
+          <p class="style-desc" data-key="ocrDesc">识别图片/摄像头画面中的文字，按行输出并标注生词释义。</p>
+          <!-- 第一行：输入 上传图片 + 拍照 -->
+          <div class="g-source-row">
+            <button class="func-btn" id="g-upload-img" data-key="uploadImg">🖼 上传图片</button>
+            <span class="g-source-or" data-key="sourceOr">或</span>
+            <button class="func-btn" id="g-capture-photo" data-key="capturePhoto">📷 拍照</button>
+            <input type="file" id="g-img-input" accept="image/*" hidden>
+          </div>
+          <!-- 其次：展示 + 文本侧栏（2026-08-20 第八十七次补充①：预览框右侧加文本侧栏，
+               识别结果输入侧栏处理展示；原 Recognition Results 栏移除） -->
+          <div class="g-sidebar-row">
+            <div class="g-media-area" id="g-ocr-media">
+              <div class="g-media-hint" id="g-ocr-hint">
+                <span data-key="ocrHint">上传图片或拍照后，点击「开始识别」</span>
+              </div>
+              <img id="g-ocr-image" alt="" style="display:none;">
+              <div class="g-file-info" id="g-ocr-file-info" style="display:none;"></div>
+            </div>
+            <div class="g-sidebar" id="g-ocr-sidebar">
+              <div class="g-results-head" data-key="ocrResultsTitle">识别结果</div>
+              <div class="g-sidebar-body" id="g-ocr-results">
+                <div class="g-empty-tip" data-key="ocrResultTip">识别出的文字将显示在这里</div>
+              </div>
+            </div>
+          </div>
+          <!-- 再其次：识别 -->
+          <div class="g-recognize-row">
+            <button class="func-btn" id="g-ocr-btn" data-key="recognize" disabled>📷 开始识别</button>
+          </div>
+          <!-- 反思（2026-08-21 第九十一次）：用户要求删除 OCR 的 Annotated Words（展示注释结果）栏目——
+               右侧文本侧栏面板即识别结果（纯文本 + 行内文本提示样式生词(释义)），
+               生词汇总由右侧悬浮文本侧栏的"词汇"标签承担，此处不再重复。 -->
+        </div>
+      </div>
+    </section>
+
+    <!-- ===== 说明栏：使用说明 ===== -->
+    <section class="guide-panel" id="panel-help" data-panel="help">
+      <div class="group">
+        <div class="group-head">
+          <span class="group-name" data-key="helpTitle">使用说明</span>
+        </div>
+        <div class="group-body help-body" id="helpBody"></div>
+      </div>
+    </section>
+  </main>
+
+  <!-- 反思（2026-08-17 第七十二次补充）：麦克风未授权不再弹模态框，只 toast 提示。 -->
+
+
+  <script type="module" src="guide.js"></script>
+</body>
+</html>

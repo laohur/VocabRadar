@@ -1,0 +1,139 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>VocabRadar</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <div class="popup-header">
+    <!-- 第一百七十六次（用户："图示字符显示不出来，换成小图标"）：原 🦫（U+1F9AB）在
+         Windows 10 旧版 Segoe UI Emoji 无字形，渲染成豆腐块。popup 是扩展自身页面
+         （chrome-extension:// 协议，无宿主页 CSP 限制），可直接引真实产品图标。 -->
+    <h1 id="phTitle"><img class="ph-logo" src="../data/icons/icon32.png" alt="">VocabRadar</h1>
+    <!-- 反思（2026-08-02）：界面语言切换按钮改为下拉菜单，支持前十大语言 -->
+    <!-- 旧版为切换按钮（仅 en/zh 二选一），用户要求改为下拉菜单支持10种语言 -->
+    <select id="uiLangSelect" class="ui-lang-select" title="UI Language">
+      <option value="en">English</option>
+      <option value="zh">中文</option>
+      <option value="hi">हिन्दी</option>
+      <option value="es">Español</option>
+      <option value="ar">العربية</option>
+      <option value="fr">Français</option>
+      <option value="bn">বাংলা</option>
+      <option value="pt">Português</option>
+      <option value="ru">Русский</option>
+      <option value="ja">日本語</option>
+    </select>
+    <!-- 反思（2026-08-13 第五十次）：引导页入口（(16) 打开引导页） -->
+    <button id="openGuideBtn" class="open-guide-btn" title="Open Guide">?</button>
+  </div>
+  <!-- 错误显示区：init 抛异常时显示，避免 popup 白屏被误判为"没弹" -->
+  <div id="popupError" class="popup-error" style="display:none;"></div>
+  <!-- 加载中提示：init 完成后由 popup.js hideLoading() 移除。
+       反思（2026-07-08）：用户反馈"工具栏点击图标不能弹出菜单"，可能是 popup 加载慢
+       或 JS 模块加载失败导致白屏被误判。加显式加载提示，至少能看到 popup 已弹出。 -->
+  <div id="popupLoading" class="popup-loading">加载中… / Loading…</div>
+  <noscript>
+    <div class="popup-error" style="display:block;">需要启用 JavaScript 才能使用设置 / JavaScript required</div>
+  </noscript>
+
+  <section class="block">
+    <div class="field-row">
+      <!-- 反思（2026-08-02 修正）：目标语言/释义语言各支持 wordfreq 全部 42 种语言 -->
+      <!-- 选项由 popup.js 从 i18n.js TRANSLATE_LANGS + LANG_NAMES 动态生成 -->
+      <!-- 避免硬编码 42 项 ×2 与 i18n.js 数据源不同步 -->
+      <div class="field">
+        <label for="sourceLanguage" data-i18n="popup.sourceLang">Target Language</label>
+        <select id="sourceLanguage"></select>
+      </div>
+      <div class="field">
+        <label for="targetLanguage" data-i18n="popup.targetLang">Definition Language</label>
+        <select id="targetLanguage"></select>
+      </div>
+    </div>
+    <label class="row">
+      <span data-i18n="popup.minRank">Min Rank</span>
+      <input id="rankThreshold" type="number" min="0" step="1000">
+    </label>
+    <label class="row chk">
+      <input id="annotateOov" type="checkbox">
+      <span data-i18n="popup.annotate">Annotate Out-of-Vocabulary Words</span>
+    </label>
+  </section>
+
+  <section class="block">
+    <label class="row">
+      <input id="textHintEnabled" type="checkbox">
+      <span data-i18n="popup.textHint">Text Hints (site-wide word highlight + hover definition + right-click lookup)</span>
+    </label>
+    <div class="sub-block" id="hintColors">
+      <!-- 样式设定菜单（2026-08-05 重构）：
+           用户要求"生词 背景色 前景色 / 注释 背景色 前景色 / 样例区 / 生词多次出现默认空 / 侧邻提示默认空"
+           移除首次/后续独立配色，合并为统一的"生词"配色；
+           "注释"配色独立一组；样例区实时预览；两个复选框默认空 -->
+      <!-- 生词配色（统一，不再区分首次/后续） -->
+      <!-- 反思（2026-08-05 修正）：relingo 风格，生词用亮色高亮（吸睛） -->
+      <div class="hint-row">
+        <span class="row-label" data-i18n="popup.hintFirst">生词</span>
+        <span class="colors">
+          <span class="color-label" data-i18n="popup.bgColor">底色</span><input id="hintFirstBg" type="color" value="#0d2014">
+          <span class="color-label" data-i18n="popup.fgColor">字色</span><input id="hintFirstFg" type="color" value="#a8e6cf">
+        </span>
+      </div>
+      <!-- 注释配色（侧邻注释 (释义) 的独立配色） -->
+      <!-- 反思（2026-08-05 修正）：用户要求"注释为单词的前后景互换"。
+           单词: 底色 #a8e6cf 字色 #0d2014 → 注释: 底色 #0d2014 字色 #a8e6cf
+           深底浅字与单词浅底深字形成反相对比，注释作为生词的"影子"伴随显示 -->
+      <div class="hint-row">
+        <span class="row-label" data-i18n="popup.hintAnnotation">注释</span>
+        <span class="colors">
+          <span class="color-label" data-i18n="popup.bgColor">底色</span><input id="hintAnnotationBg" type="color" value="#a8e6cf">
+          <span class="color-label" data-i18n="popup.fgColor">字色</span><input id="hintAnnotationFg" type="color" value="#0d2014">
+        </span>
+      </div>
+      <!-- 样例区：实时预览 生词(注释) word(translation)，只显示即时单词注释样式 -->
+      <div class="hint-row hint-sample-row">
+        <span class="row-label" data-i18n="popup.hintSample">样例</span>
+        <span class="hint-sample" id="hintSample">
+          <span id="hintSampleWord">word</span><span id="hintSampleAnn">(translation)</span>
+        </span>
+      </div>
+      <!-- 生词多次出现：控制是否高亮后续出现的词（默认空=仅首次高亮） -->
+      <div class="hint-row">
+        <label class="row chk">
+          <input id="hintLaterEnabled" type="checkbox">
+          <span data-i18n="popup.hintLater">生词多次出现</span>
+        </label>
+      </div>
+      <!-- 侧邻提示：控制是否显示侧邻注释 (释义)（默认空=不显示） -->
+      <div class="hint-row">
+        <label class="row chk">
+          <input id="hintSideAnnotation" type="checkbox">
+          <span data-i18n="popup.hintSideAnnotation">侧邻提示</span>
+        </label>
+      </div>
+    </div>
+  </section>
+
+  <!-- 视频提示（原"视频侧栏"，2026-08-05 修正：改名+移到文本提示之后） -->
+  <section class="block">
+    <label class="row">
+      <input id="sidebarEnabled" type="checkbox" checked>
+      <span data-i18n="popup.sidebar">视频提示</span>
+    </label>
+  </section>
+
+  <!-- 网页侧栏（2026-08-07）：全站网页悬浮球，扫描页面正文生词 -->
+  <section class="block">
+    <label class="row">
+      <input id="webSidebarEnabled" type="checkbox" checked>
+      <span data-i18n="popup.webSidebar">网页悬浮</span>
+    </label>
+  </section>
+
+  <!-- 第一百七十次：ASR 模型配置已迁至引导页「模型」分组（唯一配置入口），此处不再重复 -->
+
+  <script type="module" src="popup.js"></script>
+</body>
+</html>

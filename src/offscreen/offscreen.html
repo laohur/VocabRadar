@@ -1,0 +1,14 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>VocabRadar ASR Offscreen</title>
+</head>
+<body>
+  <!-- 音频捕获重构（2026-07-04）：回放元素已移除。
+       旧方案 tabCapture 会静音原标签页，需 <audio> 回放补偿。
+       新方案用 MediaElementAudioSourceNode 直接从 <video> 提取音频，
+       不影响原标签页声音，无需回放。offscreen 只负责 whisper 识别。 -->
+  <script type="module" src="offscreen.js"></script>
+</body>
+</html>

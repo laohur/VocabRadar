@@ -1,0 +1,10 @@
+{
+  "extName": {
+    "message": "VocabRadar — 動画とウェブの未知語を発見",
+    "description": "ブラウザとストアに表示される拡張機能名。"
+  },
+  "extDesc": {
+    "message": "自分の未知語を発見：YouTube/Bilibili の動画、あらゆるウェブページ、さらに AI チャット。登録不要。ひと目でひとつ、見るたび前進！",
+    "description": "拡張機能の説明：自分の未知語、動画とウェブ、AI チャット、登録不要。"
+  }
+}

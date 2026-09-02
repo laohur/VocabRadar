@@ -1,0 +1,10 @@
+{
+  "extName": {
+    "message": "VocabRadar — Find New Words in Video & Web",
+    "description": "Extension name shown in the browser and store."
+  },
+  "extDesc": {
+    "message": "Find your own new words: YouTube/Bilibili videos, any web page, plus AI chat. No sign-up. One glance, one new word.",
+    "description": "Extension description: your own new words, video and web, AI chat, no sign-up."
+  }
+}

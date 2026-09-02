@@ -1,0 +1,731 @@
+/* VocabRadar 引导页样式
+ * 反思（2026-08-14 第五十四次修正）：四子标签（设定栏/ASR/OCR/说明栏）布局。
+ *   设定栏=分组卡片（全局参数组 + 网页生词提示/文本侧栏/视频侧栏/视频叠加字幕 四个可折叠组，
+ *   组头含 ▸/▾ 折叠按钮与启用开关），样式样例卡仍为 无+11种 三列四行；
+ *   ASR/OCR=独立子标签，识别功能区（按钮行/媒体区/进度条/结果列表，空态提示居中）；
+ *   说明栏=使用说明列表。差异化样式属性由 guide.js / asr.js / ocr.js 按元数据内联渲染。
+ *   本次加大各栏/字号，修正展示区小、长宽比极端的问题（样例卡加高、预览视频用
+ *   16:9 定比并限制最大宽度）。
+ */
+:root {
+  --g-primary: #2e6b43;
+  --g-primary-strong: #21523a;
+  --g-primary-soft: rgba(46, 107, 67, 0.08);
+  --g-accent: #a8e6cf;
+  --g-bg: #f4f7f5;
+  --g-card: #ffffff;
+  --g-text: #1a1f1a;
+  --g-muted: #5f6f63;
+  --g-border: #dbe4dd;
+  --g-radius: 10px;
+  --g-shadow: 0 2px 8px rgba(20, 40, 25, 0.08);
+}
+
+* { box-sizing: border-box; }
+html, body { margin: 0; padding: 0; }
+body {
+  font-family: -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif;
+  background: var(--g-bg);
+  color: var(--g-text);
+  line-height: 1.6;
+  font-size: 15px;
+}
+
+/* === 顶部标题 === */
+.guide-header {
+  display: flex;
+  align-items: center;
+  padding: 16px 28px;
+  background: var(--g-primary);
+  color: #fff;
+  box-shadow: var(--g-shadow);
+}
+.guide-title { font-size: 21px; font-weight: 600; display: inline-flex; align-items: center; gap: 8px; }
+/* 第一百七十六次：标题左端产品图标（替代无字形的 🦫 emoji），22px 显示 */
+.guide-title .guide-logo { width: 22px; height: 22px; flex: 0 0 auto; display: block; }
+/* 反思（2026-08-16 第七十次）：头部构建版本戳（与 overlay 启动日志 BUILD_STAMP 对照） */
+.guide-ver {
+  margin-left: auto;
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.75);
+  border: 1px solid rgba(255, 255, 255, 0.35);
+  border-radius: 10px;
+  padding: 1px 10px;
+}
+/* 第一百七十七次：右上角官网入口（小房子）。margin-left 不用 auto——版本戳已占了 auto，
+   此处只留固定间距，保证房子始终贴在最右端。 */
+.guide-home {
+  margin-left: 12px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  border-radius: 8px;
+  color: #fff;
+  text-decoration: none;
+  border: 1px solid rgba(255, 255, 255, 0.35);
+  transition: background 0.15s ease;
+}
+.guide-home:hover { background: rgba(255, 255, 255, 0.18); }
+
+/* === 四子标签 === */
+.guide-tabs {
+  display: flex;
+  gap: 8px;
+  padding: 12px 28px 0;
+  /* 反思（2026-08-21 第九十次）：用户反馈"页面那么大，不妨都大些"——主栏宽 1080→1440 */
+  max-width: 1440px;
+  margin: 0 auto;
+  width: 100%;
+}
+.guide-tab {
+  border: 1px solid var(--g-border);
+  border-bottom: none;
+  background: var(--g-card);
+  color: var(--g-muted);
+  font-size: 16px;
+  padding: 10px 28px;
+  border-radius: 8px 8px 0 0;
+  cursor: pointer;
+}
+.guide-tab.active {
+  background: var(--g-bg);
+  color: var(--g-primary);
+  font-weight: 600;
+  border-color: var(--g-border);
+  position: relative;
+  top: 1px;
+}
+
+/* === 主面板 === */
+.guide-main {
+  /* 反思（2026-08-21 第九十次）：主栏宽 1080→1440（用户：页面那么大，不妨都大些） */
+  max-width: 1440px;
+  margin: 0 auto 40px;
+  padding: 0 24px;
+}
+.guide-panel { display: none; }
+.guide-panel.active { display: flex; flex-direction: column; gap: 18px; }
+
+/* === 分组卡片 === */
+.group {
+  background: var(--g-card);
+  border: 1px solid var(--g-border);
+  border-radius: var(--g-radius);
+  box-shadow: var(--g-shadow);
+  overflow: hidden;
+}
+.group-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 14px 18px;
+  cursor: pointer;
+  user-select: none;
+}
+.group[data-collapsible] .group-head:hover { background: #f7faf8; }
+.group-name { font-size: 16px; font-weight: 600; color: var(--g-primary); flex: 1; }
+.group-toggle {
+  border: none;
+  background: transparent;
+  color: var(--g-muted);
+  font-size: 22px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 4px 10px;
+  border-radius: 6px;
+}
+.group-toggle:hover { background: rgba(46, 107, 67, 0.08); color: var(--g-primary); }
+.group-switch {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  color: var(--g-muted);
+  cursor: pointer;
+  margin: 0;
+}
+.group-switch input { cursor: pointer; }
+.group-body { padding: 0 18px 18px; }
+.group[data-collapsible] .group-body { padding-top: 2px; }
+
+/* 字段行 */
+.field-row {
+  display: flex;
+  align-items: flex-end;
+  gap: 18px;
+  flex-wrap: wrap;
+  padding: 6px 0;
+}
+.field { display: flex; flex-direction: column; gap: 4px; }
+/* 第二百一十一次（用户："其他也是，一个说明一选项的，单行放得下就单行"）：
+   短说明 + 小控件的字段加 .inline——说明与控件同一行；长文本字段不加、仍两行。 */
+.field label { font-size: 13px; color: var(--g-muted); }
+/* 第二百二十三次：.inline 此前只有注释语义、无样式定义——补上：说明与控件同行可换行
+   （引擎下拉、Whisper 规模、API 地址/模型/Key、OCR 语言复选等短字段用） */
+.field.inline { flex-direction: row; align-items: center; flex-wrap: wrap; gap: 4px 12px; }
+.field select,
+.field input[type="number"],
+.field input[type="text"],
+.field input[type="password"] {
+  padding: 7px 11px;
+  border: 1px solid var(--g-border);
+  border-radius: 6px;
+  font-size: 14px;
+  background: #fff;
+  color: var(--g-text);
+}
+/* 模型行（第一百七十次）：接口地址/Key/提示词较长，给出更宽的输入框 */
+.field input[type="text"],
+.field input[type="password"] { min-width: 200px; }
+.field-wide { flex: 1 1 420px; }
+.field-wide input[type="text"] { width: 100%; }
+.chk {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 14px;
+  cursor: pointer;
+  padding-bottom: 8px;
+}
+.chk span { white-space: nowrap; }
+/* 第二百二十三次：不可选复选框——Firefox 无内置翻译的「浏览器自身」、未内置语言包的 OCR 语言
+   （JS 加 .disabled 类 + input[disabled]；不用 :has() 是 Firefox 115 不支持） */
+.chk.disabled { opacity: 0.45; cursor: not-allowed; }
+.chk.disabled input { cursor: not-allowed; }
+
+/* 分组内的小标题（第一百七十四次）：用于在「模型」分组内区隔
+   「对话大模型」与「语音识别模型」两段互不相关的配置 */
+.sub-head {
+  margin: 16px 0 0;
+  padding-top: 12px;
+  border-top: 1px solid var(--g-border);
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--g-text);
+}
+.sub-head:first-child { margin-top: 4px; padding-top: 0; border-top: 0; }
+.sub-head + .style-desc { margin-top: 6px; }
+
+/* === 样式网格 === */
+.style-desc { margin: 10px 0 14px; font-size: 13px; color: var(--g-muted); }
+.style-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 12px;
+}
+/* 第二百一十九次（用户："样式都短，尤其是前三栏，每行可以多排列"）：前三样式网格加密 */
+#textStyleGrid,
+#annStyleGrid,
+#vannStyleGrid { grid-template-columns: repeat(5, 1fr); }
+/* 第二百二十三次（用户："文本样式留白过多应该缩短，每行多列一个"）：字幕文字样式网格
+   3→4 列并压缩卡片留白（padding/gap/demo 高度），规则限定本网格、不影响前三栏 */
+#subtitleStyleGrid { grid-template-columns: repeat(4, 1fr); gap: 8px; }
+#subtitleStyleGrid .style-card { padding: 5px; gap: 4px; }
+#subtitleStyleGrid .style-card .demo { min-height: 26px; }
+@media (max-width: 720px) {
+  .style-grid { grid-template-columns: repeat(2, 1fr); }
+  /* 窄屏回退 2 列需显式覆盖（#subtitleStyleGrid 的 4 列特异性高于 .style-grid） */
+  #subtitleStyleGrid { grid-template-columns: repeat(2, 1fr); }
+}
+
+/* === 样例卡通用 === */
+.style-card {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px;
+  border: 2px solid transparent;
+  border-radius: 8px;
+  background: #fbfdfc;
+  cursor: pointer;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+.style-card:hover { border-color: var(--g-accent); }
+.style-card.active { border-color: var(--g-primary); box-shadow: 0 0 0 1px var(--g-primary); }
+.style-card .card-label {
+  font-size: 12px;
+  color: var(--g-muted);
+  text-align: center;
+}
+.style-card .demo {
+  min-height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 4px 6px;
+  border-radius: 6px;
+  background: #f0f0f0;
+  font-size: 13px;
+  overflow: hidden;
+}
+.demo .word-demo {
+  padding: 1px 5px;
+  border-radius: 3px;
+  font-weight: 600;
+}
+.demo .ann-demo {
+  padding: 1px 4px;
+  margin-left: 3px;
+  border-radius: 3px;
+  font-size: 12px;
+}
+
+/* === 字幕文字样式卡：与前三个栏目一致的水平文本样例 === */
+/* 反思（2026-08-19 第七十九次）：用户要求"文字样式窗口的尺寸跟前三个栏目的一样"。
+   删除 92×52 迷你视频区 + 绝对定位覆盖，样式卡回退 .style-card .demo 规则
+   （min-height 32 / 灰底 / 水平居中样例），subCard 以 flow 模式渲染。 */
+/* 反思（2026-08-19 第八十次）：底色改灰色 #888（用户："文字、位置样式底色是灰色"，
+   目前浅色 #f0f0f0 看不清白色样字）。选择器用 .sub-stage.demo 提升权重，压过
+   .style-card .demo 的 #f0f0f0。 */
+/* 反思（2026-08-20 第八十三次）：删除 margin:0 auto——列 flex 中 auto 水平外边距会让
+   卡片收缩为内容宽并居中，导致字幕文字样式卡比其他三栏的 .demo 卡窄（尺寸不一致）。
+   去掉后走默认 align-items:stretch 撑满整列，与前三个栏目一致。 */
+.sub-stage.demo {
+  position: relative;
+  padding: 0;
+  border-radius: 6px;
+  overflow: hidden;
+  background: #888;
+}
+.sub-stage .sub-demo { white-space: nowrap; }
+
+/* === 字幕 第六十九次重构：双预览 + 位置样式卡 === */
+.sub-sec-label {
+  margin: 14px 0 8px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--g-primary);
+}
+.sub-sec-label:first-child { margin-top: 2px; }
+/* 反思（2026-08-16 第七十次）：字幕设定诊断行——版本 + storage 原始值 + 解析生效值 */
+.sub-diag {
+  margin: 10px 0 12px;
+  padding: 6px 10px;
+  border: 1px dashed var(--g-border);
+  border-radius: 6px;
+  background: #f7faf8;
+  font-size: 12px;
+  color: var(--g-muted);
+  line-height: 1.5;
+  word-break: break-all;
+}
+.sub-preview-row {
+  display: flex;
+  gap: 24px;
+  justify-content: center;
+  flex-wrap: wrap;
+}
+.sub-preview-col {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  flex: 0 0 auto;
+}
+/* 反思（2026-08-19 第七十九次修正）：预览窗口底色改"中心灰色光晕"（用户明确）
+   radial-gradient 中心 #888 → 外缘 #4a4a4a，非旧版线性渐变。
+   反思（2026-08-20 第八十六次）：横屏/竖屏窗口大小一致（同面积、长宽互换）——
+   横屏 16:9 → 480×270、竖屏 9:16 → 270×480（旧版竖屏 152×270 面积远小于横屏，
+   用户要求"二者大小一致，只是长宽互换"）。 */
+.sub-preview-stage {
+  position: relative;
+  background: radial-gradient(ellipse at center, #888 0%, #666 60%, #4a4a4a 100%);
+  border-radius: 10px;
+  overflow: hidden;
+  /* 灰色光晕效果 */
+  box-shadow: 0 0 12px rgba(136, 136, 136, 0.45), 0 4px 8px rgba(0, 0, 0, 0.08);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.sub-preview-stage.land {
+  width: 480px;
+  height: 270px;
+}
+.sub-preview-stage.port {
+  width: 270px;
+  height: 480px;
+}
+/* 内部实际视频区域——按窗口尺寸固定，居中在容器中 */
+.sub-preview-stage.land .sub-preview-mini {
+  position: relative;
+  width: 480px;
+  height: 270px;
+}
+.sub-preview-stage.port .sub-preview-mini {
+  position: relative;
+  width: 270px;
+  height: 480px;
+}
+.sub-preview-caption {
+  text-align: center;
+  font-size: 12px;
+  color: var(--g-muted);
+}
+.sub-preview-mini { white-space: nowrap; }
+/* 反思（2026-08-19 第七十八次）：竖屏预览需允许换行（detail 模式释义换行） */
+.sub-preview-stage.port .sub-preview-mini { white-space: normal; }
+
+/* 位置样式卡：迷你视频区 + 距底部 ratio 处的白线 */
+/* 反思（2026-08-18 第七十三次修正）：与字幕样卡同步缩小（52px 高），示意即可 */
+/* 反思（2026-08-19 第七十九次）：底色统一灰色 #f0f0f0（用户："文字、位置样式底色是灰色"） */
+/* 反思（2026-08-19 第八十次）：底色改灰色 #888（浅色 #f0f0f0 不醒目；权重 .sub-pos-stage.demo
+   压过 .style-card .demo）。白线 #2e6b43 表示 ratio 中心线位置。 */
+.sub-pos-stage.demo {
+  position: relative;
+  height: 52px;
+  width: 92px;
+  margin: 0 auto;
+  padding: 0;
+  background: #888;
+  border-radius: 6px;
+  overflow: hidden;
+  box-shadow: 0 0 6px rgba(136, 136, 136, 0.35);
+}
+.sub-pos-line {
+  position: absolute;
+  left: 14%;
+  right: 14%;
+  height: 3px;
+  background: #2e6b43;
+  opacity: 0.85;
+  border-radius: 2px;
+}
+
+/* 展示注释结果汇总块 */
+.g-ann-summary[hidden] { display: none; }
+.g-ann-summary {
+  margin-top: 12px;
+  border: 1px solid var(--g-border);
+  border-radius: 8px;
+  background: #fbfdfc;
+}
+.g-ann-summary-body {
+  padding: 8px 12px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.g-chip-count {
+  color: var(--g-muted);
+  margin-left: 4px;
+  font-size: 10px;
+}
+
+/* === 功能栏（ASR/OCR） === */
+.func-group { display: flex; flex-direction: column; }
+.func-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+
+/* 第一行：来源选择（上传 + 录制来源单选） */
+.g-source-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  padding: 4px 0;
+}
+.g-source-or { color: var(--g-muted); font-size: 13px; }
+.g-radio-label { font-size: 13px; color: var(--g-muted); }
+.g-radio {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 10px;
+  border: 1px solid var(--g-border);
+  border-radius: 6px;
+  background: #fbfdfc;
+  cursor: pointer;
+  font-size: 13px;
+  color: var(--g-text);
+  user-select: none;
+  transition: border-color 0.15s, background 0.15s;
+}
+.g-radio:hover { border-color: var(--g-accent); }
+.g-radio input { accent-color: var(--g-primary); cursor: pointer; }
+.g-radio:has(input:checked) { border-color: var(--g-primary); background: var(--g-primary-soft); }
+
+.radio-row {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 8px;
+  align-items: center;
+}
+.radio-label {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--g-primary);
+  margin-right: 4px;
+}
+
+.func-btn {
+  padding: 9px 18px;
+  border: none;
+  border-radius: 8px;
+  background: var(--g-primary);
+  color: #fff;
+  font-size: 14px;
+  cursor: pointer;
+  transition: background 0.15s, opacity 0.15s;
+}
+.func-btn:hover:not(:disabled) { background: var(--g-primary-strong); }
+.func-btn:disabled { opacity: 0.45; cursor: not-allowed; }
+.func-btn.active { background: #b23a2e; }
+.func-btn.recording {
+  background: #b23a2e;
+  animation: g-blink 1s infinite;
+}
+@keyframes g-blink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.55; }
+}
+
+/* 展示区（其次）：空态提示居中，媒体 16:9 定比并限制最大宽度 */
+.g-media-area {
+  margin-top: 14px;
+  border: 1px dashed var(--g-border);
+  border-radius: 10px;
+  background: #fbfdfc;
+  padding: 12px;
+}
+.g-media-hint {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  /* 反思（2026-08-21 第九十次）：空态提示区加高（用户：视频/OCR 窗口小，不妨大些） */
+  min-height: 220px;
+  text-align: center;
+  font-size: 13px;
+  color: var(--g-muted);
+}
+.g-media-area video {
+  display: block;
+  width: auto;
+  max-width: 100%;
+  /* 反思（2026-08-21 第九十次）：预览视频加高 340→480 */
+  max-height: 480px;
+  margin: 0 auto;
+  aspect-ratio: 16 / 9;
+  background: #000;
+  border-radius: 8px;
+  object-fit: contain;
+}
+.g-media-area img {
+  display: block;
+  width: 100%;
+  max-width: 100%;
+  margin: 0 auto;
+  /* 反思（2026-08-21 第九十次）：OCR 预览图加高 360→480、放宽 640→100% */
+  max-height: 480px;
+  border-radius: 8px;
+  object-fit: contain;
+  background: #0d2014;
+}
+.g-file-info { margin-top: 6px; text-align: center; font-size: 12px; color: var(--g-muted); }
+
+/* 识别行（再其次） */
+.g-recognize-row { margin-top: 14px; }
+.g-recognize-row .func-btn { padding: 10px 28px; font-size: 15px; }
+
+/* 进度条 */
+.g-progress {
+  margin-top: 12px;
+  padding: 8px 10px;
+  background: #eef3ef;
+  border: 1px solid var(--g-border);
+  border-radius: 8px;
+}
+.g-progress-info {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  font-size: 12px;
+  color: var(--g-muted);
+  margin-bottom: 6px;
+}
+.g-progress-stage { font-weight: 600; color: var(--g-text); }
+.g-progress-detail {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 60%;
+}
+.g-progress-bar {
+  height: 6px;
+  background: var(--g-border);
+  border-radius: 3px;
+  overflow: hidden;
+}
+.g-progress-fill {
+  height: 100%;
+  width: 0%;
+  background: var(--g-primary);
+  border-radius: 3px;
+  transition: width 0.3s;
+}
+
+/* 展示+侧栏并排行（2026-08-20 第八十七次补充①：预览框右侧加视频/文本侧栏，
+   识别结果输入侧栏展示；原独立"识别结果"列表移除）
+   反思（2026-08-21 第八十八次）：侧栏面板与结果列表复用现有「视频侧栏」「文本侧栏」
+   的设计体系——样式直接用 sidebar.css / web-sidebar.css 的 --beaver-* 令牌（同源 M3
+   马卡龙，guide.html 已引入两文件），不新建设计体系、不写平行副本。 */
+.g-sidebar-row {
+  display: flex;
+  align-items: stretch;
+  gap: 12px;
+  margin-top: 14px;
+}
+.g-sidebar-row .g-media-area {
+  margin-top: 0;
+  flex: 1 1 54%;
+  min-width: 0;
+  /* 反思（2026-08-21 第九十次）：预览列与侧栏列同高加大（用户：视频侧栏很矮/窗口小） */
+  min-height: 520px;
+}
+.g-sidebar-row .g-media-area video { width: 100%; }
+@media (max-width: 720px) {
+  .g-sidebar-row { flex-direction: column; }
+}
+.g-sidebar {
+  flex: 1 1 46%;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--beaver-outline, #c2c9bf);
+  border-radius: var(--beaver-radius, 12px);
+  background: var(--beaver-bg, #fbfdf9);
+  box-shadow: var(--beaver-shadow-1, 0 1px 2px rgba(26,31,26,.10));
+  overflow: hidden;
+}
+/* 反思（2026-08-21 第八十九次）：真实视频侧栏内联挂载容器——侧栏自带
+   #beaver-sidebar 背景/圆角/阴影（sidebar.css），容器不再叠加自建外观。
+   反思（2026-08-21 第九十次）：用户反馈"视频侧栏很矮"——挂载容器给足高度，
+   侧栏 flex column 撑满容器（字幕面板随内容伸展）。 */
+.g-sidebar-mount {
+  border: none;
+  background: transparent;
+  box-shadow: none;
+  overflow: visible;
+  min-height: 520px;
+}
+.g-sidebar-mount #beaver-sidebar {
+  height: 100%;
+  min-height: 520px;
+}
+.g-sidebar-body {
+  flex: 1;
+  /* 反思（2026-08-21 第九十次）：OCR 结果列表加高（用户：窗口小，不妨大些） */
+  min-height: 300px;
+  max-height: 560px;
+  overflow-y: auto;
+}
+.g-results-head {
+  position: sticky;
+  top: 0;
+  padding: 8px 12px;
+  background: var(--beaver-bg-soft, #f5f8f3);
+  border-bottom: 1px solid var(--beaver-outline, #c2c9bf);
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--beaver-primary, #2e6b43);
+}
+.g-empty-tip {
+  padding: 34px 16px;
+  text-align: center;
+  font-size: 13px;
+  color: var(--beaver-text-disabled, #72797a);
+}
+.g-result-item {
+  padding: 8px 12px;
+  /* 反思（2026-08-21 第九十二次）：用户要求纯文本输出、不要逐行分割线 */
+  border-bottom: none;
+  font-size: 13px;
+  color: var(--beaver-text, #1a1f1a);
+}
+.g-result-item:last-child { border-bottom: none; }
+.g-result-text .g-time { color: var(--beaver-text-disabled, #72797a); font-size: 12px; margin-right: 6px; }
+.g-result-text .g-w {
+  background: var(--beaver-ann-bg, #a8e6cf);
+  color: var(--beaver-ann-fg, #0d2014);
+  border-radius: 2px;
+  padding: 0 2px;
+  font-weight: 600;
+}
+.g-result-text .g-trans { color: var(--beaver-primary, #2e6b43); }
+.g-result-anns { margin-top: 4px; display: flex; flex-wrap: wrap; gap: 6px; }
+.g-chip {
+  background: var(--beaver-bg-container, #eff3ec);
+  border: 1px solid var(--beaver-outline, #c2c9bf);
+  border-radius: 10px;
+  padding: 1px 8px;
+  font-size: 11px;
+  color: var(--beaver-text, #1a1f1a);
+}
+.g-chip .g-w { color: var(--beaver-primary, #2e6b43); font-weight: 600; }
+
+/* Toast */
+.g-toast {
+  position: fixed;
+  bottom: 18px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: #23332a;
+  color: #fff;
+  padding: 9px 16px;
+  border-radius: 8px;
+  font-size: 13px;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.25);
+  max-width: 80%;
+  /* 反思（2026-08-20 第八十三次）：ws.micDenied 等多行 toast 文案中的 \n 需换行显示 */
+  white-space: pre-line;
+}
+.g-toast.error { background: #8a2f26; }
+.g-toast-close { cursor: pointer; opacity: 0.8; font-size: 16px; }
+
+/* 摄像头拍照弹窗 */
+.g-camera-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  background: rgba(10, 18, 13, 0.85);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  padding: 20px;
+}
+.g-camera-video {
+  width: 100%;
+  max-width: 640px;
+  border-radius: 10px;
+  background: #000;
+}
+.g-camera-actions { display: flex; gap: 12px; }
+.g-camera-capture, .g-camera-close {
+  padding: 8px 20px;
+  border: none;
+  border-radius: 6px;
+  font-size: 14px;
+  cursor: pointer;
+}
+.g-camera-capture { background: var(--g-primary); color: #fff; }
+.g-camera-close { background: #666; color: #fff; }
+
+
+/* === 说明栏 === */
+.help-body { padding: 16px 18px 22px; }
+.help-title {
+  margin: 16px 0 8px;
+  font-size: 15px;
+  color: var(--g-primary);
+}
+.help-title:first-child { margin-top: 4px; }
+.help-list { margin: 0 0 10px; padding-left: 22px; }
+.help-list li { margin: 4px 0; font-size: 14px; color: var(--g-text); }
+
+

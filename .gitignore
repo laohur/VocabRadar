@@ -1,0 +1,25 @@
+# ===== 可重复产出 / 分发（构建脚本可再生成，不入库）=====
+dist/
+dist-firefox/
+*.zip
+*.7z
+
+# ===== 日志（change.log 等运行/变更日志）=====
+logs/
+
+# ===== 文档（不入库；源码注释与 docs/ 均为文档）=====
+docs/
+note.txt
+浏览器扩展.txt
+
+# ===== 工作区规则文件（用户裁定不入库）=====
+AGENTS.md
+
+# ===== 工具/编辑器状态与缓存 =====
+node_modules/
+__pycache__/
+*.pyc
+.freebuff/
+.zcode/
+Thumbs.db
+.DS_Store

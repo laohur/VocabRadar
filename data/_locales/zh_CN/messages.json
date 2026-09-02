@@ -1,0 +1,10 @@
+{
+  "extName": {
+    "message": "VocabRadar 词汇雷达 — 发现视频与网页生词",
+    "description": "浏览器与商店中显示的扩展名称。"
+  },
+  "extDesc": {
+    "message": "发现自己的生词：youtube/bilibili视频、任意网页。还有AI对话，免注册。一眼一个生词，睁眼就在进步！",
+    "description": "扩展说明：体现独特价值（自己的生词、视频与网页、AI 对话、免注册）。"
+  }
+}
