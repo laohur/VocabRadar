@@ -151,20 +151,23 @@ body {
 .group[data-collapsible] .group-body { padding-top: 2px; }
 
 /* 字段行 */
+/* 第二百二十八次（用户："语义相近距离近，反之同理；行内距离远，比栏之间还远，调整"）：
+   行内 gap 18→10、行距 padding 6→3——同语义控件贴近，行距小于行内间距，层级正确 */
 .field-row {
   display: flex;
   align-items: flex-end;
-  gap: 18px;
+  gap: 10px;
   flex-wrap: wrap;
-  padding: 6px 0;
+  padding: 3px 0;
 }
 .field { display: flex; flex-direction: column; gap: 4px; }
 /* 第二百一十一次（用户："其他也是，一个说明一选项的，单行放得下就单行"）：
    短说明 + 小控件的字段加 .inline——说明与控件同一行；长文本字段不加、仍两行。 */
 .field label { font-size: 13px; color: var(--g-muted); }
 /* 第二百二十三次：.inline 此前只有注释语义、无样式定义——补上：说明与控件同行可换行
-   （引擎下拉、Whisper 规模、API 地址/模型/Key、OCR 语言复选等短字段用） */
-.field.inline { flex-direction: row; align-items: center; flex-wrap: wrap; gap: 4px 12px; }
+   （引擎下拉、Whisper 规模、API 地址/模型/Key、OCR 语言复选等短字段用）。
+   第二百二十八次：列向 gap 12→8，标签与填空贴近。 */
+.field.inline { flex-direction: row; align-items: center; flex-wrap: wrap; gap: 4px 8px; }
 .field select,
 .field input[type="number"],
 .field input[type="text"],
@@ -211,7 +214,8 @@ body {
 .sub-head + .style-desc { margin-top: 6px; }
 
 /* === 样式网格 === */
-.style-desc { margin: 10px 0 14px; font-size: 13px; color: var(--g-muted); }
+/* 第二百二十八次：说明文字与上下控件的间距收紧（同栏内语义相近应贴近） */
+.style-desc { margin: 8px 0 8px; font-size: 13px; color: var(--g-muted); }
 .style-grid {
   display: grid;
   grid-template-columns: repeat(3, 1fr);

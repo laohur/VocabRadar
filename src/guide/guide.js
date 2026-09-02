@@ -136,7 +136,9 @@ const MSG = {
   // 第二百二十六次：引擎单选文字精简为 本地/API；fieldOcrEngine 行标签键随行结构删除。
   ocrEngineLocal: { en: 'Local', zh: '本地' },
   ocrEngineApi: { en: 'API', zh: 'API' },
-  fieldOcrLangs: { en: 'Tesseract languages', zh: 'Tesseract 语言' },
+  // 第二百二十八次（用户裁定文案）：OCR 行读作"Tesseract 支持 界面/目标/释义 语言"
+  fieldOcrLangs: { en: 'Tesseract supporting', zh: 'Tesseract 支持' },
+  ocrLangsSuffix: { en: 'language', zh: '语言' },
   // 第二百二十四次（用户："界面 目标 释义，不要写死、不要特指，默认全选"）：OCR 语言复选的角色名标签
   //   ——标签恒为角色名，勾选"值"由 JS 按当前 界面/目标/释义 语言动态映射 tess 代码
   ocrRoleUi: { en: 'Interface', zh: '界面' },

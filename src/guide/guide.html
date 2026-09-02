@@ -106,22 +106,22 @@
               <input id="llmApiKey" type="password" placeholder="sk-...">
             </div>
           </div>
-          <!-- 第二百二十七次（用户："两种提示词，背景最大长度，都应当各自一行"）：改回三行，
-               恢复完整标签（{}={{lang}} 说明直接写在标签上，不再用悬浮提示）。 -->
+          <!-- 第二百二十八次（用户："你把文本跟填空拆分多行了"）：三字段各自一行、且标签与填空同行
+               （.field.inline），填空吃掉行内剩余宽度；完整占位符说明仍在标签上。 -->
           <div class="field-row">
-            <div class="field field-wide">
+            <div class="field inline" style="flex:1 1 480px;">
               <label for="chatWordPrompt" data-key="fieldChatWordPrompt">单词类查询提示词（{} = 选中文本，{lang} = 释义语言）</label>
-              <input id="chatWordPrompt" type="text">
+              <input id="chatWordPrompt" type="text" style="flex:1 1 200px; min-width:200px;">
             </div>
           </div>
           <div class="field-row">
-            <div class="field field-wide">
+            <div class="field inline" style="flex:1 1 480px;">
               <label for="chatSidebarPrompt" data-key="fieldChatSidebarPrompt">侧栏提示词（{lang} = 释义语言；正文作为上下文另行发送）</label>
-              <input id="chatSidebarPrompt" type="text">
+              <input id="chatSidebarPrompt" type="text" style="flex:1 1 200px; min-width:200px;">
             </div>
           </div>
           <div class="field-row">
-            <div class="field field-wide">
+            <div class="field inline">
               <label for="chatContextMaxBytes"><span data-key="fieldChatContextMax">送入对话的作为背景的网页/字幕正文至多</span></label>
               <input id="chatContextMaxBytes" type="number" min="1000" step="1000" placeholder="10000">
               <span data-key="guideContextBytesSuffix">字节。</span>
@@ -203,10 +203,13 @@
           <p class="style-desc" data-key="ocrEngineDesc">截图/视频帧的文字识别引擎：本地 Tesseract（在界面/目标/释义三种语言中勾选要识别的语言），或大模型视觉识别 API（需模型支持图片输入）。</p>
           <div class="field-row" id="ocrLangRow">
             <label class="g-radio"><input type="radio" name="ocrEngine" value="tesseract" checked><span data-key="ocrEngineLocal">本地</span></label>
-            <span class="radio-label" data-key="fieldOcrLangs">Tesseract 语言</span>
+            <!-- 第二百二十八次（用户裁定文案）：读作"Tesseract 支持 界面/目标/释义 语言"
+                 （en: Tesseract supporting Interface Target Meaning language） -->
+            <span class="radio-label" data-key="fieldOcrLangs">Tesseract 支持</span>
             <label class="chk"><input type="checkbox" id="ocrLangUi"><span data-key="ocrRoleUi">界面</span></label>
             <label class="chk"><input type="checkbox" id="ocrLangTarget"><span data-key="ocrRoleTarget">目标</span></label>
             <label class="chk"><input type="checkbox" id="ocrLangMeaning"><span data-key="ocrRoleMeaning">释义</span></label>
+            <span class="radio-label" data-key="ocrLangsSuffix">语言</span>
           </div>
           <div class="field-row">
             <label class="g-radio"><input type="radio" name="ocrEngine" value="api"><span data-key="ocrEngineApi">API</span></label>
