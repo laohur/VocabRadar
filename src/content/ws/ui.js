@@ -9,7 +9,7 @@ import { LANG_NAMES, TRANSLATE_LANGS, UI_LANGS, setLang, t } from '../../lib/i18
 import { buildTopbarHTML, ensureTopbarCss } from '../../lib/sidebar-topbar.js';
 import { SUBTITLE_TEXT_STYLES, findStyle } from '../../lib/styles.js';
 import { reviveSidebarIfPossible, startVideoController } from '../video-controller.js';
-import { _activeTab, _allAnnotations, _cachedSourceLang, _detailMode, _pageSentences, _panelRect, _preExpandPos, _root, _wordOnlyMode, clampPosToViewport, clampRectToViewport, formatTime, getInjectionRoot, log, saveState, set_activeTab, set_detailMode, set_panelRect, set_preExpandPos, set_wordOnlyMode, toast, ts } from './core.js';
+import { _activeTab, _allAnnotations, _cachedLearnLang, _detailMode, _pageSentences, _panelRect, _preExpandPos, _root, _wordOnlyMode, clampPosToViewport, clampRectToViewport, formatTime, getInjectionRoot, log, saveState, set_activeTab, set_detailMode, set_panelRect, set_preExpandPos, set_wordOnlyMode, toast, ts } from './core.js';
 import { rerenderAllSlots, schedulePageScan } from './scanner.js';
 // 第一百七十一次：文本侧栏底部对话按钮 —— 对话面板唯一实现在 lib/chat.js
 import { openChatPanel } from '../../lib/chat.js';
@@ -51,12 +51,12 @@ export function buildSidebar() {
           <select class="beaver-web-lang-select" id="beaver-web-ui-lang"></select>
         </div>
         <div class="beaver-web-lang-row">
-          <label class="beaver-web-lang-label">${t('ws.sourceLang')}</label>
-          <select class="beaver-web-lang-select" id="beaver-web-source-lang"></select>
+          <label class="beaver-web-lang-label">${t('ws.learnLang')}</label>
+          <select class="beaver-web-lang-select" id="beaver-web-learn-lang"></select>
         </div>
         <div class="beaver-web-lang-row">
-          <label class="beaver-web-lang-label">${t('ws.targetLang')}</label>
-          <select class="beaver-web-lang-select" id="beaver-web-target-lang"></select>
+          <label class="beaver-web-lang-label">${t('ws.meaningLang')}</label>
+          <select class="beaver-web-lang-select" id="beaver-web-meaning-lang"></select>
         </div>
       </div>
       <!-- 第一百二十三次：⋯ 设定浮层（与视频侧栏顶行对齐） -->
@@ -306,8 +306,8 @@ function bindLanguagePanel() {
   const langBtn = _root.querySelector('#beaver-web-lang-btn');
   const langPanel = _root.querySelector('#beaver-web-lang-panel');
   const uiLangSel = _root.querySelector('#beaver-web-ui-lang');
-  const srcLangSel = _root.querySelector('#beaver-web-source-lang');
-  const tgtLangSel = _root.querySelector('#beaver-web-target-lang');
+  const srcLangSel = _root.querySelector('#beaver-web-learn-lang');
+  const tgtLangSel = _root.querySelector('#beaver-web-meaning-lang');
 
   // 填充界面语言选项（10大语言）
   for (const lang of UI_LANGS) {
@@ -331,10 +331,10 @@ function bindLanguagePanel() {
   }
 
   // 从 storage 读取当前语言设置
-  chrome.storage.local.get({ sourceLanguage: 'en', targetLanguage: 'zh', uiLanguage: 'en' }, (res) => {
+  chrome.storage.local.get({ learnLanguage: 'en', meaningLanguage: 'zh', uiLanguage: 'en' }, (res) => {
     uiLangSel.value = res.uiLanguage || 'en';
-    srcLangSel.value = res.sourceLanguage || 'en';
-    tgtLangSel.value = res.targetLanguage || 'zh';
+    srcLangSel.value = res.learnLanguage || 'en';
+    tgtLangSel.value = res.meaningLanguage || 'zh';
   });
 
   // 🌐 按钮展开/收起
@@ -361,14 +361,14 @@ function bindLanguagePanel() {
   // 目标语言切换
   srcLangSel.addEventListener('change', (e) => {
     e.stopPropagation();
-    chrome.storage.local.set({ sourceLanguage: e.target.value });
+    chrome.storage.local.set({ learnLanguage: e.target.value });
     log('目标语言切换:', e.target.value);
   });
 
   // 释义语言切换
   tgtLangSel.addEventListener('change', (e) => {
     e.stopPropagation();
-    chrome.storage.local.set({ targetLanguage: e.target.value });
+    chrome.storage.local.set({ meaningLanguage: e.target.value });
     log('释义语言切换:', e.target.value);
   });
 }
@@ -885,7 +885,7 @@ function speakWord(word) {
   try {
     window.speechSynthesis.cancel();
     const utter = new SpeechSynthesisUtterance(word);
-    utter.lang = _cachedSourceLang === 'zh' ? 'zh-CN' : _cachedSourceLang;
+    utter.lang = _cachedLearnLang === 'zh' ? 'zh-CN' : _cachedLearnLang;
     utter.rate = 0.9;
     window.speechSynthesis.speak(utter);
   } catch (_) { /* ignore */ }

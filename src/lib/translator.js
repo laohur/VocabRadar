@@ -34,15 +34,15 @@
 // ===拆分说明（2026-08-28）===
 // 本文件原为 625 行单文件，已按功能拆分为 src/lib/translator/ 目录模块（纯机械搬移）：
 //   - shared.js：跨模块共享状态唯一属主（transState 语言对/_lastChannel 最近成功渠道/
-//     _debug 调试开关）+ 工具（withTimeout/_ts/log）+ getLastTranslateChannel/getTargetLang
+//     _debug 调试开关）+ 工具（withTimeout/_ts/log）+ getLastTranslateChannel/getMeaningLang
 //   - builtin-translator.js：浏览器内置 Translator API（单例状态 _translator/_initPromise/
 //     _availability、storage 语言对初始读取与变更监听、preloadTranslator 预热、
 //     getAvailability/getTranslator、targetScriptOk 文字系统校验）
-//   - online-channels.js：SW 在线渠道消息通道 sendMessage（TRANSLATE_WORD 转发 + 55 秒超时）
+//   - online-channels.js：SW 在线渠道消息通道 sendMessage（TRANSLATE_TEXT 转发 + 55 秒超时）
 //   - index.js：翻译主流程（getWordCached/setWordCached 词典缓存、优先级队列、
 //     translate/_processQueue/_translateInternal/translateWithLemma），并作为目录统一出口
 //     re-export shared.js 与 builtin-translator.js 的原导出符号
 // 跨模块共享状态铁律：transState（语言对）与 _lastChannel 唯一实例在 shared.js，
 //   各子模块经 import 同源引用，绝不复制两份。
 // 本门面仅 re-export 全部原导出符号（符号名不变），所有引用方零改动。
-export { translate, getLastTranslateChannel, getTargetLang, getAvailability } from './translator/index.js';
+export { translate, getLastTranslateChannel, getMeaningLang, getAvailability } from './translator/index.js';

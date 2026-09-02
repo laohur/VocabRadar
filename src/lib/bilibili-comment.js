@@ -11,7 +11,7 @@
 // 取消自动发送后不再需要 csrf token 与 API 调用，仅做 DOM 填充。
 
 import { lookup } from './dictionary.js';
-import { extract_english_words } from './tokenizer.js';
+import { extractEnglishWords } from './tokenizer.js';
 import { getBilibiliSubtitles } from './subtitle/index.js';
 
 /** 阶显示：rank 每 1000 为一阶，表外词单独标识 */
@@ -84,7 +84,7 @@ function fillCommentInput(text) {
  *   3. 填入主评论框，用户手动发送
  * @returns {Promise<void>}
  */
-export async function sendComment() {
+export async function fillComment() {
   const subtitles = await getBilibiliSubtitles();
   if (!subtitles || subtitles.length === 0) {
     alert('该视频无字幕，无法提取单词');
@@ -99,7 +99,7 @@ export async function sendComment() {
   const seen = new Set();
   const annotations = [];
   for (const sub of subtitles) {
-    const words = extract_english_words(sub.text.toLowerCase());
+    const words = extractEnglishWords(sub.text.toLowerCase());
     for (const w of words) {
       if (seen.has(w)) continue;
       seen.add(w);

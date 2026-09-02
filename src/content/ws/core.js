@@ -13,13 +13,14 @@
 //   都 resolve({ok:true}) 遮蔽错误。宿主已改建在后台 event page 自身 document 内
 //   （src/background/service-worker.js#ensureFallbackIframe），故此处整段删除。
 
-import { pickCleanShortTrans } from '../../lib/dict-clean.js';
+// （第二百二十五次：原 pickCleanShortTrans 导入随转发包装 pickRandomShortTrans 的删除一并移除）
 
 // 句子分隔正则：句号/感叹/问号/中文标点/换行
 const SENTENCE_SPLIT_RE = /[.!?。！？\n]+/;
 
-// 文本节点已处理标记属性名（配合 _scanGen 代际计数）
-const PROCESSED_ATTR = 'data-beaver-web-gen';
+// 第二百二十五次：删除死常量 PROCESSED_ATTR（='data-beaver-web-gen'）——《命名清查》查明
+//   全库无任何读写该属性之处（正文处理代际标记实际由 th 侧 PROCESSED_ATTR='data-beaver-done'
+//   承担，本文件该常量从未被引用），连同与 th/core.js 同名不同值的混淆一并消除。
 
 // === 模块状态 ===
 export let _root = null;                  // 根元素 #beaver-web-sidebar
@@ -254,14 +255,8 @@ function flashButton(btn) {
   setTimeout(() => { btn.style.background = orig; }, 300);
 }
 
-// 从 translations 中取一个短义项（与 sidebar.js 同算法）
-// 反思（2026-08-16 第六十六次）：改走 pickCleanShortTrans——先清洗再分片，
-//   避免随机切到 "facilitate(vt. 帮助" 等残片；并剥离词性前缀（"v. 促进" → "促进"）。
-// 第一百七十九次（用户细则"详细全列，非详细只列出第一项"）：pickCleanShortTrans 已去掉
-//   两级随机，改为确定性取 translations[0] 的首个短义项；函数名保留但语义已不含随机。
-export function pickRandomShortTrans(translations) {
-  return pickCleanShortTrans(translations);
-}
+// 第二百二十五次：删除转发包装 pickRandomShortTrans（《命名清查》裁定：它早已无随机语义、
+//   只是 lib/dict-clean.js#pickCleanShortTrans 的同名转发；调用方 ws/scanner.js 已改为直调）。
 
 // === 状态管理（展开/收起/关闭） ===
 // 反思（2026-08-12）：用户反馈"悬浮球跟侧栏切换时位置动来动去"。
@@ -281,19 +276,19 @@ export let _panelRect = null; // {left,top,width,height} 视口坐标
 
 /**
  * 反思（2026-08-08）：用户要求"音标前加一个喇叭按钮"。
- * 朗读单词（Web Speech API），使用 sourceLanguage 设置语音。
+ * 朗读单词（Web Speech API），使用 learnLanguage 设置语音。
  * @param {string} word 要朗读的单词
  */
-// 缓存 sourceLanguage，避免每次朗读都读 storage
-export let _cachedSourceLang = 'en';
+// 缓存 learnLanguage，避免每次朗读都读 storage
+export let _cachedLearnLang = 'en';
 
 try {
-  chrome.storage.local.get({ sourceLanguage: 'en' }, (res) => {
-    _cachedSourceLang = res.sourceLanguage || 'en';
+  chrome.storage.local.get({ learnLanguage: 'en' }, (res) => {
+    _cachedLearnLang = res.learnLanguage || 'en';
   });
   chrome.storage.onChanged.addListener((changes, area) => {
-    if (area === 'local' && changes.sourceLanguage) {
-      _cachedSourceLang = changes.sourceLanguage.newValue || 'en';
+    if (area === 'local' && changes.learnLanguage) {
+      _cachedLearnLang = changes.learnLanguage.newValue || 'en';
     }
   });
 } catch (_) { /* ignore */ }

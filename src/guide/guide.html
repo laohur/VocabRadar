@@ -55,12 +55,12 @@
               <select id="uiLang"></select>
             </div>
             <div class="field">
-              <label for="sourceLanguage" data-key="fieldSource">目标语言（要学习的目标）</label>
-              <select id="sourceLanguage"></select>
+              <label for="learnLanguage" data-key="fieldSource">目标语言（要学习的目标）</label>
+              <select id="learnLanguage"></select>
             </div>
             <div class="field">
-              <label for="targetLanguage" data-key="fieldTarget">注释语言（用来释义）</label>
-              <select id="targetLanguage"></select>
+              <label for="meaningLanguage" data-key="fieldTarget">注释语言（用来释义）</label>
+              <select id="meaningLanguage"></select>
             </div>
             <div class="field">
               <label for="rankThreshold" data-key="fieldThreshold">词频阈值</label>
@@ -151,14 +151,14 @@
           <!-- 第二百二十四次（用户："改为两行单选，细项各自铺开，默认本地，whisper-tiny是具体模型名称"）：
                行1=引擎单选（本地/API，默认本地）；行2=细项铺开——本地为 whisper-* 具体模型名单选
                （value 仍存 tiny/base/…，offscreen 的 SUPPORTED_MODELS 只认这些，显示名才带 whisper- 前缀），
-               API 为 OpenAI 兼容 地址/转写模型/Key。radio value 必须是 local/llm——后台 service-worker
-               与 guide/asr.js 消费端判 'llm'（旧版存 'api' 是断线 bug，223 次已归一化）。
+               API 为 OpenAI 兼容 地址/转写模型/Key。radio value 定名 local/api
+               （第二百二十五次由 'llm' 改名——名实相符，《命名清查》裁定；读侧兼容旧残留 'llm'）。
                转写端点只有 OpenAI 兼容一种主流格式（Anthropic 无音频转写），故 API 细项不放格式单选。 -->
           <p class="style-desc" data-key="asrModelDesc">语音识别引擎：本地 Whisper（模型越大越准也越慢，首次使用需下载），或 OpenAI 兼容转写 API（填接口地址/模型名/Key）。与上面的对话模型互不相关。</p>
           <div class="field-row">
             <span class="radio-label" data-key="fieldAsrEngine">ASR 引擎</span>
             <label class="g-radio"><input type="radio" name="asrEngine" value="local" checked><span data-key="asrEngineLocal">本地（Whisper）</span></label>
-            <label class="g-radio"><input type="radio" name="asrEngine" value="llm"><span data-key="asrEngineApi">API（OpenAI 兼容）</span></label>
+            <label class="g-radio"><input type="radio" name="asrEngine" value="api"><span data-key="asrEngineApi">API（OpenAI 兼容）</span></label>
           </div>
           <div class="field-row" data-asr-local-cfg="1">
             <span class="radio-label" data-key="fieldAsrModel">Whisper 模型</span>
@@ -199,7 +199,7 @@
           <div class="field-row">
             <span class="radio-label" data-key="fieldOcrEngine">OCR 引擎</span>
             <label class="g-radio"><input type="radio" name="ocrEngine" value="tesseract" checked><span data-key="ocrEngineLocal">本地（Tesseract）</span></label>
-            <label class="g-radio"><input type="radio" name="ocrEngine" value="llm"><span data-key="ocrEngineApi">API（视觉识别）</span></label>
+            <label class="g-radio"><input type="radio" name="ocrEngine" value="api"><span data-key="ocrEngineApi">API（视觉识别）</span></label>
           </div>
           <div class="field-row" data-ocr-local-cfg="1" id="ocrLangRow">
             <span class="radio-label" data-key="fieldOcrLangs">Tesseract 语言</span>

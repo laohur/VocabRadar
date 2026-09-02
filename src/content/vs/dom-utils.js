@@ -4,14 +4,12 @@
 // 职责：视频缓存 key 生成、剪贴板复制、按钮闪烁、时间格式化、随机短义项选取、
 //       HTML/正则/CSS 选择器转义。
 // 来源：拆分自 src/content/video-sidebar.js（2026-08-28 拆分第二刀，纯机械搬移）。
-// 关系：依赖 ./logger.js（copyToClipboard 内 log）与 ../../lib/dict-clean.js
-//       （pickRandomShortTrans 转调 pickCleanShortTrans）。被门面与
+// 关系：依赖 ./logger.js（copyToClipboard 内 log）。被门面与
 //       ./comment-fill.js、./playback-gate.js、./asr-stage.js、./record-workflow.js、
 //       ./ocr.js 引用。
 // =============================================================================
 
 import { log } from './logger.js';
-import { pickCleanShortTrans } from '../../lib/dict-clean.js';
 
 // 生成视频缓存 key（区分不同视频/集数）
 // 反思（2026-07-05）：旧版仅用 hostname+pathname，导致两类问题：
@@ -79,22 +77,8 @@ export function formatTime(sec) {
   return `${m}:${String(s).padStart(2, '0')}`;
 }
 
-/**
- * 从 translations 中取一个短义项（仅用于字幕区注释，生词表保留完整释义）。
- *
- * 第一百七十九次（用户细则"详细全列，非详细只列出第一项"）：本函数原为两级随机
- *   （先随机取一条 translations，再随机取一个短义项），导致同一个词每次渲染释义都不同。
- *   现已改为确定性取第一项，实现统一收敛到 lib/dict-clean.js#pickCleanShortTrans；
- *   函数名保留（调用点较多），语义已不含随机。
- *
- * 例：translations = ["n. 苹果, 果树；家伙", "v. 哄骗"] → "苹果"（首条的首个短义项，去词性前缀）
- *
- * @param {string[]} translations 释义数组（可能含多个完整义项，每条可能含分隔符切分的短义项）
- * @returns {string} 单个短义项；无可用释义时返回空串
- */
-export function pickRandomShortTrans(translations) {
-  return pickCleanShortTrans(translations);
-}
+// 第二百二十五次：删除转发包装 pickRandomShortTrans（《命名清查》裁定：语义早已收敛到
+//   lib/dict-clean.js#pickCleanShortTrans，调用方 vs/subtitle-renderer.js 已改为直调）。
 
 // === 工具函数 ===
 export function escapeHtml(s) {

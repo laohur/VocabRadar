@@ -3,16 +3,16 @@
 // 来源：拆分自 src/lib/dictionary.js（ES Modules 模块化拆分）
 // 拆分日期：2026-08-28
 // 跨模块共享状态唯一属主（拆分铁律：绝不复制两份）：
-//   dictState = { loadedLang, dictMap, loadPromise, currentSourceLang, quietBatch }
-//   原单文件的模块级 let 变量（_loadedLang/_dictMap/_loadPromise/_currentSourceLang/
+//   dictState = { loadedLang, dictMap, loadPromise, currentLearnLang, quietBatch }
+//   原单文件的模块级 let 变量（_loadedLang/_dictMap/_loadPromise/_currentLearnLang/
 //   _quietBatch）收拢为导出可变对象，word-loader.js / projection.js / query.js
 //   经 import 引用同一实例读写，与原单文件行为完全一致。
 // 本文件还含：DEFAULT_SOURCE_LANG 常量、_ts() 时间戳辅助、setQuietBatch/
-//   getSourceLang 导出、chrome.storage 源语言初始读取与变更监听（模块加载时
+//   getLearnLang 导出、chrome.storage 源语言初始读取与变更监听（模块加载时
 //   注册一次，ESM 模块缓存保证副作用只执行一次）。
 // ============================================================
 
-// 默认源语言（与 popup.js DEFAULTS.sourceLanguage 一致）
+// 默认源语言（与 popup.js DEFAULTS.learnLanguage 一致）
 export const DEFAULT_SOURCE_LANG = 'en';
 
 // === 加载状态 ===
@@ -31,7 +31,7 @@ export const dictState = {
   loadedLang: null,                    // 原 _loadedLang
   dictMap: null,                       // 原 _dictMap
   loadPromise: null,                   // 原 _loadPromise
-  currentSourceLang: DEFAULT_SOURCE_LANG, // 原 _currentSourceLang
+  currentLearnLang: DEFAULT_SOURCE_LANG, // 原 _currentLearnLang
   quietBatch: false                    // 原 _quietBatch
 };
 
@@ -55,16 +55,16 @@ export function _ts() {
   return d.toLocaleTimeString('en-GB', { hour12: false }) + '.' + String(d.getMilliseconds()).padStart(3, '0');
 }
 
-// === 读取当前 sourceLanguage（chrome.storage.local） ===
+// === 读取当前 learnLanguage（chrome.storage.local） ===
 // 缓存值 + 监听变化，避免每次 lookup 都读 storage
 if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.local) {
-  chrome.storage.local.get({ sourceLanguage: DEFAULT_SOURCE_LANG }, (res) => {
-    dictState.currentSourceLang = res.sourceLanguage || DEFAULT_SOURCE_LANG;
+  chrome.storage.local.get({ learnLanguage: DEFAULT_SOURCE_LANG }, (res) => {
+    dictState.currentLearnLang = res.learnLanguage || DEFAULT_SOURCE_LANG;
   });
   chrome.storage.onChanged.addListener((changes, area) => {
-    if (area === 'local' && changes.sourceLanguage && changes.sourceLanguage.newValue !== dictState.currentSourceLang) {
-      console.log(`[VocabRadar][dictionary][${_ts()}] sourceLanguage 变更: ${dictState.currentSourceLang} -> ${changes.sourceLanguage.newValue}, 重新加载词频`);
-      dictState.currentSourceLang = changes.sourceLanguage.newValue;
+    if (area === 'local' && changes.learnLanguage && changes.learnLanguage.newValue !== dictState.currentLearnLang) {
+      console.log(`[VocabRadar][dictionary][${_ts()}] learnLanguage 变更: ${dictState.currentLearnLang} -> ${changes.learnLanguage.newValue}, 重新加载词频`);
+      dictState.currentLearnLang = changes.learnLanguage.newValue;
       // 切换语言时清空缓存，触发懒重载
       dictState.loadedLang = null;
       dictState.dictMap = null;
@@ -80,6 +80,6 @@ if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.local) {
  * 读取当前源语言（统一词典 key 前缀用）
  * @returns {string}
  */
-export function getSourceLang() {
-  return dictState.currentSourceLang || DEFAULT_SOURCE_LANG;
+export function getLearnLang() {
+  return dictState.currentLearnLang || DEFAULT_SOURCE_LANG;
 }

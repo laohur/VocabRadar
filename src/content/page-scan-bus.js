@@ -24,7 +24,7 @@ export function emitBlock(block) {
   if (blocks.length > MAX_BLOCKS) blocks.splice(0, blocks.length - MAX_BLOCKS);
   _lastEmitAt = Date.now();
   for (const l of [...listeners]) {
-    try { l(block); } catch (e) { console.warn('[VocabRadar][scan-bus] 监听器异常:', e); }
+    try { l(block); } catch (e) { console.warn('[VocabRadar][page-scan-bus] 监听器异常:', e); }
   }
 }
 
@@ -45,6 +45,6 @@ export function resetScan() {
   blocks.length = 0;
   _lastEmitAt = 0;
   for (const l of [...listeners]) {
-    try { l({ reset: true }); } catch (e) { console.warn('[VocabRadar][scan-bus] 监听器异常:', e); }
+    try { l({ reset: true }); } catch (e) { console.warn('[VocabRadar][page-scan-bus] 监听器异常:', e); }
   }
 }

@@ -95,7 +95,7 @@ export const JS_SENTINELS = new Set(['nan', 'undefined', 'infinity']);
 // === 状态（唯一属主）===
 //
 // 字段与拆分前的模块级变量一一对应（原名 → 现名）：
-//   _targetLang→targetLang, _enabled→enabled, _rankThreshold→rankThreshold,
+//   _meaningLang→meaningLang, _enabled→enabled, _rankThreshold→rankThreshold,
 //   _annotateOov→annotateOov, _annotateRepeat→annotateRepeat,
 //   _scanScheduled→scanScheduled, _colors→colors,
 //   _contextInvalidated→contextInvalidated, _wrapCount→wrapCount,
@@ -109,7 +109,7 @@ export const JS_SENTINELS = new Set(['nan', 'undefined', 'infinity']);
 export const thState = {
   // 反思（2026-08-12 第四十二次）：缓存当前目标语言，用于检查 IDB 中的翻译是否匹配。
   //   lookupFull 返回的 record.translationLang 需与此比较，不匹配则翻译已过期需重新查询。
-  targetLang: 'zh',
+  meaningLang: 'zh',
   enabled: false,
   // 反思（2026-08-14 第五十四次修正）：默认词频阈值恢复 5000，撤销第五十二次误改的 0
   rankThreshold: 5000,
@@ -263,12 +263,12 @@ try { window.__beaverHintTiming = getHintTiming; } catch (_) { /* ignore */ }
 
 // 目标语言订阅（模块级副作用，全项目仅此一处注册）
 if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.local) {
-  chrome.storage.local.get({ targetLanguage: 'zh' }, (res) => {
-    thState.targetLang = res.targetLanguage || 'zh';
+  chrome.storage.local.get({ meaningLanguage: 'zh' }, (res) => {
+    thState.meaningLang = res.meaningLanguage || 'zh';
   });
   chrome.storage.onChanged.addListener((changes, area) => {
-    if (area === 'local' && changes.targetLanguage) {
-      thState.targetLang = changes.targetLanguage.newValue || 'zh';
+    if (area === 'local' && changes.meaningLanguage) {
+      thState.meaningLang = changes.meaningLanguage.newValue || 'zh';
     }
   });
 }

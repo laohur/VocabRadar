@@ -372,11 +372,11 @@ function buildFirstPrompt(text, kind) {
       resolve(fill(def, 'English'));
     };
     try {
-      chrome.storage.local.get({ [key]: def, targetLanguage: 'zh' }, (res) => {
+      chrome.storage.local.get({ [key]: def, meaningLanguage: 'zh' }, (res) => {
         if (done) return;
         done = true;
         const tpl = String((res && res[key]) || def);
-        const langCode = String((res && res.targetLanguage) || 'zh');
+        const langCode = String((res && res.meaningLanguage) || 'zh');
         const langName = LANG_NAMES[langCode] || langCode;
         resolve(fill(tpl, langName));
       });

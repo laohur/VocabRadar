@@ -37,13 +37,13 @@
 //     (a) 移除 wordbank.json，改加载 wordfreq 的 small_*.msgpack.gz (10个文件共~1.6MB)
 //     (b) 释义改由 translator.js 在线查询后 fnv1aHash 100分桶缓存本地
 //     (c) tags 保留为 wordlists.json (约200KB)，仅英文词表
-//   - wordfreq 各语言独立文件，按 sourceLanguage 选择加载
+//   - wordfreq 各语言独立文件，按 learnLanguage 选择加载
 //   - 同语言只加载一次（缓存到内存），切换源语言时重新加载
 //
 // ===拆分说明（2026-08-28）===
 // 本文件原为 785 行单文件，已按功能拆分为 src/lib/dictionary/ 目录模块（纯机械搬移）：
-//   - state.js：dictState 共享状态（loadedLang/dictMap/loadPromise/currentSourceLang/
-//     quietBatch）+ DEFAULT_SOURCE_LANG + _ts + setQuietBatch/getSourceLang +
+//   - state.js：dictState 共享状态（loadedLang/dictMap/loadPromise/currentLearnLang/
+//     quietBatch）+ DEFAULT_SOURCE_LANG + _ts + setQuietBatch/getLearnLang +
 //     chrome.storage 源语言监听（模块加载副作用仅此一处，ESM 缓存保证唯一）
 //   - word-loader.js：装载函数 loadWordfreq/loadWordlists 与源读取
 //     （decompressViaBackground 后台解压回退、msgpack/cBpack 解码）
@@ -52,7 +52,7 @@
 //   - query.js：查询接口 ensureReady/lookup/lookupWithLemmatizer/lookupFull/
 //     getTags/isLoaded/getDiagState（含三个一次性日志 Set）
 // 本门面仅 re-export 全部原导出符号（符号名不变），所有引用方零改动。
-export { setQuietBatch, getSourceLang } from './dictionary/state.js';
+export { setQuietBatch, getLearnLang } from './dictionary/state.js';
 export {
   ensureReady, lookup, lookupWithLemmatizer, lookupFull, prefetchFull, isLoaded, getDiagState
 } from './dictionary/query.js';

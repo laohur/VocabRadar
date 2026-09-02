@@ -10,26 +10,24 @@
 //   - 切换到未完整翻译的语言时，未命中 key 回退到 en，保证界面可用
 //
 // 反思（2026-08-02 修正）：
-//   - 初版把 SUPPORTED_LANGS 同时用于 UI语言+目标语言+释义语言（均仅10种）
+//   - 初版把 UI_LANGS 同时用于 UI语言+目标语言+释义语言（均仅10种）
 //   - 用户反馈"界面十大预言，目标和释义语言有几十种"
 //   - 拆分为两个常量：
 //     (a) UI_LANGS：前10种语言，仅用于 #uiLangSelect 界面语言下拉菜单
 //     (b) TRANSLATE_LANGS：42种语言（wordfreq small_*.msgpack.gz 全部），
-//         用于 #sourceLanguage（目标语言）和 #targetLanguage（释义语言）下拉菜单
+//         用于 #learnLanguage（目标语言）和 #meaningLanguage（释义语言）下拉菜单
 //   - LANG_NAMES 扩展到全部42种语言，便于下拉菜单显示本地化名称
-//   - UI_LANGS 仍兼容旧名 SUPPORTED_LANGS（向后兼容导出）
+//   - （第二百二十五次：旧别名 SUPPORTED_LANGS 已随命名清查删除，全库统一只用 UI_LANGS）
 
 // === UI 语言列表：前十大语言（按总使用人数） ===
 // 仅用于 #uiLangSelect 界面语言下拉菜单
 // 与 preprocess.py UI_LANGS 一致
 export const UI_LANGS = ['en', 'zh', 'hi', 'es', 'ar', 'fr', 'bn', 'pt', 'ru', 'ja'];
 
-// 向后兼容：旧名 SUPPORTED_LANGS 等同于 UI_LANGS
-// 反思（2026-08-02）：sidebar.js 等老代码可能仍引用 SUPPORTED_LANGS，保留导出避免破坏
-export const SUPPORTED_LANGS = UI_LANGS;
+// （第二百二十五次：旧别名 SUPPORTED_LANGS 已删除——全库引用已统一为 UI_LANGS）
 
 // === 目标/释义语言列表：wordfreq 全部支持的语言（42种） ===
-// 用于 #sourceLanguage 和 #targetLanguage 下拉菜单
+// 用于 #learnLanguage 和 #meaningLanguage 下拉菜单
 // 与 preprocess.py 动态扫描的 small_*.msgpack.gz 文件列表一致
 // 注：UI语言仅10种，但目标/释义语言扩展到42种（用户要求"几十种"）
 export const TRANSLATE_LANGS = [
@@ -219,8 +217,8 @@ const DICT = {
     'toast.asrReady': 'ASR model ready',
     'toast.asrNeedActiveTab': 'Authorization needed: click the VocabRadar icon on the toolbar once (grants tab access), then click ASR again.',
     // popup
-    'popup.sourceLang': 'Target Language',
-    'popup.targetLang': 'Annotation Language',
+    'popup.learnLang': 'Target Language',
+    'popup.meaningLang': 'Annotation Language',
     'popup.minRank': 'Min Rank',
     'popup.sidebar': 'Video Hint',
     'popup.webSidebar': 'Web Hint',
@@ -241,8 +239,8 @@ const DICT = {
     'ws.resetLayout': 'Reset position & size',
     'ws.close': 'Close (refresh to restore)',
     'ws.langSettings': 'Language Settings',
-    'ws.sourceLang': 'Target Language',
-    'ws.targetLang': 'Annotation Language',
+    'ws.learnLang': 'Target Language',
+    'ws.meaningLang': 'Annotation Language',
     'ws.tabSentences': 'Sentences',
     'ws.tabWords': 'Vocabulary',
     'ws.annotation': 'Annotate',
@@ -392,7 +390,7 @@ const DICT = {
     'ws.subCenterWhiteMono': 'Center / White / Mono',
     'ws.subCenterYellowSans': 'Center / Yellow / Sans',
     'ws.subCenterCyanSerif': 'Center / Cyan / Serif',
-    'popup.subtitleOverlay': 'Subtitle Hints',
+    // （第二百二十五次：死词条 popup.subtitleOverlay 已删——键与控件均已移除）
     'popup.textHint': 'Text Hints (site-wide word highlight + hover definition + right-click translate)',
     'tool.subtitleStyle': 'Sub Style',
     'tool.overlayToggle': 'Overlay Subs',
@@ -559,8 +557,8 @@ const DICT = {
     'toast.asrLoading': '下载识别模型 {pct}%',
     'toast.asrReady': '识别模型已就绪',
     'toast.asrNeedActiveTab': '需要授权：请先点击工具栏的 VocabRadar 图标一次（授予当前标签页权限），然后重新点 ASR。',
-    'popup.sourceLang': '目标语言',
-    'popup.targetLang': '注释语言',
+    'popup.learnLang': '目标语言',
+    'popup.meaningLang': '注释语言',
     'popup.minRank': '最低词频',
     'popup.sidebar': '视频提示',
     'popup.webSidebar': '网页悬浮',
@@ -580,8 +578,8 @@ const DICT = {
     'ws.resetLayout': '重置位置与尺寸',
     'ws.close': '关闭（刷新恢复）',
     'ws.langSettings': '语言设置',
-    'ws.sourceLang': '目标语言',
-    'ws.targetLang': '释义语言',
+    'ws.learnLang': '目标语言',
+    'ws.meaningLang': '释义语言',
     'ws.tabSentences': '句',
     'ws.tabWords': '词汇',
     'ws.annotation': '注释',
@@ -727,7 +725,6 @@ const DICT = {
     'ws.subCenterWhiteMono': '居中 / 白色 / 等宽',
     'ws.subCenterYellowSans': '居中 / 黄色 / 无衬线',
     'ws.subCenterCyanSerif': '居中 / 青色 / 衬线',
-    'popup.subtitleOverlay': '字幕提示',
     'popup.textHint': '文本提示（全站生词高亮 + 悬浮释义 + 右键翻译）',
     'popup.hintFirst': '生词',
     'popup.hintLater': '生词多次出现',
@@ -777,16 +774,16 @@ function readStored() {
 export async function initLang() {
   if (_initialized) return _lang;
   _lang = await readStored();
-  // 反思（2026-08-02）：旧版仅允许 en/zh，新版允许 SUPPORTED_LANGS 内任意值
+  // 反思（2026-08-02）：旧版仅允许 en/zh，新版允许 UI_LANGS 内任意值
   //   非法值（如旧版残留或外部修改）回退到 en
-  if (!SUPPORTED_LANGS.includes(_lang)) _lang = 'en';
+  if (!UI_LANGS.includes(_lang)) _lang = 'en';
   _initialized = true;
   // 监听其他上下文的切换
   if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.onChanged) {
     chrome.storage.onChanged.addListener((changes, area) => {
       if (area === 'local' && changes.uiLanguage && changes.uiLanguage.newValue !== _lang) {
         const newLang = changes.uiLanguage.newValue || 'en';
-        _lang = SUPPORTED_LANGS.includes(newLang) ? newLang : 'en';
+        _lang = UI_LANGS.includes(newLang) ? newLang : 'en';
         _listeners.forEach((fn) => { try { fn(_lang); } catch (e) { /* ignore */ } });
       }
     });
@@ -800,11 +797,11 @@ export function getLang() {
 
 /**
  * 设置界面语言
- * @param {string} lang 语言代码（必须在 SUPPORTED_LANGS 内）
- * 反思（2026-08-02）：旧版 setLang 仅允许 en/zh，新版接受任意 SUPPORTED_LANGS 内的值
+ * @param {string} lang 语言代码（必须在 UI_LANGS 内）
+ * 反思（2026-08-02）：旧版 setLang 仅允许 en/zh，新版接受任意 UI_LANGS 内的值
  */
 export function setLang(lang) {
-  _lang = SUPPORTED_LANGS.includes(lang) ? lang : 'en';
+  _lang = UI_LANGS.includes(lang) ? lang : 'en';
   if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.local) {
     chrome.storage.local.set({ uiLanguage: _lang });
   }

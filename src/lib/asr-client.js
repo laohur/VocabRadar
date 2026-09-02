@@ -33,7 +33,7 @@
 //   ScriptProcessorNode 虽已废弃但仍可靠工作；AudioWorklet 是现代替代但需额外 worklet 文件。
 //
 // === 消息流 ===
-//   asr-client → ASR_AUDIO_SEGMENT → SW → OFFSCREEN_RECOGNIZE → offscreen
+//   asr-client → ASR_AUDIO_SEGMENT → SW → OFFSCREEN_ASR_RECOGNIZE → offscreen
 //   offscreen → ASR_SEGMENT (含 chunks 时间戳) → SW → asr-client → onText 回调
 //
 // === 时间戳 ===

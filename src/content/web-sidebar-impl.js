@@ -318,10 +318,10 @@ export function setAnnotateRepeat(b) {
 // 反思（2026-08-07）：语言设置同步——全局 storage 变化时更新选择器
 export function updateLanguages(settings) {
   if (!_root) return;
-  const src = _root.querySelector('#beaver-web-source-lang');
-  const tgt = _root.querySelector('#beaver-web-target-lang');
-  if (src && settings.sourceLanguage) src.value = settings.sourceLanguage;
-  if (tgt && settings.targetLanguage) tgt.value = settings.targetLanguage;
+  const src = _root.querySelector('#beaver-web-learn-lang');
+  const tgt = _root.querySelector('#beaver-web-meaning-lang');
+  if (src && settings.learnLanguage) src.value = settings.learnLanguage;
+  if (tgt && settings.meaningLanguage) tgt.value = settings.meaningLanguage;
 }
 
 export function updateColors(settings) {

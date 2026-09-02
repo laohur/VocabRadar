@@ -1,9 +1,9 @@
 // 分词模块
 //
 // 功能：
-//   1. simple_tokenize：将文本拆分为各类 token（CJK 字符、emoji、英文单词等）
-//   2. select_english_tokens：从 token 列表中筛选英文单词
-//   3. extract_english_words：分词 + 选词 + 过滤单字母/音效标注
+//   1. simpleTokenize：将文本拆分为各类 token（CJK 字符、emoji、英文单词等）
+//   2. selectEnglishTokens：从 token 列表中筛选英文单词
+//   3. extractEnglishWords：分词 + 选词 + 过滤单字母/音效标注
 //
 // 反思（2026-08-08）：用户反馈"为啥不用 Intl.Segmenter？"。
 //   旧版用手写正则分词，存在以下问题：
@@ -54,11 +54,11 @@ function getWordSegmenter() {
  * 反思（2026-08-08 第二次）：用户再次反馈"你咋分词的，为啥不用 Intl.Segmenter？"。
  *   上一版虽加了 Intl.Segmenter，但过滤逻辑有误：
  *   仅检查 trimmed && /[^\s]/ 保留了标点符号 token，
- *   导致 select_english_tokens 的 SELECT_PATTERN 匹配异常。
+ *   导致 selectEnglishTokens 的 SELECT_PATTERN 匹配异常。
  *   修正：使用 Intl.Segmenter 的 isWordLike 属性过滤，
  *   仅保留词级 token（排除标点、空白、符号）。
  */
-export function simple_tokenize(text) {
+export function simpleTokenize(text) {
   if (!text) return [];
 
   // 优先使用 Intl.Segmenter（Chrome 87+ 内置，零依赖）
@@ -80,7 +80,7 @@ export function simple_tokenize(text) {
 }
 
 /** 选词：从 token 列表中筛选英文单词 */
-export function select_english_tokens(tokens) {
+export function selectEnglishTokens(tokens) {
   return tokens.filter((tok) => SELECT_PATTERN.test(tok));
 }
 
@@ -91,11 +91,11 @@ export function select_english_tokens(tokens) {
  *  反思（2026-07-05）：用户要求"不要递归注释。本工具、字幕内的非内容而是符号，不作为单词"。
  *  单字母（I, a）不是有意义的生词，过滤掉。最小词长 2 字符。
  */
-export function extract_english_words(text) {
+export function extractEnglishWords(text) {
   // 剥离方括号 [...] 和圆括号 (...) 内的内容（音效/说话人标注，非台词）
   const cleaned = text.replace(/\[[^\]\n]{0,50}\]/g, ' ').replace(/\([^)\n]{0,50}\)/g, ' ');
-  const tokens = simple_tokenize(cleaned);
-  const selected = select_english_tokens(tokens);
+  const tokens = simpleTokenize(cleaned);
+  const selected = selectEnglishTokens(tokens);
   // 过滤单字母（I, a 等不是有意义的生词）
   return selected.filter((w) => w.length >= 2);
 }

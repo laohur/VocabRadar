@@ -6,14 +6,14 @@
 //       跨模块共享状态一律来自 ./core.js，写入走 core 导出的 set_xxx 接缝，绝不另存副本。
 
 import { getAnnotations, rankToStage } from '../../lib/annotator.js';
-import { isBalancedParens } from '../../lib/dict-clean.js';
+import { isBalancedParens, pickCleanShortTrans } from '../../lib/dict-clean.js';
 import { t } from '../../lib/i18n.js';
 // 第一百八十五次：扫描筛选常量的唯一定义处（与「给 AI 提取正文」共用同一套标准）
 import { JS_SENTINELS, NON_CONTENT_SELECTOR, SKIP_TAGS } from '../../lib/main-text.js';
 import { getPhonetic } from '../../lib/phonetics.js';
 import { translate } from '../../lib/translator.js';
 import { getBlocks, getLastEmitAt, subscribe } from '../page-scan-bus.js';
-import { _activeTab, _allAnnotations, _annotateOov, _annotateRepeat, _annotationsCache, _collectedSubs, _detailMode, _firstSentMap, _noAnnotation, _pageSentenceEls, _pageSentences, _rankThreshold, _root, _scanScheduled, _seenSentences, _seenWords, addSentenceKey, addWordKey, cssEscape, escapeHtml, escapeReg, formatTime, getBlockText, hasSentenceKey, hasWordKey, log, normSentKey, pickRandomShortTrans, set_allAnnotations, set_annotationsCache, set_collectedSubs, set_firstSentMap, set_pageSentenceEls, set_pageSentences, set_scanScheduled, set_seenSentences, set_seenWords, splitSentences } from './core.js';
+import { _activeTab, _allAnnotations, _annotateOov, _annotateRepeat, _annotationsCache, _collectedSubs, _detailMode, _firstSentMap, _noAnnotation, _pageSentenceEls, _pageSentences, _rankThreshold, _root, _scanScheduled, _seenSentences, _seenWords, addSentenceKey, addWordKey, cssEscape, escapeHtml, escapeReg, formatTime, getBlockText, hasSentenceKey, hasWordKey, log, normSentKey, set_allAnnotations, set_annotationsCache, set_collectedSubs, set_firstSentMap, set_pageSentenceEls, set_pageSentences, set_scanScheduled, set_seenSentences, set_seenWords, splitSentences } from './core.js';
 
 // === 扫描常量（与 text-hint-impl.js 同源）===
 // 反思（2026-08-09）：用户反馈"文本侧栏句子比网页文本提示多了很多，很多垃圾。二者应当用一个筛选"。
@@ -1018,7 +1018,7 @@ const hasTrans = (ann.translations && ann.translations.length > 0);
 
 // === 填充槽位的正文高亮 + 注释行（与 sidebar.js fillSlotAnnotations 同源） ===
 // 反思（2026-08-12）：用户反馈"句子中生词咋没注释"。
-//   根因：旧版 validAnns = anns.filter((a) => pickRandomShortTrans(a.translations))
+//   根因：旧版 validAnns = anns.filter((a) => pickCleanShortTrans(a.translations))
 //   过滤掉所有 translations 为空的词（pending 词），导致翻译未完成或失败时
 //   句子既不高亮也不显示注释。即便 onAsyncTranslate 回填触发重渲染，
 //   翻译失败的词仍被过滤，永久无注释。
@@ -1131,7 +1131,7 @@ function highlightWords(text, annotations, inlineAnnotations = false) {
     const ph = `\x00${placeholders.length}\x00`;
     let replacement = `<span class="${cls}">${escapeHtml(a.word)}</span>`;
     if (inlineAnnotations && (_annotateRepeat || a.isFirst !== false)) {
-      const shortTrans = pickRandomShortTrans(a.translations);
+      const shortTrans = pickCleanShortTrans(a.translations);
       if (shortTrans) {
         replacement += `<span class="beaver-web-ann-inline">(${escapeHtml(shortTrans)})</span>`;
       }

@@ -295,7 +295,7 @@ export async function queryWordForPanel(lower, original) {
   const phonetic = full ? full.phonetic : null;
 
   // 检查 IDB 中是否已有有效翻译（语言匹配）
-  if (full && full.translation && full.translationLang === thState.targetLang) {
+  if (full && full.translation && full.translationLang === thState.meaningLang) {
     // 翻译缓存命中，直接返回
     console.log(`[VocabRadar][text-hint] 右键查词 "${lower}": IDB缓存命中 (rank=${rank}, tags=[${tags.join(',')}], lemma=${lemma || '无'}, phonetic=${phonetic ? '已缓存' : '无'}, translation="${full.translation}")`);
     return { isWord: true, rank, tags, lemma, translations: [full.translation], pending: false, phonetic };
@@ -307,7 +307,7 @@ export async function queryWordForPanel(lower, original) {
   if (tags.length > 0) known.push(`tags=[${tags.join(',')}]`);
   if (lemma) known.push(`lemma=${lemma}`);
   if (phonetic) known.push(`phonetic=已缓存`);
-  console.log(`[VocabRadar][text-hint] 右键查词 "${lower}": 已知=[${known.join(', ') || '无'}], 待查翻译(${thState.targetLang})`);
+  console.log(`[VocabRadar][text-hint] 右键查词 "${lower}": 已知=[${known.join(', ') || '无'}], 待查翻译(${thState.meaningLang})`);
   return { isWord: true, rank, tags, lemma, translations: [], pending: true, phonetic };
 }
 
@@ -635,9 +635,9 @@ export async function ocrVideoFrame(clientX, clientY) {
     const ctx = canvas.getContext('2d');
     ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
     const dataUrl = canvas.toDataURL('image/png');
-    // 反思（2026-08-16 第六十六次）：OCR 语言随 sourceLanguage（zh→chi_sim，其余→eng）
+    // 反思（2026-08-16 第六十六次）：OCR 语言随 learnLanguage（zh→chi_sim，其余→eng）
     const ocrLang = await new Promise((resolve) => {
-      chrome.storage.local.get({ sourceLanguage: 'en' }, (res) => resolve(res.sourceLanguage || 'en'));
+      chrome.storage.local.get({ learnLanguage: 'en' }, (res) => resolve(res.learnLanguage || 'en'));
     });
     const resp = await chrome.runtime.sendMessage({
       type: 'OCR_RECOGNIZE',

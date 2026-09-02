@@ -7,10 +7,10 @@
 //   - lookupWord 统一返回 pending=true（释义待异步获取），由调用方决定阻塞/非阻塞模式
 //   - getAnnotations 中"词典命中"和"表外"分支合并为统一的异步翻译流程
 
-import { lookup, lookupWithLemmatizer, getSourceLang, setQuietBatch } from './dictionary.js';
+import { lookup, lookupWithLemmatizer, getLearnLang, setQuietBatch } from './dictionary.js';
 // 第一百九十九次：hasCachedLemma 守卫已删除（自败守卫，见 getAnnotationsInner 内注释）
-import { extract_english_words } from './tokenizer.js';
-import { translate, getTargetLang } from './translator.js';
+import { extractEnglishWords } from './tokenizer.js';
+import { translate, getMeaningLang } from './translator.js';
 import { getWordsBatch, updateFields } from './word-db.js';
 // 反思（2026-08-16 第七十次）：词典层数据来源账本——getAnnotations 每次处理
 //   真实计数 文本字符/分词/去重单词 与 各属性(rank/lemma/tags/释义) 来自统一词典(IDB)
@@ -86,7 +86,7 @@ export function lookupWord(word, threshold = 0) {
  * 对一条字幕文本提取注解
  *
  * 流程：
- *   1. extract_english_words(text.lower()) 分词+选词
+ *   1. extractEnglishWords(text.lower()) 分词+选词
  *   2. 对每个 word：
  *      - lookupWord 判定是否需要显示（高频词跳过）
  *      - 需要显示 → 通过 translator.translate(word) 异步获取释义
@@ -134,7 +134,7 @@ async function getAnnotationsInner(text, rankThreshold = 0, seen = new Set(), on
   //   与全仓默认阈值 5000（popup/service-worker/th/core/ws/core/video-sidebar 等）不一致；
   //   一旦调用方漏传或传入 NaN（配置未就绪的竞态），高频词就整批漏进词表。统一为 5000。
   const threshold = (typeof rankThreshold === 'number' && !isNaN(rankThreshold)) ? rankThreshold : 5000;
-  const words = extract_english_words(text.toLowerCase());
+  const words = extractEnglishWords(text.toLowerCase());
   const annotations = [];
   // 反思（2026-08-16 第七十次）：每批处理的真实账本——文本字符数 / 分词数 / 去重单词数，
   //   以及各属性 词典直读 vs 临时组装 的数量（计数点在下方真实读取/翻译处）。
@@ -154,7 +154,7 @@ async function getAnnotationsInner(text, rankThreshold = 0, seen = new Set(), on
   //   仅词典之外的词才从 Maps 组装 rank/lemma/tags 并写回 IDB；
   //   翻译命中 IDB（translationLang 匹配）则不再调 translate。
   //   word-db 放在 SW 层（扩展源 IDB），跨页面/跨网站共享（详见 word-db.js）。
-  const lang = getSourceLang();
+  const lang = getLearnLang();
   let idbRecords = [];
   try {
     idbRecords = await getWordsBatch(lang, words);
@@ -233,8 +233,8 @@ async function getAnnotationsInner(text, rankThreshold = 0, seen = new Set(), on
     //   缓存永远视为未命中 → 每次都走异步 translate（即使词典已有译文）。
     //   修正：用 translator 当前目标语言比对，命中则直接取词典译文，符合
     //   "找单词数据只有找词典，词典是缓存层，找不着了再去原始渠道并回填"。
-    const targetLang = getTargetLang();
-    const idbTrans = (rec && rec.translation && rec.translationLang === targetLang) ? rec.translation : null;
+    const meaningLang = getMeaningLang();
+    const idbTrans = (rec && rec.translation && rec.translationLang === meaningLang) ? rec.translation : null;
     if (idbTrans) {
       const cleanTrans = cleanDictEntry(idbTrans);
       if (cleanTrans) {

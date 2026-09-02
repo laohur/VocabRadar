@@ -6,7 +6,7 @@
 //   （_pendingMap 同词去重 + 高/低优先级串行队列）、translate 主入口（原导出）、
 //   _translateInternal 渠道串联（缓存 -> 内置 Translator -> SW 在线 -> 原形回退，
 //   含失败根因汇总日志）、translateWithLemma（原形回退全渠道重试）。
-//   同时作为目录统一出口 re-export：getLastTranslateChannel/getTargetLang
+//   同时作为目录统一出口 re-export：getLastTranslateChannel/getMeaningLang
 //   （shared.js）与 getAvailability（builtin-translator.js）；
 //   门面 src/lib/translator.js 经本文件 re-export，符号名不变、引用方零改动。
 // 语言对经 shared.js 的 transState（唯一实例）读写。
@@ -186,7 +186,7 @@ async function _translateInternal(word) {
   let stepLlm = '未尝试';   // 第二百一十六次：LLM 渠道（文本）
 
   // 1. 本地缓存（统一词典 word-db translation 字段）命中
-  const cached = await getWordCached(transState.sourceLang, transState.targetLang, word);
+  const cached = await getWordCached(transState.learnLang, transState.meaningLang, word);
   if (cached !== null) {
     _setLastChannel('本地缓存');
     return cleanDictEntry(cached);
@@ -214,13 +214,13 @@ async function _translateInternal(word) {
       const translated = await withTimeout(translator.translate(word), 10000, 'Translator.translate');
       if (translated && translated.trim()) {
         const trimmed = translated.trim();
-        if (transState.sourceLang !== transState.targetLang &&
+        if (transState.learnLang !== transState.meaningLang &&
             trimmed.toLowerCase() === word.trim().toLowerCase()) {
           stepBuiltin = '返回原文未翻译';
           log(`[VocabRadar][translator][${_ts()}] 渠道[浏览器内置翻译] "${word}" 返回原文未翻译，切换在线渠道`);
-        } else if (transState.sourceLang !== transState.targetLang && !targetScriptOk(trimmed, transState.targetLang)) {
-          stepBuiltin = '译文不含目标语言(' + transState.targetLang + ')文字';
-          log(`[VocabRadar][translator][${_ts()}] 渠道[浏览器内置翻译] "${word}"->"${trimmed}" 不含目标语言(${transState.targetLang})文字，切换在线渠道`);
+        } else if (transState.learnLang !== transState.meaningLang && !targetScriptOk(trimmed, transState.meaningLang)) {
+          stepBuiltin = '译文不含目标语言(' + transState.meaningLang + ')文字';
+          log(`[VocabRadar][translator][${_ts()}] 渠道[浏览器内置翻译] "${word}"->"${trimmed}" 不含目标语言(${transState.meaningLang})文字，切换在线渠道`);
         } else {
           result = cleanDictEntry(trimmed);
           stepBuiltin = '成功';
@@ -239,7 +239,7 @@ async function _translateInternal(word) {
   }
 
   // 3. 渠道 2：经 service worker 的在线渠道（MyMemory -> Google -> Youdao -> Baidu -> Bing -> Lingva）
-  // 反思（2026-08-05）：service-worker.js handleTranslateWord 已对每个渠道做 isUntranslated 校验，
+  // 反思（2026-08-05）：service-worker.js handleTranslateText 已对每个渠道做 isUntranslated 校验，
   //   返回的成功结果必然非原文。此处仅校验非空即可。
   if (!result) {
     try {
@@ -248,10 +248,10 @@ async function _translateInternal(word) {
         stepOnline = '未启用（在线渠道均未勾选）';
       } else {
         const resp = await sendMessage({
-          type: 'TRANSLATE_WORD',
+          type: 'TRANSLATE_TEXT',
           word,
-          source: transState.sourceLang,
-          target: transState.targetLang,
+          source: transState.learnLang,
+          target: transState.meaningLang,
           channels: _chOn
         });
         if (resp && resp.ok && resp.text) {
@@ -277,7 +277,7 @@ async function _translateInternal(word) {
   // 4. 渠道 3：LLM 文本翻译（第二百一十六次——文本形态，直接用聊天的 LLM 配置）
   if (!result && _chOn.llm) {
     try {
-      const resp = await sendMessage({ type: 'LLM_TRANSLATE', text: word, target: transState.targetLang });
+      const resp = await sendMessage({ type: 'LLM_TRANSLATE', text: word, target: transState.meaningLang });
       if (resp && resp.ok && resp.text) {
         result = cleanDictEntry(resp.text.trim());
         _setLastChannel('LLM');
@@ -294,7 +294,7 @@ async function _translateInternal(word) {
 
   // 5. 写回本地缓存并返回
   if (result) {
-    await setWordCached(transState.sourceLang, transState.targetLang, word, result);
+    await setWordCached(transState.learnLang, transState.meaningLang, word, result);
     return result;
   }
 
@@ -310,11 +310,11 @@ async function _translateInternal(word) {
     if (lemma && lemma.toLowerCase() !== word.toLowerCase()) {
       log(`[VocabRadar][translator][${_ts()}] 原形回退: "${word}" -> "${lemma}"`);
       // 查 lemma 的缓存
-      const lemmaCached = await getWordCached(transState.sourceLang, transState.targetLang, lemma);
+      const lemmaCached = await getWordCached(transState.learnLang, transState.meaningLang, lemma);
       if (lemmaCached !== null) {
         // lemma 缓存命中，写入原词缓存并返回
         const lemmaClean = cleanDictEntry(lemmaCached);
-        await setWordCached(transState.sourceLang, transState.targetLang, word, lemmaClean);
+        await setWordCached(transState.learnLang, transState.meaningLang, word, lemmaClean);
         stepLemma = '缓存命中(' + lemma + ')';
         _setLastChannel('原形回退:缓存');
         log(`[VocabRadar][translator][${_ts()}] 原形回退缓存命中: "${lemma}" -> "${lemmaClean}"`);
@@ -325,8 +325,8 @@ async function _translateInternal(word) {
       if (lemmaResult) {
         // 写入原词和 lemma 的缓存
         const lemmaClean = cleanDictEntry(lemmaResult);
-        await setWordCached(transState.sourceLang, transState.targetLang, word, lemmaClean);
-        await setWordCached(transState.sourceLang, transState.targetLang, lemma, lemmaClean);
+        await setWordCached(transState.learnLang, transState.meaningLang, word, lemmaClean);
+        await setWordCached(transState.learnLang, transState.meaningLang, lemma, lemmaClean);
         stepLemma = '渠道成功(' + lemma + ')';
         _setLastChannel('原形回退:' + (getLastTranslateChannel() || ''));
         log(`[VocabRadar][translator][${_ts()}] 原形回退成功: "${word}"->"${lemma}"->"${lemmaClean}"`);
@@ -362,10 +362,10 @@ async function translateWithLemma(word) {
       const translated = await withTimeout(translator.translate(word), 10000, 'Translator.translate(lemma)');
       if (translated && translated.trim()) {
         const trimmed = translated.trim();
-        if (transState.sourceLang !== transState.targetLang &&
+        if (transState.learnLang !== transState.meaningLang &&
             trimmed.toLowerCase() === word.trim().toLowerCase()) {
           log(`[VocabRadar][translator][${_ts()}] 渠道[浏览器内置翻译] lemma "${word}" 返回原文未翻译`);
-        } else if (transState.sourceLang !== transState.targetLang && !targetScriptOk(trimmed, transState.targetLang)) {
+        } else if (transState.learnLang !== transState.meaningLang && !targetScriptOk(trimmed, transState.meaningLang)) {
           log(`[VocabRadar][translator][${_ts()}] 渠道[浏览器内置翻译] lemma "${word}"->"${trimmed}" 不含目标文字`);
         } else {
           result = cleanDictEntry(trimmed);
@@ -381,10 +381,10 @@ async function translateWithLemma(word) {
   if (!result) {
     try {
       const resp = await sendMessage({
-        type: 'TRANSLATE_WORD',
+        type: 'TRANSLATE_TEXT',
         word,
-        source: transState.sourceLang,
-        target: transState.targetLang
+        source: transState.learnLang,
+        target: transState.meaningLang
       });
       if (resp && resp.ok && resp.text) {
         result = cleanDictEntry(resp.text.trim());
@@ -399,5 +399,5 @@ async function translateWithLemma(word) {
 }
 
 // === 目录统一出口：re-export 其余原导出符号（符号名不变） ===
-export { getLastTranslateChannel, getTargetLang } from './shared.js';
+export { getLastTranslateChannel, getMeaningLang } from './shared.js';
 export { getAvailability } from './builtin-translator.js';

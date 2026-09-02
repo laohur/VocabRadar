@@ -12,26 +12,11 @@
 //   修正：改用 _wsImpl 避免冲突。
 let _wsImpl = null;
 
-/**
- * 检测当前页面是否为视频页面（B站/YouTube 正片页）
- * 反思（2026-08-12）：用户要求"chrome edge 视频网站没有显示悬浮球"。
- *   旧版视频页面不启动文本侧栏（避免与视频侧栏冲突），但用户要求视频网站也要显示悬浮球。
- *   修正：视频页面也启动文本侧栏（悬浮球），与视频侧栏共存。
- *   isVideoPage 仍保留用于 SPA 导航检测（视频侧栏由 video-controller 启动）。
- */
-function isVideoPage() {
-  const path = location.pathname;
-  const host = location.hostname;
-  // B站正片页（排除番剧/直播/首页/空间）
-  if (host.includes('bilibili.com')) {
-    return /\/video\/(BV[\w]+|av\d+)/i.test(path);
-  }
-  // YouTube 正片页
-  if (host.includes('youtube.com')) {
-    return /\/(watch|shorts)($|\?|\/)/i.test(path);
-  }
-  return false;
-}
+// 反思（2026-08-12）：用户要求"chrome edge 视频网站没有显示悬浮球"。
+//   旧版视频页面不启动文本侧栏（避免与视频侧栏冲突），但用户要求视频网站也要显示悬浮球。
+//   修正：视频页面也启动文本侧栏（悬浮球），与视频侧栏共存。
+// 第二百二十五次：删除死函数 isVideoPage（定义后零调用；《命名清查》查明旧注释
+//   "仍保留供 video-controller.js 使用"不实——video-controller 用自己的 isSupportedPage）。
 
 let _lastUrl = location.href;
 
@@ -74,7 +59,7 @@ let _lastUrl = location.href;
         _wsImpl.setRankThreshold(changes.rankThreshold.newValue);
       }
       // 语言变化 → 更新选择器
-      if ('sourceLanguage' in changes || 'targetLanguage' in changes) {
+      if ('learnLanguage' in changes || 'meaningLanguage' in changes) {
         getSettings().then((s) => _wsImpl.updateLanguages(s));
       }
       // 注释表外词开关变化 → 重扫（2026-08-07）
@@ -101,7 +86,7 @@ let _lastUrl = location.href;
 
     // 反思（2026-08-12）：视频页面也启动文本侧栏，SPA 导航不再停止/启动文本侧栏。
     //   仅在 webSidebarEnabled 开关变化时启停（由 storage.onChanged 监听处理）。
-    //   isVideoPage 仍保留供 video-controller.js 使用。
+    //   （第二百二十五次：死函数 isVideoPage 已删除，此前的虚假保留注释一并更正。）
     const checkVideoNav = () => {
       const newUrl = location.href;
       if (newUrl === _lastUrl) return;
@@ -134,8 +119,8 @@ let _lastUrl = location.href;
 function getSettings() {
   return new Promise((resolve) => {
     chrome.storage.local.get({
-      sourceLanguage: 'en',
-      targetLanguage: 'zh',
+      learnLanguage: 'en',
+      meaningLanguage: 'zh',
       // 反思（2026-08-14 第五十四次修正）：默认词频阈值恢复 5000，撤销第五十二次误改的 0
       rankThreshold: 5000,
       annotateOov: false,

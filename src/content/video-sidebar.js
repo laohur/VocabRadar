@@ -32,7 +32,7 @@ import { warmYouTubeCaptionInnertube } from '../lib/subtitle/index.js';
 import { initAsrProgress, showASRProgress, hideASRProgress, updateASRProgressFill } from './vs-asr-progress.js';
 // 第一百二十四次：顶行统一构建器——视频/文本侧栏共用同一代码文件（用户裁定）
 import { buildTopbarHTML, ensureTopbarCss } from '../lib/sidebar-topbar.js';
-import { initLang, getLang, setLang, onLangChange, t, SUPPORTED_LANGS, UI_LANGS, TRANSLATE_LANGS, LANG_NAMES } from '../lib/i18n.js';
+import { initLang, getLang, setLang, onLangChange, t, UI_LANGS, TRANSLATE_LANGS, LANG_NAMES } from '../lib/i18n.js';
 import { summarize } from '../lib/summarizer.js';
 import { startASR, stopASR, isASRReady, hasASRCache, getCachedSubtitles, getASRCoverage, getASRFrontier, getASRStats } from '../lib/asr-client.js';
 // 第九十六次：下载音频按钮——B站音轨信息（urls[]/标题）；YouTube 走 youtube-audio.js 按需动态 import
@@ -54,15 +54,14 @@ export function isASRActive() {
 // 反思（2026-08-06）：重新启用视频内字幕 overlay（之前被移除导致全屏无字幕）。
 //   sidebar 负责启动/同步字幕到 overlay，ASR 新增字幕也实时同步。
 import { startOverlay, stopOverlay, setSubtitles as overlaySetSubtitles, addSubtitle as overlayAddSubtitle, setOverlayEnabled as overlaySetEnabled, setRankThreshold as overlaySetRank } from './subtitle-overlay.js';
-// 反思（2026-08-16 第六十六次）：释义清洗 + 干净短义项选取（去除"原形(释义)的屈折说明"夹杂）
-import { pickCleanShortTrans, isBalancedParens } from '../lib/dict-clean.js';
+// 第二百二十五次：删除本门面未使用的导入（pickCleanShortTrans/isBalancedParens 曾导入零调用）
 // 2026-08-28 拆分第二刀：按功能拆出 vs/* 子模块，本文件保留为门面（facade）。
 // 受控循环 import 说明：vs/playback-gate、vs/asr-stage、vs/record-workflow、vs/ocr
 // 需调用本门面导出的函数（getRoot/getActiveVideo/isASRActive/toast/getSubtitlesRef/
-// getVideoSourceLang/showNoSubtitle，均为函数声明、提升后可用）；这些子模块顶层仅
+// getVideoLearnLang/showNoSubtitle，均为函数声明、提升后可用）；这些子模块顶层仅
 // 初始化自身状态，对本门面绑定的调用全部发生在函数体内——运行时安全，无 TDZ 风险。
 import { log, setDebug } from './vs/logger.js';
-import { makeVideoKey, copyToClipboard, flashButton, formatTime, pickRandomShortTrans, escapeHtml, escapeReg, cssEscape } from './vs/dom-utils.js';
+import { makeVideoKey, copyToClipboard, flashButton, formatTime, escapeHtml, escapeReg, cssEscape } from './vs/dom-utils.js';
 import { pickRandomLinesForComment, findMainCommentContainer, expandCommentBox, fillCommentInput, scrollMinIntoView } from './vs/comment-fill.js';
 import { startYTReorderGuard } from './vs/yt-reorder.js';
 // 2026-08-28 拆分第三刀：布局子模块（注入/高度同步/折叠/拖拽/重注入）；
@@ -105,7 +104,7 @@ let _annotateRepeat = false;
 // 反思（2026-08-21 第九十次）：用户要求"视频叠加字幕应当默认不选"——默认值改 false，
 //   读取判据同步改为严格 === true（未设置=不选，不再 !==false 宽松判真）。
 let _overlayEnabled = false;
-let _langPair = 'en-zh';      // 语言对
+// 第二百二十五次：删除死变量 _langPair（初始化后从未使用，《命名清查》裁定）
 let _activeTab = 'subtitle';  // 当前 tab
 let _syncEnabled = true;      // 同步滚动高亮
 
@@ -121,7 +120,7 @@ let _cfgReady = null;        // 配置加载 Promise（确保 updateSubtitles �
 // 回退路径用 captureStream+MediaRecorder 替代废弃的 ScriptProcessor。
 let _asrActive = false;      // ASR 是否激活
 let _asrUnsub = null;        // ASR 字幕回调取消订阅
-let _savedSubtitles = null;  // ASR 启动时保存的原字幕（停止时恢复，当前未使用但保留兼容）
+// 第二百二十五次：删除死变量 _savedSubtitles（只写不读，《命名清查》裁定）
 let _videoKey = '';          // 当前视频缓存 key（URL-based）
 let _asrCacheLoaded = false; // 字幕面板是否由 ASR 缓存预加载（loadASRCacheIfAny 设 true）
 let _lastAsrCacheCoverage = 0; // 上次 ASR 缓存的覆盖率（避免重复加载时重新计算）
@@ -281,12 +280,12 @@ function buildSidebar() {
     <!-- 界面语言(UI_LANGS 10种) + 目标语言(TRANSLATE_LANGS 42种) + 释义语言(42种) -->
     <div class="beaver-lang-panel" id="beaver-lang-panel">
       <div class="beaver-lang-row">
-        <label class="beaver-lang-label" data-i18n="popup.sourceLang">Target Language</label>
-        <select class="beaver-lang-select" id="beaver-source-lang"></select>
+        <label class="beaver-lang-label" data-i18n="popup.learnLang">Target Language</label>
+        <select class="beaver-lang-select" id="beaver-learn-lang"></select>
       </div>
       <div class="beaver-lang-row">
-        <label class="beaver-lang-label" data-i18n="popup.targetLang">Definition Language</label>
-        <select class="beaver-lang-select" id="beaver-target-lang"></select>
+        <label class="beaver-lang-label" data-i18n="popup.meaningLang">Definition Language</label>
+        <select class="beaver-lang-select" id="beaver-meaning-lang"></select>
       </div>
       <div class="beaver-lang-row">
         <label class="beaver-lang-label" data-i18n="lang.ui">UI Language</label>
@@ -590,8 +589,8 @@ function bindEvents(options = {}) {
   // 填充三种语言下拉菜单选项
   // 界面语言：UI_LANGS（前10种）；目标/释义语言：TRANSLATE_LANGS（42种）
   const uiLangSel = _root.querySelector('#beaver-ui-lang');
-  const srcLangSel = _root.querySelector('#beaver-source-lang');
-  const tgtLangSel = _root.querySelector('#beaver-target-lang');
+  const srcLangSel = _root.querySelector('#beaver-learn-lang');
+  const tgtLangSel = _root.querySelector('#beaver-meaning-lang');
 
   // 填充界面语言选项（10种）
   for (const lang of UI_LANGS) {
@@ -614,9 +613,9 @@ function bindEvents(options = {}) {
   }
 
   // 从 storage 读取当前语言设置并同步到下拉菜单
-  chrome.storage.local.get({ sourceLanguage: 'en', targetLanguage: 'zh' }, (res) => {
-    srcLangSel.value = res.sourceLanguage || 'en';
-    tgtLangSel.value = res.targetLanguage || 'zh';
+  chrome.storage.local.get({ learnLanguage: 'en', meaningLanguage: 'zh' }, (res) => {
+    srcLangSel.value = res.learnLanguage || 'en';
+    tgtLangSel.value = res.meaningLanguage || 'zh';
   });
   uiLangSel.value = getLang();
 
@@ -632,21 +631,21 @@ function bindEvents(options = {}) {
   // 目标语言切换
   srcLangSel.addEventListener('change', (e) => {
     e.stopPropagation();
-    chrome.storage.local.set({ sourceLanguage: e.target.value });
+    chrome.storage.local.set({ learnLanguage: e.target.value });
     log('目标语言切换:', e.target.value);
   });
 
   // 释义语言切换
   tgtLangSel.addEventListener('change', (e) => {
     e.stopPropagation();
-    chrome.storage.local.set({ targetLanguage: e.target.value });
+    chrome.storage.local.set({ meaningLanguage: e.target.value });
     log('释义语言切换:', e.target.value);
   });
 
   // 关闭视频提示按钮（仅本次会话生效，刷新页面恢复）
   // 反思（2026-07-06）：用户反馈会员专属视频无作者，视频提示挤不进去。
   // 解决办法之一：设置弹出有关闭选项，仅单次生效。
-  // 关闭按钮隐藏视频提示 DOM，不修改 storage（与 subtitleOverlay 不同），
+  // 关闭按钮隐藏视频提示 DOM，不修改 storage（仅本次会话，不持久化），
   // 刷新页面后视频提示重新出现。
   _root.querySelector('#beaver-close').addEventListener('click', (e) => {
     e.stopPropagation();
@@ -667,6 +666,7 @@ function bindEvents(options = {}) {
   // 启动一律折叠——不再恢复 storage.sidebarCollapsed（旧版"先展开 loading/空面板"
   // 即源于此）。首批真实内容到达时由 updateSubtitles/appendASRSubtitle 自动展开一次。
   // 引导页 mount 模式例外：预览容器需要直接可见内容。
+  // 第二百二十五次：连带删除 sidebarCollapsed 的两处只写不读写入（《命名清查》裁定）。
   if (!options.mount) {
     setSidebarCollapsedFlag(true);
     _root.classList.add('beaver-collapsed');
@@ -674,7 +674,6 @@ function bindEvents(options = {}) {
     // 折叠态清 height/maxHeight，防空白大块（与 toggleSidebarCollapse 折叠分支一致）
     _root.style.height = 'auto';
     _root.style.maxHeight = 'none';
-    try { chrome.storage.local.set({ sidebarCollapsed: true }); } catch (_) { /* ignore */ }
     armAutoExpand();
   }
 
@@ -766,17 +765,17 @@ function bindEvents(options = {}) {
 
 /**
  * 反思（2026-08-08）：用户要求"音标前加一个喇叭按钮"。
- * 视频侧栏朗读单词（Web Speech API），使用 sourceLanguage 设置语音。
+ * 视频侧栏朗读单词（Web Speech API），使用 learnLanguage 设置语音。
  * @param {string} word 要朗读的单词
  */
-let _videoSourceLang = 'en';
+let _videoLearnLang = 'en';
 try {
-  chrome.storage.local.get({ sourceLanguage: 'en' }, (res) => {
-    _videoSourceLang = res.sourceLanguage || 'en';
+  chrome.storage.local.get({ learnLanguage: 'en' }, (res) => {
+    _videoLearnLang = res.learnLanguage || 'en';
   });
   chrome.storage.onChanged.addListener((changes, area) => {
-    if (area === 'local' && changes.sourceLanguage) {
-      _videoSourceLang = changes.sourceLanguage.newValue || 'en';
+    if (area === 'local' && changes.learnLanguage) {
+      _videoLearnLang = changes.learnLanguage.newValue || 'en';
     }
     // 反思（2026-08-13 第五十二次）：视频叠加字幕开关跨标签同步（引导页/其它标签切换时更新按钮态）
     // 反思（2026-08-21 第九十次）：默认不选——严格 === true
@@ -790,15 +789,15 @@ try {
   });
 } catch (_) { /* ignore */ }
 
-// 2026-08-28 拆分第二刀：_videoSourceLang 接驳导出（vs/ocr 读语言决定 OCR 引擎）
-export function getVideoSourceLang() { return _videoSourceLang; }
+// 2026-08-28 拆分第二刀：_videoLearnLang 接驳导出（vs/ocr 读语言决定 OCR 引擎）
+export function getVideoLearnLang() { return _videoLearnLang; }
 
 function speakWordVideo(word) {
   if (!('speechSynthesis' in window)) return;
   try {
     window.speechSynthesis.cancel();
     const utter = new SpeechSynthesisUtterance(word);
-    utter.lang = _videoSourceLang === 'zh' ? 'zh-CN' : _videoSourceLang;
+    utter.lang = _videoLearnLang === 'zh' ? 'zh-CN' : _videoLearnLang;
     utter.rate = 0.9;
     window.speechSynthesis.speak(utter);
   } catch (_) { /* ignore */ }
@@ -862,7 +861,6 @@ async function toggleASR(clickX, clickY) {
   // 复制/总结/弹幕/评论按钮和 highlightCurrent 同步高亮自动生效。
   // 非缓存预加载场景：清空面板准备接收 ASR 结果；缓存预加载场景：保留缓存字幕接续实时识别。
   if (!skipReplay) {
-    _savedSubtitles = _subtitles ? [..._subtitles] : [];
     _subtitles = [];
     // 第一百二十八次（用户反馈"选的是asr，叠加字幕却是其他轨道的时间戳错乱"）：
     //   根因：此处清空了侧栏 _subtitles，但视频叠加字幕（subtitle-overlay）从未同步清空——
@@ -975,8 +973,7 @@ function stopASRInternal(skipRestore) {
   hideASRProgress();
   // 第一百零二次：会话结束标注（仅日志）
   pushDiagLine('—— 已停止 ——');
-  // 保留 ASR 字幕，不恢复旧字幕，不清理面板
-  _savedSubtitles = null;
+  // 保留 ASR 字幕，不恢复旧字幕，不清理面板（第二百二十五次：连带删除死变量 _savedSubtitles）
   console.log('[VocabRadar][asr][' + new Date().toLocaleTimeString('en-GB', { hour12: false }) + '.' + String(Date.now() % 1000).padStart(3, '0') + '] 已停止，字幕保留');
 }
 
@@ -1070,8 +1067,9 @@ export async function startSidebar(video, options = {}) {
     warmYouTubeCaptionInnertube();
   }
   // 反思（2026-07-06 二次修复）：新增 options.hidden 参数控制初始可见性。
-  // subtitleOverlay=false 时 options.hidden=true，_root 创建后立即 display:none，
+  // options.hidden=true 时 _root 创建后立即 display:none，
   // 避免先显示再隐藏的闪烁，也确保 SPA 换集时视频提示保持隐藏。
+  // （第二百二十五次：原注释提及的 subtitleOverlay 存储键已随死键清理删除。）
   // _root 可能因 B站 Vue 重新渲染被移出 DOM（document.contains 返回 false），
   // 此时虽 _root 非空但已是失效节点，querySelector 失败 → 字幕无法填充。
   // 换集时必须校验 _root 是否仍在 DOM，失效则重建。
@@ -1792,13 +1790,11 @@ export function showNoSubtitle(msg) {
   // 启动折叠/首批内容展开一次的既定策略不变；此后任何时刻都尊重用户当前展开态。
 }
 
-// === 视频提示显隐控制（由 subtitleOverlay 设置驱动）===
-// 反思（2026-07-06）：用户反馈"浏览器工具栏设置关闭字幕提示，网页中依然出现窗口"。
-// 旧版 subtitleOverlay 仅控制 overlay 文字层，视频提示始终出现。
-// 修正：subtitleOverlay=false 时隐藏整个视频提示，用户在 popup 重新勾选后恢复显示。
-// 视频提示 DOM 保留（不销毁），恢复时无需重新初始化。
 // === 完全销毁视频提示（SPA 导航到非视频页时调用）===
 // 反思（2026-07-07）：用户要求"处理不了的视频不显示窗口，参照videoseek"。
+// 第二百二十五次：删除上方已失效的"视频提示显隐控制（由 subtitleOverlay 设置驱动）"注释块——
+//   subtitleOverlay 键已随死键清理删除（SW install 写入、全库零读取），显隐由 overlayEnabled
+//   与侧栏关闭按钮接管。
 // SPA 从视频页导航到非视频页（番剧/直播/首页）时，需完全清理视频提示：
 // 断开所有 observer（否则 reinjectGuard 会重新插入已移除的 _root）、
 // 停止 ASR、移除监听器、清 loading 超时、移除 DOM、重置状态。
@@ -1865,7 +1861,7 @@ export function showSidebar() {
 export function autoStartASR() {
   if (!_root) return;
   if (_asrActive) return;  // 已在运行则不重复启动
-  // sidebar 被隐藏（subtitleOverlay=false）时不自动启动 ASR
+  // sidebar 被隐藏（display:none，关闭按钮/隐藏参数所致）时不自动启动 ASR
   if (_root.style.display === 'none') return;
   log('无常规字幕，自动启动 ASR 作为字幕轨道');
   toggleASR(0, 0);

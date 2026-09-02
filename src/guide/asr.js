@@ -167,7 +167,8 @@ async function startAsr() {
     let asrLlmModel = null;
     try {
       const er = await new Promise((r) => chrome.storage.local.get({ asrEngine: 'local', asrLlmModel: 'whisper-1' }, r));
-      if (er.asrEngine === 'llm') asrLlmModel = er.asrLlmModel || 'whisper-1';
+      // 第二百二十五次：引擎值 'llm' 定名 'api'，读侧兼容旧残留 'llm'
+      if (er.asrEngine === 'api' || er.asrEngine === 'llm') asrLlmModel = er.asrLlmModel || 'whisper-1';
     } catch (_) { /* 默认本地 */ }
     if (asrLlmModel) {
       showAsrProgress(t('ws.recognizing'), 'LLM');
@@ -666,8 +667,8 @@ async function beginRecording(stream, kind) {
 
     let asrLang = 'en';
     try {
-      const stored = await chrome.storage.local.get({ sourceLanguage: 'en' });
-      if (stored.sourceLanguage) asrLang = stored.sourceLanguage;
+      const stored = await chrome.storage.local.get({ learnLanguage: 'en' });
+      if (stored.learnLanguage) asrLang = stored.learnLanguage;
     } catch (e) { /* ignore */ }
 
     const asrOk = startBrowserAsr(asrLang);

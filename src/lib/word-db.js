@@ -32,7 +32,7 @@
 //     lemma: null,               // 词形还原原形 string | null（null=原词即原形）
 //     tags: ["CET4"],            // 词表标签 string[]（空数组=无标签）
 //     translation: "你好",       // 释义 string | null（null=未翻译或失败）
-//     translationLang: "zh",     // 释义目标语言（切换 targetLang 时译文失效）
+//     translationLang: "zh",     // 释义目标语言（切换 meaningLang 时译文失效）
 //     phonetic: "həˈloʊ",        // 注音 string | null（null=未注音或失败）
 //     updatedAt: 1699999999999   // 最后更新时间戳
 //   }

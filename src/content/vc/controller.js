@@ -47,8 +47,8 @@ function getSettings() {
   return new Promise((resolve) => {
     chrome.storage.local.get({
       rankThreshold: 5000,   // 2026-08-14 第五十四次修正：恢复默认 5000
-      sourceLanguage: 'en',   // 所学语言（字幕轨道默认首选）
-      targetLanguage: 'zh',   // 释义语言
+      learnLanguage: 'en',   // 所学语言（字幕轨道默认首选）
+      meaningLanguage: 'zh',   // 释义语言
       sidebarEnabled: true    // #88: 侧栏开关，默认显示
     }, resolve);
   });
@@ -216,7 +216,7 @@ export async function startVideoController(platform) {
     // 超时降级：video 未就绪仍继续取字幕（overlay 跳转可能延迟，但 sidebar 字幕可显示）
     const subtitlesPromise = (platform === PLATFORM.BILIBILI)
       ? getBilibiliSubtitles()
-      : getYouTubeSubtitles(settings.sourceLanguage, settings.targetLanguage);
+      : getYouTubeSubtitles(settings.learnLanguage, settings.meaningLanguage);
 
     try {
       await waitForVideoReady(video);
@@ -276,16 +276,16 @@ export async function startVideoController(platform) {
     }
 
     // 反思（2026-07-28）：用户要求"asr的结果要记住并且应当优先加载"。
-    //   旧优先级（#86）：sourceLanguage 匹配轨道 > ASR 缓存 > 其他字幕。
-    //   新优先级：ASR 缓存 > sourceLanguage 匹配轨道 > 其他字幕 > fetch 第一条 > 空。
+    //   旧优先级（#86）：learnLanguage 匹配轨道 > ASR 缓存 > 其他字幕。
+    //   新优先级：ASR 缓存 > learnLanguage 匹配轨道 > 其他字幕 > fetch 第一条 > 空。
     //   即：有 ASR 缓存时优先加载 ASR 缓存（不完整自动继续识别），
     //   无 ASR 缓存才回退到普通字幕轨道。
     const fetchFn = (platform === PLATFORM.BILIBILI) ? fetchBilibiliTrack : fetchYouTubeTrack;
-    const sourceLang = (settings.sourceLanguage || 'en').toLowerCase();
+    const learnLang = (settings.learnLanguage || 'en').toLowerCase();
     let preferredIndex = -1;
     if (tracks && tracks.length > 0) {
       for (let i = 0; i < tracks.length; i++) {
-        if ((tracks[i].languageCode || '').toLowerCase().startsWith(sourceLang)) {
+        if ((tracks[i].languageCode || '').toLowerCase().startsWith(learnLang)) {
           preferredIndex = i;
           break;
         }
@@ -302,8 +302,8 @@ export async function startVideoController(platform) {
         setTracks(tracks, tracks ? tracks.length : 0, fetchFn);
         selectASRTrackAndContinue(asrResult.coverage);
       } else if (preferredIndex >= 0) {
-        // 2. 无 ASR 缓存：有 sourceLanguage 匹配轨道，优先使用
-        console.log('[VocabRadar][video-controller] 无 ASR 缓存, 首选语言', sourceLang, '匹配轨道 index=', preferredIndex);
+        // 2. 无 ASR 缓存：有 learnLanguage 匹配轨道，优先使用
+        console.log('[VocabRadar][video-controller] 无 ASR 缓存, 首选语言', learnLang, '匹配轨道 index=', preferredIndex);
         if (preferredIndex !== pickedIndex && fetchFn) {
           try {
             const newSubs = await fetchFn(tracks[preferredIndex]);

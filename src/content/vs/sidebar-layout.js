@@ -136,7 +136,8 @@ export function toggleSidebarCollapse(byUser = true) {
       __rtick();
     }
   }
-  try { chrome.storage.local.set({ sidebarCollapsed: isCollapsed }); } catch (_) { /* ignore */ }
+  // 第二百二十五次：删除 sidebarCollapsed 的只写不读写入（《命名清查》裁定——
+  //   video-sidebar.js:667 起启动一律折叠、不再恢复该键，全库亦无读取方）。
   log('视频侧栏折叠状态:', isCollapsed ? '折叠' : '展开');
 }
 

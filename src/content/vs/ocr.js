@@ -6,14 +6,14 @@
 //       text-hint.js 显示）。
 // 来源：拆分自 src/content/video-sidebar.js（2026-08-28 拆分第二刀，纯机械搬移）。
 // 关系：依赖 ./dom-utils.js（flashButton）；因需使用门面的 toast/getActiveVideo/
-//       getRoot/getVideoSourceLang（读写 _cfg/_video/_root/_videoSourceLang），
+//       getRoot/getVideoLearnLang（读写 _cfg/_video/_root/_videoLearnLang），
 //       对门面构成受控循环 import——本模块顶层仅初始化自身 let 状态与函数声明，
 //       绝不触碰门面绑定，门面绑定调用全部发生在异步流程体内（运行时门面已初始
 //       化完毕，安全）。原 L2899 `_root.querySelector(...)` 改走 getRoot()、
-//       原 L2918 `_videoSourceLang` 改走 getVideoSourceLang()。
+//       原 L2918 `_videoLearnLang` 改走 getVideoLearnLang()。
 // =============================================================================
 
-import { toast, getActiveVideo, getRoot, getVideoSourceLang } from '../video-sidebar.js';
+import { toast, getActiveVideo, getRoot, getVideoLearnLang } from '../video-sidebar.js';
 import { flashButton } from './dom-utils.js';
 
 let _ocrRunning = false;     // OCR 进行中
@@ -62,8 +62,8 @@ export async function onOcrClick() {
     const resp = await chrome.runtime.sendMessage({
       type: 'OCR_RECOGNIZE',
       imageDataUrl: dataUrl,
-      // 反思（2026-08-16 第六十六次）：OCR 语言随 sourceLanguage（zh→chi_sim，其余→eng）
-      lang: getVideoSourceLang() || 'en'
+      // 反思（2026-08-16 第六十六次）：OCR 语言随 learnLanguage（zh→chi_sim，其余→eng）
+      lang: getVideoLearnLang() || 'en'
     });
     const _ocrCost = ((Date.now() - _ocrStart) / 1000).toFixed(2);
     if (!resp || !resp.ok) {

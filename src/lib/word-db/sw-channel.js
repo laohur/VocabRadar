@@ -280,8 +280,8 @@ export async function warmupDictProjection() {
   _warmupPromise = (async () => {
     let lang = 'en';
     try {
-      const res = await chrome.storage.local.get(['sourceLanguage']);
-      lang = (res && res.sourceLanguage) || 'en';
+      const res = await chrome.storage.local.get(['learnLanguage']);
+      lang = (res && res.learnLanguage) || 'en';
     } catch (e) { /* storage 不可用时用默认语言 */ }
     const t0 = Date.now();
     try {
@@ -528,28 +528,8 @@ export async function handleWordDbMessage(msg, sender, sendResponse) {
         await idbDictMerge(msg.lang, msg.value);
         sendResponse({ ok: true });
         return true;
-      case 'DICT_CACHE_STAT': {
-        // 反思（2026-08-20 第八十五次）：词频/词表已是词典字段（words store 的 rank/tags），
-        //   dictCache 仅存 lemmas/ambiguity（词形数据）。统计改为读 words store 投影，
-        //   报告词典字段数量（rank 词数 / tags 词数）+ 词形数据量，供诊断窗确认统一词典已实现。
-        const [proj, cache] = await Promise.all([
-          idbGetLangProjection(msg.lang),
-          idbDictGet(msg.lang)
-        ]);
-        sendResponse({
-          ok: true,
-          stat: {
-            lang: msg.lang,
-            built: !!(proj && proj.built),
-            words: proj ? Object.keys(proj.ranks).length : 0,
-            tags: proj ? Object.keys(proj.tags).length : 0,
-            lemmas: cache && cache.lemmas ? Object.keys(cache.lemmas).length : 0,
-            hasAmbiguity: !!(cache && cache.ambiguity && Object.keys(cache.ambiguity).length),
-            time: cache ? cache.time : null
-          }
-        });
-        return true;
-      }
+      // 第二百二十五次：删除 DICT_CACHE_STAT 死分支（《命名清查》裁定——
+      //   dict-stats.js 已不发此消息，全库无发送方；同族 DICT_CACHE_GET/SET 保留）。
       case 'LEMMAS_GET': {
         // 反思（2026-08-14 第五十七次）：词形数据按需获取--SW 读扩展数据域 IDB，
         //   未命中则直接下载并写回，content script 一次消息拿到词形数据（noData 时只回统计）。

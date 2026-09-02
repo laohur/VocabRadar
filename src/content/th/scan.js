@@ -695,7 +695,7 @@ export async function processTextNode(textNode, stats) {
         isFirst: h.isFirst !== false
       }))
     });
-  } catch (e) { console.warn('[VocabRadar][scan-bus] emitBlock 失败:', e); }
+  } catch (e) { console.warn('[VocabRadar][page-scan-bus] emitBlock 失败:', e); }
 }
 
 
@@ -769,10 +769,10 @@ export async function queryWord(lower, original, stats) {
   }
 
   // 反思（2026-08-15 第六十四次）：翻译同一通道——
-  //   查询时若统一词典 IDB 已有目标语言译文（translationLang===_targetLang），
+  //   查询时若统一词典 IDB 已有目标语言译文（translationLang===_meaningLang），
   //   直接同步返回该译文，不再异步 translate。否则首次出现的 span 无释义，
   //   侧邻注释回填走的是 translate 的结果；两次走不同数据源会产生不同译文。
-  if (full && full.translation && full.translationLang === thState.targetLang) {
+  if (full && full.translation && full.translationLang === thState.meaningLang) {
     if (stats) incField(stats, 'trans', 'dict');
     return {
       isWord: true,
@@ -1174,7 +1174,7 @@ export async function getDiagState() {
     try {
       chrome.storage.local.get({
         textHintEnabled: true, sidebarEnabled: true, webSidebarEnabled: true,
-        sourceLanguage: 'en', targetLanguage: 'zh', rankThreshold: 5000,
+        learnLanguage: 'en', meaningLanguage: 'zh', rankThreshold: 5000,
         annotateOov: false, hintFirstEnabled: true, hintSideAnnotation: false,
         uiLanguage: 'en'
       }, resolve);
@@ -1211,7 +1211,7 @@ export async function getDiagState() {
     settings: {
       textHintEnabled: settings.textHintEnabled, sidebarEnabled: settings.sidebarEnabled,
       webSidebarEnabled: settings.webSidebarEnabled,
-      sourceLanguage: settings.sourceLanguage, targetLanguage: settings.targetLanguage,
+      learnLanguage: settings.learnLanguage, meaningLanguage: settings.meaningLanguage,
       rankThreshold: settings.rankThreshold, annotateOov: settings.annotateOov,
       uiLanguage: settings.uiLanguage
     },

@@ -11,7 +11,7 @@
 // 取消自动发送后不再需要 csrf token 与 API 调用，仅做 DOM 填充。
 
 import { lookup } from './dictionary.js';
-import { extract_english_words } from './tokenizer.js';
+import { extractEnglishWords } from './tokenizer.js';
 import { getBilibiliSubtitles } from './subtitle/index.js';
 
 // 已注册的 timeupdate 监听器引用，便于重复触发时先移除旧监听
@@ -63,7 +63,7 @@ function fillDanmakuInput(text) {
  * 重复点击会重置监听与已填入标记，便于换视频或重新运行。
  * @returns {Promise<void>}
  */
-export async function sendDanmaku() {
+export async function fillDanmaku() {
   const subtitles = await getBilibiliSubtitles();
   if (!subtitles || subtitles.length === 0) {
     alert('该视频无字幕，无法提取单词');
@@ -78,7 +78,7 @@ export async function sendDanmaku() {
   const wordFirstTime = new Map();
   const seen = new Set();
   for (const sub of subtitles) {
-    const words = extract_english_words(sub.text.toLowerCase());
+    const words = extractEnglishWords(sub.text.toLowerCase());
     for (const w of words) {
       if (seen.has(w)) continue;
       seen.add(w);

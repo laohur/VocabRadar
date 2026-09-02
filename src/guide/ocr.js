@@ -3,7 +3,7 @@
 //   本文件承载：
 //     - 拍照（getUserMedia 摄像头 → 截帧为 dataURL）
 //     - 图片载入（loadOcrImage：上传图片/拍照共用，载入展示区并启用「开始识别」）
-//     - 文字识别（OCR_RECOGNIZE 经 SW 中转至 offscreen Tesseract，语言随 sourceLanguage）
+//     - 文字识别（OCR_RECOGNIZE 经 SW 中转至 offscreen Tesseract，语言随 learnLanguage）
 //   ASR/录制控制从 asr.js 导入（loadOcrImage 需停 ASR/录制），公共基础设施见 asr-common.js。
 
 import { t } from '../lib/i18n.js';
@@ -195,8 +195,8 @@ async function runOcrFromDataUrl(dataUrl, fileInfo) {
     const resp = await chrome.runtime.sendMessage({
       type: 'OCR_RECOGNIZE',
       imageDataUrl: dataUrl,
-      // 反思（2026-08-16 第六十六次）：OCR 语言随 sourceLanguage（zh→chi_sim，其余→eng）
-      lang: S.sourceLang || 'en'
+      // 反思（2026-08-16 第六十六次）：OCR 语言随 learnLanguage（zh→chi_sim，其余→eng）
+      lang: S.learnLang || 'en'
     });
     const cost = ((Date.now() - start) / 1000).toFixed(2);
     if (!resp || !resp.ok) {

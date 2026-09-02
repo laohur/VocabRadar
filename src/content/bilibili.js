@@ -18,17 +18,7 @@
   }
 })();
 
-// 消息处理（弹幕/评论按钮触发，右键查词等）
-chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
-  if (msg.type === 'SEND_DANMAKU') {
-    import(chrome.runtime.getURL('src/lib/bilibili-danmaku.js'))
-      .then(({ sendDanmaku }) => sendDanmaku())
-      .catch((e) => console.error('[VocabRadar][content-bilibili] 加载 bilibili-danmaku 失败', e));
-  } else if (msg.type === 'SEND_COMMENT') {
-    import(chrome.runtime.getURL('src/lib/bilibili-comment.js'))
-      .then(({ sendComment }) => sendComment())
-      .catch((e) => console.error('[VocabRadar][content-bilibili] 加载 bilibili-comment 失败', e));
-  }
-  sendResponse({ ok: true });
-  return true;
-});
+// 第二百二十五次：删除 SEND_DANMAKU / SEND_COMMENT 死消息监听（《命名清查》裁定）——
+//   自动发送时代残留：全库只有本监听、没有任何发送方；且现行弹幕/评论助手只「填入输入框」
+//   （lib/bilibili-danmaku.js#fillDanmaku / lib/bilibili-comment.js#fillComment，
+//   由侧栏按钮直接调用），不经过消息通道。

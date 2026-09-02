@@ -22,6 +22,9 @@
 //   本地 Whisper 为 whisper-tiny 等具体模型名单选（value 仍存 tiny/base/…）；②OCR 语言复选标签
 //   改回角色名 界面/目标/释义（223 次误用语言名 English/中文 当标签，用户纠正"不要特指"），
 //   值仍动态映射 tess 代码、默认全选；③翻译行提示词与 LLM 复选框确认同行（收窄防换行）。
+// 第二百二十五次（命名清查执行）：①存储语言键改名 sourceLanguage→learnLanguage、targetLanguage→
+//   meaningLanguage（后台 SW 顶层一次性迁移）；②引擎值 'llm' 定名 'api'（读侧兼容旧残留）；
+//   ③死键/死代码清理（subtitleOverlay、sidebarCollapsed、_asrFallbackMode、SEND_* 等）。
 
 import {
   initLang, setLang, t,
@@ -683,13 +686,13 @@ async function loadSettings() {
   const cfgDefaults = await getConfigDefaults();
   const defaults = Object.assign({
     uiLanguage: 'zh',
-    sourceLanguage: 'en',
-    targetLanguage: 'zh',
+    learnLanguage: 'en',
+    meaningLanguage: 'zh',
     rankThreshold: 5000,
     annotateOov: false,
     uiLanguage: 'zh',
-    sourceLanguage: 'en',
-    targetLanguage: 'zh',
+    learnLanguage: 'en',
+    meaningLanguage: 'zh',
     rankThreshold: 5000,
     annotateOov: false,
     annotateRepeat: false,
@@ -707,10 +710,10 @@ async function loadSettings() {
     chatSidebarPrompt: CHAT_SIDEBAR_PROMPT,
     chatContextMaxBytes: 10000,   // 第二百一十二次：对话上下文字节上限（默认 1 万字节，用户三度确认 [10 000]）
     // 第二百二十三次：引擎改下拉两行式；补齐 asrLlm*/ocrLlm* 六键与 translationChannels/llmTranslatePrompt 默认
-    ocrEngine: 'tesseract',   // OCR 引擎（tesseract | llm；旧残留 'api' 由 renderAll 归一化为 'llm'）
-    asrEngine: 'local',   // ASR 引擎（local whisper | llm 转写；旧残留 'api' 同上归一化）
+    ocrEngine: 'tesseract',   // OCR 引擎（tesseract | api；第二百二十五次：值 'llm' 改名 'api'）
+    asrEngine: 'local',   // ASR 引擎（local whisper | api 转写；同上改名）
     asrLlmModel: 'whisper-1',   // LLM 转写模型（用户自管，有错就报）
-    asrLlmBaseUrl: '',   // 转写 API 接口地址（后台 resolveEngineCfg('asr') 消费，此前无 UI）
+    asrLlmBaseUrl: '',   // 转写 API 接口地址（后台 resolveLlmEngineCfg('asr') 消费，此前无 UI）
     asrLlmApiKey: '',    // 转写 API Key（此前无 UI）
     ocrLlmProvider: 'openai',   // OCR 视觉识别 API 格式（openai | anthropic）
     ocrLlmBaseUrl: '',
@@ -743,24 +746,22 @@ async function loadSettings() {
 function renderAll(res) {
   // 语言控件
   renderLangSelect($('uiLang'), UI_LANGS, res.uiLanguage);
-  renderLangSelect($('sourceLanguage'), TRANSLATE_LANGS, res.sourceLanguage);
-  renderLangSelect($('targetLanguage'), TRANSLATE_LANGS, res.targetLanguage);
+  renderLangSelect($('learnLanguage'), TRANSLATE_LANGS, res.learnLanguage);
+  renderLangSelect($('meaningLanguage'), TRANSLATE_LANGS, res.meaningLanguage);
   $('rankThreshold').value = res.rankThreshold;
   $('annotateOov').checked = !!res.annotateOov;
-  // 第二百二十三次：ASR/OCR 引擎改为下拉（本地/API，默认本地）。
-  // 断线修复：旧版 UI 存 'api'，而消费端（service-worker.js / guide/asr.js）判 'llm'——
-  // 选 API 永不生效、API 细项行也不显示。读侧把残留 'api' 归一化为 'llm' 并回写 storage
-  // （与样式 id 清洗同模式，仅迁移一次，之后不再写）。
-  const asrEng = (res.asrEngine === 'api') ? 'llm' : (res.asrEngine || 'local');
-  if (res.asrEngine === 'api') chrome.storage.local.set({ asrEngine: 'llm' });
+  // 第二百二十五次：引擎存储值定名 'api'（与 UI 词、语义一致，《命名清查》裁定）。
+  // 兼容读旧残留：223~224 次存过 'llm'，读侧归一化为 'api' 并回写一次（同样式 id 清洗模式）。
+  const asrEng = (res.asrEngine === 'llm' || res.asrEngine === 'api') ? 'api' : 'local';
+  if (res.asrEngine === 'llm') chrome.storage.local.set({ asrEngine: 'api' });
   document.querySelectorAll('input[name="asrEngine"]').forEach((r) => { r.checked = (r.value === asrEng); });
-  document.querySelector('[data-asr-api-cfg]').style.display = (asrEng === 'llm') ? '' : 'none';
-  document.querySelector('[data-asr-local-cfg]').style.display = (asrEng === 'llm') ? 'none' : '';
-  const ocrEng = (res.ocrEngine === 'api') ? 'llm' : (res.ocrEngine || 'tesseract');
-  if (res.ocrEngine === 'api') chrome.storage.local.set({ ocrEngine: 'llm' });
+  document.querySelector('[data-asr-api-cfg]').style.display = (asrEng === 'api') ? '' : 'none';
+  document.querySelector('[data-asr-local-cfg]').style.display = (asrEng === 'api') ? 'none' : '';
+  const ocrEng = (res.ocrEngine === 'llm' || res.ocrEngine === 'api') ? 'api' : 'tesseract';
+  if (res.ocrEngine === 'llm') chrome.storage.local.set({ ocrEngine: 'api' });
   document.querySelectorAll('input[name="ocrEngine"]').forEach((r) => { r.checked = (r.value === ocrEng); });
-  document.querySelector('[data-ocr-api-cfg]').style.display = (ocrEng === 'llm') ? '' : 'none';
-  document.querySelector('[data-ocr-local-cfg]').style.display = (ocrEng === 'llm') ? 'none' : '';
+  document.querySelector('[data-ocr-api-cfg]').style.display = (ocrEng === 'api') ? '' : 'none';
+  document.querySelector('[data-ocr-local-cfg]').style.display = (ocrEng === 'api') ? 'none' : '';
   // OCR 本地语言复选（界面/目标/释义三角色，值动态映射 tess 代码，默认全选——见 renderOcrLangRow）
   renderOcrLangRow(res);
   // ASR API 细项回填（地址/Key 此前无 UI；模型名保留 whisper-1 兜底）
@@ -950,8 +951,8 @@ function applyLlmProviderHints(id) {
 function renderOcrLangRow(res) {
   const roles = [
     ['ocrLangUi', res.uiLanguage || 'zh'],
-    ['ocrLangTarget', res.sourceLanguage || 'en'],
-    ['ocrLangMeaning', res.targetLanguage || 'zh']
+    ['ocrLangTarget', res.learnLanguage || 'en'],
+    ['ocrLangMeaning', res.meaningLanguage || 'zh']
   ];
   const stored = res.ocrLanguages;   // undefined=新用户（默认全选）；有值则按已存代码尊重
   roles.forEach(([id, langCode]) => {
@@ -1071,15 +1072,15 @@ async function init() {
   });
 
   // 源语言/目标语言/阈值/生词开关/ASR 模型
-  $('sourceLanguage').addEventListener('change', (e) => {
-    chrome.storage.local.set({ sourceLanguage: e.target.value }, () => {
+  $('learnLanguage').addEventListener('change', (e) => {
+    chrome.storage.local.set({ learnLanguage: e.target.value }, () => {
       log('源语言=', e.target.value);
       // 第二百二十三次：OCR 本地语言候选随目标语言变 → 重渲该行（勾选态按已存 ocrLanguages）
       chrome.storage.local.get(null, (res) => renderOcrLangRow(res));
     });
   });
-  $('targetLanguage').addEventListener('change', (e) => {
-    chrome.storage.local.set({ targetLanguage: e.target.value }, () => {
+  $('meaningLanguage').addEventListener('change', (e) => {
+    chrome.storage.local.set({ meaningLanguage: e.target.value }, () => {
       log('释义语言=', e.target.value);
       chrome.storage.local.get(null, (res) => renderOcrLangRow(res));
     });
@@ -1162,14 +1163,15 @@ async function init() {
     e.target.value = v;
     chrome.storage.local.set({ chatContextMaxBytes: v }, () => log('对话上下文上限(字节)=', v));
   });
-  // 第二百二十四次：引擎/Whisper 模型/OCR 格式均改单选（radio）——细项行随选中显隐与保存
+  // 第二百二十四次：引擎/Whisper 模型/OCR 格式均改单选（radio）——细项行随选中显隐与保存。
+  // 第二百二十五次：radio value 定名 local/api（原 'llm'）。
   document.querySelectorAll('input[name="asrEngine"]').forEach((r) => {
     r.addEventListener('change', () => {
       if (!r.checked) return;
       const v = r.value;
       chrome.storage.local.set({ asrEngine: v }, () => log('ASR 引擎=', v));
-      document.querySelector('[data-asr-api-cfg]').style.display = (v === 'llm') ? '' : 'none';
-      document.querySelector('[data-asr-local-cfg]').style.display = (v === 'llm') ? 'none' : '';
+      document.querySelector('[data-asr-api-cfg]').style.display = (v === 'api') ? '' : 'none';
+      document.querySelector('[data-asr-local-cfg]').style.display = (v === 'api') ? 'none' : '';
     });
   });
   document.querySelectorAll('input[name="ocrEngine"]').forEach((r) => {
@@ -1177,8 +1179,8 @@ async function init() {
       if (!r.checked) return;
       const v = r.value;
       chrome.storage.local.set({ ocrEngine: v }, () => log('OCR 引擎=', v));
-      document.querySelector('[data-ocr-api-cfg]').style.display = (v === 'llm') ? '' : 'none';
-      document.querySelector('[data-ocr-local-cfg]').style.display = (v === 'llm') ? 'none' : '';
+      document.querySelector('[data-ocr-api-cfg]').style.display = (v === 'api') ? '' : 'none';
+      document.querySelector('[data-ocr-local-cfg]').style.display = (v === 'api') ? 'none' : '';
     });
   });
   // Whisper 模型单选（radio value 保持 tiny/base/…，与 offscreen SUPPORTED_MODELS 一致）
@@ -1269,7 +1271,7 @@ async function init() {
                || changes.asrEngine || changes.ocrEngine || changes.asrLlmModel || changes.asrLlmBaseUrl
                || changes.asrLlmApiKey || changes.ocrLlmProvider || changes.ocrLlmBaseUrl || changes.ocrLlmModel
                || changes.ocrLlmApiKey || changes.ocrLanguages || changes.translationChannels
-               || changes.llmTranslatePrompt || changes.sourceLanguage || changes.targetLanguage) {
+               || changes.llmTranslatePrompt || changes.learnLanguage || changes.meaningLanguage) {
       // 第一百七十三次：补齐「模型」栏的跨标签页同步。第一百七十次新增 llm*/chatPrompt/
       //   asrModelSize 六个键时漏了本监听器 —— 在另一标签页改了模型配置，本页输入框
       //   仍显示旧值，用户以为没保存又改一遍，两页互相覆盖。

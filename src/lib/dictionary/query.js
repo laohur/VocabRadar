@@ -132,7 +132,7 @@ export async function lookupWithLemmatizer(word) {
   //   词典仅由 startHint 一处 await loadDictionary() 加载（singleton），
   //   此处若词典未就绪直接返回 null，调用方降级到在线翻译。
   if (!dictState.dictMap) return null;
-  const lang = dictState.loadedLang || dictState.currentSourceLang || DEFAULT_SOURCE_LANG;
+  const lang = dictState.loadedLang || dictState.currentLearnLang || DEFAULT_SOURCE_LANG;
   // 缺哪个词的原形，就经 SW 组装哪个词（lemmatizeOne 查过会写回 _wordCache，lookup 同步复用）
   try { await lemmatizeOne(lower, lang); } catch (e) { /* 组装失败按原词即原形 */ }
   // 反思（2026-08-21 第八十九次）：组装结果直接写入统一词典词条的 lemma 字段
@@ -192,7 +192,7 @@ export async function lookupFull(word, stats) {
   if (!word) return null;
   const lower = (word || '').toLowerCase();
   if (!lower) return null;
-  const lang = dictState.loadedLang || dictState.currentSourceLang || DEFAULT_SOURCE_LANG;
+  const lang = dictState.loadedLang || dictState.currentLearnLang || DEFAULT_SOURCE_LANG;
 
   // 反思（2026-08-16 第七十二次）：词典只加载一次--startHint / web-sidebar 启动时
   //   已 await loadDictionary()，此处不再重复加载；若词典未就绪（极端竞态），
@@ -324,7 +324,7 @@ export async function lookupFull(word, stats) {
  */
 export async function prefetchFull(words) {
   if (!dictState.dictMap || !words || words.length === 0) return;
-  const lang = dictState.loadedLang || dictState.currentSourceLang || DEFAULT_SOURCE_LANG;
+  const lang = dictState.loadedLang || dictState.currentLearnLang || DEFAULT_SOURCE_LANG;
   // 只预取"尚未直读过完整属性"的词：已补全过的词条本就走内存，无需再读。
   const need = [];
   const seen = new Set();
@@ -411,18 +411,18 @@ export function isLoaded() {
 
 /**
  * 诊断信息（2026-08-14 第五十四次）：供诊断悬浮窗展示词典加载状态
- * 反思（2026-08-14 第五十五次修正）：旧版含 sourceLangs: LANGUAGES 字段，但本模块
+ * 反思（2026-08-14 第五十五次修正）：旧版含 learnLangs: LANGUAGES 字段，但本模块
  *   未定义/未导入 LANGUAGES，getDiagState() 抛 ReferenceError -> 诊断窗显示
  *   "LANGUAGES is not defined"。移除该字段。
  * 反思（2026-08-21 第八十八次）：词典只有一个--诊断只报一个词条数（dictSize），
  *   不再分 wordfreq/wordlists 两个数字。
- * @returns {{loadedLang:string|null, dictSize:number, loadPending:boolean, currentSourceLang:string|null}}
+ * @returns {{loadedLang:string|null, dictSize:number, loadPending:boolean, currentLearnLang:string|null}}
  */
 export function getDiagState() {
   return {
     loadedLang: dictState.loadedLang,
     dictSize: dictState.dictMap ? dictState.dictMap.size : 0,
     loadPending: !!(dictState.loadPromise && !dictState.loadedLang),
-    currentSourceLang: dictState.currentSourceLang || null
+    currentLearnLang: dictState.currentLearnLang || null
   };
 }

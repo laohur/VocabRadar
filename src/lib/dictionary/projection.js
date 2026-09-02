@@ -15,33 +15,33 @@ import { getLangProjection, bulkWriteDictionary } from '../word-db.js';
 import { loadWordfreq, loadWordlists } from './word-loader.js';
 
 /**
- * 加载词典（懒加载，按 sourceLanguage 选择 wordfreq 文件）
+ * 加载词典（懒加载，按 learnLanguage 选择 wordfreq 文件）
  * 反思（2026-08-20 第八十五次）：词频/词表不是独立缓存，而是词典字段。
  *   页面每次加载优先从词典（words store）投影构建 Map（getLangProjection）；
  *   仅当词典缺失/不全（built=false，如首次安装或切换语言后该语言词典尚未构建）时，
  *   才启用装载函数（loadWordfreq/loadWordlists）读取源文件并送入词典。
  * 反思（2026-08-21 第八十八次）：词典只有一个--rank/tags 合入同一 Map<word, {rank,tags}>，
  *   不再有 wordfreq/wordlists 两张表；装载函数也只是把同一词典的字段合起来。
- * @param {string} [lang] 强制指定语言（默认读 storage.currentSourceLang）
+ * @param {string} [lang] 强制指定语言（默认读 storage.currentLearnLang）
  * @returns {Promise<Map<string,{rank:number|null,tags:string[]}>>} 统一词典
  */
 export async function _loadDict(lang) {
-  const targetLang = lang || dictState.currentSourceLang || DEFAULT_SOURCE_LANG;
+  const meaningLang = lang || dictState.currentLearnLang || DEFAULT_SOURCE_LANG;
 
   // 已加载相同语言：直接返回（不打日志--用户反馈"每次都要加载 wordfreq/wordlists"，
   //   实际是单例缓存命中，只是多处调用触发了日志）。
-  if (dictState.loadedLang === targetLang && dictState.dictMap) {
+  if (dictState.loadedLang === meaningLang && dictState.dictMap) {
     return dictState.dictMap;
   }
 
   // 已有加载中 Promise：复用
-  if (dictState.loadPromise && dictState.loadPromise._lang === targetLang) {
+  if (dictState.loadPromise && dictState.loadPromise._lang === meaningLang) {
     return dictState.loadPromise;
   }
 
   dictState.loadPromise = (async () => {
     const startTime = Date.now();
-    console.log(`[VocabRadar][dictionary][${_ts()}] 开始加载词典, lang=${targetLang}`);
+    console.log(`[VocabRadar][dictionary][${_ts()}] 开始加载词典, lang=${meaningLang}`);
 
     // 反思（2026-08-20 第八十五次）：从词典读词频/词表（rank/tags 字段）--
     //   只有词典会缓存，词频等不是独立缓存；词典已构建（__built__ 标记）即直接读词典。
@@ -53,7 +53,7 @@ export async function _loadDict(lang) {
     if (typeof window !== 'undefined') window.__beaverDictTiming = _seg;
     let _t0 = performance.now();
     try {
-      proj = await getLangProjection(targetLang);
+      proj = await getLangProjection(meaningLang);
     } catch (e) {
       proj = null;
     }
@@ -81,7 +81,7 @@ export async function _loadDict(lang) {
         if (dictState.dictMap.has(word)) continue;
         dictState.dictMap.set(word, { rank: null, tags: [], lemma: projLemmas[word], translation: undefined, translationLang: undefined, phonetic: undefined });
       }
-      dictState.loadedLang = targetLang;
+      dictState.loadedLang = meaningLang;
       _seg.map = Math.round(performance.now() - _t0);   // 第一百八十八次
       const cost = ((Date.now() - startTime) / 1000).toFixed(2);
       // 第一百四十一次（用户裁定）：完整性用**实际值**校验，基准优先级：
@@ -93,7 +93,7 @@ export async function _loadDict(lang) {
         _t0 = performance.now();   // 第一百八十八次：manifest 对账段计时（含首次 fetch manifest.json）
         const mc = await getManifestCounts();
         _seg.manifest = Math.round(performance.now() - _t0);
-        expected = Number(mc[targetLang]) || 0;
+        expected = Number(mc[meaningLang]) || 0;
       }
       // 第一百九十次修复：total 原用 performance.now() 减 Date.now() 的 startTime（epoch 值），
       //   得出 -1.78e12 的负数（用户实测"合计 -1788164723852ms"）。统一用 Date.now 口径。
@@ -108,18 +108,18 @@ export async function _loadDict(lang) {
       }
       console.warn(`[VocabRadar][dictionary][${_ts()}] 投影不完整: 库内 ${cnt} / 基准 ${expected} -> 增量补齐(upsert，不清库)`);
       _t0 = performance.now();   // 第一百八十八次：增量补齐段计时
-      await _rebuildFromSources(targetLang);
+      await _rebuildFromSources(meaningLang);
       _seg.rebuild = Math.round(performance.now() - _t0);
       return dictState.dictMap;
     }
 
     // 词典缺 __built__ 标记 -> 首次构建
     _t0 = performance.now();   // 第一百八十八次：首次构建段计时
-    await _rebuildFromSources(targetLang);
+    await _rebuildFromSources(meaningLang);
     _seg.rebuild = Math.round(performance.now() - _t0);
     return dictState.dictMap;
   })();
-  dictState.loadPromise._lang = targetLang;
+  dictState.loadPromise._lang = meaningLang;
 
   return dictState.loadPromise;
 }

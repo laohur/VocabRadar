@@ -3,13 +3,13 @@
 // 来源：拆分自 src/lib/translator.js（ES Modules 模块化拆分）
 // 拆分日期：2026-08-28
 // 跨模块共享状态唯一属主（拆分铁律：绝不复制两份）：
-//   transState = { sourceLang, targetLang }  原模块级 let _sourceLang/_targetLang，
+//   transState = { learnLang, meaningLang }  原模块级 let _learnLang/_meaningLang，
 //   builtin-translator.js（storage 语言对监听读写、availability/create 参数）与
 //   index.js（词典缓存读写、SW 消息参数）经 import 引用同一实例读写，与原单文件行为一致。
 //   _lastChannel（最近一次翻译成功渠道）仅存于本模块，经 _setLastChannel 写入、
 //   getLastTranslateChannel() 读取（index.js 原形回退日志拼接直接调用该导出读取）。
 // 本文件还含：withTimeout（带超时 Promise）、_ts() 时间戳、log() 调试日志
-//   （_debug 开关 + config.json 读取）、getTargetLang()（原导出）。
+//   （_debug 开关 + config.json 读取）、getMeaningLang()（原导出）。
 // ============================================================
 
 /**
@@ -59,19 +59,19 @@ export function getLastTranslateChannel() {
  *   需与 translationLang（记录的是目标语言）比对，故导出当前目标语言。
  * @returns {string} 目标语言代码
  */
-export function getTargetLang() {
-  return transState.targetLang;
+export function getMeaningLang() {
+  return transState.meaningLang;
 }
 
 // === 当前语言对（从 storage 读取，默认 en -> zh） ===
 // 反思（2026-08-02）：旧版 SOURCE_LANG/TARGET_LANG 为常量 'en'/'zh'，
 //   新版需支持多语言切换，改为动态读取 + 监听变化
-// 拆分接驳（2026-08-28）：原 let _sourceLang/_targetLang 收拢为导出可变对象 transState
+// 拆分接驳（2026-08-28）：原 let _learnLang/_meaningLang 收拢为导出可变对象 transState
 //   （唯一实例），storage 初始读取与 onChanged 监听在 builtin-translator.js，
 //   availability/create 参数与缓存/SW 消息参数在 index.js，均同源引用。
 export const transState = {
-  sourceLang: 'en',   // 原 _sourceLang
-  targetLang: 'zh'   // 原 _targetLang
+  learnLang: 'en',   // 原 _learnLang
+  meaningLang: 'zh'   // 原 _meaningLang
 };
 
 // 反思（2026-08-03）：用户要求"网络请求等打印日志遵循调试开关"。

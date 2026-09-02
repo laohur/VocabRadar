@@ -13,6 +13,8 @@
 
 import { t } from '../lib/i18n.js';
 import { getAnnotations } from '../lib/annotator.js';
+// 第二百二十五次：短义项选取统一收敛到 lib 版（原本地独立实现已漂移，见下方删除说明）
+import { pickCleanShortTrans } from '../lib/dict-clean.js';
 // 反思（2026-08-21 第九十二次）：引导页没有 startHint 等 await ensureReady 的入口，
 //   快速识别（小文件）在词典装载完成前就推句/推侧栏 → 注释全落空
 //   （用户反馈"asr 的结果视频侧栏并没有提取生词"）。识别与挂载前先 await 词典就绪。
@@ -177,7 +179,7 @@ export const S = {
   ocrAnnWords: new Map(),
   rankThreshold: 5000,
   annotateOov: false,
-  sourceLang: 'en'
+  learnLang: 'en'
 };
 
 // === 工具 ===
@@ -250,20 +252,9 @@ export function flashButton(btn) {
   setTimeout(() => { btn.style.background = orig; }, 300);
 }
 
-// 取一个短义项（行内注释用）
-// 第一百七十九次（用户细则"详细全列，非详细只列出第一项"）：去掉两级随机，
-//   与 lib/dict-clean.js#pickCleanShortTrans 同细则——取 translations[0] 的第一个短义项，
-//   首条无有效内容时顺序回退到后续条目。避免同一词每次显示不同释义。
-export function pickRandomShortTrans(translations) {
-  if (!Array.isArray(translations) || translations.length === 0) return '';
-  for (const full of translations) {
-    if (!full) continue;
-    const parts = String(full).split(/[,;，；]/).map((s) => s.trim()).filter(Boolean);
-    if (parts.length === 0) continue;
-    return parts[0];
-  }
-  return '';
-}
+// 第二百二十五次：删除本地独立实现 pickRandomShortTrans（《命名清查》裁定）——
+//   原实现只按标点切片、不剥词性前缀，与 lib/dict-clean.js#pickCleanShortTrans 漂移
+//   （project_summary 早有"须同步"约定，实际已不同步）。改为直接导入 lib 版统一口径。
 
 // === ASR 阶段名翻译 ===
 const STAGE_I18N_MAP = {
@@ -311,7 +302,7 @@ export function renderHighlighted(text, anns) {
   for (const a of sorted) {
     const re = new RegExp(`\\b${escapeReg(a.word)}\\b`, 'i');
     const ph = `\x00${placeholders.length}\x00`;
-    const shortTrans = pickRandomShortTrans(a.translations);
+    const shortTrans = pickCleanShortTrans(a.translations);
     let replacement = `<b class="g-w">${escapeHtml(a.word)}</b>`;
     if (shortTrans) replacement += `<span class="g-trans">(${escapeHtml(shortTrans)})</span>`;
     placeholders.push(replacement);
@@ -571,11 +562,11 @@ export function initAsrCommon() {
   chrome.storage.local.get({
     rankThreshold: 5000,
     annotateOov: false,
-    sourceLanguage: 'en'
+    learnLanguage: 'en'
   }, (res) => {
     S.rankThreshold = (typeof res.rankThreshold === 'number' && !isNaN(res.rankThreshold)) ? res.rankThreshold : 5000;
     S.annotateOov = res.annotateOov === true;
-    S.sourceLang = res.sourceLanguage || 'en';
+    S.learnLang = res.learnLanguage || 'en';
   });
 
   // 反思（2026-08-22 第九十三次）：设置变更实时同步到本页——旧版只在页面加载读一次，
@@ -591,9 +582,9 @@ export function initAsrCommon() {
         S.annotateOov = changes.annotateOov.newValue;
         log('注释表外词已同步:', S.annotateOov);
       }
-      if (changes.sourceLanguage && typeof changes.sourceLanguage.newValue === 'string') {
-        S.sourceLang = changes.sourceLanguage.newValue;
-        log('源语言已同步:', S.sourceLang);
+      if (changes.learnLanguage && typeof changes.learnLanguage.newValue === 'string') {
+        S.learnLang = changes.learnLanguage.newValue;
+        log('源语言已同步:', S.learnLang);
       }
     });
   } catch (e) { /* ignore */ }

@@ -11,7 +11,7 @@
 //   3) loadSettings/detectTranslator/checkBilibiliLogin 失败时降级显示，不抛错；
 //   4) init 完成后显式移除 #popupLoading 提示，避免误判"没弹"。
 
-import { initLang, getLang, setLang, onLangChange, t, SUPPORTED_LANGS, TRANSLATE_LANGS, LANG_NAMES } from '../lib/i18n.js';
+import { initLang, getLang, setLang, onLangChange, t, UI_LANGS, TRANSLATE_LANGS, LANG_NAMES } from '../lib/i18n.js';
 
 // 在 popup 顶部显示错误横幅（避免白屏无法诊断）
 function showPopupError(err) {
@@ -67,7 +67,7 @@ window.addEventListener('unhandledrejection', (e) => showPopupError(e.reason));
  *   数据源（42种）与 preprocess.py 动态扫描的 small_*.msgpack.gz 文件列表一致。
  */
 function populateTranslateLangOptions() {
-  const selects = ['sourceLanguage', 'targetLanguage'];
+  const selects = ['learnLanguage', 'meaningLanguage'];
   for (const id of selects) {
     const sel = document.getElementById(id);
     if (!sel) continue;
@@ -84,8 +84,8 @@ function populateTranslateLangOptions() {
 }
 
 const DEFAULTS = {
-  sourceLanguage: 'en',
-  targetLanguage: 'zh',
+  learnLanguage: 'en',
+  meaningLanguage: 'zh',
   // 反思（2026-08-14 第五十四次修正）：用户裁定"调整词频就能凸显，不应更改默认值"。
   //   恢复默认 5000，撤销第五十二次误改的 0。
   rankThreshold: 5000,
@@ -217,7 +217,7 @@ async function init() {
       uiLangSelect.value = getLang();
       uiLangSelect.addEventListener('change', (e) => {
         const lang = e.target.value;
-        if (SUPPORTED_LANGS.includes(lang)) {
+        if (UI_LANGS.includes(lang)) {
           setLang(lang);
         }
       });
@@ -244,8 +244,8 @@ async function init() {
     populateTranslateLangOptions();
     const setVal = (id, val) => { const el = document.getElementById(id); if (el) el.value = val; };
     const setChk = (id, val) => { const el = document.getElementById(id); if (el) el.checked = val; };
-    setVal('sourceLanguage', settings.sourceLanguage);
-    setVal('targetLanguage', settings.targetLanguage);
+    setVal('learnLanguage', settings.learnLanguage);
+    setVal('meaningLanguage', settings.meaningLanguage);
     setVal('rankThreshold', settings.rankThreshold);
     setChk('textHintEnabled', settings.textHintEnabled);
     setChk('sidebarEnabled', settings.sidebarEnabled);
@@ -304,8 +304,8 @@ async function init() {
  * 下载在后台异步进行，不阻塞 popup。
  */
 async function autoDownloadTranslator(settings) {
-  const src = settings.sourceLanguage || 'en';
-  const tgt = settings.targetLanguage || 'zh';
+  const src = settings.learnLanguage || 'en';
+  const tgt = settings.meaningLanguage || 'zh';
   if (src === tgt) return;  // 同语言无需翻译
 
   if (typeof Translator === 'undefined') {
@@ -336,8 +336,8 @@ async function autoDownloadTranslator(settings) {
 
 // 选项联动绑定（从 init 抽出，便于独立 try/catch）
 function bindOptionChanges() {
-  document.getElementById('sourceLanguage').addEventListener('change', (e) => saveSetting('sourceLanguage', e.target.value));
-  document.getElementById('targetLanguage').addEventListener('change', (e) => saveSetting('targetLanguage', e.target.value));
+  document.getElementById('learnLanguage').addEventListener('change', (e) => saveSetting('learnLanguage', e.target.value));
+  document.getElementById('meaningLanguage').addEventListener('change', (e) => saveSetting('meaningLanguage', e.target.value));
   document.getElementById('rankThreshold').addEventListener('change', (e) => saveSetting('rankThreshold', Number(e.target.value)));
   document.getElementById('textHintEnabled').addEventListener('change', (e) => saveSetting('textHintEnabled', e.target.checked));
   document.getElementById('sidebarEnabled').addEventListener('change', (e) => saveSetting('sidebarEnabled', e.target.checked));

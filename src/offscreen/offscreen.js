@@ -6,7 +6,7 @@
 //   好处：消除 tabCapture 静音副作用；offscreen 大幅简化。
 //
 // 流程：
-//   content script 采集音频段 → SW 转发 OFFSCREEN_RECOGNIZE → offscreen 用 whisper 识别
+//   content script 采集音频段 → SW 转发 OFFSCREEN_ASR_RECOGNIZE → offscreen 用 whisper 识别
 //   → 回传 ASR_SEGMENT（经 SW 中转给 content script）
 //
 // 为什么仍需要 offscreen：content script 受页面 CSP 限制，B站/YouTube 的 CSP
@@ -166,7 +166,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     sendResponse({ ok: true });
     return true;
   }
-  if (msg.type === 'OFFSCREEN_RECOGNIZE') {
+  if (msg.type === 'OFFSCREEN_ASR_RECOGNIZE') {
     // 接收 content script 采集的音频段，送 whisper 识别
     // 反思（2026-07-04）：旧版 ArrayBuffer 经 SW 中继丢失（samples=0），曾改普通 Array。
     // 反思（第九十八次实测复发）：samples=0 再现——ArrayBuffer 双跳中继在部分环境不可靠。
@@ -192,10 +192,10 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       }
     }
     if (!audioData || audioData.length === 0) {
-      console.warn('[VocabRadar][offscreen][' + _ts() + '] OFFSCREEN_RECOGNIZE 音频缺失: msgKeys=' +
+      console.warn('[VocabRadar][offscreen][' + _ts() + '] OFFSCREEN_ASR_RECOGNIZE 音频缺失: msgKeys=' +
         Object.keys(msg || {}).join(',') + ' audioType=' + (msg ? typeof msg.audio : 'n/a'));
     }
-    console.log('[VocabRadar][offscreen][' + _ts() + '] OFFSCREEN_RECOGNIZE: ch=' + src + ' samples=' + (audioData ? audioData.length : 0) + ' returnTimestamps=' + !!msg.returnTimestamps);
+    console.log('[VocabRadar][offscreen][' + _ts() + '] OFFSCREEN_ASR_RECOGNIZE: ch=' + src + ' samples=' + (audioData ? audioData.length : 0) + ' returnTimestamps=' + !!msg.returnTimestamps);
     recognizeAndSend(audioData || new Float32Array(0), msg.start, msg.end, msg.videoKey, msg.returnTimestamps || false, src);
     sendResponse({ ok: true });
     return true;
@@ -243,8 +243,8 @@ let _tesseractWorker = null;
 let _tesseractLang = null;
 
 /**
- * sourceLanguage → Tesseract 语言包
- * 反思（2026-08-16 第六十六次）：OCR 语言随 sourceLanguage——本地化数据仅含 eng/chi_sim，
+ * learnLanguage → Tesseract 语言包
+ * 反思（2026-08-16 第六十六次）：OCR 语言随 learnLanguage——本地化数据仅含 eng/chi_sim，
  *   zh* 用 chi_sim，其余一律 eng（单语言识别更快更准）。未知/缺省回落 'eng+chi_sim'（旧行为）。
  * @param {string} [lang]
  * @returns {string|null} 单语言名；null 表示未指定（回落双语言）
@@ -297,7 +297,7 @@ async function getOcrWorker(lang) {
   //   被 MV3 CSP 阻止（worker-src 不允许 blob:）。修正：workerBlobURL=false，
   //   workerPath 指定本地路径，new Worker(chrome-extension://...) 符合 script-src 'self'。
   // 反思（2026-08-05）：corePath/langPath 改为本地路径，脱离 CDN 依赖。
-  // 反思（2026-08-16 第六十六次）：语言包随 sourceLanguage（eng / chi_sim），非固定双语言。
+  // 反思（2026-08-16 第六十六次）：语言包随 learnLanguage（eng / chi_sim），非固定双语言。
   console.log('[VocabRadar][offscreen][' + _ts() + '] 创建 OCR worker (lang=' + langKey + ', 本地 core+lang, workerBlobURL=false)');
   const _workerStart = Date.now();
   _tesseractWorker = await Tesseract.createWorker(langKey, 1, {
@@ -695,15 +695,15 @@ async function recognizeAndSend(audioData, segStart, segEnd, videoKey, returnTim
     // 反思（2026-08-08）：用户反馈"asr效果差，你是设定了语言吗？"。
     //   根因：未传 language 参数，whisper 需额外做语言检测，tiny 模型检测精度低，
     //   导致非英语语音识别效果差。
-    //   修正：从 storage 读取用户设置的 sourceLanguage，传给 whisper。
-    //   - sourceLanguage='en' → language='en'（英语，whisper 支持）
-    //   - sourceLanguage='zh' → language='zh'（中文）
-    //   - sourceLanguage=null/未设置 → 不传 language，whisper 自动检测
+    //   修正：从 storage 读取用户设置的 learnLanguage，传给 whisper。
+    //   - learnLanguage='en' → language='en'（英语，whisper 支持）
+    //   - learnLanguage='zh' → language='zh'（中文）
+    //   - learnLanguage=null/未设置 → 不传 language，whisper 自动检测
     let _asrLang = null;
     try {
-      const stored = await chrome.storage.local.get({ sourceLanguage: 'en' });
-      if (stored.sourceLanguage && stored.sourceLanguage !== 'auto') {
-        _asrLang = stored.sourceLanguage;
+      const stored = await chrome.storage.local.get({ learnLanguage: 'en' });
+      if (stored.learnLanguage && stored.learnLanguage !== 'auto') {
+        _asrLang = stored.learnLanguage;
       }
     } catch (_) { /* ignore */ }
 

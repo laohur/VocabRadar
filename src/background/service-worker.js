@@ -73,13 +73,34 @@ function log(...args) {
     _debug = !!cfg.debug;
   } catch (_) { /* ignore */ }
 })();
+
+// 第二百二十五次一次性迁移：语言存储键改名（《命名清查》裁定，名实相符）——
+//   sourceLanguage（要学习的目标语言）→ learnLanguage
+//   targetLanguage（释义/注释语言）→ meaningLanguage
+// 幂等：新键已存在则跳过；旧键保留在 storage 不删（已无任何代码读取，降级友好）。
+// SW 顶层每次唤醒都执行，早于任何消息处理；扩展更新时 onInstalled 更会先行触发。
+// 唯一允许出现旧键名的地方就是本块（迁移代码不得不提旧名）。
+(async () => {
+  try {
+    const get = (keys) => new Promise((r) => chrome.storage.local.get(keys, r));
+    const old = await get(['sourceLanguage', 'targetLanguage', 'learnLanguage', 'meaningLanguage']);
+    const patch = {};
+    if (old.learnLanguage === undefined && old.sourceLanguage !== undefined) patch.learnLanguage = old.sourceLanguage;
+    if (old.meaningLanguage === undefined && old.targetLanguage !== undefined) patch.meaningLanguage = old.targetLanguage;
+    if (Object.keys(patch).length) {
+      await new Promise((r) => chrome.storage.local.set(patch, r));
+      console.log('[VocabRadar][sw] 语言键已迁移:', JSON.stringify(patch));
+    }
+  } catch (_) { /* 迁移失败不阻塞启动；各读取端有默认值兜底 */ }
+})();
+
 const DEFAULT_SETTINGS = {
-  sourceLanguage: 'en',
-  targetLanguage: 'zh',
+  learnLanguage: 'en',
+  meaningLanguage: 'zh',
   // 反思（2026-08-14 第五十四次修正）：用户裁定"调整词频就能凸显，不应更改默认值"。
   //   恢复默认 5000（原 5000），此前第五十二次误改为 0 属于错误默认，回滚。
   rankThreshold: 5000,
-  subtitleOverlay: true,
+  // 第二百二十五次：删除死键 subtitleOverlay（SW install 写入、全库零读取，《命名清查》裁定）。
   // 反思（2026-08-12）：用户反馈"所有浏览器网页中丢了文本提示"。
   //   旧版 textHintEnabled: false，onInstalled 写入 storage 后 text-hint.js 读取到 false 不启动。
   //   修正：改为 true，与 popup.js / text-hint.js 默认值一致，开箱即用。
@@ -348,23 +369,25 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       //   若 _asrActive 为 false 但 offscreen 存在，仍尝试转发，避免丢段。
       // 反思（2026-08-08 第二次）：用户持续反馈"asr经常停止"。
       //   根因：SW 重启后 offscreen document 可能也被 Chrome 回收，
-      //   chrome.runtime.sendMessage({ type: 'OFFSCREEN_RECOGNIZE' }) 失败被 .catch 吞掉，
+      //   chrome.runtime.sendMessage({ type: 'OFFSCREEN_ASR_RECOGNIZE' }) 失败被 .catch 吞掉，
       //   段被静默丢弃，content script 的 sendSegmentAndWait 超时后跳过当前段。
       //   修正：转发前先 ensureOffscreen()，确保 offscreen 存在。
       //   ensureOffscreen 内部先 hasDocument 检查（快），不存在才 createDocument。
       (async () => {
         // 第二百一十五次（用户："asr模型可选本地whisper，也能选llm"；"离线整段，在线分片"）：
-        //   ASR 引擎可选——'llm' 走 LLM 音频转写（在线分片：每段 Float32 PCM(16kHz)
+        //   ASR 引擎可选——'api' 走 OpenAI 兼容音频转写（在线分片：每段 Float32 PCM(16kHz)
         //   现转 WAV 一次请求）；'local'（默认）走既有 offscreen whisper。
         //   模型名用户自管（asrLlmModel，默认 whisper-1），有错就报（回包带 error 字段）。
+        // 第二百二十五次：引擎存储值 'llm' 改名 'api'（名实相符，《命名清查》裁定）——
+        //   它指"在线转写 API"，与聊天大模型无关；读侧兼容旧残留 'llm'/'api' 都视为 API。
         let asrEngineSel = 'local';
         let asrLlmModel = 'whisper-1';
         try {
           const er = await new Promise((r) => chrome.storage.local.get({ asrEngine: 'local', asrLlmModel: 'whisper-1' }, r));
-          asrEngineSel = er.asrEngine || 'local';
+          asrEngineSel = (er.asrEngine === 'llm' || er.asrEngine === 'api') ? 'api' : 'local';
           asrLlmModel = er.asrLlmModel || 'whisper-1';
         } catch (_) { /* 默认本地 */ }
-        if (asrEngineSel === 'llm') {
+        if (asrEngineSel === 'api') {
           handleSegmentByLlm(msg, sender).catch((e) => {
             console.warn('[VocabRadar][sw][' + _ts() + '] ASR(LLM) 段失败:', e);
           });
@@ -374,7 +397,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         if (_asrActive || _asrTabId) {
           await ensureOffscreen().catch(() => { /* ignore */ });
           chrome.runtime.sendMessage({
-            type: 'OFFSCREEN_RECOGNIZE',
+            type: 'OFFSCREEN_ASR_RECOGNIZE',
             videoKey: msg.videoKey,
             start: msg.start,
             end: msg.end,
@@ -393,7 +416,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
             _asrTabId = res._asrTabId || null;
             await ensureOffscreen().catch(() => { /* ignore */ });
             chrome.runtime.sendMessage({
-              type: 'OFFSCREEN_RECOGNIZE',
+              type: 'OFFSCREEN_ASR_RECOGNIZE',
               videoKey: msg.videoKey,
               start: msg.start,
               end: msg.end,
@@ -414,8 +437,8 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     case 'ASR_CHECK':
       sendResponse({ ok: true, supported: true });
       return true;
-    case 'TRANSLATE_WORD':
-      handleTranslateWord(msg.word, msg.source, msg.target, msg.channels)
+    case 'TRANSLATE_TEXT':
+      handleTranslateText(msg.word, msg.source, msg.target, msg.channels)
         .then((r) => sendResponse(r))
         .catch((e) => sendResponse({ ok: false, error: String(e.message || e) }));
       return true;
@@ -473,7 +496,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       // content script 发来的 OCR 请求，转发给 offscreen 运行 Tesseract.js
       // 反思（2026-07-28）：content script 受页面 CSP 限制无法加载 CDN 脚本，
       //   OCR 需在 offscreen document 运行（扩展自身 CSP 已配置 cdn.jsdelivr.net）。
-      // 反思（2026-08-16 第六十六次）：透传 lang（OCR 语言随 sourceLanguage）。
+      // 反思（2026-08-16 第六十六次）：透传 lang（OCR 语言随 learnLanguage）。
       handleOcrRecognize(msg.imageDataUrl, msg.lang)
         .then((r) => sendResponse(r))
         .catch((e) => sendResponse({ ok: false, error: String(e.message || e) }));
@@ -539,22 +562,23 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 // === OCR：转发到 offscreen 运行 Tesseract.js ===
 // 反思（2026-07-28）：content script 受页面 CSP 限制无法直接加载 Tesseract.js，
 //   需通过 offscreen document 运行。SW 负责确保 offscreen 存在并转发消息。
-// 反思（2026-08-16 第六十六次）：OCR 语言随 sourceLanguage——透传 lang 给 offscreen。
+// 反思（2026-08-16 第六十六次）：OCR 语言随 learnLanguage——透传 lang 给 offscreen。
 async function handleOcrRecognize(imageDataUrl, lang) {
   // 第二百一十四次（用户："OCR可选 Tesseract LLM"）：引擎由 storage.ocrEngine 选择——
-  //   'tesseract'（默认，offscreen 本地识别）| 'llm'（当前对话大模型的视觉识别）。
+  //   'tesseract'（默认，offscreen 本地识别）| 'api'（大模型视觉识别 API）。
+  //   第二百二十五次：值 'llm' 改名 'api'，读侧兼容旧残留 'llm'。
   let engine = 'tesseract';
   let tessLangs = 'eng';
   try {
     const er = await new Promise((resolve) => {
       try { chrome.storage.local.get({ ocrEngine: 'tesseract', ocrLanguages: { eng: true } }, resolve); } catch (_) { resolve({}); }
     });
-    engine = er.ocrEngine || 'tesseract';
+    engine = (er.ocrEngine === 'llm' || er.ocrEngine === 'api') ? 'api' : 'tesseract';
     const ol = er.ocrLanguages || {};
     const ls = Object.keys(ol).filter((k) => ol[k] === true);
     if (ls.length > 0) tessLangs = ls.join('+');
   } catch (_) { /* 默认 Tesseract + eng */ }
-  if (engine === 'llm') {
+  if (engine === 'api') {
     return handleOcrByLlm(imageDataUrl, lang);
   }
   lang = tessLangs;   // 第二百一十九次：Tesseract 语言=引导页复选（eng/chi_sim/jpn 的并集）
@@ -610,7 +634,7 @@ function pcmF32ToWavBlob(f32, sampleRate) {
 }
 
 async function llmTranscribeBlob(blob, cfg, lang, fileName) {
-  // 第二百一十六次：cfg 由调用方传入（ASR-LLM 独立配置 resolveEngineCfg('asr') 产物）
+  // 第二百一十六次：cfg 由调用方传入（ASR-LLM 独立配置 resolveLlmEngineCfg('asr') 产物）
   if (cfg.format === 'anthropic') throw new Error('Anthropic 无音频转写端点，请改用 OpenAI 兼容来源');
   if (!cfg.baseUrl) throw new Error('Base URL 未配置');
   const url = cfg.baseUrl.replace(/\/+$/, '') + '/audio/transcriptions';
@@ -639,14 +663,14 @@ async function handleSegmentByLlm(msg, sender) {
   const pcm = new Float32Array(f32);
   const wav = pcmF32ToWavBlob(pcm, 16000);
   let lang = null;
-  try { lang = (await new Promise((r) => chrome.storage.local.get({ sourceLanguage: 'en' }, r))).sourceLanguage; } catch (_) { }
-  const cfg = await resolveEngineCfg('asr');   // 恢复 216 形态：ASR-LLM 独立配置
+  try { lang = (await new Promise((r) => chrome.storage.local.get({ learnLanguage: 'en' }, r))).learnLanguage; } catch (_) { }
+  const cfg = await resolveLlmEngineCfg('asr');   // 恢复 216 形态：ASR-LLM 独立配置
   const text = await llmTranscribeBlob(wav, cfg, lang, 'segment.wav');
   // 回包与 offscreen 的 ASR_SEGMENT 同形（无 chunks——接收端按整段文本处理，已兼容）
   if (sender && sender.tab && sender.tab.id) {
     chrome.tabs.sendMessage(sender.tab.id, {
       type: 'ASR_SEGMENT', videoKey: msg.videoKey, start: msg.start, end: msg.end,
-      text: text, samples: pcm.length, engine: 'llm'
+      text: text, samples: pcm.length, engine: 'api'   // 第二百二十五次：引擎标记随值改名（payload 字段，当前无消费方）
     }).catch(() => { /* 接收页可能已关闭 */ });
   }
 }
@@ -654,7 +678,7 @@ async function handleSegmentByLlm(msg, sender) {
 // 第二百一十六次（用户："可以下拉，可以单独配置，跟聊天的LLM不同"）：
 //   ASR-LLM 与 OCR-LLM 各自独立的 LLM 配置（asrLlm* / ocrLlm* 键），
 //   provider 缺省 openai（转写/视觉的主流候选），与聊天 llm* 配置互不影响。
-async function resolveEngineCfg(engine) {
+async function resolveLlmEngineCfg(engine) {
   const keys = (engine === 'asr')
     ? { p: 'asrLlmProvider', b: 'asrLlmBaseUrl', m: 'asrLlmModel', k: 'asrLlmApiKey' }
     : { p: 'ocrLlmProvider', b: 'ocrLlmBaseUrl', m: 'ocrLlmModel', k: 'ocrLlmApiKey' };
@@ -677,8 +701,8 @@ async function handleAsrLlmFile(msg, sender) {
     const mimeMap = { wav: 'audio/wav', mp3: 'audio/mpeg', m4a: 'audio/mp4', webm: 'audio/webm', ogg: 'audio/ogg', flac: 'audio/flac' };
     const blob = new Blob([u8], { type: mimeMap[ext] || 'audio/wav' });
     let lang = null;
-    try { lang = (await new Promise((r) => chrome.storage.local.get({ sourceLanguage: 'en' }, r))).sourceLanguage; } catch (_) { }
-    const cfg = await resolveEngineCfg('asr');   // 第二百二十次：LLM 只此聊天一处设定
+    try { lang = (await new Promise((r) => chrome.storage.local.get({ learnLanguage: 'en' }, r))).learnLanguage; } catch (_) { }
+    const cfg = await resolveLlmEngineCfg('asr');   // 第二百二十次：ASR-LLM 独立配置（与聊天 llm* 键互不影响）
     const text = await llmTranscribeBlob(blob, cfg, lang, String(msg.fileName || 'audio.wav'));
     sendResponse({ ok: true, text: text });
   } catch (e) {
@@ -688,7 +712,7 @@ async function handleAsrLlmFile(msg, sender) {
 }
 
 async function handleOcrByLlm(imageDataUrl, lang) {
-  const cfg = await resolveEngineCfg('ocr');   // 恢复 216 形态：OCR-LLM 独立配置
+  const cfg = await resolveLlmEngineCfg('ocr');   // 恢复 216 形态：OCR-LLM 独立配置
   const out = await llmVisionOnce(cfg, OCR_LLM_PROMPT, imageDataUrl);
   if (!out.ok) {
     log('[VocabRadar][sw][' + _ts() + '] OCR(LLM) 失败: ' + out.error);
@@ -783,7 +807,7 @@ async function llmVisionOnce(cfg, prompt, imageDataUrl) {
 // === ASR：offscreen 协调（音频捕获重构 2026-07-04）===
 // 旧方案：SW 调 tabCapture.getMediaStreamId → offscreen getUserMedia 采集
 // 新方案：content script 用 AudioContext + MediaElementAudioSourceNode 采集
-//   → 发 ASR_AUDIO_SEGMENT 到 SW → SW 转发 OFFSCREEN_RECOGNIZE 到 offscreen
+//   → 发 ASR_AUDIO_SEGMENT 到 SW → SW 转发 OFFSCREEN_ASR_RECOGNIZE 到 offscreen
 //   → offscreen 用 whisper 识别 → 回传 ASR_SEGMENT → SW 中转给 content script
 // SW 不再需要 tabCapture，只需创建 offscreen 供 whisper 运行
 let _asrActive = false;
@@ -791,7 +815,7 @@ let _asrTabId = null;
 // Firefox 回退（2026-08-15 第六十四次；2026-08-30 第一百八十次改宿主位置）：
 //   Firefox 无 chrome.offscreen，whisper 运行于**后台 event page 自身 document** 内的
 //   隐藏 iframe（旧版建在网页 DOM 里，被网页 CSP 拦，详见 ensureFallbackIframe）。
-let _asrFallbackMode = false;
+// 第二百二十五次：删除死变量 _asrFallbackMode（五处赋值、零读取，《命名清查》裁定）。
 // 后台页内的 ASR 宿主 iframe 引用（仅 Firefox；Chromium 后台为 SW 无 DOM，恒为 null）
 let _asrFallbackFrame = null;
 
@@ -837,17 +861,13 @@ async function handleStartASR(tabId, videoKey) {
   //   - 扩展 CSP 已含 wasm-unsafe-eval，引导页 asr.js 已证明 Firefox 扩展页可运行 whisper。
   const useFallback = typeof chrome.offscreen === 'undefined';
   if (useFallback) {
-    _asrFallbackMode = true;
     const created = await ensureFallbackIframe();
     if (!created.ok) {
-      _asrFallbackMode = false;
       const msg = 'Firefox 回退宿主创建失败（' + (created.error || '未知原因') + '）。请打开扩展引导页，在「ASR」栏上传音视频或录音识别。';
       console.warn('[VocabRadar][sw][' + _ts() + '] ' + msg);
       return { ok: false, error: msg };
     }
     log('[VocabRadar][sw][' + _ts() + '] Firefox 回退已启用（whisper 运行于后台页内隐藏 iframe）');
-  } else {
-    _asrFallbackMode = false;
   }
   if (_asrActive) {
     // 已在运行：先停
@@ -874,7 +894,6 @@ async function handleStartASR(tabId, videoKey) {
   if (useFallback) {
     const ready = await waitOffscreenReady(8000);
     if (!ready) {
-      _asrFallbackMode = false;
       persistAsrState(false, null);
       const msg = 'Firefox 回退宿主未就绪（8 秒内无 PING 应答；诊断：' + describeFallbackFrame()
         + '）。请重试，或打开扩展引导页在「ASR」栏识别。';
@@ -927,7 +946,6 @@ async function handleStopASR() {
   }
   _asrActive = false;
   _asrTabId = null;
-  _asrFallbackMode = false;
   persistAsrState(false, null);
   return { ok: true };
 }
@@ -1123,7 +1141,7 @@ async function fetchWithTimeout(url, options = {}, timeout = 8000) {
   }
 }
 
-async function handleTranslateWord(word, source, target, channels) {
+async function handleTranslateText(word, source, target, channels) {
   if (!word) return { ok: false, error: 'empty word' };
   // 第二百一十六次（用户："引导页增加翻译一行，后跟LLM、几个api、浏览器自身复选框"）：
   //   每个渠道可勾选启停（缺省全启）；未勾选的渠道直接跳过（报"渠道未启用"）。

@@ -805,18 +805,18 @@ async function getYouTubeCaptionTracks() {
  * 获取 YouTube 字幕（返回所有轨道 + 默认轨道字幕）
  *
  * 默认轨道选择策略（2026-07-03 按用户确认调整）：
- *   1) 首选 sourceLanguage（所学语言=目标语言）轨道，前缀匹配
- *   2) 无则取第一条非 targetLanguage（释义语言）轨道（避免默认选母语字幕）
+ *   1) 首选 learnLanguage（所学语言=目标语言）轨道，前缀匹配
+ *   2) 无则取第一条非 meaningLanguage（释义语言）轨道（避免默认选母语字幕）
  *   3) 全失败则取第一条
  * 反思：旧版硬编码优先 en、回退非 zh，无视用户在 popup 改的源语言，
  * 导致"字幕轨道可选，默认首选目标语言"未生效。
  *
- * @param {string} [sourceLanguage='en'] 所学语言（默认首选轨道）
- * @param {string} [targetLanguage='zh'] 释义语言（回退时避开）
+ * @param {string} [learnLanguage='en'] 所学语言（默认首选轨道）
+ * @param {string} [meaningLanguage='zh'] 释义语言（回退时避开）
  * @returns {Promise<{tracks: Array, subtitles: Array|null, pickedIndex: number}|null>}
  */
-export async function getYouTubeSubtitles(sourceLanguage = 'en', targetLanguage = 'zh') {
-  console.log('[VocabRadar][youtube] 开始获取字幕, sourceLanguage=' + sourceLanguage + ' targetLanguage=' + targetLanguage);
+export async function getYouTubeSubtitles(learnLanguage = 'en', meaningLanguage = 'zh') {
+  console.log('[VocabRadar][youtube] 开始获取字幕, learnLanguage=' + learnLanguage + ' meaningLanguage=' + meaningLanguage);
   // 尽早注入页面主世界脚本，确保 YouTube 播放器的字幕请求能被拦截
   injectPageScript();
   console.log('[VocabRadar][youtube] 页面脚本注入完成, ready=', _pageScriptReady, '已有缓存=', _pageTimedtextCache.length, '条');
@@ -836,14 +836,14 @@ export async function getYouTubeSubtitles(sourceLanguage = 'en', targetLanguage 
   }
   console.log('[VocabRadar][youtube] 所有字幕轨道:', trackList.map((t) => `${t.languageCode}=${t.name}`).join(', '));
 
-  // 默认首选 sourceLanguage 轨道；无则取非 targetLanguage；再无则第一条
+  // 默认首选 learnLanguage 轨道；无则取非 meaningLanguage；再无则第一条
   // 第一百二十次：优先选择 ASR 自动字幕（kind=asr），无则按语言匹配
-  let pickedIndex = trackList.findIndex((t) => t.kind === 'asr' && t.languageCode.startsWith(sourceLanguage));
+  let pickedIndex = trackList.findIndex((t) => t.kind === 'asr' && t.languageCode.startsWith(learnLanguage));
   if (pickedIndex < 0) {
-    pickedIndex = trackList.findIndex((t) => t.languageCode.startsWith(sourceLanguage));
+    pickedIndex = trackList.findIndex((t) => t.languageCode.startsWith(learnLanguage));
   }
   if (pickedIndex < 0) {
-    pickedIndex = trackList.findIndex((t) => !t.languageCode.startsWith(targetLanguage));
+    pickedIndex = trackList.findIndex((t) => !t.languageCode.startsWith(meaningLanguage));
   }
   if (pickedIndex < 0) pickedIndex = 0;
 const picked = trackList[pickedIndex];

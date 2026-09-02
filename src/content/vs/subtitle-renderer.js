@@ -22,13 +22,13 @@
 // ============================================================================
 
 import { log } from './logger.js';
-import { formatTime, copyToClipboard, flashButton, pickRandomShortTrans, escapeHtml, escapeReg, cssEscape } from './dom-utils.js';
+import { formatTime, copyToClipboard, flashButton, escapeHtml, escapeReg, cssEscape } from './dom-utils.js';
 import { pickRandomLinesForComment, findMainCommentContainer, expandCommentBox, fillCommentInput, scrollMinIntoView } from './comment-fill.js';
 import { autoExpandOnce, requestSyncHeightOnce } from './sidebar-layout.js';
 import { getAnnotations, rankToStage, resetDiag } from '../../lib/annotator.js';
 import { getPhonetic } from '../../lib/phonetics.js';
 import { t } from '../../lib/i18n.js';
-import { isBalancedParens } from '../../lib/dict-clean.js';
+import { isBalancedParens, pickCleanShortTrans } from '../../lib/dict-clean.js';
 import { addSubtitle as overlayAddSubtitle } from '../subtitle-overlay.js';
 // 第一百七十一次：视频侧栏底部对话按钮 —— 对话面板唯一实现在 lib/chat.js
 import { openChatPanel } from '../../lib/chat.js';
@@ -255,7 +255,7 @@ function onAsyncTranslate(ann) {
 // === 高亮字幕中的生词 ===
 // 简略模式（inlineAnnotations=true）：注释直接跟在生词高亮 span 后，不另起一行。
 //   格式：<span class="beaver-word">word</span><span class="beaver-ann-inline">(释义)</span>
-//   释义为随机短义项（pickRandomShortTrans）。无释义时仅高亮，不加括号。
+//   释义为确定性短义项（lib/dict-clean.js#pickCleanShortTrans，225 次起直调）。无释义时仅高亮，不加括号。
 // 反思（2026-07-22）：用户要求「字幕的单词注释跟在字幕正文里面的生词后，不另起一行，这是简略模式。
 //   详细模式是之前老版本（注释另起一行）」。
 function highlightWords(text, annotations, inlineAnnotations = false) {
@@ -280,7 +280,7 @@ function highlightWords(text, annotations, inlineAnnotations = false) {
     // 简略模式：生词后追加 (释义) inline span。无释义时仅高亮。
     let replacement = `<span class="${cls}">${escapeHtml(a.word)}</span>`;
     if (inlineAnnotations) {
-      const shortTrans = pickRandomShortTrans(a.translations);
+      const shortTrans = pickCleanShortTrans(a.translations);
       if (shortTrans) {
         replacement += `<span class="beaver-ann-inline">(${escapeHtml(shortTrans)})</span>`;
       }
@@ -696,10 +696,10 @@ function fillSlotAnnotations(slot, sub, anns) {
   const contentSpan = slot.querySelector('.beaver-sub-content');
   const annContainer = slot.querySelector('.beaver-ann-container');
   // 反思（2026-07-22）：用户要求「有些生词没注释，没翻译的就不要显示了」。
-  //   过滤掉无翻译的词（pickRandomShortTrans 返回空），字幕区不高亮、不显示注释。
+  //   过滤掉无翻译的词（pickCleanShortTrans 返回空），字幕区不高亮、不显示注释。
   //   pending 表外词初始 translations=[] 被过滤，翻译成功后 onAsyncTranslate 触发重绘显示。
   //   生词表仍保留所有生词（createWordPanelItem 不过滤），仅字幕区过滤。
-  const validAnns = (anns || []).filter(a => pickRandomShortTrans(a.translations));
+  const validAnns = (anns || []).filter(a => pickCleanShortTrans(a.translations));
   // 第一百八十七次：字幕行与词表共用同一份阈值/表外词过滤，杜绝字幕注释高频词
   const shownAnns = filterByCurrentRank(validAnns);
   // 反思（2026-07-22）：用户要求「字幕的单词注释跟在字幕正文里面的生词后，不另起一行，这是简略模式。
@@ -756,7 +756,7 @@ function fillSlotAnnotations(slot, sub, anns) {
       }
     } else {
       // 简略模式：随机短义项，生词(注释) 格式
-      const shortTrans = pickRandomShortTrans(a.translations);
+      const shortTrans = pickCleanShortTrans(a.translations);
       const transText = shortTrans ? escapeHtml(shortTrans) : '';
       if (transText) {
         html = `<span class="beaver-ann-word">${escapeHtml(a.word || '')}</span><span class="beaver-ann-paren">(</span><span class="beaver-ann-trans">${transText}</span><span class="beaver-ann-paren">)</span>`;
