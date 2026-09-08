@@ -16,12 +16,14 @@
  *      - obfuscate（混淆）：纯净基础上 terser compress + mangle（标识符改名；不开
  *        toplevel——esbuild 分包 chunk 间 import/export 绑定名、classic 入口全局名、
  *        HTML 内联引用的全局函数一律保留，跨文件契约不被打断）；
- *      - auto（自动）：混淆版 Chrome + 混淆版 Firefox + 火狐另加审核版（审核版 =
- *        纯净 Firefox 包的逐字节副本：去注释、未压缩、未混淆，供 AMO 人工审核阅读；
- *        AMO 政策允许 minified/obfuscated 代码，但须附可读源码供审核）。
+ *      - auto（自动，默认）：混淆版 Chrome + 混淆版 Firefox + 火狐纯净版（2026-09-08：
+ *        纯净 Firefox 包去注释/未压缩/未混淆，本身即可作 AMO 人工阅读用可读包；
+ *        原 -review.zip 改名副本与纯净包逐字节相同，纯冗余已删。AMO 政策允许
+ *        minified/obfuscated 代码但须附可读源码——正式审核附件是
+ *        make_amo_source_zip.mjs 产出的 vocabradar-extension-source.zip）。
  *      压缩/混淆的 terser 统一处理跑在 esbuild 预打包之后（散文件 + chunk 一次
  *      覆盖）；vendor/data 仍排除。产物命名：纯净包名不变；压缩 *-min.zip /
- *      dist-min*；混淆 *-obf.zip / dist-obf*；审核 vocabradar-extension-firefox-review.zip。
+ *      dist-min*；混淆 *-obf.zip / dist-obf*。
  *
  * 数据目录结构（src/data/，由 preprocess.mjs 生成，打包时不处理）：
  *   - config.json          配置文件（panelHideDelay 等）
@@ -453,21 +455,16 @@ async function buildBrowser(browser, mode) {
 }
 
 async function buildAuto() {
-  // 自动模式（2026-09-07 用户裁定）：仅混淆 ×2 + 火狐另加审核版
-  // 纯净为基础——先出纯净 Firefox 包（"纯净为基础，其他未混淆"），
-  // 审核版 = 纯净 Firefox 包的逐字节副本（去注释、未压缩、未混淆），
-  // 供 AMO 人工审核阅读（AMO 政策：obfuscated 代码须附可读源码/构建供审核）。
-  console.log('=== 自动模式：混淆 Chrome + 混淆 Firefox + 火狐审核版 ===');
+  // 自动模式（2026-09-08 用户裁定）：混淆 Chrome + 混淆 Firefox + 火狐纯净版
+  // 纯净为基础——先出纯净 Firefox 包（vocabradar-extension-firefox.zip），
+  // 该包本身去注释/未压缩/未混淆，可直接作 AMO 人工阅读用可读包（原 -review.zip
+  // 改名副本已删：与纯净包逐字节相同，纯冗余，"需要时再加"）。
+  // 注意：AMO 政策正式审核附件是 make_amo_source_zip.mjs 产出的
+  // vocabradar-extension-source.zip（README 构建说明 + 完整可复现源码链）。
+  console.log('=== 自动模式：混淆 Chrome + 混淆 Firefox + 火狐纯净版（审核可读用） ===');
   await buildBrowser('firefox', 'pure');
   await buildBrowser('chrome', 'obfuscate');
   await buildBrowser('firefox', 'obfuscate');
-  const src = path.join(ROOT, 'vocabradar-extension-firefox.zip');
-  const dst = path.join(ROOT, 'vocabradar-extension-firefox-review.zip');
-  fs.copyFileSync(src, dst);
-  console.log(
-    `[审核版] ${path.basename(src)} -> ${path.basename(dst)} ` +
-    `（纯净 Firefox 包副本：去注释/未压缩/未混淆，供 AMO 审核）`
-  );
 }
 
 async function main() {
@@ -476,7 +473,7 @@ async function main() {
       // 等价旧 argparse --browser choices=[chrome,firefox,all] default=all
       browser: { type: 'string', default: 'all' },
       // 2026-09-07：打包形态（纯净/压缩/混淆/自动），纯净为基础
-      mode: { type: 'string', default: 'pure' },
+      mode: { type: 'string', default: 'auto' },
     },
   });
   const browser = values.browser;
@@ -494,9 +491,9 @@ async function main() {
   buildPhonemizeLangpacks();
 
   if (mode === 'auto') {
-    // 自动：固定产出混淆 Chrome + 混淆 Firefox + 火狐审核版，--browser 不参与
+    // 自动：固定产出混淆 Chrome + 混淆 Firefox + 火狐纯净版，--browser 不参与
     if (browser !== 'all') {
-      console.log(`[提示] auto 模式忽略 --browser=${browser}，固定产出混淆×2 + 火狐审核版`);
+      console.log(`[提示] auto 模式忽略 --browser=${browser}，固定产出混淆×2 + 火狐纯净版`);
     }
     await buildAuto();
   } else if (browser === 'chrome') {
