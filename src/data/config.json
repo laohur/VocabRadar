@@ -20,7 +20,7 @@
   "subtitleStyle": "none",
   "annotateRepeat": false,
   "chatContextMaxBytes": 100000,
-  "chatWordPrompt": "Please explain the text \"{}\" in {lang}.",
+  "chatWordPrompt": "Please explain \"{text}\" in {lang}.",
   "chatSidebarPrompt": "Please summarise the text above in {lang}.",
   "llmProvider": "pollinations",
   "llmBaseUrl": "",

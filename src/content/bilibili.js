@@ -19,6 +19,6 @@
 })();
 
 // 第二百二十五次：删除 SEND_DANMAKU / SEND_COMMENT 死消息监听（《命名清查》裁定）——
-//   自动发送时代残留：全库只有本监听、没有任何发送方；且现行弹幕/评论助手只「填入输入框」
-//   （lib/bilibili-danmaku.js#fillDanmaku / lib/bilibili-comment.js#fillComment，
-//   由侧栏按钮直接调用），不经过消息通道。
+//   自动发送时代残留：全库只有本监听、没有任何发送方；评论助手现行路径为
+//   vs/comment-fill.js（由侧栏评论按钮直接调用），不经过消息通道。
+//   （弹幕模块 src/lib/bilibili-danmaku.js 已随弹幕功能移除而删除。）

@@ -381,28 +381,6 @@ export async function extractReadabilityText() {
 // Defuddle 构造器缓存（约 330KB 模块只加载一次；与 Readability 同为懒加载，不占首屏）
 let _DefuddleCtor = null;
 
-// Defuddle FULL 构造器缓存（约 744KB，仅方案七 Markdown 模式懒加载——第二百零四次）
-let _DefuddleFullCtor = null;
-
-/**
- * 懒加载 Defuddle FULL 构建（vendor ESM，已在 manifest 的 web_accessible_resources 中）
- * 第二百零四次（用户实测 markdown:true 在 core 包原样吐 HTML）：Defuddle 的 Markdown
- *   转换只在 full 构建（README: Bundles→full adds math/Markdown conversion），
- *   Markdown 模式必须用本构造器；core（defuddle.js）保持主链路轻量。
- * @returns {Promise<Function>} Defuddle（full）构造器
- */
-async function loadDefuddleFull() {
-  if (_DefuddleFullCtor) return _DefuddleFullCtor;
-  const url = chrome.runtime.getURL('src/lib/vendor/defuddle-full.js');
-  const mod = await import(url);
-  const ctor = mod && (mod.default || mod.Defuddle);
-  if (typeof ctor !== 'function') {
-    throw new Error('defuddle-full.js 未导出构造器');
-  }
-  _DefuddleFullCtor = ctor;
-  return ctor;
-}
-
 // 块级元素标签（第一百九十九次：Defuddle 正文换行还原用）
 const BLOCK_LINE_TAGS = /^(P|DIV|LI|UL|OL|H[1-6]|BLOCKQUOTE|PRE|TABLE|TR|THEAD|TBODY|SECTION|ARTICLE|MAIN|HEADER|FOOTER|FIGURE|FIGCAPTION|DL|DT|DD|HR|ASIDE|NAV)$/;
 
@@ -514,6 +492,43 @@ export async function extractDefuddleText() {
     cloneMs,
     parseMs,
     wordCount: (result && typeof result.wordCount === 'number') ? result.wordCount : 0,
+    strip
+  };
+}
+
+// === G4（2026-09-08）：无宿主正文提取 —— 网站 Creator 解析网页链接用 ===
+// 背景：extractDefuddleText 强耦合当前页面（buildPageCloneHtml 克隆 document、
+//   <base>=location.href、title 兜底 document.title）。网站侧 HTML 由 SW fetch 而来，
+//   无"当前页面"可言，故把同一条 Defuddle 链路参数化：输入外部 HTML + baseUrl。
+// 其余（stripOwnNodes / Defuddle.parse / htmlToLineText / 行过滤）与 extractDefuddleText
+//   完全同规，"正文提取唯一实现"纪律不被绕开。
+// 边界：markHiddenElements/getComputedStyle 需要活文档，静态 HTML 无法做 CSS 计算类
+//   隐藏标注（外部样式表在 SW 抓的 HTML 里本就缺席），故这里只剔除 HTML 自带的
+//   [hidden] / aria-hidden / 未展开 details 等（stripOwnNodes 内既有逻辑覆盖的部分）。
+export async function extractDefuddleFromHtml(html, baseUrl) {
+  const Defuddle = await loadDefuddle();
+  const doc = new DOMParser().parseFromString(String(html || ''), 'text/html');
+  const strip = stripOwnNodes(doc);
+  try {
+    if (!doc.querySelector('base')) {
+      const base = doc.createElement('base');
+      base.setAttribute('href', baseUrl || 'about:blank');
+      (doc.head || doc.documentElement).insertBefore(base, (doc.head || doc.documentElement).firstChild);
+    }
+  } catch (e) {
+    console.warn('[VocabRadar][main-text] 注入 <base> 失败（不影响正文提取）:', e);
+  }
+  const parsed = new Defuddle(doc).parse();
+  const result = (parsed && typeof parsed.then === 'function') ? await parsed : parsed;
+  let raw = '';
+  if (result && result.content) {
+    raw = htmlToLineText(result.content);
+  }
+  const text = raw.split(/\n+/).map((s) => s.replace(/\s+/g, ' ').trim()).filter((s) => s.length >= 2).join('\n');
+  return {
+    text,
+    title: (result && result.title) || '',
+    chars: text.length,
     strip
   };
 }
@@ -641,20 +656,16 @@ export async function extractRulesReadabilityText() {
 }
 
 /**
- * 方案六/七「规则初筛 + Defuddle」：密度法挑正文容器，只把该子树交给 Defuddle
+ * 方案六「规则初筛 + Defuddle」：密度法挑正文容器，只把该子树交给 Defuddle
  *
  * 动机：Readability 最贵的一步是克隆整页 DOM 并对全文打分。先把范围压到正文容器，
  *   克隆量往往只剩几分之一，理论上能在保留清洗能力的同时大幅降耗时。
- * 第二百零一次（用户："诊断窗口增添一项"）：opts.markdown=true 时 Defuddle 以
- *   markdown 输出 content（喂 LLM 更省 token 的候选形态），供诊断窗对比——
- *   markdown 是纯文本，不走 htmlToLineText（那是对 HTML 块结构的还原）。
- * @param {{markdown?: boolean}} [opts] markdown=true 时 content 为 Markdown 文本
- * @returns {Promise<{text:string,title:string,chars:number,cloneMs:number,parseMs:number,how:string,hit:string,wordCount:number,markdown:boolean}>}
+ * 2026-09-08（用户裁定"defuddle 不需要 markdown"）：Markdown 分支随 defuddle-full.js
+ *   一并移除，恒用 core 构建输出 HTML→行文本。
+ * @returns {Promise<{text:string,title:string,chars:number,cloneMs:number,parseMs:number,how:string,hit:string,wordCount:number}>}
  */
-export async function extractRulesDefuddleText(opts) {
-  const md = !!(opts && opts.markdown);
-  // 第二百零四次：Markdown 转换只在 full 构建（core 包 markdown:true 原样吐 HTML，用户实测）
-  const Defuddle = md ? await loadDefuddleFull() : await loadDefuddle();
+export async function extractRulesDefuddleText() {
+  const Defuddle = await loadDefuddle();
   const pick = pickContentRoot();
 
   const t0 = performance.now();
@@ -666,15 +677,12 @@ export async function extractRulesDefuddleText(opts) {
   const cloneMs = performance.now() - t0;
 
   const t1 = performance.now();
-  const parsed = new Defuddle(doc, { markdown: md }).parse();
+  const parsed = new Defuddle(doc).parse();
   const result = (parsed && typeof parsed.then === 'function') ? await parsed : parsed;
   const parseMs = performance.now() - t1;
 
-  // HTML 模式：清洗后的 HTML 按块级元素补换行取纯文本（第一百九十九次）；
-  // Markdown 模式：content 本身即 Markdown 文本，原样采用。
-  const raw = (result && result.content)
-    ? (md ? String(result.content) : htmlToLineText(result.content))
-    : '';
+  // HTML 按块级元素补换行取纯文本（第一百九十九次）
+  const raw = (result && result.content) ? htmlToLineText(result.content) : '';
   const text = raw.split(/\n+/).map((s) => s.replace(/\s+/g, ' ').trim()).filter((s) => s.length >= 2).join('\n');
   return {
     text,
@@ -685,8 +693,7 @@ export async function extractRulesDefuddleText(opts) {
     strip,
     how: pick.how,
     hit: pick.hit,
-    wordCount: (result && typeof result.wordCount === 'number') ? result.wordCount : 0,
-    markdown: md
+    wordCount: (result && typeof result.wordCount === 'number') ? result.wordCount : 0
   };
 }
 
@@ -941,27 +948,8 @@ export async function measureMainTextExtractors() {
     out.plans.push({ name: 'Defuddle（密度选容器+子树克隆喂入）', error: out.defuddleHybridError });
   }
 
-  // 方案七：Defuddle Markdown（第二百零一次用户："诊断窗口增添一项"）——
-  //   同方案六的喂法，仅 markdown:true：content 直接输出 Markdown，
-  //   评估"喂 LLM 省 token"形态用；主链路暂仍取 HTML→行文本。
-  const h0 = performance.now();
-  try {
-    const h = await extractRulesDefuddleText({ markdown: true });
-    out.defuddleMdMs = performance.now() - h0;
-    out.defuddleMdChars = h.chars;
-    out.plans.push({
-      name: 'Defuddle Markdown（同方案六·markdown 输出）',
-      ms: out.defuddleMdMs,
-      chars: h.chars,
-      note: '克隆 ' + h.cloneMs.toFixed(0) + ' + 解析 ' + h.parseMs.toFixed(0) + ' ms ｜ ' + out.defuddleHybridHit,
-      preview: h.text.slice(0, 300),
-      full: h.text
-    });
-  } catch (e) {
-    out.defuddleMdMs = performance.now() - h0;
-    out.defuddleMdError = String((e && e.message) || e);
-    out.plans.push({ name: 'Defuddle Markdown（同方案六·markdown 输出）', error: out.defuddleMdError });
-  }
+  // 2026-09-08（用户裁定"defuddle 不需要 markdown"）：方案七 Defuddle Markdown
+  //   对比项随 defuddle-full.js 一并移除；方案六（上方无参调用）不受影响。
 
   // 当前实际送给 AI 的正文（用户要能核对"上下文到底装了什么"）
   try {
@@ -1068,6 +1056,8 @@ function renderHintTiming(esc, ms) {
     ['hint:walkEnd', 'TreeWalker 遍历结束'],
     ['hint:firstHighlight', '★首个高亮出现（用户看见提示）'],
     ['hint:firstAnn', '★首条侧注释出现'],
+    ['hint:ranksReady', '词频先行就绪（分阶段 Stage 1，只认 rank）'],
+    ['hint:ranksRescan', '词频先行重扫（高亮先出，tags/lemma 随后补）'],
     ['hint:dictReady', '词典就绪'],
     ['hint:dictRescan', '词典就绪后重扫'],
     ['hint:scanDone', '本轮扫描全部批次完成']

@@ -1,11 +1,16 @@
 # ===== 可重复产出 / 分发（构建脚本可再生成，不入库）=====
 dist/
 dist-firefox/
+dist-min/
+dist-obf/
+dist-firefox-min/
+dist-firefox-obf/
 *.zip
 *.7z
 
 # ===== 日志（change.log 等运行/变更日志）=====
 logs/
+change.log
 
 # ===== 文档（不入库；源码注释与 docs/ 均为文档）=====
 docs/
@@ -21,5 +26,7 @@ __pycache__/
 *.pyc
 .freebuff/
 .zcode/
+# Edge 上传脚本本地凭据（API Key，绝不入库）
+scripts/edge_upload.local.json
 Thumbs.db
 .DS_Store

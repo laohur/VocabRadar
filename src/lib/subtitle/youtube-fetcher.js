@@ -103,7 +103,7 @@ let _pageScriptReady = false;
  *   - Chrome/Edge：page-fetch.js 已由 manifest 声明式注入（world:MAIN +
  *     document_start），本函数**不会重复装补丁**（页面侧 __beaverPageFetchInjected 去重），
  *     只负责建立本世界的 message 监听、PING 补问 READY、以及回查页面侧早期缓存。
- *   - Firefox：MV3 不支持 world:"MAIN"，build.py 剥离该条 → 仍靠此处 <script src> 懒注入。
+ *   - Firefox：MV3 不支持 world:"MAIN"，build.mjs 剥离该条 → 仍靠此处 <script src> 懒注入。
  * 仅执行一次（_pageScriptInjected 标记）。
  */
 function injectPageScript() {
@@ -908,7 +908,7 @@ function getYtCaptionInnertube() {
   }
   if (!_ytCaptionInnertube) {
     _ytCaptionInnertube = (async () => {
-      const mod = await import(chrome.runtime.getURL('src/lib/vendor/youtubei/web.bundle.min.js'));
+      const mod = await import(chrome.runtime.getURL('src/lib/vendor/youtubei.web.bundle.min.js'));
       const { Innertube } = mod;
       return await Innertube.create({ retrieve_player: false });
     })().catch((e) => { _ytCaptionInnertube = null; throw e; });

@@ -1,0 +1,10 @@
+{
+  "extName": {
+    "message": "VocabRadar — Neue Wörter in Video und Web",
+    "description": "Name der Erweiterung im Browser und im Store."
+  },
+  "extDesc": {
+    "message": "Finde deine unbekannten Wörter: YouTube/Bilibili-Videos, jede Webseite, dazu KI-Chat. Keine Registrierung.",
+    "description": "Beschreibung: eigene neuen Wörter, Video und Web, KI-Chat, keine Registrierung."
+  }
+}

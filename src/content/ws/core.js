@@ -328,6 +328,10 @@ async function loadState() {
 export function getBlockText(block) {
   const parts = [];
   const BLOCK_TAGS = new Set(['P','DIV','LI','TD','TH','H1','H2','H3','H4','H5','H6','BLOCKQUOTE','DD','DT','CAPTION','FIGCAPTION','ARTICLE','SECTION','MAIN','TR','UL','OL','TABLE','BR']);
+  // 2026-09-02 短行合并修复：行内短句（如 <span>短行</span><span>短行</span>）在同一块内
+  //   旧逻辑仅对 BLOCK_TAGS 补换行，行内 span 之间只补空格，导致"多短行→一长句"。
+  //   新增：同父容器下的不同行内子元素视作换行分隔，保持短行独立。
+  const INLINE_TAGS = new Set(['SPAN','B','I','EM','STRONG','A','FONT','U','S','SUP','SUB','CODE','MARK','SMALL','BIG','LABEL','Q','CITE','ABBR','TIME','VAR','SAMP','KBD']);
   const walker = document.createTreeWalker(block, NodeFilter.SHOW_TEXT, {
     acceptNode(node) {
       if (!node.textContent || !node.textContent.trim()) return NodeFilter.FILTER_REJECT;
@@ -348,18 +352,50 @@ export function getBlockText(block) {
       return NodeFilter.FILTER_ACCEPT;
     }
   });
+  let lastEl = null;
   while (walker.nextNode()) {
     const node = walker.currentNode;
     let txt = node.textContent || '';
     const el = node.parentElement;
+    let isNewlineBlock = false;
     // 块级元素前后补换行（与浏览器渲染一致）
     if (el && BLOCK_TAGS.has(el.tagName)) {
       txt = '\n' + txt + '\n';
+      isNewlineBlock = true;
+    } else if (lastEl && el !== lastEl) {
+      // 同一父容器下、不同行内子元素 → 视作换行（短行独立）
+      try {
+        const lastParent = lastEl.parentElement;
+        const curParent = el.parentElement;
+        if (lastParent && curParent && lastParent === curParent && INLINE_TAGS.has(lastEl.tagName) && INLINE_TAGS.has(el.tagName)) {
+          if (txt && !/^[\s\u00a0\u3000\n]/.test(txt)) {
+            txt = '\n' + txt;
+            isNewlineBlock = true;
+          }
+        } else {
+          // 嵌套的行内格式（如 hello <b>world</b>）不视作换行
+          const isNested = (lastEl.contains && el.contains) ? (lastEl.contains(el) || el.contains(lastEl)) : false;
+          if (!isNested) {
+            try {
+              const csLast = getComputedStyle(lastEl);
+              const csCur = getComputedStyle(el);
+              const isBlock = (d) => d === 'block' || d === 'list-item' || d === 'table' || d === 'flex' || d === 'grid' || d === 'table-cell' || d === 'table-row';
+              if (isBlock(csLast.display) || isBlock(csCur.display)) {
+                if (txt && !/^[\s\u00a0\u3000\n]/.test(txt)) {
+                  txt = '\n' + txt;
+                  isNewlineBlock = true;
+                }
+              }
+            } catch (_) {}
+          }
+        }
+      } catch (_) {}
     }
-    if (parts.length > 0) {
+    lastEl = el;
+    if (!isNewlineBlock && parts.length > 0) {
       const prev = parts[parts.length - 1];
       // 相邻文本之间无空白 → 补空格，避免生词黏连
-      if (prev && txt && !/[\s\u00a0\u3000]$/.test(prev) && !/^[\s\u00a0\u3000]/.test(txt)) {
+      if (prev && txt && !/[\s\u00a0\u3000\n]$/.test(prev) && !/^[\s\u00a0\u3000\n]/.test(txt)) {
         parts.push(' ');
       }
     }

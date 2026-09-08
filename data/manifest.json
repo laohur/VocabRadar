@@ -4,7 +4,7 @@
   "name": "__MSG_extName__",
   "version": "0.2.0",
   "description": "__MSG_extDesc__",
-  "permissions": ["storage", "activeTab", "cookies", "contextMenus", "offscreen", "audioCapture", "videoCapture", "scripting"],
+  "permissions": ["storage", "alarms", "activeTab", "cookies", "contextMenus", "offscreen", "audioCapture", "videoCapture", "scripting"],
   "host_permissions": [
     "*://*.bilibili.com/*",
     "*://*.youtube.com/*",
@@ -56,16 +56,21 @@
       "matches": ["<all_urls>"],
       "js": ["src/content/dict-prefetch.js"],
       "run_at": "document_start"
+    },
+    {
+      "matches": ["<all_urls>"],
+      "js": ["src/content/vocabradar-bridge.js"],
+      "run_at": "document_idle"
     }
   ],
   "web_accessible_resources": [
     {
-      "resources": ["src/data/*", "src/data/wordfreq/*", "src/data/icons/*", "src/lib/*", "src/lib/vendor/*", "src/lib/vendor/tessdata/*", "src/content/*", "src/content/chunks/*", "src/offscreen/*", "src/guide/*"],
+      "resources": ["src/data/*", "src/data/icons/*", "src/lib/*", "src/lib/vendor/*", "src/content/*", "src/content/chunks/*", "src/offscreen/*", "src/guide/*"],
       "matches": ["<all_urls>"]
     }
   ],
   "content_security_policy": {
-    "extension_pages": "script-src 'self' 'wasm-unsafe-eval'; object-src 'self'; media-src 'self' blob:; connect-src 'self' https://cdn.jsdelivr.net https://unpkg.com https://huggingface.co https://hf-mirror.com https://*.xenova.com https://*.hf.co https://api.mymemory.translated.net https://translate.googleapis.com https://fanyi.youdao.com https://fanyi.baidu.com https://dict.youdao.com https://libretranslate.com https://api.argos-translate.com https://translate.terraprint.co https://www.bing.com https://lingva.ml https://translate.plausibility.cloud https://lingva.lunar.icu https://api.groq.com https://openrouter.ai https://generativelanguage.googleapis.com https://api.openai.com https://api.deepseek.com https://api.anthropic.com https://text.pollinations.ai https://oai.endpoints.kepler.ai.cloud.ovh.net https://*.endpoints.kepler.ai.cloud.ovh.net"
+    "extension_pages": "script-src 'self' 'wasm-unsafe-eval'; object-src 'self'; media-src 'self' blob:; connect-src 'self' https://cdn.jsdelivr.net https://fastly.jsdelivr.net https://gcore.jsdelivr.net https://tessdata.projectnaptha.com https://unpkg.com https://huggingface.co https://hf-mirror.com https://*.xenova.com https://*.hf.co https://api.mymemory.translated.net https://translate.googleapis.com https://fanyi.youdao.com https://fanyi.baidu.com https://dict.youdao.com https://libretranslate.com https://api.argos-translate.com https://translate.terraprint.co https://www.bing.com https://lingva.ml https://translate.plausibility.cloud https://lingva.lunar.icu https://api.groq.com https://openrouter.ai https://generativelanguage.googleapis.com https://api.openai.com https://api.deepseek.com https://api.anthropic.com https://text.pollinations.ai https://oai.endpoints.kepler.ai.cloud.ovh.net https://*.endpoints.kepler.ai.cloud.ovh.net"
   },
   "browser_specific_settings": {
     "gecko": {

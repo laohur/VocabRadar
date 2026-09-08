@@ -11,7 +11,7 @@
  *      之前就位，播放器自己请求的每条 /api/timedtext 才会被记下。
  *      旧实现是**懒注入**（用户点取字幕时才 <script src> 注入），此时播放器早已
  *      发完请求，补丁装上等于空网；而播放器对已加载轨道不会重复请求 → 白等 8 秒。
- *   2. Firefox：MV3 不支持 content_scripts[].world="MAIN"，build.py 会剥离该条；
+ *   2. Firefox：MV3 不支持 content_scripts[].world="MAIN"，build.mjs 会剥离该条；
  *      仍走 youtube-fetcher.js injectPageScript() 的 <script src> 懒注入路径。
  *   两条路径并存时靠 window.__beaverPageFetchInjected 去重，只装一次补丁。
  *

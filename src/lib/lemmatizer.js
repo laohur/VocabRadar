@@ -26,7 +26,6 @@
 // 词典是缓冲层：查过的词缓存下来，重复查词不再发消息
 const _wordCache = new Map();
 const WORD_CACHE_LIMIT = 2000;
-
 /**
  * 词形还原（同步，仅读逐词缓存）
  * 未缓存（该词尚未经 SW 查询）时返回原词；调用方如需该词原形应先 lemmatizeOne()
@@ -133,4 +132,58 @@ export function getDiagState() {
     cachedWords: _wordCache.size,
     loadedLangs: []
   };
+}
+
+// 同族反查缓存（2026-09-04）：key=lemmalower|lang|limit → words[]（页面会话内复用，
+// SW 侧另有整表扫描缓存；两层都不命中才真正扫表）
+const _familyCache = new Map();
+const FAMILY_CACHE_LIMIT = 200;
+
+/**
+ * 查某原形的同族词（异步，经 SW 反向扫描词形整表）
+ * @param {string} lemma 原形（小写）
+ * @param {string} [lang='en'] 语言代码
+ * @param {number} [limit=20] 返回上限
+ * @returns {Promise<string[]>} 同族词数组（失败回空数组，不抛错）
+ */
+export async function lemmaFamily(lemma, lang = 'en', limit = 20) {
+  const target = String(lemma || '').toLowerCase();
+  if (!target) return [];
+  const key = target + '|' + (lang || 'en') + '|' + (limit || 20);
+  const hit = _familyCache.get(key);
+  if (hit) return hit;
+  const words = await lemmaFamilyViaMessage(target, lang || 'en', limit || 20);
+  const out = Array.isArray(words) ? words : [];
+  if (_familyCache.size >= FAMILY_CACHE_LIMIT) _familyCache.clear();
+  _familyCache.set(key, out);
+  return out;
+}
+
+// 同族反查消息：SW 侧反向扫描整表（首次可能读 IDB/下载，超时给 30s，与 lemmatizeOne 同口径）
+function lemmaFamilyViaMessage(lemma, lang, limit) {
+  return new Promise((resolve) => {
+    try {
+      if (typeof chrome === 'undefined' || !chrome.runtime || !chrome.runtime.sendMessage) {
+        resolve([]);
+        return;
+      }
+      let settled = false;
+      const timer = setTimeout(() => {
+        if (!settled) { settled = true; resolve([]); }
+      }, 30000);
+      try {
+        chrome.runtime.sendMessage({ type: 'LEMMATIZE_FAMILY', lemma, lang, limit }, (r) => {
+          if (settled) return;
+          settled = true;
+          clearTimeout(timer);
+          if (chrome.runtime.lastError) { resolve([]); return; }
+          resolve(r && r.ok && Array.isArray(r.words) ? r.words : []);
+        });
+      } catch (sendErr) {
+        if (!settled) { settled = true; clearTimeout(timer); resolve([]); }
+      }
+    } catch (e) {
+      resolve([]);
+    }
+  });
 }

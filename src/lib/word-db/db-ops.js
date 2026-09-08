@@ -218,7 +218,7 @@ export async function idbClearAll() {
   }
 }
 
-export async function idbBulkWrite(lang, entries, expected) {
+export async function idbBulkWrite(lang, entries, expected, dataVersion) {
   const db = await getDB();
   return new Promise((resolve, reject) => {
     const tx = db.transaction([S_RANK, S_TAGS, S_META], 'readwrite');
@@ -229,12 +229,41 @@ export async function idbBulkWrite(lang, entries, expected) {
       if (e.word === '__built__') {
         // 第一百四十次（用户裁定）：meta 记录**实际值** expected（本次构建的真实词条数）
         // --完整性校验用它，不用任何拍脑袋阈值。
-        stM.put(Object.assign({ lang, built: true }, Number.isFinite(expected) ? { expected: Math.round(expected) } : {}));
+        // 2026-09-03 源头过滤：meta 记录 dataVersion（= manifest.version，预处理数据的
+        // 数据格式版本）--projection.js 比对不一致即判旧数据，清库全量重建
+        //（upsert 不清库，过滤后旧词典脏词永远清不掉，必须版本比对触发显式清库）。
+        stM.put(Object.assign({ lang, built: true },
+          Number.isFinite(expected) ? { expected: Math.round(expected) } : {},
+          Number.isFinite(dataVersion) ? { dataVersion: Math.round(dataVersion) } : {}));
         continue;
       }
       const k = makeKey(lang, e.word);
       if (e.rank !== undefined) stR.put({ k, lang, v: e.rank });
       if (e.tags !== undefined) stT.put({ k, lang, v: e.tags });
+    }
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error);
+  });
+}
+
+/**
+ * 批量写入释义（内置翻译包装载用，与 idbBulkWrite 同型：单事务逐块写）
+ * 反思（2026-09-04）：小程序内置英中翻译包（VocabRadar/preprocess 产出，ECDICT+LLM）
+ *   接入扩展——不走内存直查（违反"业务只从词典读"），而由装载函数经本函数一次性
+ *   写入 d_trans 分表（translationLang='zh' 存 tlang 字段），之后 translator 首层
+ *   词典缓存即命中。失败只抛错不打标记（调用方 bulkWriteTranslations 负责中止语义）。
+ * @param {string} lang 源语言（如 'en'）
+ * @param {Array<{word:string,translation:string}>} entries 释义条目（translation 已是定稿字符串）
+ * @param {string} [translationLang] 释义语言（存 tlang，供 translator 按语言对校验）
+ */
+export async function idbBulkTrans(lang, entries, translationLang) {
+  const db = await getDB();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction([S_TRANS], 'readwrite');
+    const st = tx.objectStore(S_TRANS);
+    for (const e of (entries || [])) {
+      if (!e || !e.word || typeof e.translation !== 'string' || !e.translation) continue;
+      st.put({ k: makeKey(lang, e.word), lang, v: e.translation, tlang: translationLang || null });
     }
     tx.oncomplete = () => resolve();
     tx.onerror = () => reject(tx.error);
@@ -302,22 +331,58 @@ export async function idbGetLangProjection(lang) {
   ]);
   // 第一百四十次：读 meta（built 标记 + expected 实际值）
   _t0 = performance.now();   // 第一百九十次：meta 段计时
-  const meta = await readMeta();
+  const meta = await readMetaFor(db, lang);
   _it.meta = Math.round(performance.now() - _t0);
   if (meta) built = !!meta.built;
   const metaExpected = (meta && Number.isFinite(meta.expected)) ? meta.expected : 0;
+  // 2026-09-03 源头过滤：带出 dataVersion（构建时的预处理数据版本，0=旧版构建未记录）--
+  // projection.js 与 manifest.version 比对，不一致 ⇒ 旧词典数据过期，清库全量重建。
+  const metaDataVersion = (meta && Number.isFinite(meta.dataVersion)) ? meta.dataVersion : 0;
   // 带出实际值--ranksCount=库内实数，expected=构建时记录的实际词条数。
-  return { built, ranks, tags, lemmas, ranksCount: Object.keys(ranks).length, expected: metaExpected };
-  function readMeta() {
-    return new Promise((res) => {
-      try {
-        const tx = db.transaction(S_META, 'readonly');
-        const rq = tx.objectStore(S_META).get(lang);
-        rq.onsuccess = () => res(rq.result || null);
-        rq.onerror = () => res(null);
-      } catch (e) { res(null); }
-    });
+  return { built, ranks, tags, lemmas, ranksCount: Object.keys(ranks).length, expected: metaExpected, dataVersion: metaDataVersion };
+}
+
+/** 读 meta 表单语言记录（idbGetLangProjection 与 idbGetRanksProjection 共用） */
+function readMetaFor(db, lang) {
+  return new Promise((res) => {
+    try {
+      const tx = db.transaction(S_META, 'readonly');
+      const rq = tx.objectStore(S_META).get(lang);
+      rq.onsuccess = () => res(rq.result || null);
+      rq.onerror = () => res(null);
+    } catch (e) { res(null); }
+  });
+}
+
+/**
+ * 只读 ranks 投影（分阶段投影 Stage 1，首屏高亮只认 rank）
+ * 反思（2026-09-04）：整投影含 ranks+tags+lemmas 三表并行扫＋2MB 消息传输，
+ *   首屏高亮却只用 rank。拆出 rank-only 快通道：meta＋d_rank 单表一次 getAll，
+ *   约整投影 1/3 数据量。tags/lemma 随后走整投影合并。
+ * @param {string} lang 语言代码
+ * @returns {Promise<{built:boolean,ranks:object,ranksCount:number,expected:number,dataVersion:number}>}
+ */
+export async function idbGetRanksProjection(lang) {
+  const db = await getDB();
+  const tx = db.transaction(S_RANK, 'readonly');
+  const idx = tx.objectStore(S_RANK).index('by-lang');
+  const rows = await new Promise((resolve, reject) => {
+    try {
+      const req = idx.getAll(IDBKeyRange.only(lang));
+      req.onerror = () => reject(req.error);
+      req.onsuccess = () => resolve(req.result || []);
+    } catch (e) { reject(e); }
+  });
+  const ranks = {};
+  for (let i = 0; i < rows.length; i++) {
+    const p = splitKey(rows[i].k);
+    if (p) ranks[p.word] = rows[i].v;
   }
+  const meta = await readMetaFor(db, lang);
+  const built = !!(meta && meta.built);
+  const expected = (meta && Number.isFinite(meta.expected)) ? meta.expected : 0;
+  const dataVersion = (meta && Number.isFinite(meta.dataVersion)) ? meta.dataVersion : 0;
+  return { built, ranks, ranksCount: Object.keys(ranks).length, expected, dataVersion };
 }
 
 // === 词典整表缓存（dictCache store） ===

@@ -26,9 +26,13 @@ import { formatTime, copyToClipboard, flashButton, escapeHtml, escapeReg, cssEsc
 import { pickRandomLinesForComment, findMainCommentContainer, expandCommentBox, fillCommentInput, scrollMinIntoView } from './comment-fill.js';
 import { autoExpandOnce, requestSyncHeightOnce } from './sidebar-layout.js';
 import { getAnnotations, rankToStage, resetDiag } from '../../lib/annotator.js';
+import { lemmaFamily } from '../../lib/lemmatizer.js';
 import { getPhonetic } from '../../lib/phonetics.js';
 import { t } from '../../lib/i18n.js';
 import { isBalancedParens, pickCleanShortTrans } from '../../lib/dict-clean.js';
+// 2026-09-04（原形折叠）：diverse-lemmas 语言名单（纯数据无依赖），用于判定
+// 当前目标语是否有词形还原覆盖；无覆盖语种不显示常显原形（中/日原形即本身，无意义）。
+import { LANGUAGES } from '../../lib/vendor/diverse-lemmas/languages.js';
 import { addSubtitle as overlayAddSubtitle } from '../subtitle-overlay.js';
 // 第一百七十一次：视频侧栏底部对话按钮 —— 对话面板唯一实现在 lib/chat.js
 import { openChatPanel } from '../../lib/chat.js';
@@ -308,10 +312,140 @@ function renderWordPanel() {
 
 /**
  * 创建单条生词表条目 DOM 元素
- * @param {{word:string,rank:number|null,tags:string[],translations:string[],pending?:boolean}} a
+ *
+ * 反思（2026-09-04）：原形折叠三件套（lemmaDisplayOf/supportsLemmaLang/toggleLemmaGroup
+ * 与下方 createWordPanelItem 内渲染配合）。目标语言缓存不从门面 video-sidebar.js
+ * 导入 getVideoLearnLang，避免门面↔子模块循环 import；与 _videoLearnLang 同源
+ * （storage learnLanguage），各自监听跟随。
+ */
+let _renderLearnLang = 'en';
+// 2026-09-04（原形折叠诊断）：首个词表条目渲染时打一行门闸状态（之后不再打），
+// 用户反馈"没见着原形/折叠按钮"时凭此行区分：扩展未更新 / 语种无覆盖 / 其他。
+let _lemmaDiagDone = false;
+try {
+  if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.local) {
+    chrome.storage.local.get({ learnLanguage: 'en' }, (res) => {
+      if (res && typeof res.learnLanguage === 'string' && res.learnLanguage) _renderLearnLang = res.learnLanguage;
+    });
+    if (chrome.storage.onChanged) {
+      chrome.storage.onChanged.addListener((changes, area) => {
+        if (area === 'local' && changes.learnLanguage && typeof changes.learnLanguage.newValue === 'string' && changes.learnLanguage.newValue) {
+          _renderLearnLang = changes.learnLanguage.newValue;
+        }
+      });
+    }
+  }
+} catch (_) { /* 非扩展上下文默认 en */ }
+
+/**
+ * 目标语是否有词形还原覆盖（diverse-lemmas LANGUAGES 名单为准）
+ * @param {string} lang 语言码
+ * @returns {boolean}
+ */
+function supportsLemmaLang(lang) {
+  if (!LANGUAGES) return false;
+  return Object.prototype.hasOwnProperty.call(LANGUAGES, String(lang || '').toLowerCase());
+}
+
+/**
+ * 条目展示用原形：有还原结果用还原值，否则用词面小写（原词即原形也说）
+ * 反思（2026-09-04）：用户反馈"首字母还在大写"——历史 IDB 存在表层大小写原形坏档，
+ *   此处统一小写（词典惯例），归组键本就小写不受影响。
+ * @param {{word:string,lemma?:string|null}} a 注释条目
+ * @returns {string} 原形文本（小写键形式）
+ */
+function lemmaDisplayOf(a) {
+  const w = String((a && a.word) || '');
+  const l = String((a && a.lemma) || '').trim();
+  return (l || w.toLowerCase() || w).toLowerCase();
+}
+
+/**
+ * 同原形归组键（与展示值同口径：lemma 缺失即词面小写）
+ * @param {{word:string,lemma?:string|null}} a 注释条目
+ * @returns {string}
+ */
+function lemmaKeyOf(a) {
+  return lemmaDisplayOf(a).toLowerCase();
+}
+
+/**
+ * 原形折叠开关（导出给门面 video-sidebar.js 的点击委托调用）
+ *
+ * 反思（2026-09-04）：用户要求"展开的时候再查"——归组查询发生在点击展开瞬间。
+ * 反思（2026-09-04 二轮）：展开改纯词单行——此前逐行列词＋释义，但上下文译文常 pending、
+ *   家族词多无缓存译文，空释义行像 bug。现同行只列词（`, ` 分隔，块底色，不斜体）：
+ *   ①上下文成员（_allAnnotations 现场值，当前词置顶加粗）；②SW 反查整表补齐家族
+ *   （lemmaFamily 只要词不要详情，又快一截），去重后追加。用户问"为啥只有大写没有
+ *   小写"——去重键大小写不敏感，大写表层会折叠掉小写，展示层统一小写（词典惯例）。
+ * @param {HTMLElement} itemEl 生词表条目 div.beaver-word-item
+ */
+export function toggleLemmaGroup(itemEl) {
+  if (!itemEl || !itemEl.isConnected) return;
+  const box = itemEl.querySelector('.beaver-w-lemma-group');
+  const btn = itemEl.querySelector('.beaver-w-lemma-toggle');
+  if (!box || !btn) return;
+  // 已展开 → 收起并清空（下次展开重新查，保证与最新数据一致）
+  if (box.style.display !== 'none') {
+    box.style.display = 'none';
+    box.innerHTML = '';
+    btn.classList.remove('open');
+    btn.title = t('th.lemmaExpand');
+    return;
+  }
+  const key = String(box.dataset.lemma || '').toLowerCase();
+  if (!key) return;
+  const seen = new Set();
+  const words = [];
+  const pushWord = (w) => {
+    const s = String(w || '').trim().toLowerCase();
+    if (!s || seen.has(s)) return;
+    seen.add(s);
+    words.push(s);
+  };
+  // 当前词置顶（展示统一小写）
+  pushWord(itemEl.dataset.word || '');
+  for (const m of _allAnnotations) {
+    if (lemmaKeyOf(m) !== key) continue;
+    pushWord(m.word);
+  }
+  if (words.length === 0) return;
+  const selfLower = words[0];
+  box.innerHTML = words.map((w) => (w === selfLower ? `<b>${escapeHtml(w)}</b>` : escapeHtml(w))).join(', ')
+    + `<span class="beaver-w-lemma-more">, …</span>`;
+  box.style.display = '';
+  btn.classList.add('open');
+  btn.title = t('th.lemmaCollapse');
+  // 同族补齐（异步）：整表家族去重后追加；失败/无新增时吃掉占位
+  lemmaFamily(key, _renderLearnLang, 20).then((fam) => {
+    if (!box.isConnected || box.style.display === 'none') return;
+    const ph = box.querySelector('.beaver-w-lemma-more');
+    const extra = [];
+    for (const w of (fam || [])) {
+      const s = String(w || '').trim().toLowerCase();
+      if (!s || seen.has(s)) continue;
+      seen.add(s);
+      extra.push(s);
+    }
+    const html = extra.map((w) => escapeHtml(w)).join(', ');
+    if (ph) ph.outerHTML = extra.length > 0 ? ', ' + html : '';
+    else if (extra.length > 0) box.insertAdjacentHTML('beforeend', ', ' + html);
+  }).catch(() => {
+    const ph = box.querySelector('.beaver-w-lemma-more');
+    if (ph) ph.remove();
+  });
+}
+
+/**
+ * 创建单条生词表条目 DOM 元素
+ * @param {{word:string,rank:number|null,tags:string[],translations:string[],pending?:boolean,lemma?:string|null}} a
  * @returns {HTMLDivElement}
  */
 function createWordPanelItem(a) {
+  if (!_lemmaDiagDone) {
+    _lemmaDiagDone = true;
+    try { log(`原形折叠门闸: learnLang=${_renderLearnLang} 有覆盖=${supportsLemmaLang(_renderLearnLang)} 首词=${(a && a.word) || ''} 原形=${lemmaDisplayOf(a)}`); } catch (_) {}
+  }
   const div = document.createElement('div');
   div.className = 'beaver-word-item' + (a.pending ? ' pending' : '');
   // 第一百七十七次：data-word 统一存规范化键（trim+小写），与 appendWordPanelItems
@@ -341,9 +475,21 @@ function createWordPanelItem(a) {
   html += ` <button class="beaver-w-speak" data-word="${escapeHtml(a.word || '')}" title="🔊">🔊</button><span class="beaver-w-phonetic" data-word="${escapeHtml(a.word || '')}"></span>`;
   // 词形（2026-08-14 第五十四次）：词汇表显示词形还原原形（running→run）。
   //   与悬浮提示/右键面板的 lemma-row 一致，仅当原形不同于词面时显示。
-  const lemma = (a.lemma || '').trim();
-  if (lemma && lemma.toLowerCase() !== String(a.word || '').toLowerCase()) {
-    html += ` <span class="beaver-w-lemma">${escapeHtml(t('th.lemma'))}: ${escapeHtml(lemma)}</span>`;
+  // 反思（2026-09-04）：用户要求"词形还原即便原形也要说，右加上折叠符号，
+  //   若展开列出所有同原词形的单词，展开的时候再查"。
+  //   词形还原有覆盖的语种（diverse-lemmas LANGUAGES 名单，如 en/de/fr 有，zh/ja 无）常显
+  //   原形 chip＋折叠（toggleLemmaGroup，懒查）；无覆盖语种（中/日等）沿用旧口径（仅原形≠词面时显示）。
+  // 反思（2026-09-04）：用户要求 chip 化——"从Lemma: word▶ 改为斜体+底色，
+  //   点击展开，移除前后缀"。原形 chip 即按钮（斜体＋底色见 CSS），无"原形："前缀
+  //   无 ▶/▼ 后缀，展开态靠 .open 换底色区分，title 保留文字说明。
+  const lemmaText = lemmaDisplayOf(a);
+  if (supportsLemmaLang(_renderLearnLang)) {
+    html += ` <button class="beaver-w-lemma-toggle" data-lemma="${escapeHtml(lemmaText)}" title="${escapeHtml(t('th.lemmaExpand'))}">${escapeHtml(lemmaText)}</button><div class="beaver-w-lemma-group" data-lemma="${escapeHtml(lemmaText)}" style="display:none"></div>`;
+  } else {
+    const lemma = (a.lemma || '').trim();
+    if (lemma && lemma.toLowerCase() !== String(a.word || '').toLowerCase()) {
+      html += ` <span class="beaver-w-lemma">${escapeHtml(t('th.lemma'))}: ${escapeHtml(lemma)}</span>`;
+    }
   }
   html += ` <span class="beaver-w-trans">${transText}</span>`;
   if (tagsText) html += ` <span class="beaver-w-tags">${tagsText}</span>`;
@@ -772,7 +918,7 @@ function fillSlotAnnotations(slot, sub, anns) {
     //   后续命中 _cache Map 直接返回。await 期间 line 可能被 fillSlotAnnotations 重绘移除，
     //   故 await 后校验 line.isConnected，避免向已脱离 DOM 的 span 写入（无效且浪费）。
     if (_detailMode && a.word) {
-      fillPhoneticAsync(line, a.word);
+      fillPhoneticAsync(line, a.word, sub && sub.text);
     } else {
       console.log('[VocabRadar][video-sidebar] 跳过音标填充: _detailMode=' + _detailMode + ' word="' + (a.word || '') + '"');
     }
@@ -792,13 +938,15 @@ function fillSlotAnnotations(slot, sub, anns) {
  * @param {HTMLElement} line 详细注释行 .beaver-ann-line
  * @param {string} word 单词
  */
-async function fillPhoneticAsync(line, word) {
+async function fillPhoneticAsync(line, word, context) {
   const span = line.querySelector('.beaver-ann-phonetic');
   if (!span) return;
   // 加载中占位符（让用户知道注音正在加载）
   span.textContent = '…';
   try {
-    const phon = await getPhonetic(word);
+    // 反思（2026-09-04）：日文连带上下文查注音——字幕整句透传，ja 包内句 parse 取 token 读法；
+    //   非 ja 语言忽略 context 参数，行为不变。
+    const phon = await getPhonetic(word, undefined, context);
     // await 期间 line 可能已被重绘移除（fillSlotAnnotations 重建 annContainer.innerHTML）
     if (!line.isConnected) {
       console.log('[VocabRadar][phonetics] line 已断开, 丢弃结果: "' + word + '"');
@@ -1009,7 +1157,7 @@ async function buildPanelBody() {
       body += `${formatAnnotationLine(a)}\n`;
     }
   } else {
-    toast(t('toast.trainNoCopy'));
+    toast(t('toast.learnNoCopy'));
     return null;
   }
   return body;
@@ -1069,14 +1217,14 @@ export async function onChatClickVs() {
 }
 
 // 工具：注释是否有有效译文（非空且非空白）
-// 用于评论/弹幕/复制"必须有译文才填"，杜绝"只有前缀"或"单词无释义"
+// 用于评论/复制"必须有译文才填"，杜绝"只有前缀"或"单词无释义"
 function hasTranslation(a) {
   return Array.isArray(a.translations) && a.translations.some((t) => t && String(t).trim());
 }
 
 // 格式化单条注释为文本行：单词 | 释义 | 标签 | 词阶
-// 反思（2026-07-08）：用户要求"单词注释除了释义，还有标签、词阶属性，弹幕评论中也带上"。
-//   旧版弹幕/评论只有"单词 释义"，缺少标签和词阶。统一为完整四段格式。
+// 反思（2026-07-08）：用户要求"单词注释除了释义，还有标签、词阶属性，评论中也带上"。
+//   旧版评论只有"单词 释义"，缺少标签和词阶。统一为完整四段格式。
 //   释义完整不简化（annotator.js 已移除 sim_translate 截断）。
 // 反思（2026-08-03）：用户反馈"视频提示生词表明明一堆，复制或者评论按钮说没有单词"。
 //   根因：复制/评论用 hasTranslation 过滤掉无译文的词，导致词表有词但按钮报"无单词"。
@@ -1163,7 +1311,7 @@ export async function onCommentClick() {
 //   无需墙钟偏移反算。B站路径通过 PCM 偏移精确计算，回退路径通过 video.currentTime 跟踪。
 //   offscreen 启用 return_timestamps=true，返回 chunk 级时间戳，
 //   asr-client 按 chunk 拆分后逐条调用 onText，每条字幕有精确的起止时间。
-//   ASR 结果直接进入 getSubtitlesRef()，复制/OCR/弹幕/评论和 highlightCurrent 自动生效。
+//   ASR 结果直接进入 getSubtitlesRef()，复制/OCR/评论和 highlightCurrent 自动生效。
 //   滑动窗口模式（2026-07-07）：不再直接插入 DOM/_subEntries，只插入 getSubtitlesRef() +
 //   缓存注释。窗口内容由 highlightCurrent 在下次 timeupdate 时自然更新。
 // seg: {start, end, text}（start/end 为视频相对秒数）。

@@ -222,8 +222,37 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     });
     return true;
   }
+  // === G4（2026-09-08）：网页正文提取（网站 Creator 解析编排用） ===
+  // SW fetch 到 HTML 后转发到这里，用 main-text.js 的 extractDefuddleFromHtml 提取正文。
+  // 本文件是 ES module（offscreen.html 以 type="module" 加载），可加载 main-text.js；
+  // main-text 顶层无 DOM 副作用（全为常量/函数定义），offscreen document 提供 DOMParser。
+  // 动态 import：Defuddle/vendor 仅在首次链接解析时加载，ASR 旧路径零影响。
+  if (msg.type === 'OFFSCREEN_EXTRACT_TEXT') {
+    const _extStart = Date.now();
+    console.log('[VocabRadar][offscreen][' + _ts() + '] OFFSCREEN_EXTRACT_TEXT 收到请求, html 长度=' + (msg.html || '').length);
+    extractFromHtml(msg.html, msg.baseUrl).then((r) => {
+      const _extCost = ((Date.now() - _extStart) / 1000).toFixed(2);
+      console.log('[VocabRadar][offscreen][' + _ts() + '] 正文提取完成, 耗时=' + _extCost + 's, 文本长度=' + (r.text || '').length);
+      sendResponse(r);
+    }).catch((e) => {
+      console.warn('[VocabRadar][offscreen][' + _ts() + '] 正文提取失败:', e);
+      sendResponse({ ok: false, error: String(e.message || e) });
+    });
+    return true;
+  }
   return false;
 });
+
+// === G4：网页正文提取（main-text.js 唯一实现的参数化入口） ===
+// 提取结果为空按失败回报（明示，不静默给空文本）——页面可能需要登录或无正文。
+async function extractFromHtml(html, baseUrl) {
+  const mod = await import('../lib/main-text.js');
+  const r = await mod.extractDefuddleFromHtml(html, baseUrl);
+  if (!r || !r.text || !r.text.trim()) {
+    throw new Error('extracted text is empty (page may require login or have no article body)');
+  }
+  return { ok: true, text: r.text, title: r.title || '' };
+}
 
 // === OCR 识别（Tesseract.js）===
 // 反思（2026-07-28）：content script 受页面 CSP 限制无法加载 CDN 脚本，
@@ -239,21 +268,71 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 //   corePath/langPath 指向 chrome-extension:// 本地路径，彻底脱离 CDN 依赖。
 //   语言数据使用 4.0.0_best_int 版本（integer 量化，体积小：eng 2.8MB + chi_sim 1.6MB）。
 //   日志策略：全链路打印（加载、worker 创建、识别、终止），便于诊断问题。
+// 反思（2026-09-07）：tessdata 语言包按用户指令改为多 CDN 回退链加载，本地
+//   vendor/tessdata 已删除（包体 -7.3MB）。回退链按实测可达性排序，前三源为
+//   jsDelivr 同一仓库的多域名镜像（tessdata_fast@4.0.0，裸 .traineddata，gzip:false），
+//   尾源为 tesseract.js 官方 CDN（.traineddata.gz，gzip:true，需解压）：
+//     cdn.jsdelivr.net → fastly.jsdelivr.net → gcore.jsdelivr.net
+//     → tessdata.projectnaptha.com/4.0.0
+//   任一源 createWorker 失败即换下一源，全链失败才向上抛错（日志逐源打印，不静默）。
+//   已知局限：createWorker 失败时其内部半途 worker 无引用可 terminate，可能泄漏一个
+//   空 worker（不阻塞后续重建，如实记录）；完全离线时 OCR 不可用（此前本地包可离线）。
 let _tesseractWorker = null;
 let _tesseractLang = null;
 
+// tessdata CDN 回退链。langPath 与 gzip 必须成对：jsDelivr 镜像是裸 traineddata
+// （文件名 <lang>.traineddata），projectnaptha 是 gzip 包（<lang>.traineddata.gz），
+// 两者的请求文件名与解压行为都不同。
+const TESSDATA_SOURCES = [
+  { name: 'cdn.jsdelivr.net', langPath: 'https://cdn.jsdelivr.net/gh/tesseract-ocr/tessdata_fast@4.0.0', gzip: false },
+  { name: 'fastly.jsdelivr.net', langPath: 'https://fastly.jsdelivr.net/gh/tesseract-ocr/tessdata_fast@4.0.0', gzip: false },
+  { name: 'gcore.jsdelivr.net', langPath: 'https://gcore.jsdelivr.net/gh/tesseract-ocr/tessdata_fast@4.0.0', gzip: false },
+  { name: 'tessdata.projectnaptha.com', langPath: 'https://tessdata.projectnaptha.com/4.0.0', gzip: true },
+];
+
+// 42 语 → Tesseract 语言代码全表（2026-09-08 放开，用户："放开全部 OCR 语言映射"）。
+// tessdata_fast 4.0.0 覆盖全部 42 个 tess 代码，走上方 TESSDATA_SOURCES 的 CDN 回退链
+// 按需拉取。键是 learnLanguage/界面语言代码，值是 tess 代码；与 guide.js 的
+// TESS_LANG_CODES 内容一致（两处同步维护，改动须双向核对）。
+const TESS_LANG_MAP = {
+  ar: 'ara', bg: 'bul', bn: 'ben', ca: 'cat', cs: 'ces', da: 'dan', de: 'deu', el: 'ell',
+  en: 'eng', es: 'spa', fa: 'fas', fi: 'fin', fil: 'fil', fr: 'fra', he: 'heb', hi: 'hin',
+  hu: 'hun', id: 'ind', is: 'isl', it: 'ita', ja: 'jpn', ko: 'kor', lt: 'lit', lv: 'lav',
+  mk: 'mkd', ms: 'msa', nb: 'nor', nl: 'nld', pl: 'pol', pt: 'por', ro: 'ron', ru: 'rus',
+  sh: 'hrv', sk: 'slk', sl: 'slv', sv: 'swe', ta: 'tam', tr: 'tur', uk: 'ukr', ur: 'urd',
+  vi: 'vie', zh: 'chi_sim',
+};
+// 合法 tess 代码白名单（TESS_LANG_MAP 的值域）——校验请求串防任意语言注入 createWorker
+const TESS_VALID_CODES = new Set(Object.values(TESS_LANG_MAP));
+
 /**
- * learnLanguage → Tesseract 语言包
- * 反思（2026-08-16 第六十六次）：OCR 语言随 learnLanguage——本地化数据仅含 eng/chi_sim，
- *   zh* 用 chi_sim，其余一律 eng（单语言识别更快更准）。未知/缺省回落 'eng+chi_sim'（旧行为）。
+ * 归一 OCR 语言请求 → Tesseract 语言串
+ * 反思（2026-08-16 第六十六次）：OCR 语言随 learnLanguage——旧实现只有两档
+ *   （zh 开头→chi_sim，其余→eng），且实际传入的是引导页勾选并集串（tess 代码形态，
+ *   如 'eng+chi_sim'），'chi_sim' 不以 zh 开头被误归 'eng'——只勾中文时识别语言
+ *   仍是英文的隐藏 bug。2026-09-08 改全表映射后一并修复。
+ * 输入两种形态：tess 代码串（SW 从 storage.ocrLanguages 收集的勾选并集，
+ *   如 'eng+chi_sim'、'jpn'），或语言代码（'ja'/'zh'——语义上 learnLanguage 直传）。
+ * 规则：按 '+' 逐段——TESS_LANG_MAP 键命中翻译成 tess 代码；已是合法 tess 代码
+ *   （TESS_VALID_CODES）原样保留；'zh' 变体（zh-TW 等）回落 chi_sim；沾不上的段
+ *   丢弃（不猜语言，勾选态由引导页保证）。去重保持顺序。全空返回 null（调用方
+ *   回落 'eng+chi_sim' 旧行为）。
  * @param {string} [lang]
- * @returns {string|null} 单语言名；null 表示未指定（回落双语言）
+ * @returns {string|null} '+' 连接的 tess 语言串；null 表示无可识别语言（回落默认）
  */
 function resolveTessLang(lang) {
   if (!lang) return null;
-  const l = String(lang).toLowerCase();
-  if (l.startsWith('zh')) return 'chi_sim';
-  return 'eng';
+  const parts = String(lang).toLowerCase().split('+');
+  const out = [];
+  const push = (code) => { if (!out.includes(code)) out.push(code); };
+  for (const p of parts) {
+    if (!p) continue;
+    if (TESS_LANG_MAP[p]) { push(TESS_LANG_MAP[p]); continue; }
+    if (TESS_VALID_CODES.has(p)) { push(p); continue; }
+    if (p.startsWith('zh')) push('chi_sim');
+    // 其余未知段丢弃：createWorker 只接受白名单内语言，宁可少识别也不让 worker 加载失败
+  }
+  return out.length > 0 ? out.join('+') : null;
 }
 
 async function getOcrWorker(lang) {
@@ -296,23 +375,47 @@ async function getOcrWorker(lang) {
   // 反思（2026-07-28）：Tesseract.js 默认 workerBlobURL=true 会创建 blob URL worker，
   //   被 MV3 CSP 阻止（worker-src 不允许 blob:）。修正：workerBlobURL=false，
   //   workerPath 指定本地路径，new Worker(chrome-extension://...) 符合 script-src 'self'。
-  // 反思（2026-08-05）：corePath/langPath 改为本地路径，脱离 CDN 依赖。
+  // 反思（2026-09-07）：langPath 不再指向本地 vendor/tessdata（已删），改为按
+  //   TESSDATA_SOURCES 顺序逐源 createWorker，失败换下一源（详见上方反思注释）。
   // 反思（2026-08-16 第六十六次）：语言包随 learnLanguage（eng / chi_sim），非固定双语言。
-  console.log('[VocabRadar][offscreen][' + _ts() + '] 创建 OCR worker (lang=' + langKey + ', 本地 core+lang, workerBlobURL=false)');
+  // 反思（2026-09-04）：tessdata 已真解压为 .traineddata（Edge 拒绝包内 .gz 文件），
+  //   jsDelivr 源须传 gzip:false 按裸文件 fetch 且跳过 gunzip；projectnaptha 源为
+  //   .traineddata.gz，须传 gzip:true。
+  console.log('[VocabRadar][offscreen][' + _ts() + '] 创建 OCR worker (lang=' + langKey + ', 本地 core, tessdata 走 CDN 回退链, workerBlobURL=false)');
   const _workerStart = Date.now();
-  _tesseractWorker = await Tesseract.createWorker(langKey, 1, {
-    workerPath: chrome.runtime.getURL('src/lib/vendor/tesseract-worker.min.js'),
-    workerBlobURL: false,
-    corePath: chrome.runtime.getURL('src/lib/vendor'),
-    langPath: chrome.runtime.getURL('src/lib/vendor/tessdata'),
-    logger: (m) => {
-      if (m && m.status) {
-        console.log('[VocabRadar][offscreen][' + _ts() + '] Tesseract: ' + m.status + (m.progress !== undefined ? ' ' + (m.progress * 100).toFixed(0) + '%' : ''));
+  let _lastSrcErr = null;
+  for (const _src of TESSDATA_SOURCES) {
+    try {
+      console.log('[VocabRadar][offscreen][' + _ts() + '] 尝试 tessdata 源: ' + _src.name + ' (gzip=' + _src.gzip + ')');
+      _tesseractWorker = await Tesseract.createWorker(langKey, 1, {
+        workerPath: chrome.runtime.getURL('src/lib/vendor/tesseract-worker.min.js'),
+        workerBlobURL: false,
+        corePath: chrome.runtime.getURL('src/lib/vendor'),
+        langPath: _src.langPath,
+        gzip: _src.gzip,
+        logger: (m) => {
+          if (m && m.status) {
+            console.log('[VocabRadar][offscreen][' + _ts() + '] Tesseract: ' + m.status + (m.progress !== undefined ? ' ' + (m.progress * 100).toFixed(0) + '%' : ''));
+          }
+        }
+      });
+      console.log('[VocabRadar][offscreen][' + _ts() + '] tessdata 源成功: ' + _src.name + ', worker 创建总耗时=' + ((Date.now() - _workerStart) / 1000).toFixed(2) + 's');
+      break;
+    } catch (_srcErr) {
+      _lastSrcErr = _srcErr;
+      console.warn('[VocabRadar][offscreen][' + _ts() + '] tessdata 源失败: ' + _src.name + ', error=', _srcErr, '— 换下一源');
+      if (_tesseractWorker) {
+        try {
+          await _tesseractWorker.terminate();
+        } catch (_termErr) { /* 终止失败忽略 */ }
+        _tesseractWorker = null;
       }
     }
-  });
+  }
+  if (!_tesseractWorker) {
+    throw new Error('tessdata 所有 CDN 源均失败 (' + TESSDATA_SOURCES.map((s) => s.name).join(' → ') + '): ' + String((_lastSrcErr && _lastSrcErr.message) || _lastSrcErr));
+  }
   _tesseractLang = langKey;
-  console.log('[VocabRadar][offscreen][' + _ts() + '] OCR worker 创建完成, 耗时=' + ((Date.now() - _workerStart) / 1000).toFixed(2) + 's');
   return _tesseractWorker;
 }
 

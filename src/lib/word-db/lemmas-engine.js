@@ -121,3 +121,48 @@ export async function swLemmatizeWord(word, lang) {
   }
   return { ok: true, lemma, candidates: Array.from(candidates) };
 }
+
+// 同族反查缓存（2026-09-04）：key=lang|lemmalower → 全量同族词数组（已排序，调用方按 limit 截断）
+const _familyCache = new Map();  // key -> string[]
+const FAMILY_CACHE_LIMIT = 500;  // 兜底：不同 lemma 缓存条目上限，超了清掉最旧（Map 插入序）
+const FAMILY_STORE_CAP = 200;    // 单 lemma 存储上限（防超大词族吃内存）
+
+/**
+ * SW 专用：查某原形的全部同族词（页面展开原形折叠时调用）
+ *
+ * 反思（2026-09-04）：用户反馈展开只列出一个（词表内同页同形才一组，高频原形如 run
+ *   早被阈值滤掉，永不进组）。"列出所有同原词形的单词"只能走词形整表反查：
+ *   SW 侧 lemmasLoad 已有全量 wordDict（word→lemma），此处反向扫描收集。
+ *   13.9 万条目内存扫描一次约数毫秒，按 lang|lemma 缓存，后续 O(1)。
+ * @param {string} lemma 原形（小写）
+ * @param {string} [lang='en'] 语言代码
+ * @param {number} [limit=20] 返回上限
+ * @returns {Promise<{ok:boolean, lemma:string, words:string[], total:number}>}
+ */
+export async function swLemmaFamily(lemma, lang, limit) {
+  const target = String(lemma || '').toLowerCase();
+  const key = (lang || 'en');
+  const cap = (typeof limit === 'number' && limit > 0 && limit <= 100) ? Math.floor(limit) : 20;
+  if (!target) return { ok: true, lemma: target, words: [], total: 0 };
+  const cacheKey = key + '|' + target;
+  const hit = _familyCache.get(cacheKey);
+  if (hit) return { ok: true, lemma: target, words: hit.slice(0, cap), total: hit.length };
+  // 确保词形数据就绪（已缓存则免下载；整表在 SW 会话内复用，不发页面）
+  const r = await lemmasLoad(key);
+  const dict = (r && r.wordDict) || {};
+  const out = [];
+  for (const w in dict) {
+    if (!Object.prototype.hasOwnProperty.call(dict, w)) continue;
+    try {
+      if (String(dict[w]).toLowerCase() === target) out.push(w);
+    } catch (_) { /* 脏行跳过 */ }
+  }
+  // 排序：短词优先（基础形通常最短）→ 字母序；稳定可预期
+  out.sort((a, b) => (a.length - b.length) || (a < b ? -1 : a > b ? 1 : 0));
+  if (_familyCache.size >= FAMILY_CACHE_LIMIT) {
+    const oldest = _familyCache.keys().next();
+    if (!oldest.done) _familyCache.delete(oldest.value);
+  }
+  _familyCache.set(cacheKey, out.slice(0, FAMILY_STORE_CAP));
+  return { ok: true, lemma: target, words: out.slice(0, cap), total: out.length };
+}

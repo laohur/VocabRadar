@@ -1,6 +1,6 @@
 // YouTube 音频流提取模块（第九十六次新建）
 //
-// 基于 youtubei.js（LuanRT/YouTube.js，MIT，vendor 打包于 src/lib/vendor/youtubei/）：
+// 基于 youtubei.js（LuanRT/YouTube.js，MIT，vendor 打包于 src/lib/vendor/youtubei.web.bundle.min.js）：
 //   Innertube 会话 → getBasicInfo(videoId) → chooseFormat({type:'audio'}) →
 //   format.decipher(session.player)——自动完成 base.js 拉取与签名/n 参数转换
 //   （即 @distube/ytdl-core 的活，且上游持续维护，见 docs/plan-full-download-asr.md）。
@@ -24,7 +24,7 @@ let _innertubePromise = null;
 async function getInnertube() {
   if (!_innertubePromise) {
     _innertubePromise = (async () => {
-      const mod = await import(chrome.runtime.getURL('src/lib/vendor/youtubei/web.bundle.min.js'));
+      const mod = await import(chrome.runtime.getURL('src/lib/vendor/youtubei.web.bundle.min.js'));
       const { Innertube } = mod;
       return await Innertube.create({ retrieve_player: true });
     })().catch((e) => {

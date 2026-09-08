@@ -20,7 +20,8 @@
 //   - projection-cache.js：SW 投影内存缓存 _projCache（唯一 Map 实例）
 //   - db-ops.js：IDB 打开/事务/游标读写原语（含库/表常量与 _dbPromise 连接单例）
 //   - lemmas-engine.js：词形数据装载与逐词还原引擎
-//   - sw-channel.js：SW 消息通道与 DIRECT_IDB 路由（全部 11 个对外导出在此实现）
+//   - sw-channel.js：SW 消息通道与 DIRECT_IDB 路由（全部对外导出在此实现，
+//     2026-09-04 加 bulkWriteTranslations 内置翻译包通道）
 // 本门面仅 re-export 全部原导出符号（符号名不变），所有引用方零改动。
 //
 // ===记录结构（沿用）===
@@ -43,6 +44,6 @@
 //   phonetic：null=未注音，非 null=已注音
 export {
   getWord, getWordsBatch, putWord, updateFields, clearByLang, clearAll,
-  getLangProjection, bulkWriteDictionary, getDictCache, setDictCache,
+  getLangProjection, getRanksProjection, bulkWriteDictionary, bulkWriteTranslations, getDictCache, setDictCache,
   handleWordDbMessage, warmupDictProjection
 } from './word-db/sw-channel.js';

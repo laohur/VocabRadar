@@ -1,5 +1,16 @@
 {
   "dependencies": {
-    "esbuild": "^0.24.0"
+    "@piper-plus/g2p": "^0.4.2",
+    "@rollup/plugin-json": "^6.1.0",
+    "@rollup/plugin-node-resolve": "^16.0.3",
+    "esbuild": "^0.24.0",
+    "koroman": "^1.0.16",
+    "kuroshiro": "^1.2.0",
+    "kuroshiro-analyzer-kuromoji": "^1.1.0",
+    "path-browserify": "^1.0.1",
+    "phonemize": "^2.0.0",
+    "pinyin-pro": "^3.29.3",
+    "rollup": "^4.63.1",
+    "terser": "^5.48.0"
   }
 }

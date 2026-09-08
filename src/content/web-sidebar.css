@@ -871,10 +871,19 @@
   display: inline;
   color: var(--beaver-text-soft);
   /* 反思（2026-08-09）：用户要求"注音不要倾斜"，去掉 font-style: italic */
+  /* 反思（2026-09-04）：用户反馈"注音用的啥字体，咋看不懂"。统一指定系统字体栈
+     （扩展装不到字体文件，只能用系统栈；Segoe UI 是 Win10 默认且 IPA/变音符号
+     覆盖最好，其余为回退），防宿主页面字体缺 IPA 字形。 */
+  font-family: "Segoe UI", "Microsoft YaHei", "Noto Sans", "Charis SIL", "Doulos SIL", "Arial Unicode MS", Arial, sans-serif;
   font-size: 0.9em;
   /* 反思（2026-08-10）：用户要求"喇叭音标应当紧贴"，左侧 margin 保持 0 紧贴喇叭按钮 */
   margin-left: 0;
   padding: 0 4px 0 0;
+}
+
+/* 注音为空时不占位（"注音有结果才显示"） */
+#beaver-web-sidebar .beaver-web-ann-line .beaver-web-ann-phonetic:empty {
+  display: none;
 }
 
 #beaver-web-sidebar .beaver-web-ann-line .beaver-web-ann-rank {
@@ -946,6 +955,8 @@
   display: inline;
   color: var(--beaver-text-soft);
   /* 反思（2026-08-09）：用户要求"注音不要倾斜"，去掉 font-style: italic */
+  /* 反思（2026-09-04）：注音统一系统字体栈（同上），空 span 直接隐藏（"有结果才显示"）。 */
+  font-family: "Segoe UI", "Microsoft YaHei", "Noto Sans", "Charis SIL", "Doulos SIL", "Arial Unicode MS", Arial, sans-serif;
   font-size: 0.9em;
   /* 反思（2026-08-10）：用户要求"喇叭音标应当紧贴"，左侧 margin 保持 0 紧贴喇叭按钮；
      与喇叭构成同一段，左右空白由喇叭左侧与音标右侧留白包裹 */
@@ -953,11 +964,56 @@
   padding: 0 4px 0 0;
 }
 
+#beaver-web-sidebar .beaver-web-word-item .beaver-w-phonetic:empty {
+  display: none;
+}
+
 #beaver-web-sidebar .beaver-web-word-item .beaver-w-lemma {
   display: inline;
   color: var(--beaver-text-soft);
   font-size: 0.85em;
   padding: 0 4px 0 0;
+}
+
+/* 原形折叠（2026-09-04）：与视频侧 sidebar.css 同口径（斜体＋底色 chip 即按钮，
+ * 无前后缀；展开态 .open 换深底色）。 */
+#beaver-web-sidebar .beaver-web-word-item .beaver-w-lemma-toggle {
+  display: inline-block;
+  font-style: italic;
+  background: var(--beaver-secondary-container);
+  color: var(--beaver-on-secondary-container);
+  border: none;
+  border-radius: 8px;
+  padding: 1px 8px;
+  margin-right: 4px;
+  cursor: pointer;
+  font-size: 0.85em;
+  line-height: 1.5;
+}
+#beaver-web-sidebar .beaver-web-word-item .beaver-w-lemma-toggle:hover {
+  filter: brightness(0.96);
+}
+#beaver-web-sidebar .beaver-web-word-item .beaver-w-lemma-toggle.open {
+  background: var(--beaver-primary);
+  color: var(--beaver-on-primary);
+}
+#beaver-web-sidebar .beaver-web-word-item .beaver-w-lemma-group {
+  display: block;
+  width: 100%;
+  margin: 2px 0;
+  padding: 2px 10px;
+  border-radius: 8px;
+  /* 反思（2026-09-04 二轮）：与视频侧同口径（块底色向右扩展，同行列词不斜体）。 */
+  background: var(--beaver-secondary-container);
+  color: var(--beaver-on-secondary-container);
+  font-size: 0.9em;
+  font-style: normal;
+  line-height: 1.7;
+  word-break: break-word;
+}
+/* 同族补齐占位（异步到达前）：不斜体 */
+#beaver-web-sidebar .beaver-web-word-item .beaver-w-lemma-more {
+  color: var(--beaver-text-disabled);
 }
 
 #beaver-web-sidebar .beaver-web-word-item .beaver-w-trans {
@@ -1002,7 +1058,10 @@
 #beaver-web-sidebar .beaver-web-word-only .beaver-w-tags,
 #beaver-web-sidebar .beaver-web-word-only .beaver-w-rank,
 #beaver-web-sidebar .beaver-web-word-only .beaver-w-speak,
-#beaver-web-sidebar .beaver-web-word-only .beaver-w-lemma {
+#beaver-web-sidebar .beaver-web-word-only .beaver-w-lemma,
+/* 反思（2026-09-04）：原形折叠新增的按钮与展开组同样只剩单词时隐藏。 */
+#beaver-web-sidebar .beaver-web-word-only .beaver-w-lemma-toggle,
+#beaver-web-sidebar .beaver-web-word-only .beaver-w-lemma-group {
   display: none !important;
 }
 
@@ -1370,3 +1429,47 @@
 #beaver-web-sidebar.beaver-ann-style-lime .beaver-web-sub-text .beaver-web-word.later { background: #d4e157 !important; color: #222b00 !important; border-radius: 0 !important; font-weight: 600 !important; text-decoration: underline !important; }
 #beaver-web-sidebar.beaver-ann-style-lime .beaver-web-ann-inline,
 #beaver-web-sidebar.beaver-ann-style-lime .beaver-web-ann-line .beaver-web-ann-word { background: #222b00 !important; color: #d4e157 !important; border-radius: 0 !important; font-size: 15px !important; }
+
+/* G3（2026-09-08）：learn 面板按钮行（§6.2，二维码上方）——导入当前侧栏内容为草稿卷轴 */
+#beaver-web-sidebar .beaver-web-draft-row {
+  display: flex;
+  gap: 8px;
+  width: 100%;
+  max-width: 280px;
+}
+
+#beaver-web-sidebar .beaver-web-draft-btn {
+  flex: 1;
+  padding: 6px 8px;
+  min-height: 30px;
+  border: none;
+  background: var(--beaver-btn-bg);
+  border-radius: var(--beaver-radius-sm);
+  cursor: pointer;
+  color: var(--beaver-text-soft);
+  pointer-events: auto;
+  transition: all 0.15s;
+  min-width: 0;
+  box-shadow: var(--beaver-shadow-1);
+  font-size: 0.9em;
+}
+
+#beaver-web-sidebar .beaver-web-draft-btn:hover:not(:disabled) {
+  background: var(--beaver-btn-bg-hover);
+}
+
+/* 无内容灰态（§6.2：禁用并提示，不静默） */
+#beaver-web-sidebar .beaver-web-draft-btn.is-empty {
+  background: var(--beaver-bg-container);
+  color: var(--beaver-text-disabled);
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+/* 导入进行中：防重复点击 */
+#beaver-web-sidebar .beaver-web-draft-btn:disabled {
+  background: var(--beaver-bg-container);
+  color: var(--beaver-text-disabled);
+  cursor: not-allowed;
+  opacity: 0.6;
+}

@@ -1,0 +1,10 @@
+{
+  "extName": {
+    "message": "VocabRadar — Temukan kata baru di video & web",
+    "description": "Nama ekstensi yang tampil di browser dan toko."
+  },
+  "extDesc": {
+    "message": "Temukan kata baru kamu: video YouTube/Bilibili, halaman web mana pun, plus obrolan AI. Tanpa pendaftaran.",
+    "description": "Deskripsi: kata baru milikmu, video dan web, obrolan AI, tanpa pendaftaran."
+  }
+}

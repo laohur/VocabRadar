@@ -1,24 +1,24 @@
 // VocabRadar 视频提示 content script
 //
-// 注入位置：B站视频页右侧 .right-container 内部顶部（参考 bilibili-subtitle：
-//   "视频右侧(弹幕列表上方)"）。作为文档流元素，不 fixed 不遮盖。
+// 注入位置：B站视频页右侧 .right-container 内部顶部。作为文档流元素，不 fixed 不遮盖。
+//   （早期参考 bilibili-subtitle“视频右侧(弹幕列表上方)”；弹幕功能已移除，
+//   现以右列首位 + 顺序守卫置顶为准，详见 vs/sidebar-layout.js。）
 //
 // 结构：顶行(标题+设定) → tabs(字幕/生词表) → 工具栏(词频/无需注释/只看生词/地球)
-//       → 面板(字幕标签页+生词表标签页) → 底部(复制/弹幕/评论 按钮)
+//       → 面板(字幕标签页+生词表标签页) → 底部(复制/评论 按钮)
 //
-// 弹幕/评论按钮 = 复选框（默认选中）。选中时：
-//   监听 video.timeupdate，每条字幕到达前 danmakuAdvanceSec 秒，
-//   把该条生词注释（换行分割 + 前缀）填入弹幕/评论输入框，由用户手动发送。
+// 评论按钮：点击即把当前生词注释填入评论输入框，由用户手动发送。
 //
 // 非致命错误（找不到输入框、复制失败等）用冒泡 toast 提示，不弹 alert。
 //
-// debug 与参数：读取 src/data/config.json 的 debug / danmakuAdvanceSec /
-//   danmakuMaxLen / prefixDanmaku / prefixComment / prefixCopy / toastDuration。
+// debug 与参数：读取 src/data/config.json 的 debug /
+//   commentMaxLen / prefixComment / prefixCopy / toastDuration。
+//   （弹幕三键 danmakuAdvanceSec/danmakuMaxLen/prefixDanmaku 已随弹幕模块删除，不再读取。）
 //
 // ASR 设计（2026-07-03 修订，2026-07-07 滑动窗口修订）：
 //   ASR 结果作为"可选轨道"出现在轨道下拉框中（🎤 ASR），与普通字幕
 //   完全同源处理——同样的 createEmptySlot 渲染、同样的 getAnnotations 生词
-//   注释、同样的 highlightCurrent 同步高亮、同样的复制/OCR/弹幕/评论按钮。
+//   注释、同样的 highlightCurrent 同步高亮、同样的复制/OCR/评论按钮。
 //   不再使用独立的 _asrEntries 数组，ASR 结果直接进入 _subtitles/_subEntries。
 //   启动 ASR 时保存当前字幕，清空面板；停止 ASR 时恢复原字幕。
 
@@ -84,7 +84,9 @@ import {
   onCopy, onCommentClick, highlightCurrent, appendASRSubtitle,
   resetRenderState, setNoAnnotation, setDetailMode, getDetailMode,
   // 第一百七十一次：copy 右侧导出为文件、评论左侧发起对话（实现在子模块，门面仅接线）
-  onExportFile, onChatClickVs
+  onExportFile, onChatClickVs,
+  // 2026-09-04：生词表原形折叠开关（实现在子模块，门面仅接线）
+  toggleLemmaGroup
 } from './vs/subtitle-renderer.js';
 
 // === 模块状态 ===
@@ -137,15 +139,12 @@ let _asrTrackIndex = -1;     // ASR 在轨道下拉框中的索引（-1=未添�
 //   setTracks 检测到此标记时保持 ASR 选中态不被覆盖；选常规轨道/停止 ASR/换集时重置为 false。
 let _userPickedASR = false;
 
-// config 参数
+// config 参数（弹幕三键 danmakuAdvanceSec/danmakuMaxLen/prefixDanmaku 已随弹幕模块删除）
 let _cfg = {
   debug: true,
-  danmakuAdvanceSec: 2,
-  danmakuMaxLen: 30,
   commentMaxLen: 1000,
   // 第一百七十七次：前缀去掉 🦫（Windows 10 旧版 Segoe UI Emoji 无该字形，显示为豆腐块）
   //   并去掉"提示"二字，统一为 "VocabRadar："
-  prefixDanmaku: 'VocabRadar：',
   prefixComment: 'VocabRadar：\n',
   prefixCopy: 'VocabRadar：\n',
   toastDuration: 2500
@@ -295,7 +294,7 @@ function buildSidebar() {
     <div class="beaver-tabs">
       <div class="beaver-tab active" data-tab="subtitle" data-i18n="tab.subtitle">🎬 Subtitles</div>
       <div class="beaver-tab" data-tab="words" data-i18n="tab.words">📖 Word List</div>
-      <div class="beaver-tab" data-tab="mp" data-i18n="tab.train">📱 Train</div>
+      <div class="beaver-tab" data-tab="mp" data-i18n="tab.learn">📱 Learn</div>
     </div>
     <!-- 反思（2026-08-13 第四十七次）：标签页按钮分组——
          字母页(subtitle)：注释/详情/字幕样式；词汇页(words)：词表按钮 -->
@@ -314,7 +313,7 @@ function buildSidebar() {
     <div class="beaver-panel hidden" id="beaver-word-panel"></div>
     <div class="beaver-panel hidden" id="beaver-mp-panel">
       <img alt="VocabRadar小程序二维码">
-      <div class="beaver-mp-tip" data-i18n="train.tip">微信扫码使用「VocabRadar」小程序<br>随时随地背单词</div>
+      <div class="beaver-mp-tip" data-i18n="learn.tip">微信扫码使用「VocabRadar」小程序<br>随时随地背单词</div>
     </div>
     <div class="beaver-asr-progress" id="beaver-asr-progress" style="display:none;">
       <div class="beaver-asr-progress-info">
@@ -650,6 +649,10 @@ function bindEvents(options = {}) {
   // 刷新页面后视频提示重新出现。
   _root.querySelector('#beaver-close').addEventListener('click', (e) => {
     e.stopPropagation();
+    // 2026-09-08（用户："扩展侧栏中关闭后，影响并未消失"）：✕ 关闭时若 ASR 仍在转录
+    //   必须一并停掉——旧版只藏 DOM，拾音/网络请求继续跑（影响残留）。
+    //   与 destroySidebar 同口径（_asrActive 判定后才停）。
+    if (_asrActive) { try { stopASRInternal(true); } catch (err) { /* ignore */ } }
     _root.style.display = 'none';
     // 第一百三十二次（用户状态机）：✕ 是显式关闭——打标记后文本悬浮球恢复为唯一入口
     // （syncBallWithVideoSidebar 靠该标记区分"关闭"与"📄切走"，前者放行球、后者不放）。
@@ -753,7 +756,17 @@ function bindEvents(options = {}) {
 
   // 反思（2026-08-08）：喇叭按钮朗读（Web Speech API）。
   //   事件委托：所有 .beaver-w-speak 和 .beaver-ann-speak 按钮统一处理。
+  // 反思（2026-09-04）：生词表原形折叠按钮（.beaver-w-lemma-toggle）同委托处理，
+  //   归组查询在展开瞬间发生（toggleLemmaGroup 内部读 _allAnnotations 现场值）。
   _root.addEventListener('click', (e) => {
+    const tgl = e.target.closest('.beaver-w-lemma-toggle');
+    if (tgl) {
+      e.stopPropagation();
+      e.preventDefault();
+      const item = tgl.closest('.beaver-word-item');
+      if (item) toggleLemmaGroup(item);
+      return;
+    }
     const btn = e.target.closest('.beaver-w-speak, .beaver-ann-speak');
     if (btn) {
       e.stopPropagation();
@@ -812,7 +825,7 @@ function speakWordVideo(word) {
 //   启动：保存当前字幕 → 清空面板 → asr-client 自动识别当前所在分钟并预识别后续分钟
 //   停止：停止识别 → 保留 ASR 字幕不清空
 // ASR 识别结果直接进入 _subtitles/_subEntries（与普通字幕同源），
-// 复制/总结/弹幕/评论按钮和 highlightCurrent 同步高亮自动生效。
+// 复制/总结/评论按钮和 highlightCurrent 同步高亮自动生效。
 
 async function toggleASR(clickX, clickY) {
   if (_asrActive) {
@@ -859,7 +872,7 @@ async function toggleASR(clickX, clickY) {
   // 【第一百零一次 用户裁定】移除第九十八次的"点击识别立即暂停"——恢复原交互：
   // 点击识别不改变播放状态，识别在后台进行（直连下载或回退采集）。
   // ASR 结果直接进入 _subtitles/_subEntries（与普通字幕同源），
-  // 复制/总结/弹幕/评论按钮和 highlightCurrent 同步高亮自动生效。
+  // 复制/总结/评论按钮和 highlightCurrent 同步高亮自动生效。
   // 非缓存预加载场景：清空面板准备接收 ASR 结果；缓存预加载场景：保留缓存字幕接续实时识别。
   if (!skipReplay) {
     _subtitles = [];
@@ -977,8 +990,6 @@ function stopASRInternal(skipRestore) {
   // 保留 ASR 字幕，不恢复旧字幕，不清理面板（第二百二十五次：连带删除死变量 _savedSubtitles）
   console.log('[VocabRadar][asr][' + new Date().toLocaleTimeString('en-GB', { hour12: false }) + '.' + String(Date.now() % 1000).padStart(3, '0') + '] 已停止，字幕保留');
 }
-
-// === 弹幕填入函数已随弹幕按钮移除（第九十六次；bilibili-danmaku.js 独立模块保留给右键/消息路径） ===
 
 // === 加载提示（字幕到达前显示） ===
 // 加载态：仅显示 header + 骨架动画，隐藏 tabs/toolbar/footer

@@ -18,10 +18,10 @@ import { isSW, DIRECT_IDB, runtimeValid } from './env.js';
 import { makeKey } from './key-utils.js';
 import {
   idbGet, idbGetBatch, idbPut, idbUpdate, idbClearByLang, idbClearAll,
-  idbBulkWrite, idbGetLangProjection, idbDictGet, idbDictMerge
+  idbBulkWrite, idbBulkTrans, idbGetLangProjection, idbGetRanksProjection, idbDictGet, idbDictMerge
 } from './db-ops.js';
 import { _projCache } from './projection-cache.js';
-import { lemmasLoad, swLemmatizeWord } from './lemmas-engine.js';
+import { lemmasLoad, swLemmatizeWord, swLemmaFamily } from './lemmas-engine.js';
 
 export async function getWord(lang, word) {
   if (!lang || !word) return null;
@@ -303,6 +303,36 @@ function notifyProjDirty(lang) {
   } catch (e) { /* ignore */ }
 }
 
+/**
+ * 只读 ranks 投影（分阶段 Stage 1，跨上下文）
+ * 反思（2026-09-04）：首屏高亮只认 rank。优先复用两级缓存里的整投影切片
+ *   （SW 热时零扫描）；缓存未命中才扫 d_rank 单表，且 ranks-only 结果不写缓存
+ *   （防残缺投影毒化整投影缓存）。
+ * @param {string} lang 语言代码
+ * @returns {Promise<{built:boolean,ranks:object,ranksCount:number,expected:number,dataVersion:number}|null>}
+ */
+export async function getRanksProjection(lang) {
+  if (!lang) return null;
+  if (isSW) {
+    try {
+      let proj = _projCache.get(lang);
+      if (!proj) proj = await projLocalGet(lang);
+      if (proj && proj.built && proj.ranks && Object.keys(proj.ranks).length > 0) {
+        return {
+          built: true, ranks: proj.ranks, ranksCount: Object.keys(proj.ranks).length,
+          expected: proj.expected || 0, dataVersion: proj.dataVersion || 0
+        };
+      }
+      return await idbGetRanksProjection(lang);
+    } catch (e) { return null; }
+  }
+  if (!runtimeValid()) return null;
+  try {
+    const resp = await chrome.runtime.sendMessage({ type: 'WORD_DB_GET_RANKS_PROJ', lang });
+    return (resp && resp.ok) ? resp.proj : null;
+  } catch (e) { return null; }
+}
+
 // SW 侧批量构建会话缓存（分块累积，final=true 时一次性写库并打构建标记）
 // 反思（2026-08-20 第八十五次）：CS->SW 巨型消息不可靠（第五十七次教训），
 //   批量写入分块（约 3000 条/块）累积到 SW，最后一块才真正写 IDB，避免逐块重复全量读。
@@ -315,10 +345,15 @@ const _bulkSessions = new Map(); // buildId -> { lang, entries: Map<word, {rank?
  *   并写入 '__built__' 标记。此后页面每次加载只从词典读投影，不再读源文件。
  * 反思（2026-08-21 第八十八次）：词典只有一个--调用方只传一个统一词典 Map
  *   （Map<word, {rank?, tags?}>），rank/tags 是同一词条的两个字段，不再分两张表。
+ * 2026-09-03 源头过滤：新增 dataVersion 参数（= manifest.version），随末块写入
+ *   meta（SW/CS 两条路径都透传）；projection.js 据此与 manifest.version 比对，
+ *   不一致即判旧词典数据过期，清库全量重建。
  * @param {string} lang
  * @param {Map<string,{rank?:number|null,tags?:string[]}>|null} dictMap 统一词典 Map
+ * @param {number} [expected] 本次构建的真实词条数（meta.expected 实际值基准）
+ * @param {number} [dataVersion] 预处理数据版本（manifest.version，meta.dataVersion）
  */
-export async function bulkWriteDictionary(lang, dictMap, expected) {
+export async function bulkWriteDictionary(lang, dictMap, expected, dataVersion) {
   if (!lang) return;
   const buildId = lang + ':' + Date.now();
   const entries = [];
@@ -338,14 +373,15 @@ export async function bulkWriteDictionary(lang, dictMap, expected) {
     let ok = false;
     try {
       if (isSW) {
-        await idbBulkWrite(lang, chunk, isFinal ? expected : undefined);
+        await idbBulkWrite(lang, chunk, isFinal ? expected : undefined, isFinal ? dataVersion : undefined);
         ok = true;
       } else if (runtimeValid()) {
         const resp = await new Promise((resolve) => {
           try {
             chrome.runtime.sendMessage({
               type: 'WORD_DB_BULK_WRITE', lang, entries: chunk, final: isFinal,
-              expected: isFinal ? expected : undefined
+              expected: isFinal ? expected : undefined,
+              dataVersion: isFinal ? dataVersion : undefined   // 2026-09-03：数据版本透传
             }, (r) => {
               if (chrome.runtime.lastError) { resolve({ ok: false, error: chrome.runtime.lastError.message }); return; }
               resolve(r || { ok: false, error: 'no response' });
@@ -369,6 +405,63 @@ export async function bulkWriteDictionary(lang, dictMap, expected) {
   if (!allOk || entries.length === 0) return false;
   // 直写成功：让 SW 失效其内存投影缓存（后台仅刷新缓存--用户架构裁定）
   notifyProjDirty(lang);
+  return true;
+}
+
+/**
+ * 将内置翻译包释义送入词典 d_trans 分表（跨上下文）
+ * 反思（2026-09-04）：与 bulkWriteDictionary 同可靠性口径——分块 1200、任一块失败
+ *   立即中止（已写块保留，下次版本重建覆盖；不打任何"完成"标记，失败靠日志明示）。
+ *   translation 是定稿字符串（调用方已 join），translationLang 决定 translator 哪对语言能命中。
+ * @param {string} lang 源语言（如 'en'）
+ * @param {Map<string,string>|null} transMap Map<word_lower, translation定稿字符串>
+ * @param {string} [translationLang] 释义语言（如 'zh'）
+ * @returns {Promise<boolean>} 全块成功 true
+ */
+export async function bulkWriteTranslations(lang, transMap, translationLang) {
+  if (!lang) return false;
+  const entries = [];
+  if (transMap) for (const [word, translation] of transMap) {
+    if (word && typeof translation === 'string' && translation) entries.push({ word, translation });
+  };
+  if (entries.length === 0) return false;
+  const CHUNK = 1200;
+  let allOk = true;
+  let lastErr = '';
+  const nChunks = Math.max(1, Math.ceil(entries.length / CHUNK));
+  for (let i = 0, ci = 0; i < entries.length || ci === 0; i += CHUNK, ci++) {
+    const chunk = entries.slice(i, i + CHUNK);
+    let ok = false;
+    try {
+      if (isSW) {
+        await idbBulkTrans(lang, chunk, translationLang);
+        ok = true;
+      } else if (runtimeValid()) {
+        const resp = await new Promise((resolve) => {
+          try {
+            chrome.runtime.sendMessage({
+              type: 'WORD_DB_BULK_TRANS', lang, entries: chunk, translationLang
+            }, (r) => {
+              if (chrome.runtime.lastError) { resolve({ ok: false, error: chrome.runtime.lastError.message }); return; }
+              resolve(r || { ok: false, error: 'no response' });
+            });
+          } catch (err) { resolve({ ok: false, error: String((err && err.message) || err) }); }
+        });
+        ok = !!(resp && resp.ok);
+        if (!ok && resp && resp.error) lastErr = resp.error;
+      }
+    } catch (e) {
+      ok = false;
+      lastErr = String((e && e.message) || e);
+    }
+    if (!ok) {
+      allOk = false;
+      console.warn(`[VocabRadar][word-db][bulkTrans] 分块 ${ci + 1}/${nChunks} 写入失败--中止（已写块保留，下次版本重建覆盖）。原因: ${lastErr || '(未知)'}`);
+      break;
+    }
+    if (ci < nChunks - 1) await new Promise((r) => setTimeout(r, 25)); // 块间让出
+  }
+  if (!allOk) return false;
   return true;
 }
 
@@ -483,14 +576,61 @@ export async function handleWordDbMessage(msg, sender, sendResponse) {
         sendResponse({ ok: true, proj });
         return true;
       }
-      case 'WORD_DB_BULK_WRITE': {
-        // 第一百五十四次·可靠性重构：废除"SW 内存攒批+末块巨事务"（事件页休眠/
+      case 'WORD_DB_GET_RANKS_PROJ': {
+        // 分阶段投影 Stage 1（2026-09-04）：只读 ranks，供首屏先扫。优先复用两级缓存
+        //   里的整投影切片（SW 热时零扫描）；未命中才扫 d_rank 单表，且结果不写缓存。
+        try {
+          let proj = _projCache.get(msg.lang);
+          if (!proj) proj = await projLocalGet(msg.lang);
+          if (proj && proj.built && proj.ranks && Object.keys(proj.ranks).length > 0) {
+            sendResponse({
+              ok: true,
+              proj: {
+                built: true, ranks: proj.ranks, ranksCount: Object.keys(proj.ranks).length,
+                expected: proj.expected || 0, dataVersion: proj.dataVersion || 0
+              }
+            });
+          } else {
+            sendResponse({ ok: true, proj: await idbGetRanksProjection(msg.lang) });
+          }
+        } catch (e) {
+          sendResponse({ ok: false, error: String((e && e.message) || e) });
+        }
+        return true;
+      }
+      case 'WORD_DB_BULK_WRITE': {        // 第一百五十四次·可靠性重构：废除"SW 内存攒批+末块巨事务"（事件页休眠/
         // 大事务失败即前功尽弃且无错误可见）。改为**逐块即时小事务**：
         // 每条消息直接写 IDB（3000->1200 行/块），末块自带 __built__+expected 原子标记；
         // 任一块异常把 error 串回传 CS，绝不静默、绝不打半截标记。
+        // 2026-09-03：dataVersion（预处理数据版本）随末块写入 meta。
         try {
-          await idbBulkWrite(msg.lang, msg.entries || [], msg.final ? msg.expected : undefined);
+          await idbBulkWrite(msg.lang, msg.entries || [], msg.final ? msg.expected : undefined,
+            msg.final ? msg.dataVersion : undefined);
           if (msg.lang) { _projCache.delete(msg.lang); projLocalDel(msg.lang); }   // 第二百零六次：两级缓存同步失效
+          // P0-②（2026-09-04）：末块写完后主动 loadProjCached 回填两级缓存——重建的每个
+          //   分块都删 storage.local（防读半截），建完却从不回填，导致重建后首个页面必全表
+          //   扫库（实测 5.7s）。此处 SW 正热，顺手扫一次填缓存（await，代价落进重建后台，
+          //   对用户不可见）；之后的首载命中 storage.local（百 ms 级），SW 休眠也不怕。
+          if (msg.final && msg.lang) {
+            const _tRefill = Date.now();
+            try {
+              await loadProjCached(msg.lang);
+              console.log(`[VocabRadar][word-db] 重建末块回填投影缓存完成: ${msg.lang} (${Date.now() - _tRefill}ms)`);
+            } catch (e) {
+              console.warn('[VocabRadar][word-db] 重建末块回填投影缓存失败（下次加载时扫描回填）:', e && e.message);
+            }
+          }
+          sendResponse({ ok: true, written: (msg.entries || []).length });
+        } catch (e) {
+          sendResponse({ ok: false, error: String((e && e.message) || e) });
+        }
+        return true;
+      }
+      case 'WORD_DB_BULK_TRANS': {
+        // 反思（2026-09-04）：内置翻译包逐块即时写 d_trans（与 BULK_WRITE 同口径，
+        //   不打构建标记——释义回填失败不阻塞词典构建，靠日志明示＋下次版本重建覆盖）。
+        try {
+          await idbBulkTrans(msg.lang, msg.entries || [], msg.translationLang);
           sendResponse({ ok: true, written: (msg.entries || []).length });
         } catch (e) {
           sendResponse({ ok: false, error: String((e && e.message) || e) });
@@ -545,6 +685,11 @@ export async function handleWordDbMessage(msg, sender, sendResponse) {
         // 反思（2026-08-16 第六十七次）：逐词词形还原--页面不拉整表，
         //   每次只查一个词（首次构建 lemmatizer 可能读 IDB/首次下载，走 try/catch 兜底）。
         sendResponse(await swLemmatizeWord(msg.word, msg.lang || 'en'));
+        return true;
+      case 'LEMMATIZE_FAMILY':
+        // 反思（2026-09-04）：同族反查--页面展开原形折叠时查某原形的全部同族词。
+        //   类型名带 LEMMATIZE_ 前缀，沿用 service-worker.js 既有前缀转发，无需改路由。
+        sendResponse(await swLemmaFamily(msg.lemma, msg.lang || 'en', msg.limit));
         return true;
       default:
         return false;

@@ -49,9 +49,10 @@ import {
 
 const $ = (id) => document.getElementById(id);
 
-// 第二百二十三次：LLM 翻译渠道提示词默认模板（{}=原文，{lang}=释义语言）。
+// 第二百二十三次：LLM 翻译渠道提示词默认模板（{text}=原文，{lang}=释义语言）。
+// 2026-09-02 修正占位为 {text}（用户裁定：Please translate "{text}" in {lang}.）
 // 注意：后台 handleLlmTranslate 目前用硬编码英文提示词、不消费此键——接线属后台改造（本次仅保存）。
-const LLM_TRANSLATE_PROMPT = 'Please translate "{}" in {lang}.';
+const LLM_TRANSLATE_PROMPT = 'Please translate "{text}" in {lang}.';
 
 // 翻译渠道缺省表（与 lib/translator/index.js 的 DEFAULT_TRANS_CHANNELS 一致：LLM 默认不选）。
 // renderAll 回填与 loadSettings 默认共用；跨标签页 get(null) 拿不到默认键时也以它兜底。
@@ -64,8 +65,9 @@ const TRANS_CH_IDS = [['transChLlm', 'llm'], ['transChBuiltin', 'builtin'], ['tr
 
 // 目标/释义/界面语言 → Tesseract 语言代码映射（覆盖 TRANSLATE_LANGS 全 42 种），
 // OCR 本地复选框（renderOcrLangRow）动态渲染用，不写死三种语言。
-// 反思：tessdata 本地仅内置 eng/chi_sim（src/lib/vendor/tessdata/），offscreen 的 langPath
-//   指向本地 vendor、不远程下载——无包语言的复选框必须禁用，否则勾了必失败（如实呈现）。
+// 反思（2026-09-07）：tessdata 已改 CDN 回退链加载（见 offscreen.js TESSDATA_SOURCES，
+//   本地 vendor/tessdata 已删）。但 offscreen.resolveTessLang 仍只映射 zh→chi_sim、
+//   其余→eng 两档，未映射语言的复选框仍须禁用，否则勾了也只会用 eng 识别（如实呈现）。
 const TESS_LANG_CODES = {
   ar: 'ara', bg: 'bul', bn: 'ben', ca: 'cat', cs: 'ces', da: 'dan', de: 'deu', el: 'ell',
   en: 'eng', es: 'spa', fa: 'fas', fi: 'fin', fil: 'fil', fr: 'fra', he: 'heb', hi: 'hin',
@@ -74,7 +76,8 @@ const TESS_LANG_CODES = {
   sh: 'hrv', sk: 'slk', sl: 'slv', sv: 'swe', ta: 'tam', tr: 'tur', uk: 'ukr', ur: 'urd',
   vi: 'vie', zh: 'chi_sim'
 };
-// 本地已内置语言包的 tess 代码（新增语言包须同步 vendor/tessdata 目录）
+// resolveTessLang 已映射的 tess 代码（eng/chi_sim 走 CDN 回退链拉取，见 offscreen.js；
+// 新增映射须同步 offscreen.resolveTessLang）
 const BUNDLED_TESS_PACKS = new Set(['eng', 'chi_sim']);
 
 // 引导页自身文案（中英双语，跟随界面语言；data-key 与 HTML 属性对应）
@@ -95,7 +98,7 @@ const MSG = {
     zh: '语音识别引擎：本地 Whisper（模型越大越准也越慢，首次使用需下载），或 OpenAI 兼容转写 API（填接口地址/模型名/Key）。与上面的对话模型互不相关。'
   },
   ocrEngineDesc: {
-    en: 'OCR engine for screenshots/video frames: local Tesseract (pick languages among the interface / target / meaning languages), or a vision LLM API (needs image input support).',
+    en: 'OCR engine for screenshots/video frames: local Tesseract (pick languages among the interface / target / definition languages), or a vision LLM API (needs image input support).',
     zh: '截图/视频帧的文字识别引擎：本地 Tesseract（在界面/目标/释义三种语言中勾选要识别的语言），或大模型视觉识别 API（需模型支持图片输入）。'
   },
   modelDesc: {
@@ -110,11 +113,11 @@ const MSG = {
   //   恢复完整标签（226 次的悬浮提示键 tipChat* 随之删除）；"Anthropic 兼容"表述对齐
   //   "OpenAI 兼容"（自定义网关同样可用，并非只有官方端点）。
   fieldChatWordPrompt: {
-    en: 'Chat prompt for words ({} = selected text, {lang} = meaning language)',
-    zh: '单词类查询提示词（{} = 选中文本，{lang} = 释义语言）'
+    en: 'Chat prompt for words ({text} = selected text, {lang} = definition language)',
+    zh: '单词类查询提示词（{text} = 选中文本，{lang} = 释义语言）'
   },
   fieldChatSidebarPrompt: {
-    en: 'Chat prompt for sidebars ({lang} = meaning language; body text is sent as context)',
+    en: 'Chat prompt for sidebars ({lang} = definition language; body text is sent as context)',
     zh: '侧栏提示词（{lang} = 释义语言；正文作为上下文另行发送）'
   },
   groupTextHint: { en: 'Word Hints on Pages', zh: '网页生词提示' },
@@ -729,7 +732,7 @@ async function loadSettings() {
     ocrLlmModel: '',
     ocrLlmApiKey: '',
     translationChannels: DEFAULT_TRANS_CH,   // 第二百二十三次：改引常量（LLM 渠道默认不选，其余全选）
-    llmTranslatePrompt: LLM_TRANSLATE_PROMPT,   // LLM 翻译渠道提示词（{}=原文，{lang}=注释语言）
+    llmTranslatePrompt: LLM_TRANSLATE_PROMPT,   // LLM 翻译渠道提示词（{text}=原文，{lang}=释义语言）
     // 第一百零二次：asrFirstChunkSec 默认值条目移除（唯一来源 src/data/config.json）
     textStyle: 'none',
     annotationStyle: 'none',
@@ -753,7 +756,7 @@ async function loadSettings() {
 }
 
 function renderAll(res) {
-  // 语言控件
+  // 语言控件（2026-09-02 释义语言统一英文名称：meaningLanguage 固定用 LANG_NAMES_EN）
   renderLangSelect($('uiLang'), UI_LANGS, res.uiLanguage);
   renderLangSelect($('learnLanguage'), TRANSLATE_LANGS, res.learnLanguage);
   renderLangSelect($('meaningLanguage'), TRANSLATE_LANGS, res.meaningLanguage, LANG_NAMES_EN);
@@ -965,12 +968,12 @@ function renderOcrLangRow(res) {
     if (!cb) return;
     const tess = TESS_LANG_CODES[langCode];
     cb.dataset.tess = tess || '';
-    const hasPack = !!tess && BUNDLED_TESS_PACKS.has(tess);
+    const hasPack = !!tess;   // 42 语全映射，仅表外语言兜底禁用
     cb.disabled = !hasPack;
     const lbl = cb.closest('label.chk');
     if (lbl) {
       lbl.classList.toggle('disabled', !hasPack);
-      lbl.title = (!hasPack && tess) ? m('ocrLangNoPack') : '';
+      lbl.title = '';   // 42 语全放开后无"无包"场景（ocrLangNoPack 文案已删）
     }
     cb.checked = stored ? (!!tess && stored[tess] === true) : hasPack;
   });

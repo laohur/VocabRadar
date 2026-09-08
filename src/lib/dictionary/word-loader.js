@@ -5,8 +5,10 @@
 // 装载函数（loadWordfreq/loadWordlists）与词典无关--仅在初始化或词典数据
 //   缺失/不全时启用（由 projection.js 的 _rebuildFromSources 调用），装载完成
 //   经 bulkWriteDictionary 送入词典（word-db.js）后不再读取（readme 权威设计）。
-// 含：decompressViaBackground（后台 SW 代解压回退）、loadWordfreq（gzip 解压 +
-//   msgpack/cBpack 解码 -> Map<word, rank>）、loadWordlists（JSON -> Map<word, tags>）。
+// 含：fetchWfViaBackground（2026-09-08 HF dataset 中转，SW 直传 ArrayBuffer）、
+//   loadWordfreq（HF CDN 拉取 + DecompressionStream 解压 + msgpack/cBpack 解码 ->
+//   Map<word, rank>）、loadWordlists（JSON -> Map<word, tags>）、
+//   loadBuiltinEnZh（内置英中翻译包 JSON -> Map<word, translation定稿字符串>）。
 // 仅使用 state.js 的 _ts() 时间戳辅助，无共享状态写入（产物 Map 由调用方消费）。
 // ============================================================
 
@@ -14,35 +16,33 @@ import { _ts } from './state.js';
 import { decode as msgpackDecode } from '../vendor/msgpack-lite.js';
 
 /**
- * 通过 background Service Worker 解压 gzip 数据
- * 反思（2026-08-11 第二十三次）：Firefox content script 中 DecompressionStream
- *   可能不可用或返回 Xray 包装的 ArrayBuffer。SW 有完整 Web API 访问权限，
- *   且不受 Xray 限制，可作为回退方案。
- *   数据通过 chrome.runtime.sendMessage 传输（structured clone 支持 ArrayBuffer）。
- * @param {ArrayBuffer} compressed 压缩数据
- * @returns {Promise<ArrayBuffer|null>} 解压后的 ArrayBuffer，失败返回 null
+ * 通过 background Service Worker 拉 wordfreq 数据文件（2026-09-08 HF dataset CDN 化）
+ * 背景：42 语 small_*.msgpack.gz 不随包，改由 HF dataset vocabradar/wordfreq 拉取。
+ *   content script 受宿主页面 CSP connect-src 约束（B站/YouTube 等不放行
+ *   huggingface.co），须由 SW 代理 fetch（含 files.json SHA-256 校验，见
+ *   service-worker.js handleWfFetch；SW 恒为 secure context，crypto.subtle 可用）。
+ * @param {string} file 相对路径（data/small_xx.msgpack.gz，SW 端正则白名单，防借道 SSRF）
+ * @returns {Promise<{ok:true,data:ArrayBuffer}|null>} 成功返回 {ok,data}（SW 直传，
+ *   结构化克隆支持 ArrayBuffer），失败返回 null
  */
-function decompressViaBackground(compressed) {
+function fetchWfViaBackground(file) {
   return new Promise((resolve) => {
     try {
-      chrome.runtime.sendMessage(
-        { type: 'DECOMPRESS_GZIP', data: compressed },
-        (response) => {
-          if (chrome.runtime.lastError) {
-            console.warn('[VocabRadar][dictionary] 后台解压消息错误:', chrome.runtime.lastError.message);
-            resolve(null);
-            return;
-          }
-          if (response && response.ok && response.data) {
-            resolve(response.data);
-          } else {
-            console.warn('[VocabRadar][dictionary] 后台解压返回失败:', response && response.error);
-            resolve(null);
-          }
+      chrome.runtime.sendMessage({ type: 'WF_FETCH', file }, (response) => {
+        if (chrome.runtime.lastError) {
+          console.warn('[VocabRadar][dictionary] wordfreq 后台拉取消息错误:', chrome.runtime.lastError.message);
+          resolve(null);
+          return;
         }
-      );
+        if (response && response.ok && response.data) {
+          resolve(response);
+        } else {
+          console.warn('[VocabRadar][dictionary] wordfreq 后台拉取失败:', response && response.error);
+          resolve(null);
+        }
+      });
     } catch (e) {
-      console.warn('[VocabRadar][dictionary] 后台解压消息发送失败:', e);
+      console.warn('[VocabRadar][dictionary] wordfreq 后台拉取消息发送失败:', e);
       resolve(null);
     }
   });
@@ -50,7 +50,7 @@ function decompressViaBackground(compressed) {
 
 /**
  * 加载 wordfreq 数据文件（装载函数，与词典无关--仅初始化或词典数据缺失/不全时启用）
- * 流程：fetch .gz -> DecompressionStream 解压（或 SW 回退）-> msgpack 解码 -> 按 frequency 降序排序 -> 构建 Map<word, rank>
+ * 流程：SW 经 HF dataset 拉 .gz（SHA-256 已校验）-> DecompressionStream 解压（或 SW 回退）-> msgpack 解码 -> 构建 Map<word, rank>
  * 反思（2026-08-20 第八十五次）：词频不是独立缓存，而是词典字段（words store 记录 rank 字段）。
  *   装载完成由 _loadDict 送入词典（bulkWriteDictionary），此后页面加载只从词典投影读，
  *   本函数仅在词典缺少该语言数据时执行（用户："词频、词形等都是扩展刚安装初始化一次性读取，
@@ -59,57 +59,35 @@ function decompressViaBackground(compressed) {
  * @returns {Promise<Map<string, number>>} Map<word_lower, rank>
  */
 export async function loadWordfreq(lang) {
-  const url = chrome.runtime.getURL(`src/data/wordfreq/small_${lang}.msgpack.gz`);
-  console.log(`[VocabRadar][dictionary][${_ts()}] 词典缺少 ${lang} 数据，装载词频源文件: ${url}`);
-  // 反思（2026-08-05 修正）：fetch 可能抛异常（扩展更新后页面未刷新、URL 失效、CSP 等），
+  // 2026-09-08（用户批复"删包内 42 语 .bin"+ HF dataset）：词频包不再随扩展分发，
+  //   改经 SW 从 HF dataset vocabradar/wordfreq 拉取（files.json SHA-256 校验在 SW 端）。
+  const file = `data/small_${lang}.msgpack.gz`;
+  console.log(`[VocabRadar][dictionary][${_ts()}] 词典缺少 ${lang} 数据，经后台拉取词频源文件: ${file}`);
+  // 反思（2026-08-05 修正）：拉取可能抛异常（扩展更新后页面未刷新、网络失败等），
   //   未包 try/catch 会导致 loadDictionary reject -> text-hint startHint 中断 -> 文本提示不出现。
-  //   修正：fetch 包 try/catch，失败返回空 Map（所有词按表外处理，不阻塞功能）。
-  let res;
-  try {
-    res = await fetch(url);
-  } catch (e) {
-    console.warn(`[VocabRadar][dictionary][${_ts()}] wordfreq fetch 异常: ${e && e.message}, 返回空 Map`);
-    return new Map();
-  }
-  if (!res.ok) {
-    console.warn(`[VocabRadar][dictionary][${_ts()}] wordfreq 加载失败: HTTP ${res.status}, 返回空 Map`);
+  //   修正：失败返回空 Map（所有词按表外处理，不阻塞功能）——fetchWfViaBackground
+  //   内部已兜底为 resolve(null)，永不 reject。
+  const r = await fetchWfViaBackground(file);
+  if (!r) {
+    console.warn(`[VocabRadar][dictionary][${_ts()}] wordfreq 拉取失败（${file}），返回空 Map`);
     return new Map();
   }
 
-  // 1. gzip 解压
-  // 反思（2026-08-11 第二十三次）：Firefox content script 可能无 DecompressionStream
-  //   或 DecompressionStream 返回的 ArrayBuffer 被 Xray 包装导致后续操作失败。
-  //   修正：优先用 DecompressionStream，失败时回退到后台引擎解压
-  //   （SW 有完整 Web API 访问权限，且不受 Xray 限制）。
-  //   最后一道防线：用 fetch + Content-Encoding trick（Firefox 特有行为）。
-  const compressed = await res.arrayBuffer();
+  // 1. gzip 解压（DecompressionStream 单路径：Chrome 80+, Firefox 113+）。
+  // 2026-09-08（用户批复）：删旧"回退 SW 代解压"分支——直传改造后该分支已无触发
+  //   条件（SW 从未实现 DECOMPRESS_GZIP handler，sendMessage 恒得 lastError，纯死路）。
+  //   解压失败即返回空 Map（所有词按表外处理），不阻塞功能。
+  const compressed = r.data;
   console.log(`[VocabRadar][dictionary][${_ts()}] wordfreq[${lang}] 压缩大小: ${(compressed.byteLength / 1024).toFixed(1)} KB`);
   let decompressedBuf;
   try {
-    if (typeof DecompressionStream !== 'undefined') {
-      // 方案 A：原生 DecompressionStream（Chrome 80+, Firefox 113+）
-      const decompressedStream = new Response(compressed).body
-        .pipeThrough(new DecompressionStream('gzip'));
-      decompressedBuf = await new Response(decompressedStream).arrayBuffer();
-      console.log(`[VocabRadar][dictionary][${_ts()}] wordfreq[${lang}] DecompressionStream 解压成功: ${(decompressedBuf.byteLength / 1024).toFixed(1)} KB`);
-    } else {
-      // 方案 B：Firefox 无 DecompressionStream -> 通过 background SW 解压
-      console.warn(`[VocabRadar][dictionary][${_ts()}] DecompressionStream 不可用，回退到后台引擎解压`);
-      decompressedBuf = await decompressViaBackground(compressed);
-      if (!decompressedBuf) throw new Error('后台引擎解压返回空');
-      console.log(`[VocabRadar][dictionary][${_ts()}] wordfreq[${lang}] 后台解压成功: ${(decompressedBuf.byteLength / 1024).toFixed(1)} KB`);
-    }
+    const decompressedStream = new Response(compressed).body
+      .pipeThrough(new DecompressionStream('gzip'));
+    decompressedBuf = await new Response(decompressedStream).arrayBuffer();
+    console.log(`[VocabRadar][dictionary][${_ts()}] wordfreq[${lang}] DecompressionStream 解压成功: ${(decompressedBuf.byteLength / 1024).toFixed(1)} KB`);
   } catch (e) {
     console.error(`[VocabRadar][dictionary][${_ts()}] wordfreq[${lang}] gzip 解压失败:`, e);
-    // 最后尝试方案 B（如果方案 A 失败）
-    try {
-      decompressedBuf = await decompressViaBackground(compressed);
-      if (!decompressedBuf) throw new Error('后台解压也返回空');
-      console.log(`[VocabRadar][dictionary][${_ts()}] wordfreq[${lang}] 后台回退解压成功: ${(decompressedBuf.byteLength / 1024).toFixed(1)} KB`);
-    } catch (e2) {
-      console.error(`[VocabRadar][dictionary][${_ts()}] wordfreq[${lang}] 所有解压方案均失败:`, e2);
-      return new Map();
-    }
+    return new Map();
   }
 
   // 2. msgpack 解码：得到数组或对象
@@ -194,6 +172,21 @@ export async function loadWordfreq(lang) {
     }
   }
   console.log(`[VocabRadar][dictionary][${_ts()}] wordfreq[${lang}] 构建完成: ${map.size} 词`);
+  // 2026-09-08（用户批复"HF 数据更新自动重建"）：成功拉取并解码后，把 SW 校验过的
+  //   sha256/bytes 写入 storage.wfInstalled[lang]（SW checkWfUpdates 每 24h 轮询比对的
+  //   基线），并清除 wfUpdates[lang] 待处理标记。失败路径（返回空 Map）不写——保持
+  //   旧基线，等下次更新检测或重装触发重拉。
+  try {
+    if (r && r.sha256) {
+      const { wfInstalled = {}, wfUpdates = {} } = await chrome.storage.local.get(['wfInstalled', 'wfUpdates']);
+      wfInstalled[lang] = { sha256: r.sha256, bytes: r.bytes || 0, ts: Date.now() };
+      delete wfUpdates[lang];
+      await chrome.storage.local.set({ wfInstalled, wfUpdates });
+      console.log(`[VocabRadar][dictionary][${_ts()}] wordfreq[${lang}] 已记录源版本 sha256=${String(r.sha256).slice(0, 8)}…（更新轮询基线）`);
+    }
+  } catch (e) {
+    console.warn(`[VocabRadar][dictionary][${_ts()}] wordfreq[${lang}] 记录源版本失败（不影响装载）:`, e);
+  }
   // 反思（2026-08-20 第八十五次）：词频是词典字段，不再写 dictCache。
   //   送入词典（rank 字段 + __built__ 标记）由 _loadDict 的 bulkWriteDictionary 统一完成。
   return map;
@@ -223,5 +216,58 @@ export async function loadWordlists() {
     }
   }
   console.log(`[VocabRadar][dictionary][${_ts()}] wordlists 装载完成: ${map.size} 词`);
+  return map;
+}
+
+/**
+ * 加载内置英中翻译包（装载函数，与词典无关--仅初始化或词典数据缺失/不全时启用）
+ * 反思（2026-09-04）：小程序内置英中翻译包（VocabRadar/preprocess/build_translation_zh.py
+ *   产出，ECDICT+LLM，见 src/data/translations/ATTRIBUTION.md）接入扩展——不走内存直查
+ *   （违反"业务只从词典读"），而在此装载为 Map<word, translation定稿字符串>，
+ *   由 projection._rebuildFromSources 经 bulkWriteTranslations 一次性写入词典 d_trans
+ *   分表（translationLang='zh'），之后 translator 首层词典缓存即命中，在线只补真正缺词。
+ *   仅 learnLanguage=en 时调用；其它语言对不受影响（translationLang 校验天然隔离）。
+ *   释义定稿：数组 join(' | ')，与详细模式 translations.join(' | ') 全列口径一致。
+ * @returns {Promise<Map<string, string>>} Map<word_lower, translation>
+ */
+export async function loadBuiltinEnZh() {
+  const url = chrome.runtime.getURL('src/data/translations/en_zh.json');
+  console.log(`[VocabRadar][dictionary][${_ts()}] 装载内置英中翻译包: ${url}`);
+  let res;
+  try {
+    res = await fetch(url);
+  } catch (e) {
+    console.warn(`[VocabRadar][dictionary][${_ts()}] 内置翻译包 fetch 异常: ${e && e.message}, 返回空 Map（释义走在线）`);
+    return new Map();
+  }
+  if (!res.ok) {
+    console.warn(`[VocabRadar][dictionary][${_ts()}] 内置翻译包加载失败: HTTP ${res.status}, 返回空 Map（释义走在线）`);
+    return new Map();
+  }
+  let obj;
+  try {
+    obj = await res.json();
+  } catch (e) {
+    console.warn(`[VocabRadar][dictionary][${_ts()}] 内置翻译包 JSON 解析失败，返回空 Map（释义走在线）`);
+    return new Map();
+  }
+  const map = new Map();
+  if (obj && typeof obj === 'object') {
+    for (const word in obj) {
+      if (!Object.prototype.hasOwnProperty.call(obj, word)) continue;
+      const v = obj[word];
+      const arr = Array.isArray(v) ? v : (typeof v === 'string' ? [v] : null);
+      if (!arr) continue;
+      const items = [];
+      for (const t of arr) {
+        if (typeof t !== 'string') continue;
+        const s = t.trim();
+        if (s && items.indexOf(s) === -1) items.push(s);
+        if (items.length >= 5) break;
+      }
+      if (items.length > 0) map.set(String(word).toLowerCase(), items.join(' | '));
+    }
+  }
+  console.log(`[VocabRadar][dictionary][${_ts()}] 内置英中翻译包装载完成: ${map.size} 词`);
   return map;
 }

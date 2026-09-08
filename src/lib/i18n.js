@@ -21,14 +21,14 @@
 
 // === UI 语言列表：前十大语言（按总使用人数从大到小排，第二百二十八次调整 fr/ar 顺序） ===
 // 仅用于 #uiLangSelect 界面语言下拉菜单
-// 与 preprocess.py UI_LANGS 一致
+// 与 preprocess.mjs UI_LANGS 一致
 export const UI_LANGS = ['en', 'zh', 'hi', 'es', 'fr', 'ar', 'bn', 'pt', 'ru', 'ja'];
 
 // （第二百二十五次：旧别名 SUPPORTED_LANGS 已删除——全库引用已统一为 UI_LANGS）
 
 // === 目标/释义语言列表：wordfreq 全部支持的语言（42种） ===
 // 用于 #learnLanguage 和 #meaningLanguage 下拉菜单
-// 与 preprocess.py 动态扫描的 small_*.msgpack.gz 文件列表一致（集合一致，顺序仅供展示）
+// 与 preprocess.mjs 动态扫描的 small_*.msgpack.bin 文件列表一致（集合一致，顺序仅供展示）
 // 注：UI语言仅10种，但目标/释义语言扩展到42种（用户要求"几十种"）
 // 第二百二十八次（用户："三种语言列表都从规模往下排"）：按语言使用规模（总使用人数）
 //   从大到小排序，替代原字母序；仅影响下拉展示顺序，词典/词频按语言代码取用不受影响。
@@ -111,7 +111,7 @@ const DICT = {
     // 第一百七十六次：去掉 🦫（Win10 无字形），小图标改由 brandIconSVG() 内联
     'tab.subtitle': '🎬 Subtitles',
     'tab.words': '📖 Vocabulary',
-    'tab.train': '📱 Train',
+    'tab.learn': '📱 Learn',
     'tool.rank': 'Rank',
     'tool.annotation': 'Annotation',
     'tool.detail': 'Detail',
@@ -133,7 +133,7 @@ const DICT = {
     'chat.failed': 'Request failed',
     'chat.openGuide': 'Open settings to configure the model',
     'chat.noText': 'No text to discuss',
-    // 第九十六次：下载音频按钮 toast（弹幕按钮移除，danmaku 相关键保留给 bilibili-danmaku.js 路径）
+    // 第九十六次：下载音频按钮 toast（弹幕按钮已移除、弹幕模块已删除）
     'toast.dlAudioBusy': 'Download already in progress...',
     'toast.dlAudioOk': 'Audio saved',
     'toast.dlAudioFail': 'Audio download failed: ',
@@ -214,7 +214,13 @@ const DICT = {
     'asr.stop': 'Stop recognition',
     'asr.listening': 'Listening...',
     'asr.modelLoading': 'Loading ASR model...',
-    'train.tip': 'Scan with WeChat to use the VocabRadar mini-program<br>Learn vocabulary anytime',
+    'learn.tip': 'Scan with WeChat to use the VocabRadar mini-program<br>Learn vocabulary anytime',
+  // G3（2026-09-08）：learn 面板按钮行（§6.2）——导入当前侧栏内容为草稿卷轴
+  'learn.importDraft': '📚 Import to My Scrolls',
+  'learn.importAndOpen': '↗ Import and Open',
+  'learn.importOk': 'Draft imported — view it in My Scrolls on the VocabRadar site',
+  'learn.importFail': 'Import failed — see console for details',
+  'learn.noContent': 'No page text yet — browse and scan a page first',
     // toast
     'toast.copied': 'Copied to clipboard',
     'toast.copyFail': 'Copy failed, please select text manually',
@@ -225,7 +231,7 @@ const DICT = {
     'toast.commentFilled': 'Filled into comment box',
     'toast.commentFail': 'Main comment box not found (scroll to comments and retry)',
     'toast.commentTrimmed': 'Comment too long, randomly picked {picked}/{total} words',
-    'toast.trainNoCopy': 'Train panel has nothing to copy',
+    'toast.learnNoCopy': 'Learn panel has nothing to copy',
     'toast.noVideo': 'Video element not found, cannot jump',
     'toast.asrUnavail': 'Real-time ASR unavailable',
     'toast.asrStarted': 'Real-time ASR started (loading model…)',
@@ -235,7 +241,7 @@ const DICT = {
     'toast.asrNeedActiveTab': 'Authorization needed: click the VocabRadar icon on the toolbar once (grants tab access), then click ASR again.',
     // popup
     'popup.learnLang': 'Target Language',
-    'popup.meaningLang': 'Annotation Language',
+    'popup.meaningLang': 'Definition language',
     'popup.minRank': 'Min Rank',
     'popup.sidebar': 'Video Hint',
     'popup.webSidebar': 'Web Hint',
@@ -257,7 +263,7 @@ const DICT = {
     'ws.close': 'Close (refresh to restore)',
     'ws.langSettings': 'Language Settings',
     'ws.learnLang': 'Target Language',
-    'ws.meaningLang': 'Annotation Language',
+    'ws.meaningLang': 'Definition language',
     'ws.tabSentences': 'Sentences',
     'ws.tabWords': 'Vocabulary',
     'ws.annotation': 'Annotate',
@@ -388,6 +394,9 @@ const DICT = {
     'th.definition': 'Definition',
     'th.tags': 'Tags',
     'th.lemma': 'Lemma',
+    // 2026-09-04（用户："词形还原即便原形也要说，右加折叠符号"）：词表原形折叠按钮 title
+    'th.lemmaExpand': 'Show same-lemma words',
+    'th.lemmaCollapse': 'Collapse',
     'th.querying': 'Querying...',
     // 第一百八十五次：重复键后者生效，同步改为纯符号
     'th.notWord': 'Common word',
@@ -451,7 +460,7 @@ const DICT = {
     'title': 'VocabRadar',
     'tab.subtitle': '🎬字幕',
     'tab.words': '📖词汇',
-    'tab.train': '📱练习',
+    'tab.learn': '📱学习',
     'tool.rank': '词频',
     'tool.annotation': '注释',
     'tool.detail': '详略',
@@ -474,7 +483,7 @@ const DICT = {
     'chat.failed': '请求失败',
     'chat.openGuide': '打开设置配置模型',
     'chat.noText': '没有可讨论的文本',
-    // 第九十六次：下载音频按钮 toast（弹幕按钮移除，danmaku 相关键保留给 bilibili-danmaku.js 路径）
+    // 第九十六次：下载音频按钮 toast（弹幕按钮已移除、弹幕模块已删除）
     'toast.dlAudioBusy': '已有下载任务进行中...',
     'toast.dlAudioOk': '音频已保存',
     'toast.dlAudioFail': '音频下载失败：',
@@ -557,7 +566,13 @@ const DICT = {
     'asr.stop': '停止识别',
     'asr.listening': '识别中...',
     'asr.modelLoading': '加载 ASR 模型中...',
-    'train.tip': '微信扫码使用「VocabRadar」小程序<br>随时随地背单词',
+    'learn.tip': '微信扫码使用「VocabRadar」小程序<br>随时随地背单词',
+  // G3（2026-09-08）：learn 面板按钮行（§6.2）——导入当前侧栏内容为草稿卷轴
+  'learn.importDraft': '📚 导入到我的卷轴学习',
+  'learn.importAndOpen': '↗ 并且打开',
+  'learn.importOk': '已存为草稿卷轴，可在网站「我的卷轴」查看',
+  'learn.importFail': '导入失败，详见控制台',
+  'learn.noContent': '暂无正文，请先浏览网页完成扫描',
     'toast.copied': '已复制到剪切板',
     'toast.copyFail': '复制失败，请手动选择文本',
     'toast.noContent': '无内容可填入（字幕未加载或生词表为空）',
@@ -567,7 +582,7 @@ const DICT = {
     'toast.commentFilled': '已填入评论框',
     'toast.commentFail': '未找到主评论框（请滚动到评论区顶部后重试）',
     'toast.commentTrimmed': '评论超长，已随机选取 {picked}/{total} 词',
-    'toast.trainNoCopy': '练习面板无需复制',
+    'toast.learnNoCopy': '学习面板无需复制',
     'toast.asrUnavail': '实时识别不可用',
     'toast.asrStarted': '实时识别已开始（正在加载模型…）',
     'toast.asrStopped': '实时识别已停止',
@@ -724,6 +739,9 @@ const DICT = {
     'th.definition': '释义',
     'th.tags': '标签',
     'th.lemma': '原形',
+    // 2026-09-04（用户："词形还原即便原形也要说，右加折叠符号"）：词表原形折叠按钮 title
+    'th.lemmaExpand': '展开同原形词',
+    'th.lemmaCollapse': '收起',
     'th.querying': '查询中…',
     'th.noDef': '—',
     'th.notWord': '非生词',

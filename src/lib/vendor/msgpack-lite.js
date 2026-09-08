@@ -1,10 +1,10 @@
 // 轻量级 msgpack 解码器（仅解码，无编码）
 //
-// 用途：解码 wordfreq 的 small_*.msgpack.gz 文件
+// 用途：解码 wordfreq 的 small_*.msgpack.bin 文件（内容仍 gzip）
 // 数据格式：dict<string, number>，number 为 float（每百万词出现次数）
 //
 // 设计原则：
-//   1. 仅实现解码，不需要编码（preprocess.py 已在 Python 端编码）
+//   1. 仅实现解码，不需要编码（preprocess.mjs 已在 Node 端编码）
 //   2. 覆盖 msgpack 全部基础类型（nil/bool/int/float/str/array/map），
 //      通用性足以应对任何合法 msgpack 数据
 //   3. 零依赖，纯 ES module，避免引入第三方库增加扩展体积

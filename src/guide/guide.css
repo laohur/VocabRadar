@@ -152,7 +152,8 @@ body {
 
 /* 字段行 */
 /* 第二百二十八次（用户："语义相近距离近，反之同理；行内距离远，比栏之间还远，调整"）：
-   行内 gap 18→10、行距 padding 6→3——同语义控件贴近，行距小于行内间距，层级正确 */
+    行内 gap 18→10、行距 padding 6→3——同语义控件贴近，行距小于行内间距，层级正确 */
+/* 2026-09-02 细项之间紧邻：ASR/OCR API 网址默认 60 字符，细项紧邻；Background 行紧邻 */
 .field-row {
   display: flex;
   align-items: flex-end;
@@ -160,10 +161,17 @@ body {
   flex-wrap: wrap;
   padding: 3px 0;
 }
+.field-row.tight { gap: 6px; padding: 2px 0; }
+.field-row.tight .field.inline { gap: 4px 6px; }
+/* ASR/OCR API 网址默认 60 字符宽度 */
+#asrLlmBaseUrl, #ocrLlmBaseUrl { width: 60ch; max-width: 100%; min-width: 28ch; }
+/* 占位符灰色仅此处，输入框内文字保持正文色 */
+input::placeholder { color: var(--g-muted); opacity: 1; }
 .field { display: flex; flex-direction: column; gap: 4px; }
 /* 第二百一十一次（用户："其他也是，一个说明一选项的，单行放得下就单行"）：
-   短说明 + 小控件的字段加 .inline——说明与控件同一行；长文本字段不加、仍两行。 */
-.field label { font-size: 13px; color: var(--g-muted); }
+    短说明 + 小控件的字段加 .inline——说明与控件同一行；长文本字段不加、仍两行。 */
+/* 2026-09-02 释义语言统一英文/正文不用灰色：字段标签用正文色，只有占位符灰色 */
+.field label { font-size: 13px; color: var(--g-text); }
 /* 第二百二十三次：.inline 此前只有注释语义、无样式定义——补上：说明与控件同行可换行
    （引擎下拉、Whisper 规模、API 地址/模型/Key、OCR 语言复选等短字段用）。
    第二百二十八次：列向 gap 12→8，标签与填空贴近。 */
@@ -177,6 +185,16 @@ body {
   border-radius: 6px;
   font-size: 14px;
   background: #fff;
+  color: var(--g-text);
+}
+/* 2026-09-02 正文不用灰色，只有占位符灰色 */
+.field input::placeholder,
+.field textarea::placeholder {
+  color: var(--g-muted);
+  opacity: 1;
+}
+.field select:invalid,
+.field input:placeholder-shown {
   color: var(--g-text);
 }
 /* 模型行（第一百七十次）：接口地址/Key/提示词较长，给出更宽的输入框 */
@@ -201,17 +219,48 @@ body {
 .chk.disabled input { cursor: not-allowed; }
 
 /* 分组内的小标题（第一百七十四次）：用于在「模型」分组内区隔
-   「对话大模型」与「语音识别模型」两段互不相关的配置 */
+    「对话大模型」与「语音识别模型」两段互不相关的配置 */
+/* 2026-09-02 模型各子栏取消分割线改用不同底色 + 小标题样式（Tesseract 行不套用） */
 .sub-head {
-  margin: 16px 0 0;
-  padding-top: 12px;
-  border-top: 1px solid var(--g-border);
+  margin: 0;
+  padding: 10px 12px 8px;
   font-size: 14px;
   font-weight: 600;
-  color: var(--g-text);
+  color: var(--g-primary);
+  letter-spacing: 0.2px;
+  /* 取消分割线，改用底色区分 */
+  border-top: none;
 }
-.sub-head:first-child { margin-top: 4px; padding-top: 0; border-top: 0; }
-.sub-head + .style-desc { margin-top: 6px; }
+.sub-head:first-child { margin-top: 4px; }
+.sub-head + .style-desc { margin-top: 6px; padding: 0 12px; }
+/* 模型子栏底色区分（四段不同底色，取消分割线） */
+.model-subsec {
+  margin: 0 -18px;
+  padding: 6px 18px 10px;
+  border-radius: 8px;
+}
+.model-subsec + .model-subsec { margin-top: 8px; }
+.model-subsec-chat { background: #ffffff; --subsec-input-bg: #ffffff; }
+.model-subsec-trans { background: #f0f7f1; --subsec-input-bg: #f0f7f1; }
+.model-subsec-asr { background: #fef9e7; --subsec-input-bg: #fef9e7; }
+.model-subsec-ocr { background: #f0f4ff; --subsec-input-bg: #f0f4ff; }
+/* 填空也要用底色（输入框背景跟随子栏底色） */
+.model-subsec .field input[type="text"],
+.model-subsec .field input[type="password"],
+.model-subsec .field input[type="number"],
+.model-subsec .field select {
+  background: var(--subsec-input-bg);
+}
+/* 子栏内 field-row 保持紧邻语义：细项之间紧邻（gap 收紧） */
+.model-subsec .field-row { gap: 6px; padding: 2px 12px; }
+.model-subsec .style-desc { color: var(--g-text); }
+/* Tesseract supporting language 行不使用小标题样式，用普通正文标签 */
+.ocr-lang-label {
+  font-size: 13px;
+  font-weight: 400;
+  color: var(--g-text);
+  margin: 0 2px;
+}
 
 /* === 样式网格 === */
 /* 第二百二十八次：说明文字与上下控件的间距收紧（同栏内语义相近应贴近）。

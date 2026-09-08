@@ -80,14 +80,18 @@
 
       <!-- 模型（第二百二十三次重排：对话大模型 / 翻译 / 语音识别模型 / OCR 四小节；
            LLM 四参数一行、两提示词与正文最大长度各一行；ASR/OCR 引擎为下拉两行式） -->
-      <div class="group" id="group-model">
+      <!-- 2026-09-02 模型栏默认折叠 -->
+      <div class="group" id="group-model" data-collapsible>
         <div class="group-head">
+          <button class="group-toggle" type="button">▸</button>
           <span class="group-name" data-key="groupModel">模型</span>
         </div>
-        <div class="group-body">
-          <div class="sub-head" data-key="subHeadChat">对话大模型</div>
-          <p class="style-desc" data-key="modelDesc">对话（💬）功能所用的大模型接口。按 API 格式分三类：免费直连（无需账号）、OpenAI 格式、Anthropic 格式；后两类需自行申请 Key。</p>
-          <div class="field-row">
+        <div class="group-body" style="display:none;">
+          <!-- 2026-09-02 模型子栏取消分割线改用不同底色 + 小标题样式 -->
+          <div class="model-subsec model-subsec-chat">
+            <div class="sub-head" data-key="subHeadChat">对话大模型</div>
+            <p class="style-desc" data-key="modelDesc">对话（💬）功能所用的大模型接口。按 API 格式分三类：免费直连（无需账号）、OpenAI 格式、Anthropic 格式；后两类需自行申请 Key。</p>
+            <div class="field-row tight">
             <div class="field">
               <label for="llmProvider" data-key="fieldLlmProvider">对话模型来源</label>
               <select id="llmProvider"></select>
@@ -106,47 +110,37 @@
               <input id="llmApiKey" type="password" placeholder="sk-...">
             </div>
           </div>
-          <!-- 第二百二十八次（用户："你把文本跟填空拆分多行了"）：三字段各自一行、且标签与填空同行
-               （.field.inline），填空吃掉行内剩余宽度；完整占位符说明仍在标签上。 -->
-          <div class="field-row">
+          <div class="field-row tight">
             <div class="field inline" style="flex:1 1 480px;">
               <label for="chatWordPrompt" data-key="fieldChatWordPrompt">单词类查询提示词（{} = 选中文本，{lang} = 释义语言）</label>
               <input id="chatWordPrompt" type="text" style="flex:1 1 200px; min-width:200px;">
             </div>
           </div>
-          <div class="field-row">
+          <div class="field-row tight">
             <div class="field inline" style="flex:1 1 480px;">
               <label for="chatSidebarPrompt" data-key="fieldChatSidebarPrompt">侧栏提示词（{lang} = 释义语言；正文作为上下文另行发送）</label>
               <input id="chatSidebarPrompt" type="text" style="flex:1 1 200px; min-width:200px;">
             </div>
           </div>
-          <!-- 第二百二十九次（用户："填空短些，右对齐"）：标签居左，短填空（120px、数字右对齐）
-               与"字节"后缀推到行尾右对齐 -->
-          <div class="field-row">
-            <div class="field inline" style="flex:1 1 100%;">
+          <!-- 2026-09-02 Background 行细项紧邻：标签与填空紧邻，不再推至行尾 -->
+          <div class="field-row tight">
+            <div class="field inline" style="flex:1 1 auto; gap:6px;">
               <label for="chatContextMaxBytes"><span data-key="fieldChatContextMax">送入对话的作为背景的网页/字幕正文至多</span></label>
-              <span style="margin-left:auto; display:inline-flex; align-items:center; gap:8px;">
-                <input id="chatContextMaxBytes" type="number" min="1000" step="1000" placeholder="10000" style="width:120px; text-align:right;">
-                <span data-key="guideContextBytesSuffix">字节。</span>
-              </span>
+              <input id="chatContextMaxBytes" type="number" min="1000" step="1000" placeholder="10000" style="width:120px; text-align:right;">
+              <span data-key="guideContextBytesSuffix">字节。</span>
             </div>
           </div>
-          <!-- 第二百二十三次（用户："翻译 后面跟着一排候选框，第一行LLM（默认没选）后跟提示词
-               Please translate "{}" in {lang}.，下一行其他几个默认选中。火狐本身没翻译自然灰色不可选"）：
-               从「全局参数」组挪入模型分组。保存监听在 guide.js 补齐（此前勾选不落 storage）；
-               浏览器无 Translator API（如 Firefox）时「浏览器自身」由 JS 灰显禁用。 -->
-          <div class="sub-head" data-key="subHeadTrans">翻译</div>
+          </div><!-- /.model-subsec-chat -->
+          <div class="model-subsec model-subsec-trans">
+            <div class="sub-head" data-key="subHeadTrans">翻译</div>
           <p class="style-desc" data-key="transDesc">生词释义的在线翻译渠道（勾选启用，按序回退）：LLM 渠道走上方对话大模型，默认不选；其余渠道默认全启用。</p>
-          <div class="field-row">
+          <div class="field-row tight">
             <label class="chk"><input type="checkbox" id="transChLlm"><span data-key="transChLlm">LLM</span></label>
-            <!-- 第二百二十七次（用户："翻译 提示词黑框，跟别的不一样"）：原输入框裸放在 .field-row 里
-                 拿不到 .field input 的统一外观（默认浏览器边框发黑）——包进 .field 走统一样式；
-                 与 LLM 复选框同行不变。 -->
             <div class="field" style="flex:1 1 320px; min-width:240px;">
-              <input id="llmTranslatePrompt" type="text" placeholder="Please translate &quot;{}&quot; in {lang}.">
+              <input id="llmTranslatePrompt" type="text" placeholder="Please translate &quot;{text}&quot; in {lang}.">
             </div>
           </div>
-          <div class="field-row">
+          <div class="field-row tight">
             <label class="chk"><input type="checkbox" id="transChBuiltin"><span data-key="transChBuiltin">浏览器自身</span></label>
             <label class="chk"><input type="checkbox" id="transChBaidusug"><span data-key="transChBaidusug">百度联想</span></label>
             <label class="chk"><input type="checkbox" id="transChYoudaodict"><span data-key="transChYoudaodict">有道词典</span></label>
@@ -157,7 +151,9 @@
             <label class="chk"><input type="checkbox" id="transChBing"><span data-key="transChBing">Bing</span></label>
             <label class="chk"><input type="checkbox" id="transChLingva"><span data-key="transChLingva">Lingva</span></label>
           </div>
-          <div class="sub-head" data-key="subHeadAsr">语音识别模型</div>
+          </div><!-- /.model-subsec-trans -->
+          <div class="model-subsec model-subsec-asr">
+            <div class="sub-head" data-key="subHeadAsr">语音识别模型</div>
           <!-- 第二百二十六次（用户："asr 两行单选，第一行是本地，whisper模型是下拉，第二行是api。ocr同理"）：
                每行=引擎单选+该引擎细项（两行常驻、不再显隐切换）：
                行1=本地○+Whisper 模型下拉（value 仍存 tiny/base/…，offscreen 的 SUPPORTED_MODELS 只认这些，
@@ -165,7 +161,7 @@
                一种主流格式，Anthropic 无音频转写，故无格式选项）。radio value 定名 local/api
                （第二百二十五次由 'llm' 改名）。选中哪行即启用哪个引擎，未选行的细项仅作预配置。 -->
           <p class="style-desc" data-key="asrModelDesc">语音识别引擎：本地 Whisper（模型越大越准也越慢，首次使用需下载），或 OpenAI 兼容转写 API（填接口地址/模型名/Key）。与上面的对话模型互不相关。</p>
-          <div class="field-row">
+          <div class="field-row tight">
             <label class="g-radio"><input type="radio" name="asrEngine" value="local" checked><span data-key="asrEngineLocal">本地</span></label>
             <div class="field inline">
               <label for="asrModelSize" data-key="fieldAsrModel">Whisper 模型</label>
@@ -183,41 +179,41 @@
               </select>
             </div>
           </div>
-          <div class="field-row">
+          <div class="field-row tight">
             <label class="g-radio"><input type="radio" name="asrEngine" value="api"><span data-key="asrEngineApi">API</span></label>
-            <!-- 第二百二十九次（用户："asr ocr api的网址默认长度翻倍，细项之间等距"）：
-                 地址弹性 2 倍（默认基准 300px），模型/Key 各 1 倍（150px），行内 gap 统一 10px 等距 -->
-            <div class="field inline" style="flex:2 1 300px;">
+            <!-- 2026-09-02 asr api 网址默认 60 字符，细项紧邻 -->
+            <div class="field inline" style="flex:0 0 60ch; min-width:28ch;">
               <label for="asrLlmBaseUrl" data-key="fieldLlmBaseUrl">接口地址</label>
-              <input id="asrLlmBaseUrl" type="text" placeholder="https://api.openai.com/v1">
+              <input id="asrLlmBaseUrl" type="text" placeholder="https://api.openai.com/v1" size="60" style="width:60ch; max-width:100%;">
             </div>
-            <div class="field inline" style="flex:1 1 150px;">
+            <div class="field inline" style="flex:0 1 18ch; min-width:14ch;">
               <label for="asrLlmModel" data-key="fieldAsrLlmModel">转写模型</label>
-              <input id="asrLlmModel" type="text" placeholder="whisper-1">
+              <input id="asrLlmModel" type="text" placeholder="whisper-1" style="width:18ch;">
             </div>
-            <div class="field inline" style="flex:1 1 150px;">
+            <div class="field inline" style="flex:0 1 18ch; min-width:14ch;">
               <label for="asrLlmApiKey" data-key="fieldLlmApiKey">API Key</label>
               <input id="asrLlmApiKey" type="password" placeholder="sk-...">
             </div>
           </div>
-          <div class="sub-head" data-key="subHeadOcr">OCR</div>
+          </div><!-- /.model-subsec-asr -->
+          <div class="model-subsec model-subsec-ocr">
+            <div class="sub-head" data-key="subHeadOcr">OCR</div>
           <!-- 第二百二十六次（用户："ocr同理"）：每行=引擎单选+该引擎细项（两行常驻）：
                行1=本地○+Tesseract 语言三复选（标签固定为角色名 界面/目标/释义，不随语言名变、
                不要特指、默认全选；各自的勾选"值"由 JS 按当前 界面语言/目标语言/释义语言 动态映射
                为 Tesseract 语言代码，renderOcrLangRow）；行2=API○+格式下拉（OpenAI 兼容/Anthropic，
                视觉识别两种后台均已实现）+地址/模型/Key。 -->
           <p class="style-desc" data-key="ocrEngineDesc">截图/视频帧的文字识别引擎：本地 Tesseract（在界面/目标/释义三种语言中勾选要识别的语言），或大模型视觉识别 API（需模型支持图片输入）。</p>
-          <div class="field-row" id="ocrLangRow">
+          <!-- 2026-09-02 Tesseract supporting language 不是小标题，用普通标签样式 -->
+          <div class="field-row tight" id="ocrLangRow">
             <label class="g-radio"><input type="radio" name="ocrEngine" value="tesseract" checked><span data-key="ocrEngineLocal">本地</span></label>
-            <!-- 第二百二十八次（用户裁定文案）：读作"Tesseract 支持 界面/目标/释义 语言"
-                 （en: Tesseract supporting Interface Target Meaning language） -->
-            <span class="radio-label" data-key="fieldOcrLangs">Tesseract 支持</span>
+            <span class="ocr-lang-label" data-key="fieldOcrLangs">Tesseract supporting</span>
             <label class="chk"><input type="checkbox" id="ocrLangUi"><span data-key="ocrRoleUi">界面</span></label>
             <label class="chk"><input type="checkbox" id="ocrLangTarget"><span data-key="ocrRoleTarget">目标</span></label>
             <label class="chk"><input type="checkbox" id="ocrLangMeaning"><span data-key="ocrRoleMeaning">释义</span></label>
-            <span class="radio-label" data-key="ocrLangsSuffix">语言</span>
+            <span class="ocr-lang-label" data-key="ocrLangsSuffix">language</span>
           </div>
-          <div class="field-row">
+          <div class="field-row tight">
             <label class="g-radio"><input type="radio" name="ocrEngine" value="api"><span data-key="ocrEngineApi">API</span></label>
             <div class="field inline">
               <label for="ocrLlmProvider" data-key="ocrApiFmt">API 格式</label>
@@ -226,20 +222,21 @@
                 <option value="anthropic" data-key="fmtAnthropic">Anthropic 兼容</option>
               </select>
             </div>
-            <!-- 第二百二十九次：地址弹性 2 倍（默认基准 300px），模型/Key 各 1 倍（150px），等距同上 -->
-            <div class="field inline" style="flex:2 1 300px;">
+            <!-- 2026-09-02 ocr api 网址默认 60 字符，细项紧邻 -->
+            <div class="field inline" style="flex:0 0 60ch; min-width:28ch;">
               <label for="ocrLlmBaseUrl" data-key="fieldLlmBaseUrl">接口地址</label>
-              <input id="ocrLlmBaseUrl" type="text">
+              <input id="ocrLlmBaseUrl" type="text" size="60" style="width:60ch; max-width:100%;">
             </div>
-            <div class="field inline" style="flex:1 1 150px;">
+            <div class="field inline" style="flex:0 1 18ch; min-width:14ch;">
               <label for="ocrLlmModel" data-key="fieldLlmModel">模型名</label>
-              <input id="ocrLlmModel" type="text">
+              <input id="ocrLlmModel" type="text" style="width:18ch;">
             </div>
-            <div class="field inline" style="flex:1 1 150px;">
+            <div class="field inline" style="flex:0 1 18ch; min-width:14ch;">
               <label for="ocrLlmApiKey" data-key="fieldLlmApiKey">API Key</label>
               <input id="ocrLlmApiKey" type="password" placeholder="sk-...">
             </div>
           </div>
+          </div><!-- /.model-subsec-ocr -->
         </div>
       </div>
 

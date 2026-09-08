@@ -509,6 +509,10 @@
   display: inline;
   color: var(--beaver-text-soft);
   /* 反思（2026-08-09）：用户要求"注音不要倾斜"，去掉 font-style: italic */
+  /* 反思（2026-09-04）：用户反馈"注音用的啥字体，咋看不懂"。注音此前继承宿主页面
+     字体，缺 IPA 扩展区字形即豆腐块。统一指定系统字体栈（扩展装不到字体文件，
+     只能用系统栈；Segoe UI 是 Win10 默认且 IPA/变音符号覆盖最好，其余为回退）。 */
+  font-family: "Segoe UI", "Microsoft YaHei", "Noto Sans", "Charis SIL", "Doulos SIL", "Arial Unicode MS", Arial, sans-serif;
   font-size: 0.9em;
   margin-left: 0;
   /* 反思（2026-08-15 第六十五次）：与喇叭构成同一段，右侧留白包裹、左侧紧贴喇叭 */
@@ -517,8 +521,22 @@
 
 /* 注音为空时不占位（避免词头与 Rank 之间多余 margin） */
 .beaver-ann-line .beaver-ann-phonetic:empty {
+  display: none;
   margin-left: 0;
   padding-right: 0;
+}
+
+/* 生词表条目注音（2026-08-06 新增 span 时漏写基础样式，此处补字体与空隐藏；
+ * 反思（2026-09-04）："注音有结果才显示"——空 span 直接 display:none；
+ * 字体栈同上，防宿主页面字体缺 IPA 字形。 */
+#beaver-word-panel .beaver-w-phonetic {
+  display: inline;
+  color: var(--beaver-text-soft);
+  font-family: "Segoe UI", "Microsoft YaHei", "Noto Sans", "Charis SIL", "Doulos SIL", "Arial Unicode MS", Arial, sans-serif;
+  font-size: 0.9em;
+}
+#beaver-word-panel .beaver-w-phonetic:empty {
+  display: none;
 }
 
 /* === 喇叭朗读按钮（2026-08-08）=== */
@@ -588,6 +606,49 @@
   color: var(--beaver-text-soft);
   font-size: 0.85em;
   margin-right: 6px;
+}
+
+/* 原形折叠（2026-09-04）：用户要求"从Lemma: word▶ 改为斜体+底色，点击展开，
+ * 移除前后缀"。原形 chip 本身即按钮：斜体＋底色（与标签同系弱化），无"原形："前缀、
+ * 无 ▶/▼ 后缀；点击展开同族，展开态（.open）换深底色区分；title 保留文字说明。 */
+.beaver-word-item .beaver-w-lemma-toggle {
+  display: inline-block;
+  font-style: italic;
+  background: var(--beaver-secondary-container);
+  color: var(--beaver-on-secondary-container);
+  border: none;
+  border-radius: 8px;
+  padding: 1px 8px;
+  margin-right: 6px;
+  cursor: pointer;
+  font-size: 0.85em;
+  line-height: 1.5;
+}
+.beaver-word-item .beaver-w-lemma-toggle:hover {
+  filter: brightness(0.96);
+}
+.beaver-word-item .beaver-w-lemma-toggle.open {
+  background: var(--beaver-primary);
+  color: var(--beaver-on-primary);
+}
+.beaver-word-item .beaver-w-lemma-group {
+  display: block;
+  width: 100%;
+  margin: 2px 0;
+  padding: 2px 10px;
+  border-radius: 8px;
+  /* 反思（2026-09-04 二轮）：展开块底色向右扩展（与 chip 同系），同行列词不斜体；
+     当前词 <b> 加粗由浏览器默认样式承担，此处不清零。 */
+  background: var(--beaver-secondary-container);
+  color: var(--beaver-on-secondary-container);
+  font-size: 0.9em;
+  font-style: normal;
+  line-height: 1.7;
+  word-break: break-word;
+}
+/* 同族补齐占位（异步到达前）：与组同字号，不斜体 */
+.beaver-word-item .beaver-w-lemma-more {
+  color: var(--beaver-text-disabled);
 }
 
 /* 生词表标签：自带浅绿灰背景色（与词头深绿区分，颜色不混淆） */
@@ -947,6 +1008,8 @@
 /* === 词单模式（2026-08-07）=== */
 /* 用户要求"点击后只剩单词，移走所有注释" */
 /* CSS 隐藏音标/释义/标签/词阶，只剩单词文本 */
+/* 反思（2026-09-04）：补隐藏 .beaver-w-lemma/.beaver-w-lemma-toggle/.beaver-w-lemma-group
+ * （与网页侧第六十八次同口径，词单只剩单词；此前视频侧词单漏藏原形）。 */
 #beaver-word-panel.beaver-word-only .beaver-word-item {
   padding: 2px 0;
   border-bottom: none;
@@ -955,7 +1018,10 @@
 #beaver-word-panel.beaver-word-only .beaver-w-phonetic,
 #beaver-word-panel.beaver-word-only .beaver-w-trans,
 #beaver-word-panel.beaver-word-only .beaver-w-tags,
-#beaver-word-panel.beaver-word-only .beaver-w-rank {
+#beaver-word-panel.beaver-word-only .beaver-w-rank,
+#beaver-word-panel.beaver-word-only .beaver-w-lemma,
+#beaver-word-panel.beaver-word-only .beaver-w-lemma-toggle,
+#beaver-word-panel.beaver-word-only .beaver-w-lemma-group {
   display: none !important;
 }
 

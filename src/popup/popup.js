@@ -64,7 +64,7 @@ window.addEventListener('unhandledrejection', (e) => showPopupError(e.reason));
  * 填充目标语言/释义语言下拉菜单选项
  * 反思（2026-08-02 修正）：初版硬编码10种语言，用户要求"目标和释义语言有几十种"。
  *   改为从 i18n.js TRANSLATE_LANGS + LANG_NAMES 动态生成，避免硬编码与 i18n.js 不同步。
- *   数据源（42种）与 preprocess.py 动态扫描的 small_*.msgpack.gz 文件列表一致。
+ *   数据源（42种）与 preprocess.mjs 动态扫描的 small_*.msgpack.bin 文件列表一致。
  */
 function populateTranslateLangOptions() {
   const selects = ['learnLanguage', 'meaningLanguage'];

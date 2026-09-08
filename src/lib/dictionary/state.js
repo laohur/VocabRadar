@@ -3,7 +3,11 @@
 // 来源：拆分自 src/lib/dictionary.js（ES Modules 模块化拆分）
 // 拆分日期：2026-08-28
 // 跨模块共享状态唯一属主（拆分铁律：绝不复制两份）：
-//   dictState = { loadedLang, dictMap, loadPromise, currentLearnLang, quietBatch }
+//   dictState = { loadedLang, dictMap, loadPromise, currentLearnLang, quietBatch,
+//     ranksReadyLang, ranksPromise, _settleRanks }
+//   分阶段投影（2026-09-04）：ranks 先行——ranksReadyLang 记录 rank-only 就绪的语言，
+//   ranksPromise 供扫描侧先重扫出高亮；_settleRanks 是 ranks 承诺的 resolve 函数暂存
+//   （loadPromise 异常时兜底 resolve null，承诺永不悬空）。
 //   原单文件的模块级 let 变量（_loadedLang/_dictMap/_loadPromise/_currentLearnLang/
 //   _quietBatch）收拢为导出可变对象，word-loader.js / projection.js / query.js
 //   经 import 引用同一实例读写，与原单文件行为完全一致。
@@ -32,7 +36,10 @@ export const dictState = {
   dictMap: null,                       // 原 _dictMap
   loadPromise: null,                   // 原 _loadPromise
   currentLearnLang: DEFAULT_SOURCE_LANG, // 原 _currentLearnLang
-  quietBatch: false                    // 原 _quietBatch
+  quietBatch: false,                   // 原 _quietBatch
+  ranksReadyLang: null,                // 分阶段 Stage 1 就绪语言（rank-only 可扫）
+  ranksPromise: null,                  // 分阶段 Stage 1 承诺（同语言复用）
+  _settleRanks: null                   // ranks 承诺 resolve 暂存（异常兜底用）
 };
 
 /** 设置/取消词典逐词日志静音（批量处理期间置 true，结束置 false）
@@ -65,10 +72,13 @@ if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.local) {
     if (area === 'local' && changes.learnLanguage && changes.learnLanguage.newValue !== dictState.currentLearnLang) {
       console.log(`[VocabRadar][dictionary][${_ts()}] learnLanguage 变更: ${dictState.currentLearnLang} -> ${changes.learnLanguage.newValue}, 重新加载词频`);
       dictState.currentLearnLang = changes.learnLanguage.newValue;
-      // 切换语言时清空缓存，触发懒重载
+      // 切换语言时清空缓存，触发懒重载（分阶段字段一并清，否则旧语言 ranks 承诺残留）
       dictState.loadedLang = null;
       dictState.dictMap = null;
       dictState.loadPromise = null;
+      dictState.ranksReadyLang = null;
+      dictState.ranksPromise = null;
+      dictState._settleRanks = null;
     }
   });
 }

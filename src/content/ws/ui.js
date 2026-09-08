@@ -10,11 +10,13 @@ import { buildTopbarHTML, ensureTopbarCss } from '../../lib/sidebar-topbar.js';
 import { SUBTITLE_TEXT_STYLES, findStyle } from '../../lib/styles.js';
 import { reviveSidebarIfPossible, startVideoController } from '../video-controller.js';
 import { _activeTab, _allAnnotations, _cachedLearnLang, _detailMode, _pageSentences, _panelRect, _preExpandPos, _root, _wordOnlyMode, clampPosToViewport, clampRectToViewport, formatTime, getInjectionRoot, log, saveState, set_activeTab, set_detailMode, set_panelRect, set_preExpandPos, set_wordOnlyMode, toast, ts } from './core.js';
-import { rerenderAllSlots, schedulePageScan } from './scanner.js';
+import { rerenderAllSlots, schedulePageScan, toggleLemmaGroup } from './scanner.js';
 // 第一百七十一次：文本侧栏底部对话按钮 —— 对话面板唯一实现在 lib/chat.js
 import { openChatPanel } from '../../lib/chat.js';
 // 第一百八十五次：给 AI 的正文提取（Readability 优先）与耗时诊断，唯一实现在 lib/main-text.js
 import { getAiMainText, openMainTextDiag } from '../../lib/main-text.js';
+// G3（2026-09-08）：learn 面板草稿导入（§6.2）——组装+落缓存唯一实现在 ./draft-export.js
+import { importCurrentSidebarDraft, SITE_URL } from './draft-export.js';
 
 // === 构建 DOM 骨架 ===
 export function buildSidebar() {
@@ -73,8 +75,8 @@ export function buildSidebar() {
         <div class="beaver-web-tab active" data-tab="sentences">${t('ws.tabSentences')}</div>
         <div class="beaver-web-tab" data-tab="words">${t('ws.tabWords')}</div>
         <!-- 第一百三十五次：补练习页——上轮用户反馈"三个标签只显示前两个"即指此 -->
-        <!-- 第一百八十五次：练习统一叫 train（原 practice） -->
-        <div class="beaver-web-tab" data-tab="train">${t('tab.train')}</div>
+        <!-- 第一百八十五次：练习统一叫 learn（原 train/practice，2026-09-07 T9 改名） -->
+        <div class="beaver-web-tab" data-tab="learn">${t('tab.learn')}</div>
       </div>
       <!-- 句标签工具栏：详情（注释开关移到底部工具栏，第六十八次） -->
       <div class="beaver-web-toolbar" data-tab-toolbar="sentences">
@@ -97,11 +99,16 @@ export function buildSidebar() {
         </div>
       </div>
       <!-- 第一百三十五次：练习页（与视频侧栏 mp 页同源内容：小程序二维码，懒加载） -->
-      <div class="beaver-web-tab-panel hidden" data-tab="train" id="beaver-web-tab-train">
-        <div class="beaver-web-mp-panel">
-          <img class="beaver-web-mp-img" id="beaver-web-mp-img" alt="VocabRadar">
-          <div class="beaver-web-mp-tip" data-i18n="train.tip">微信扫码使用「VocabRadar」小程序<br>随时随地背单词</div>
+      <div class="beaver-web-tab-panel hidden" data-tab="learn" id="beaver-web-tab-learn">
+        <!-- 2026-09-08 修复：G3 曾在此处直接绑定 #beaver-web-draft-import/#beaver-web-draft-open
+             但模板缺失两按钮，querySelector 返回 null 抛 TypeError 致其后绑定全部中断。
+             同时清理原内层容器被删后残留的悬空 </div>。 -->
+        <div class="beaver-web-draft-row">
+          <button class="beaver-web-draft-btn" id="beaver-web-draft-import" data-i18n="learn.importDraft">📚 Import to My Scrolls</button>
+          <button class="beaver-web-draft-btn" id="beaver-web-draft-open" data-i18n="learn.importAndOpen">↗ Import and Open</button>
         </div>
+        <img class="beaver-web-mp-img" id="beaver-web-mp-img" alt="VocabRadar">
+        <div class="beaver-web-mp-tip" data-i18n="learn.tip">微信扫码使用「VocabRadar」小程序<br>随时随地背单词</div>
       </div>
       <!-- 底部工具栏：复制按钮
            反思（2026-08-16 第六十八次）："注释按钮移走"——原句子工具栏的注释开关
@@ -283,12 +290,25 @@ makeResizable();
   //   注意 #beaver-web-export 已被顶部"词单"按钮占用，导出文件另用 -export-file 后缀
   _root.querySelector('#beaver-web-export-file').addEventListener('click', onExportFileClick);
   _root.querySelector('#beaver-web-chat').addEventListener('click', onChatClick);
+  // G3（2026-09-08）：learn 面板按钮行（§6.2）——左=写扩展缓存+提示；右=同左并打开网站
+  _root.querySelector('#beaver-web-draft-import').addEventListener('click', onDraftImportClick);
+  _root.querySelector('#beaver-web-draft-open').addEventListener('click', onDraftImportAndOpenClick);
   // 第二百零四次：⏱ 正文提取耗时诊断按钮移除——入口并入 ⋯ 下拉菜单
   //   （#beaver-web-diag-item，openMainTextDiag 绑定迁至该处）
 
   // 反思（2026-08-08）：喇叭按钮朗读（Web Speech API）。
   //   事件委托：所有 .beaver-w-speak 和 .beaver-web-ann-speak 按钮统一处理。
+  // 反思（2026-09-04）：生词表原形折叠按钮（.beaver-w-lemma-toggle）同委托处理，
+  //   归组查询在展开瞬间发生（toggleLemmaGroup 内部读 _allAnnotations 现场值）。
   _root.addEventListener('click', (e) => {
+    const tgl = e.target.closest('.beaver-w-lemma-toggle');
+    if (tgl) {
+      e.stopPropagation();
+      e.preventDefault();
+      const item = tgl.closest('.beaver-web-word-item');
+      if (item) toggleLemmaGroup(item);
+      return;
+    }
     const btn = e.target.closest('.beaver-w-speak, .beaver-web-ann-speak');
     if (btn) {
       e.stopPropagation();
@@ -896,6 +916,12 @@ function close() {
   _root.classList.remove('expanded', 'collapsed');
   _root.classList.add('closed');
   saveState(false);
+  // 2026-09-08（用户："扩展侧栏中关闭后，影响并未消失"）：✕ 关闭侧栏时连带撤掉
+  //   text-hint 在页面上的全部影响（高亮包裹/侧邻注释/hover 提示）——text-hint-impl
+  //   的 stopHint+unwrapAll。只影响本页（不写 storage），刷新后随侧栏一并恢复；
+  //   stopForPage 会拦住 reconcile 的 5s 自动复活路径。text-hint impl 尚未就绪时
+  //   钩子缺席，可选链静默跳过（此时注解本就尚未生成）。
+  try { window.__beaverHintCtl?.stopForPage?.(); } catch (e) { console.warn('[VocabRadar][web-sidebar] stopForPage 调用失败:', e); }
 }
 
 // === 第一百二十三次：重置位置与尺寸（⋯ 设定菜单项）===
@@ -936,11 +962,18 @@ function switchTab(tab) {
     exitWordOnlyMode();
   }
   // 第一百三十五次：练习页二维码懒加载（与视频侧栏同策略：首切才取，免无谓 IO）
-  if (tab === 'train') {
+  if (tab === 'learn') {
     const mpImg = _root.querySelector('#beaver-web-mp-img');
     if (mpImg && !mpImg.src) {
       try { mpImg.src = chrome.runtime.getURL('src/data/mp-qr.jpg'); } catch (e) { /* ignore */ }
     }
+    // G3（2026-09-08）：无正文时按钮行灰态（§6.2「禁用并提示，不静默」——
+    // 不设 disabled，点击仍 toast 提示，与 Creator jumpStep 灰态同型）
+    const hasText = _pageSentences.length > 0;
+    ['#beaver-web-draft-import', '#beaver-web-draft-open'].forEach((sel) => {
+      const b = _root.querySelector(sel);
+      if (b) b.classList.toggle('is-empty', !hasText);
+    });
   }
   // 切到句标签时触发扫描
   if (tab === 'sentences') {
@@ -948,6 +981,37 @@ function switchTab(tab) {
   }
 }
 
+// === G3（2026-09-08）：learn 面板草稿导入（§6.2） ===
+// doImportDraft：组装+落缓存+三态提示（成功/无内容/失败，R1 不静默）；
+// 期间两按钮禁用防重复点击，结束后恢复
+async function doImportDraft() {
+  const btns = ['#beaver-web-draft-import', '#beaver-web-draft-open']
+    .map((sel) => _root.querySelector(sel));
+  try {
+    btns.forEach((b) => { if (b) b.disabled = true; });
+    const r = await importCurrentSidebarDraft();
+    if (!r.ok) { toast(t('learn.noContent')); return { ok: false }; }
+    toast(t('learn.importOk'));
+    return { ok: true };
+  } catch (e) {
+    console.error('[VocabRadar][web-sidebar] 草稿导入失败', e);
+    toast(t('learn.importFail'));
+    return { ok: false };
+  } finally {
+    btns.forEach((b) => { if (b) b.disabled = false; });
+  }
+}
+
+// 左按钮：仅导入（不跳转）
+async function onDraftImportClick() {
+  await doImportDraft();
+}
+
+// 右按钮：同左，导入成功才打开网站「我的卷轴」（hash 路由）
+async function onDraftImportAndOpenClick() {
+  const r = await doImportDraft();
+  if (r.ok) window.open(SITE_URL + '/#/my-scrolls', '_blank');
+}
 // === 工具栏 ===
 function onDetailClick() {
   set_detailMode(!_detailMode);

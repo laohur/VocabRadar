@@ -53,7 +53,9 @@ let _transformersPipeline = null;
 async function getTransformersFallback() {
   if (_transformersPipeline) return _transformersPipeline;
   try {
-    const url = chrome.runtime.getURL('src/lib/vendor/transformers.mjs');
+    // 2026-09-08 收敛：transformers.mjs 与 min.js 为同一 @xenova/transformers 2.17.2
+    // ESM 构建，统一用 min.js（offscreen 同源），删除冗余的 mjs 副本
+    const url = chrome.runtime.getURL('src/lib/vendor/transformers.min.js');
     const mod = await import(url);
     const pipeline = mod.pipeline || mod.default?.pipeline;
     if (!pipeline) return null;

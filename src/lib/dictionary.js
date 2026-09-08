@@ -34,7 +34,7 @@
 //   - 旧版加载 wordbank.json (6.8MB，含 translations+rank+tags)，
 //     体积大、加载慢、释义静态不可更新。
 //   - 用户要求"不再使用词典文件，由在线查询后缓存本地"：
-//     (a) 移除 wordbank.json，改加载 wordfreq 的 small_*.msgpack.gz (10个文件共~1.6MB)
+//     (a) 移除 wordbank.json，改加载 wordfreq 的 small_*.msgpack.bin (10个文件共~1.6MB)
 //     (b) 释义改由 translator.js 在线查询后 fnv1aHash 100分桶缓存本地
 //     (c) tags 保留为 wordlists.json (约200KB)，仅英文词表
 //   - wordfreq 各语言独立文件，按 learnLanguage 选择加载
@@ -46,13 +46,13 @@
 //     quietBatch）+ DEFAULT_SOURCE_LANG + _ts + setQuietBatch/getLearnLang +
 //     chrome.storage 源语言监听（模块加载副作用仅此一处，ESM 缓存保证唯一）
 //   - word-loader.js：装载函数 loadWordfreq/loadWordlists 与源读取
-//     （decompressViaBackground 后台解压回退、msgpack/cBpack 解码）
-//   - projection.js：内存投影构建 _loadDict/_rebuildFromSources/getManifestCounts
+//     （HF CDN 拉取经 SW 直传 ArrayBuffer、DecompressionStream 解压、msgpack/cBpack 解码）
+//   - projection.js：内存投影构建 _loadDict/_rebuildFromSources
 //     （读词典投影构建 dictState.dictMap；缺失/不全时源装载并送库）
 //   - query.js：查询接口 ensureReady/lookup/lookupWithLemmatizer/lookupFull/
 //     getTags/isLoaded/getDiagState（含三个一次性日志 Set）
 // 本门面仅 re-export 全部原导出符号（符号名不变），所有引用方零改动。
 export { setQuietBatch, getLearnLang } from './dictionary/state.js';
 export {
-  ensureReady, lookup, lookupWithLemmatizer, lookupFull, prefetchFull, isLoaded, getDiagState
+  ensureReady, ensureRanksReady, isRanksLoaded, lookup, lookupWithLemmatizer, lookupFull, prefetchFull, isLoaded, getDiagState
 } from './dictionary/query.js';

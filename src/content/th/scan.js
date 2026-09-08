@@ -24,7 +24,7 @@
 // 跨模块调用：tooltip.js 提供浮层处理器；panel.js 提供查词面板；core.js 提供共享状态/常量/工具。
 // 第一百八十七次：新增 prefetchFull —— processBatch 每批开跑前一次性批量预取本批词，
 //   消除 lookupFull 逐词 SW 往返（实测串行查词 1069 次）。
-import { lookupFull, prefetchFull, getDiagState as getDictDiagState, ensureReady, setQuietBatch, isLoaded as isDictLoaded } from '../../lib/dictionary.js';
+import { lookupFull, prefetchFull, getDiagState as getDictDiagState, ensureReady, ensureRanksReady, setQuietBatch, isLoaded as isDictLoaded } from '../../lib/dictionary.js';
 import { getDiagState as getLemmatizerDiagState } from '../../lib/lemmatizer.js';
 import { translate } from '../../lib/translator.js';
 import { initLang } from '../../lib/i18n.js';
@@ -95,7 +95,20 @@ export async function startHint(settings) {
     // 可靠性保障：rescanNow 是既有的对账/诊断共路函数（text-hint.js:41 亦在用），
     // 且完成回调只跑一次（_dictRescanArmed 幂等），失败静默由 3s 自愈兜底。
     let _dictRescanArmed = false;
+    // 分阶段投影（2026-09-04）：ranks 先行——首屏高亮只认 rank，ranks 到即重扫出高亮
+    //   （tags/lemma 为空，悬浮细节随后补）；整投影就绪的既有重扫补全细节。两扫各跑一次，
+    //   均走同一 rescanNow（清 wordCache/seenWords/processed 后全量重扫），语义不变。
+    let _ranksRescanArmed = false;
     try {
+      ensureRanksReady().then(() => {
+        thMark('hint:ranksReady');
+        if (_ranksRescanArmed) return;
+        _ranksRescanArmed = true;
+        thMark('hint:ranksRescan');
+        try { rescanNow(); } catch (e) { console.warn('[VocabRadar][text-hint] 词频先行重扫失败:', e); }
+      }).catch((e) => {
+        console.warn('[VocabRadar][text-hint] 词频装载失败（等整词典就绪重扫）:', e);
+      });
       ensureReady().then(() => {
         thMark('hint:dictReady');
         if (_dictRescanArmed) return;
@@ -535,6 +548,9 @@ export async function processBatch(textNodes) {
 export function getBlockOriginText(block) {
   const parts = [];
   const BLOCK_TAGS = new Set(['P','DIV','LI','TD','TH','H1','H2','H3','H4','H5','H6','BLOCKQUOTE','DD','DT','CAPTION','FIGCAPTION','ARTICLE','SECTION','MAIN','TR','UL','OL','TABLE','BR']);
+  // 2026-09-02 短行合并修复（与 ws/core.js#getBlockText 同步）：同一父容器下不同行内子元素
+  //   原仅对 BLOCK_TAGS 补换行，行内 span 之间只补空格，导致多短行→一长句。此处同口径补换行。
+  const INLINE_TAGS = new Set(['SPAN','B','I','EM','STRONG','A','FONT','U','S','SUP','SUB','CODE','MARK','SMALL','BIG','LABEL','Q','CITE','ABBR','TIME','VAR','SAMP','KBD']);
   const walker = document.createTreeWalker(block, NodeFilter.SHOW_TEXT, {
     acceptNode(node) {
       if (!node.textContent || !node.textContent.trim()) return NodeFilter.FILTER_REJECT;
@@ -550,16 +566,46 @@ export function getBlockOriginText(block) {
       return NodeFilter.FILTER_ACCEPT;
     }
   });
+  let lastEl = null;
   while (walker.nextNode()) {
     const node = walker.currentNode;
     let txt = node.textContent || '';
     const el = node.parentElement;
+    let isNewlineBlock = false;
     if (el && BLOCK_TAGS.has(el.tagName)) {
       txt = '\n' + txt + '\n';
+      isNewlineBlock = true;
+    } else if (lastEl && el !== lastEl) {
+      try {
+        const lastParent = lastEl.parentElement;
+        const curParent = el.parentElement;
+        if (lastParent && curParent && lastParent === curParent && INLINE_TAGS.has(lastEl.tagName) && INLINE_TAGS.has(el.tagName)) {
+          if (txt && !/^[\s\u00a0\u3000\n]/.test(txt)) {
+            txt = '\n' + txt;
+            isNewlineBlock = true;
+          }
+        } else {
+          const isNested = (lastEl.contains && el.contains) ? (lastEl.contains(el) || el.contains(lastEl)) : false;
+          if (!isNested) {
+            try {
+              const csLast = getComputedStyle(lastEl);
+              const csCur = getComputedStyle(el);
+              const isBlock = (d) => d === 'block' || d === 'list-item' || d === 'table' || d === 'flex' || d === 'grid' || d === 'table-cell' || d === 'table-row';
+              if (isBlock(csLast.display) || isBlock(csCur.display)) {
+                if (txt && !/^[\s\u00a0\u3000\n]/.test(txt)) {
+                  txt = '\n' + txt;
+                  isNewlineBlock = true;
+                }
+              }
+            } catch (_) {}
+          }
+        }
+      } catch (_) {}
     }
-    if (parts.length > 0) {
+    lastEl = el;
+    if (!isNewlineBlock && parts.length > 0) {
       const prev = parts[parts.length - 1];
-      if (prev && txt && !/[\s\u00a0\u3000]$/.test(prev) && !/^[\s\u00a0\u3000]/.test(txt)) {
+      if (prev && txt && !/[\s\u00a0\u3000\n]$/.test(prev) && !/^[\s\u00a0\u3000\n]/.test(txt)) {
         parts.push(' ');
       }
     }

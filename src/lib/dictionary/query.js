@@ -48,6 +48,28 @@ export function ensureReady() {
 }
 
 /**
+ * 等待词频先行就绪（分阶段投影 Stage 1，2026-09-04）
+ * ranks 到即 resolve（rank-only dictMap 可扫出高亮），tags/lemma 随后 Stage 2 合并。
+ * 承诺永不悬空：装载总失败时 resolve null，调用方按无词典继续（与 ensureReady 失败语义一致）。
+ * @returns {Promise<Map|null>} rank-only 或完整词典 Map（失败 null）
+ */
+export function ensureRanksReady() {
+  if (dictState.ranksReadyLang && dictState.dictMap) return Promise.resolve(dictState.dictMap);
+  if (!dictState.ranksPromise) {
+    try { _loadDict().catch(() => {}); } catch (_) { /* ignore */ }
+  }
+  return dictState.ranksPromise || Promise.resolve(null);
+}
+
+/**
+ * 词频是否先行就绪（rank-only 可扫）
+ * @returns {boolean}
+ */
+export function isRanksLoaded() {
+  return !!(dictState.ranksReadyLang && dictState.dictMap);
+}
+
+/**
  * 查询单词，返回 { rank, tags, lemma }
  *
  * 查询逻辑：

@@ -93,14 +93,23 @@ async function _loadImpl() {
     //   避免"点完启动/重扫 5s 后被对账误杀"。
     let _lastManualAt = 0;
     const markManual = () => { _lastManualAt = Date.now(); };
+    // 2026-09-08：本页会话停用标记——网页侧栏 ✕ 关闭时连带撤掉页面高亮/注解
+    //   （用户："扩展侧栏中关闭后，影响并未消失"）。不写 storage（只影响本页，
+    //   刷新即恢复），但必须拦住 reconcile 的"存储要求启用→自动 startHint"复活路径，
+    //   否则 5s 对账会把手动 stopHint 无限复活。清除点：诊断窗 start / popup 显式
+    //   打开 textHintEnabled（onChanged）。
+    let _sessionStop = false;
     window.__beaverHintCtl = {
       start: async () => {
         markManual();
+        _sessionStop = false;
         try { await chrome.storage.local.set({ textHintEnabled: true }); } catch (_) { /* ignore */ }
         const s = await getSettings();
         await startOrReport(s);
       },
       stop: () => { markManual(); if (_impl) _impl.stopHint(); },
+      // 侧栏 ✕ 关闭专用：本页会话停用（不写 storage；reconcile 尊重该标记不再自动复活）
+      stopForPage: () => { markManual(); _sessionStop = true; if (_impl) _impl.stopHint(); },
       rescan: () => { markManual(); if (_impl) _impl.rescanNow(); },
       clear: () => { markManual(); if (_impl) _impl.clearHighlights(); },
       setRank: (v) => {
@@ -132,8 +141,12 @@ async function _loadImpl() {
       //   统一"仅显式 false 才停用"语义（与 reconcile 一致）。
       if ('textHintEnabled' in changes) {
         if (changes.textHintEnabled.newValue !== false) {
+          // 2026-09-08：popup 显式（重）开主开关=用户最新意图，解除本页会话停用
+          _sessionStop = false;
           getSettings().then((s) => startOrReport(s));
         } else {
+          // 显式停用路径：标记已无意义，一并复位防悬挂
+          _sessionStop = false;
           _impl.stopHint();
         }
         return;
@@ -216,6 +229,7 @@ async function _loadImpl() {
     //   对账日志走 console.warn，可被诊断悬浮窗"运行日志"捕获，便于确认恢复路径。
     let _lastImplNullWarn = 0;   // 第二百次：_impl=null 的限频告警时间戳
     let _lastMissingKeyWarn = 0; // 第二百零三次：textHintEnabled 缺键的限频告警时间戳
+    let _lastSessionStopWarn = 0; // 2026-09-08：会话停用期 reconcile 跳过的限频告警时间戳
     const reconcile = async () => {
       // 第二百次：_impl=null 不再静默——模块图未装载（挂起/失败）是"整页无提示"的直接
       //   证据，对账周期必须出声（30s 限频防刷屏），并带上 boot.state 供诊断窗/日志取用。
@@ -251,6 +265,17 @@ async function _loadImpl() {
       //   把 undefined 判为 falsy → 走停用分支 → stopHint 杀掉正常启动的模块（"高亮闪一下又消失"）。
       //   getSettings 默认 true，undefined 应视为启用（与 guide.js `!== false`、popup 语义一致）。
       const wantEnabled = (s.textHintEnabled !== false);
+      // 2026-09-08：本页会话停用中（侧栏 ✕ 关闭触发）——存储仍要求启用也不自动复活，
+      //   否则 stopForPage 撤掉的注解 5s 内被对账冲回（用户："影响并未消失"）。
+      //   限频留痕不静默。
+      if (wantEnabled && _sessionStop) {
+        const _nowSS = Date.now();
+        if (!_lastSessionStopWarn || _nowSS - _lastSessionStopWarn > 60000) {
+          _lastSessionStopWarn = _nowSS;
+          console.warn('[VocabRadar][text-hint] 对账: 本页会话停用中（侧栏✕关闭），跳过自动 startHint（60s 限频）');
+        }
+        return;
+      }
       if (wantEnabled) {
         if (!st.effective.enabled || st.effective.startedEver === false) {
           // 诊断（2026-08-20 第八十六次补充③）：打印启用态全貌，定位"对账恢复"真实原因

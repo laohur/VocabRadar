@@ -8,12 +8,16 @@
 import { getAnnotations, rankToStage } from '../../lib/annotator.js';
 import { isBalancedParens, pickCleanShortTrans } from '../../lib/dict-clean.js';
 import { t } from '../../lib/i18n.js';
+// 2026-09-04（原形折叠）：diverse-lemmas 语言名单（纯数据无依赖），用于判定
+// 当前目标语是否有词形还原覆盖；无覆盖语种不显示常显原形（中/日原形即本身，无意义）。
+import { LANGUAGES } from '../../lib/vendor/diverse-lemmas/languages.js';
 // 第一百八十五次：扫描筛选常量的唯一定义处（与「给 AI 提取正文」共用同一套标准）
 import { JS_SENTINELS, NON_CONTENT_SELECTOR, SKIP_TAGS } from '../../lib/main-text.js';
 import { getPhonetic } from '../../lib/phonetics.js';
+import { lemmaFamily } from '../../lib/lemmatizer.js';
 import { translate } from '../../lib/translator.js';
 import { getBlocks, getLastEmitAt, subscribe } from '../page-scan-bus.js';
-import { _activeTab, _allAnnotations, _annotateOov, _annotateRepeat, _annotationsCache, _collectedSubs, _detailMode, _firstSentMap, _noAnnotation, _pageSentenceEls, _pageSentences, _rankThreshold, _root, _scanScheduled, _seenSentences, _seenWords, addSentenceKey, addWordKey, cssEscape, escapeHtml, escapeReg, formatTime, getBlockText, hasSentenceKey, hasWordKey, log, normSentKey, set_allAnnotations, set_annotationsCache, set_collectedSubs, set_firstSentMap, set_pageSentenceEls, set_pageSentences, set_scanScheduled, set_seenSentences, set_seenWords, splitSentences } from './core.js';
+import { _activeTab, _allAnnotations, _annotateOov, _annotateRepeat, _annotationsCache, _cachedLearnLang, _collectedSubs, _detailMode, _firstSentMap, _noAnnotation, _pageSentenceEls, _pageSentences, _rankThreshold, _root, _scanScheduled, _seenSentences, _seenWords, addSentenceKey, addWordKey, cssEscape, escapeHtml, escapeReg, formatTime, getBlockText, hasSentenceKey, hasWordKey, log, normSentKey, set_allAnnotations, set_annotationsCache, set_collectedSubs, set_firstSentMap, set_pageSentenceEls, set_pageSentences, set_scanScheduled, set_seenSentences, set_seenWords, splitSentences } from './core.js';
 
 // === 扫描常量（与 text-hint-impl.js 同源）===
 // 反思（2026-08-09）：用户反馈"文本侧栏句子比网页文本提示多了很多，很多垃圾。二者应当用一个筛选"。
@@ -48,7 +52,8 @@ const _wsDiag = {
   domDupBlocked: 0,    // DOM 查重挡掉（键集说没收、DOM 里却有 = 防护层间失联的证据）
   inserted: 0,         // 实际插入 DOM 的条目
   dupOnInsert: 0,      // 插入后同键条目数 >1 的现场次数（重复实锤）
-  resortDupRemoved: 0  // 重排时从数组清除的同键重复条数
+  resortDupRemoved: 0, // 重排时从数组清除的同键重复条数
+  sentGateBlocked: 0   // 第二百三十次：新词门闸拦下的无新词句累计数（句表侧，三条路径共用）
 };
 if (typeof window !== 'undefined') window.__beaverWsDedup = _wsDiag;   // 实时引用
 
@@ -60,6 +65,24 @@ function _wsDupNote(msg) {
   const rec = `[${new Date().toTimeString().slice(0, 8)}] ${msg}`;
   _wsDupEvents.push(rec);
   if (_wsDupEvents.length > 10) _wsDupEvents.shift();
+}
+
+// 第二百三十一次（用户："新词门闸拦下无新词句"日志太频繁，一页刷 9 条）：限频出声——
+//   首条照打，之后 60s 至多一条并汇报区间压制量。计数器 _wsDiag.sentGateBlocked 仍
+//   全量递增（诊断窗/实时引用不受影响），只是不再逐条刷屏；真异常时线索仍在。
+let _lastSentGateWarn = 0;   // 上次出声时间戳（0=从未）
+let _sentGateSuppressed = 0; // 区间内被压制的条数
+function warnSentGate(sample) {
+  _wsDiag.sentGateBlocked++;
+  const now = Date.now();
+  if (!_lastSentGateWarn || now - _lastSentGateWarn > 60000) {
+    const supp = _sentGateSuppressed;
+    _sentGateSuppressed = 0;
+    _lastSentGateWarn = now;
+    console.warn(`[VocabRadar][web-sidebar] 新词门闸拦下无新词句（累计 ${_wsDiag.sentGateBlocked} 次${supp ? `，区间已压制 ${supp} 条` : ''}）: ${sample}`);
+  } else {
+    _sentGateSuppressed++;
+  }
 }
 
 // === 第一百九十次：侧栏现状快照（诊断悬浮窗「侧栏现状」行数据源）===
@@ -322,8 +345,18 @@ function ingestPageBlock(block) {
       });
     }
     if (anns.length === 0 && !forceAll) continue;
+    // 第二百三十次（用户："生词重复。"，Microsoft Learn 左导航 8 行各自成句、各含
+    //   documentation → 句表收 8 条）：新词门闸——句子注释词全部已在页级首现句权威表
+    //   _firstSentMap（第193次）登记过、无任何新词时不再入库。此处提前挡下，省掉
+    //   schedulePendingTranslate 的无谓查词；forceAll（OCR/ASR all=true 整行必收）豁免。
+    //   注意：本路径拦下时不调 appendPageSentence → 不 addSentenceKey，同一句文本
+    //   后续块若带来新词仍可正常入库，旧词覆盖度由 mergeAnnotationsForSentence 补齐。
+    if (!forceAll && anns.length > 0 && anns.every((w) => _firstSentMap.has(wordDedupKey(w.word)))) {
+      warnSentGate(sent.slice(0, 40));
+      continue;
+    }
     // 第一百八十三次：addSentenceKey 已收进 appendPageSentence（唯一汇入点统一去重）。
-    appendPageSentence({ text: sent }, anns);
+    appendPageSentence({ text: sent }, anns, { forceAll });
     schedulePendingTranslate(anns);
   }
 }
@@ -725,7 +758,7 @@ function updateWordTranslation(slot, ann) {
  * @param {{text:string}} seg 句子对象
  * @param {Array} anns 初始注释数组（可能含 pending 词）
  */
-function appendPageSentence(seg, anns) {
+function appendPageSentence(seg, anns, opts) {
   // 第一百八十三次（用户："文本侧栏的句子会重复"）：本函数是三条扫描路径
   //   （总线 ingestPageBlock / span 扫描 / TreeWalker 兜底）唯一的入库汇入点，
   //   旧版只 push+appendChild、从不校验，去重全靠各调用方自行 check-then-act：
@@ -739,6 +772,19 @@ function appendPageSentence(seg, anns) {
   if (hasSentenceKey(key)) {
     _dupSentenceBlocked++;
     console.warn(`[VocabRadar][web-sidebar] 句子重复入库已拦下（累计 ${_dupSentenceBlocked} 次）: ${key.slice(0, 40)}`);
+    return;
+  }
+  // 第二百三十次（用户："生词重复。"）：新词门闸——句子若只含 _firstSentMap 已登记词
+  //   （无任何新词），不再入库。根因：句表旧语义是"凡含生词的句子全收"，而词表五层
+  //   去重只管词条目、管不住句条目本身——导航类页面每条菜单各自成句、各含同一生词
+  //  （documentation ×8 即此）。判据用第193次页级首现句权威表 _firstSentMap 而非
+  //   isFirst 标志：每词只随其首现句出现一次，之后的同词句全部免入；三条入库路径
+  //   （总线/span/TreeWalker）统一生效，opts.forceAll 供总线传 OCR/ASR 全收豁免。
+  //   注意：被拦句子不得 addSentenceKey——同一句文本后续块若带来新词仍可入库
+  //  （覆盖度由 mergeAnnotationsForSentence 补齐）；词表/页面高亮/注释语义不变。
+  if (!(opts && opts.forceAll) && Array.isArray(anns) && anns.length > 0
+      && anns.every((a) => _firstSentMap.has(wordDedupKey(a && a.word)))) {
+    warnSentGate(key.slice(0, 40));
     return;
   }
   addSentenceKey(key);
@@ -1100,7 +1146,7 @@ function fillSlotAnnotations(slot, sub, anns) {
     line.innerHTML = `<div class="beaver-web-ann-content">${html}</div>`;
     annContainer.appendChild(line);
     if (_detailMode && a.word) {
-      fillPhoneticAsync(line, a.word);
+      fillPhoneticAsync(line, a.word, sub && sub.text);
     }
   }
 }
@@ -1146,12 +1192,13 @@ function highlightWords(text, annotations, inlineAnnotations = false) {
 }
 
 // 异步填充详细注释行的注音 span
-async function fillPhoneticAsync(line, word) {
+async function fillPhoneticAsync(line, word, context) {
   const span = line.querySelector('.beaver-web-ann-phonetic');
   if (!span) return;
   span.textContent = '…';
   try {
-    const phon = await getPhonetic(word);
+    // 反思（2026-09-04）：日文连带上下文查注音——句子整句透传；非 ja 忽略，行为不变。
+    const phon = await getPhonetic(word, undefined, context);
     if (!line.isConnected) return;
     const curSpan = line.querySelector('.beaver-web-ann-phonetic');
     if (!curSpan) return;
@@ -1165,7 +1212,111 @@ async function fillPhoneticAsync(line, word) {
 }
 
 // === 生词表 ===
+// 2026-09-04（原形折叠诊断）：首个词表条目渲染时打一行门闸状态（之后不再打），
+// 与视频侧同口径，用户反馈"没见着"时凭此行定位。
+let _lemmaDiagDoneWs = false;
+// 反思（2026-09-04）：原形折叠三件套（与 vs/subtitle-renderer.js 同口径，
+// 独立实现——两侧 _allAnnotations/去重键各归各模块，不跨模块读状态）。
+/**
+ * 目标语是否有词形还原覆盖（diverse-lemmas LANGUAGES 名单为准）
+ * @param {string} lang 语言码
+ * @returns {boolean}
+ */
+function supportsLemmaLang(lang) {
+  if (!LANGUAGES) return false;
+  return Object.prototype.hasOwnProperty.call(LANGUAGES, String(lang || '').toLowerCase());
+}
+
+/**
+ * 条目展示用原形：有还原结果用还原值，否则用词面小写（原词即原形也说）
+ * 反思（2026-09-04）：与视频侧同口径，统一小写（历史 IDB 表层大小写坏档到显示层归一）。
+ * @param {{word:string,lemma?:string|null}} a 注释条目
+ * @returns {string} 原形文本（小写键形式）
+ */
+function lemmaDisplayOf(a) {
+  const w = String((a && a.word) || '');
+  const l = String((a && a.lemma) || '').trim();
+  return (l || w.toLowerCase() || w).toLowerCase();
+}
+
+/**
+ * 同原形归组键（与展示值同口径：lemma 缺失即词面小写）
+ * @param {{word:string,lemma?:string|null}} a 注释条目
+ * @returns {string}
+ */
+function lemmaKeyOf(a) {
+  return lemmaDisplayOf(a).toLowerCase();
+}
+
+/**
+ * 原形折叠开关（导出给 ui.js 的点击委托调用）
+ *
+ * 反思（2026-09-04）：与 vs/subtitle-renderer.js 同口径。
+ * 反思（2026-09-04 二轮）：展开改纯词单行（同行列词，`, ` 分隔，块底色，不斜体，
+ *   当前词加粗；展示统一小写）＋家族取词补齐。释义列删除（经常缺勤像 bug）。
+ * @param {HTMLElement} itemEl 生词表条目 div.beaver-web-word-item
+ */
+export function toggleLemmaGroup(itemEl) {
+  if (!itemEl || !itemEl.isConnected) return;
+  const box = itemEl.querySelector('.beaver-w-lemma-group');
+  const btn = itemEl.querySelector('.beaver-w-lemma-toggle');
+  if (!box || !btn) return;
+  // 已展开 → 收起并清空（下次展开重新查，保证与最新数据一致）
+  if (box.style.display !== 'none') {
+    box.style.display = 'none';
+    box.innerHTML = '';
+    btn.classList.remove('open');
+    btn.title = t('th.lemmaExpand');
+    return;
+  }
+  const key = String(box.dataset.lemma || '').toLowerCase();
+  if (!key) return;
+  const seen = new Set();
+  const words = [];
+  const pushWord = (w) => {
+    const s = String(w || '').trim().toLowerCase();
+    if (!s || seen.has(s)) return;
+    seen.add(s);
+    words.push(s);
+  };
+  // 当前词置顶（展示统一小写）
+  pushWord(itemEl.dataset.word || '');
+  for (const m of _allAnnotations) {
+    if (lemmaKeyOf(m) !== key) continue;
+    pushWord(m.word);
+  }
+  if (words.length === 0) return;
+  const selfLower = words[0];
+  box.innerHTML = words.map((w) => (w === selfLower ? `<b>${escapeHtml(w)}</b>` : escapeHtml(w))).join(', ')
+    + `<span class="beaver-w-lemma-more">, …</span>`;
+  box.style.display = '';
+  btn.classList.add('open');
+  btn.title = t('th.lemmaCollapse');
+  // 同族补齐（异步）：整表家族去重后追加；失败/无新增时吃掉占位
+  lemmaFamily(key, _cachedLearnLang, 20).then((fam) => {
+    if (!box.isConnected || box.style.display === 'none') return;
+    const ph = box.querySelector('.beaver-w-lemma-more');
+    const extra = [];
+    for (const w of (fam || [])) {
+      const s = String(w || '').trim().toLowerCase();
+      if (!s || seen.has(s)) continue;
+      seen.add(s);
+      extra.push(s);
+    }
+    const html = extra.map((w) => escapeHtml(w)).join(', ');
+    if (ph) ph.outerHTML = extra.length > 0 ? ', ' + html : '';
+    else if (extra.length > 0) box.insertAdjacentHTML('beforeend', ', ' + html);
+  }).catch(() => {
+    const ph = box.querySelector('.beaver-w-lemma-more');
+    if (ph) ph.remove();
+  });
+}
+
 function createWordPanelItem(a) {
+  if (!_lemmaDiagDoneWs) {
+    _lemmaDiagDoneWs = true;
+    try { log(`原形折叠门闸: learnLang=${_cachedLearnLang} 有覆盖=${supportsLemmaLang(_cachedLearnLang)} 首词=${(a && a.word) || ''} 原形=${lemmaDisplayOf(a)}`); } catch (_) {}
+  }
   const div = document.createElement('div');
   div.className = 'beaver-web-word-item' + (a.pending ? ' pending' : '');
   // 反思（2026-08-12）：data-word 统一用小写存储，便于 onAsyncTranslate 用小写查询匹配
@@ -1200,9 +1351,20 @@ function createWordPanelItem(a) {
   // 反思（2026-08-10）：用户要求"喇叭音标应当紧贴"，去掉两者之间的空格
   html += ` <button class="beaver-w-speak" data-word="${escapeHtml(a.word || '')}" title="🔊">🔊</button><span class="beaver-w-phonetic" data-word="${escapeHtml(a.word || '')}"></span>`;
   // 反思（2026-08-16 第七十二次）：词形还原——原形与词面不同时显示（如 running→run）
-  const lemma = (a.lemma || '').trim();
-  if (lemma && lemma.toLowerCase() !== String(a.word || '').toLowerCase()) {
-    html += ` <span class="beaver-w-lemma">${escapeHtml(t('th.lemma'))}: ${escapeHtml(lemma)}</span>`;
+  // 反思（2026-09-04）：用户要求"词形还原即便原形也要说，右加上折叠符号，
+  //   若展开列出所有同原词形的单词，展开的时候再查"。与视频侧同口径：
+  //   有覆盖语种常显"原形：X"＋折叠按钮，展开时以当前 _allAnnotations 归组懒查；
+  //   无覆盖语种沿用旧口径。目标语读 core 的 _cachedLearnLang（活绑定，免重复监听）。
+  // 反思（2026-09-04）：用户要求 chip 化——原形 chip 即按钮（斜体＋底色见 CSS），
+  //   无"原形："前缀无 ▶/▼ 后缀，展开态靠 .open 换底色区分。与视频侧同口径。
+  const lemmaTextWs = lemmaDisplayOf(a);
+  if (supportsLemmaLang(_cachedLearnLang)) {
+    html += ` <button class="beaver-w-lemma-toggle" data-lemma="${escapeHtml(lemmaTextWs)}" title="${escapeHtml(t('th.lemmaExpand'))}">${escapeHtml(lemmaTextWs)}</button><div class="beaver-w-lemma-group" data-lemma="${escapeHtml(lemmaTextWs)}" style="display:none"></div>`;
+  } else {
+    const lemma = (a.lemma || '').trim();
+    if (lemma && lemma.toLowerCase() !== String(a.word || '').toLowerCase()) {
+      html += ` <span class="beaver-w-lemma">${escapeHtml(t('th.lemma'))}: ${escapeHtml(lemma)}</span>`;
+    }
   }
   html += ` <span class="beaver-w-trans">${transText}</span>`;
   if (rankText) html += ` <span class="beaver-w-rank">${rankText}</span>`;

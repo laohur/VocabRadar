@@ -19,6 +19,10 @@
 //   → scan.js: processTextNode（OCR 文本注释生词）
 import { lookupFull } from '../../lib/dictionary.js';
 import { translate, getLastTranslateChannel } from '../../lib/translator.js';
+import { lemmaFamily } from '../../lib/lemmatizer.js';
+// 2026-09-04（原形折叠进悬浮/面板）：diverse-lemmas 语言名单（纯数据无依赖），
+// 无覆盖语种不显示常显原形（中/日原形即本身，无意义）。
+import { LANGUAGES } from '../../lib/vendor/diverse-lemmas/languages.js';
 import { t } from '../../lib/i18n.js';
 import { getPhonetic } from '../../lib/phonetics.js';
 import {
@@ -36,12 +40,160 @@ import { getAiMainText } from '../../lib/main-text.js';
 //   改用侧栏顶行同款内联 SVG 小图标，由 sidebar-topbar.js 唯一定义。
 import { brandIconSVG } from '../../lib/sidebar-topbar.js';
 
+// === 原形折叠（2026-09-04，用户："网页提示以及右键查询中没有"）===
+// 悬浮提示与右键面板共用卡片结构（buildCardInnerHTML），原形 chip 逻辑集中于此，
+// tooltip.js 调用 renderLemmaInto（已从本模块导入 buildPanelHTML，同受控循环）。
+// 目标语言缓存自建（th 模块各自读 storage，不跨模块搬状态）。
+let _thLearnLang = 'en';
+try {
+  if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.local) {
+    chrome.storage.local.get({ learnLanguage: 'en' }, (res) => {
+      if (res && typeof res.learnLanguage === 'string' && res.learnLanguage) _thLearnLang = res.learnLanguage;
+    });
+    if (chrome.storage.onChanged) {
+      chrome.storage.onChanged.addListener((changes, area) => {
+        if (area === 'local' && changes.learnLanguage && typeof changes.learnLanguage.newValue === 'string' && changes.learnLanguage.newValue) {
+          _thLearnLang = changes.learnLanguage.newValue;
+        }
+      });
+    }
+  }
+} catch (_) { /* 非扩展上下文默认 en */ }
+
+/** 本文件内小转义（新代码用；旧 innerHTML 拼接沿用原样不动） */
+function escHtml(s) {
+  return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
+/**
+ * 目标语是否有词形还原覆盖（diverse-lemmas LANGUAGES 名单为准）
+ * @param {string} lang 语言码
+ * @returns {boolean}
+ */
+function supportsLemmaLang(lang) {
+  if (!LANGUAGES) return false;
+  return Object.prototype.hasOwnProperty.call(LANGUAGES, String(lang || '').toLowerCase());
+}
+
+/** 当前目标语是否显示原形 chip（tooltip.js 经 renderLemmaInto 间接使用） */
+function lemmaChipEnabled() {
+  return supportsLemmaLang(_thLearnLang);
+}
+
+/**
+ * 渲染卡片原形行（悬浮提示与右键面板共用，tooltip.js 也调此函数）
+ *
+ * 反思（2026-09-04）：①"即便原形也要说"——有覆盖语种且 lemma 已知即常显 chip；
+ *   lemma 未知（如悬浮 base 词 scan 只给 null）且查询是单词时，原词即原形兜底
+ *   （与 annotator 组装口径一致；多词选区不兜底）；
+ *   ②"首字母大写"——历史 IDB 表层大小写坏档到显示层统一小写（词典惯例）；
+ *   ③chip 化——斜体＋底色按钮即开关，无"原形："前缀无 ▶/▼ 后缀，展开态 .open 换色。
+ * @param {ShadowRoot} shadow 卡片 shadow root
+ * @param {string} word 查询词面
+ * @param {string|null} lemma 原形（可空）
+ */
+export function renderLemmaInto(shadow, word, lemma) {
+  if (!shadow) return;
+  const row = shadow.querySelector('.lemma-row');
+  const box = shadow.querySelector('.lemma-group');
+  if (!row || !box) return;
+  let lem = String(lemma || '').trim().toLowerCase();
+  const single = /^\S+$/.test(String(word || '').trim());
+  if (!lem && supportsLemmaLang(_thLearnLang) && single) lem = String(word).trim().toLowerCase();
+  if (supportsLemmaLang(_thLearnLang) && lem) {
+    row.innerHTML = `<button class="lemma-chip" data-lemma="${escHtml(lem)}" title="${escHtml(t('th.lemmaExpand'))}">${escHtml(lem)}</button>`;
+    box.dataset.lemma = lem;
+    box.style.display = 'none';
+    box.innerHTML = '';
+  } else if (lem && lem !== String(word || '').toLowerCase()) {
+    row.innerHTML = `${t('th.lemma')}: <b>${escHtml(lem)}</b>`;
+    box.dataset.lemma = '';
+    box.style.display = 'none';
+    box.innerHTML = '';
+  } else {
+    row.innerHTML = '';
+    box.dataset.lemma = '';
+    box.style.display = 'none';
+    box.innerHTML = '';
+  }
+}
+
+/**
+ * 卡片原形折叠开关（shadow 内点击委托调用，面板与悬浮共用）
+ *
+ * 反思（2026-09-04 二轮）：展开改纯词单行——同行只列词（`, ` 分隔，块底色，不斜体，
+ *   查询词加粗置顶；展示统一小写），释义列删除（家族词多无缓存译文，空行像 bug）。
+ * 展开源只有词形整表家族（卡片是单查询词，无词表上下文）：lemmaFamily 只要词，
+ * 失败留空不报错。
+ * @param {ShadowRoot} shadow 卡片 shadow root
+ * @param {HTMLElement} btn 被点的 .lemma-chip 按钮
+ */
+export function toggleLemmaGroupTh(shadow, btn) {
+  if (!shadow || !btn) return;
+  const box = shadow.querySelector('.lemma-group');
+  if (!box) return;
+  if (box.style.display !== 'none') {
+    box.style.display = 'none';
+    box.innerHTML = '';
+    btn.classList.remove('open');
+    btn.title = t('th.lemmaExpand');
+    return;
+  }
+  const key = String(btn.dataset.lemma || '').toLowerCase();
+  if (!key) return;
+  // 查询词置顶加粗（展示统一小写），家族随后追加
+  let selfWord = '';
+  try {
+    const wEl = shadow.querySelector('.word');
+    selfWord = String((wEl && wEl.textContent) || '').trim().toLowerCase();
+  } catch (_) {}
+  const seenF = new Set();
+  const words = [];
+  if (selfWord) { seenF.add(selfWord); words.push(selfWord); }
+  box.innerHTML = words.map((w) => `<b>${escHtml(w)}</b>`).join(', ')
+    + `<span class="lemma-more">, …</span>`;
+  box.style.display = '';
+  btn.classList.add('open');
+  btn.title = t('th.lemmaCollapse');
+  lemmaFamily(key, _thLearnLang, 20).then((fam) => {
+    if (!box.isConnected || box.style.display === 'none') return;
+    const ph = box.querySelector('.lemma-more');
+    const extra = [];
+    for (const w of (fam || [])) {
+      const s = String(w || '').trim().toLowerCase();
+      if (!s || seenF.has(s)) continue;
+      seenF.add(s);
+      extra.push(s);
+    }
+    const html = extra.map((w) => escHtml(w)).join(', ');
+    if (ph) ph.outerHTML = extra.length > 0 ? ', ' + html : '';
+    else if (extra.length > 0) box.insertAdjacentHTML('beforeend', ', ' + html);
+  }).catch(() => {
+    const ph = box.querySelector('.lemma-more');
+    if (ph) ph.remove();
+  });
+}
+
+/** 卡片 shadow 内原形 chip 点击委托（ensurePanel/ensureTooltip 各绑一次） */
+function onCardLemmaClick(e, shadow) {
+  const btn = (e && e.target && e.target.closest) ? e.target.closest('.lemma-chip') : null;
+  if (!btn) return;
+  e.stopPropagation();
+  if (e.preventDefault) e.preventDefault();
+  toggleLemmaGroupTh(shadow, btn);
+}
+
+/** 给卡片 shadow 绑定原形 chip 委托（导出给 tooltip.js 的 ensureTooltip 用） */
+export function bindLemmaChipClick(shadow) {
+  if (!shadow) return;
+  shadow.addEventListener('click', (e) => onCardLemmaClick(e, shadow));
+}
+
 /**
  * 显示右键菜单查词面板
  * @param {string} text 用户选中的文本
  */
-export function showContextPanel(text, clientX, clientY) {
-  const trimmed = text.trim();
+export function showContextPanel(text, clientX, clientY) {  const trimmed = text.trim();
   if (!trimmed) return;
   ensurePanel();
   syncBodyFontSize(thState.panel);
@@ -114,9 +266,8 @@ export function showContextPanel(text, clientX, clientY) {
           if (stg.indexOf('NaN') !== -1) stg = t('th.outside');
           shadow.querySelector('.stage').textContent = stg;
           shadow.querySelector('.panel-header .header-stage').textContent = stg;
-          const lemmaEl2 = shadow.querySelector('.lemma-row');
-          const lemma2 = (info.lemma || '').trim();
-          lemmaEl2.innerHTML = (lemma2 && lemma2.toLowerCase() !== trimmed.toLowerCase()) ? `${t('th.lemma')}: <b>${lemma2}</b>` : '';
+          // 反思（2026-09-04）：原形行改走共用 renderLemmaInto（常显 chip＋小写归一，悬浮共用）
+          renderLemmaInto(shadow, trimmed, info.lemma);
           if (info.phonetic) {
             shadow.querySelector('.phonetic-row').textContent = info.phonetic;
           } else {
@@ -141,14 +292,8 @@ export function showContextPanel(text, clientX, clientY) {
       if (stage.indexOf('NaN') !== -1) stage = t('th.outside');
       shadow.querySelector('.stage').textContent = stage;
       shadow.querySelector('.panel-header .header-stage').textContent = stage;
-      // 词形还原原形
-      const lemmaEl = shadow.querySelector('.lemma-row');
-      const lemma = (info.lemma || '').trim();
-      if (lemma && lemma.toLowerCase() !== word.toLowerCase()) {
-        lemmaEl.innerHTML = `${t('th.lemma')}: <b>${lemma}</b>`;
-      } else {
-        lemmaEl.innerHTML = '';
-      }
+      // 词形还原原形（2026-09-04：改走共用 renderLemmaInto，常显 chip＋小写归一）
+      renderLemmaInto(shadow, word, info.lemma);
       // 标签
       const tagsEl = shadow.querySelector('.tags-row');
       tagsEl.innerHTML = '';
@@ -333,9 +478,25 @@ export function buildPanelHTML() {
       /* 反思（2026-08-13 第四十九次）：词阶只在 header 右侧显示一次（不挤生词），正文重复的 .stage 隐藏 */
       .word-row .stage { display: none; }
       .stage { display: inline-block; padding: 2px 8px; background: #2e6b43; color: #ffffff; border-radius: 8px; font-size: 0.85em; white-space: nowrap; }
-      .phonetic-row { font-size: 0.95em; color: #424942; margin-bottom: 6px; }
+      .phonetic-row { font-size: 0.95em; color: #424942; margin-bottom: 6px;
+        /* 反思（2026-09-04）：用户反馈"注音用的啥字体，咋看不懂"。注音 span 此前未指定
+           字体，Shadow DOM 内继承宿主页面字体，缺 IPA 扩展区字形即显示豆腐块。
+           修正：统一指定系统字体栈（扩展装不到字体文件，只能用系统栈；Segoe UI 是
+           Win10 默认且 IPA/变音符号覆盖最好，其余为回退）。无结果时隐藏整行
+           （"注音有结果才显示"；加载中占位符 … 非空故仍显示）。 */
+        font-family: "Segoe UI", "Microsoft YaHei", "Noto Sans", "Charis SIL", "Doulos SIL", "Arial Unicode MS", Arial, sans-serif; }
+      .phonetic-row:empty { display: none; }
       .lemma-row { font-size: 0.85em; color: #424942; margin-bottom: 8px; }
       .lemma-row b { color: #1a1f1a; font-weight: 500; }
+      .lemma-row:empty { display: none; }
+      /* 原形 chip（2026-09-04）：斜体＋底色按钮即开关，无"原形："前缀无 ▶/▼ 后缀；
+         展开态 .open 换深底色；title 保留文字说明。 */
+      .lemma-chip { font-style: italic; background: #e4efe6; color: #2e6b43; border: 0; border-radius: 8px; padding: 1px 10px; cursor: pointer; font-size: inherit; line-height: 1.6; }
+      .lemma-chip:hover { filter: brightness(0.96); }
+      .lemma-chip.open { background: #2e6b43; color: #ffffff; }
+      .lemma-group { margin: 0 0 8px 0; padding: 2px 10px; border-radius: 8px; background: #e4efe6; color: #2e6b43; font-size: 0.9em; font-style: normal; line-height: 1.7; word-break: break-word; }
+      .lemma-group:empty { display: none; }
+      .lemma-more { color: #8a918a; }
       .section { margin-bottom: 10px; }
       .section-label { font-size: 0.85em; color: #424942; margin-bottom: 4px; }
       .trans-row { color: #1a1f1a; line-height: 1.7; }
@@ -372,6 +533,7 @@ export function buildCardInnerHTML() {
     </div>
     <div class="phonetic-row"></div>
     <div class="lemma-row"></div>
+    <div class="lemma-group" style="display:none"></div>
     <div class="section">
       <div class="section-label">${t('th.definition')}</div>
       <div class="trans-row"></div>
@@ -408,6 +570,8 @@ export function ensurePanel() {
   `;
   const shadow = thState.panel.attachShadow({ mode: 'open' });
   shadow.innerHTML = buildPanelHTML();
+  // 反思（2026-09-04）：卡片原形 chip 点击委托（shadow 内，绑一次；只处理 .lemma-chip，其余放行）
+  bindLemmaChipClick(shadow);
   document.documentElement.appendChild(thState.panel);
   // 反思（2026-07-07）：用户反馈"右键的查询菜单无法消失，应当点击别处自动消失"。
   // 旧版只有 e.target === thState.panel（几乎不触发，因 thState.panel 内有 shadow DOM 子元素）

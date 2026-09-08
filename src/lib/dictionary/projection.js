@@ -4,15 +4,18 @@
 // 拆分日期：2026-08-28
 // _loadDict（懒加载主流程：getLangProjection 读词典投影 -> 已构建则合并为内存
 //   统一词条表 dictState.dictMap；缺 __built__ 标记或投影不完整则 _rebuildFromSources）
-// 与 _rebuildFromSources（装载函数唯一入口：loadWordfreq/loadWordlists 源装载 ->
-//   内存合并 -> bulkWriteDictionary 分块 upsert 送入词典 + __built__/expected
-//   原子标记 + 写后校验）。getManifestCounts（preprocess manifest 会话级缓存）
-//   仅本模块使用故保持私有。共享状态经 state.js 的 dictState 可变对象读写。
+// 与 _rebuildFromSources（装载函数唯一入口：
+//   loadWordfreq/loadWordlists 源装载 -> 内存合并 -> bulkWriteDictionary 分块 upsert
+//   送入词典 + __built__/expected/dataVersion 原子标记 + 写后校验）。
+// 2026-09-08（用户裁定"远程下载动态获取数字"）：包内 wordfreq/meta.json 退役，
+//   getManifest 及 manifest.version 版本比对机制一并删除——词数基准用 meta.expected
+//   （上次构建同事务写入的实际值），远程拉取的词数以解码后 Map.size 为准（动态实际值）。
+// 共享状态经 state.js 的 dictState 可变对象读写。
 // ============================================================
 
 import { dictState, DEFAULT_SOURCE_LANG, _ts } from './state.js';
-import { getLangProjection, bulkWriteDictionary } from '../word-db.js';
-import { loadWordfreq, loadWordlists } from './word-loader.js';
+import { getLangProjection, getRanksProjection, bulkWriteDictionary, bulkWriteTranslations, clearByLang } from '../word-db.js';
+import { loadWordfreq, loadWordlists, loadBuiltinEnZh } from './word-loader.js';
 
 /**
  * 加载词典（懒加载，按 learnLanguage 选择 wordfreq 文件）
@@ -27,6 +30,28 @@ import { loadWordfreq, loadWordlists } from './word-loader.js';
  */
 export async function _loadDict(lang) {
   const meaningLang = lang || dictState.currentLearnLang || DEFAULT_SOURCE_LANG;
+
+  // 2026-09-08（用户批复"主动轮询 files.json 检测更新并自动重建"）：SW 每 24h 比对
+  //   storage.wfInstalled[lang].sha256 与 HF files.json（checkWfUpdates），差异写
+  //   storage.wfUpdates[lang]。此处入口检查（60s 内存节流）：有更新 → clearByLang
+  //   清该语言词典数据 + 失效单例 → 不走下方命中分支，直接走正常重建路径自然重拉。
+  try {
+    const now = Date.now();
+    if (!dictState._wfUpdateCheckedAt || now - dictState._wfUpdateCheckedAt > 60000) {
+      dictState._wfUpdateCheckedAt = now;
+      const { wfUpdates } = await chrome.storage.local.get('wfUpdates');
+      if (wfUpdates && wfUpdates[meaningLang]) {
+        console.log(`[VocabRadar][dictionary][${_ts()}] 检测到 ${meaningLang} 词频源更新（HF files.json sha256 变化），清库重建`);
+        const removed = await clearByLang(meaningLang);
+        console.log(`[VocabRadar][dictionary][${_ts()}] 词典 ${meaningLang} 已清除 ${removed} 条，开始重建`);
+        dictState.loadedLang = null;
+        dictState.dictMap = null;
+        dictState.loadPromise = null;
+      }
+    }
+  } catch (e) {
+    console.warn(`[VocabRadar][dictionary][${_ts()}] wfUpdates 检查失败（不影响正常加载）:`, e);
+  }
 
   // 已加载相同语言：直接返回（不打日志--用户反馈"每次都要加载 wordfreq/wordlists"，
   //   实际是单例缓存命中，只是多处调用触发了日志）。
@@ -49,9 +74,82 @@ export async function _loadDict(lang) {
     // 第一百八十八次：分段计时 —— 上轮实测词典就绪仍剩 5.5s（DCL 后），
     //   需定位耗时落在：投影读取(IDB) / Map 构建 / manifest 对账 / 源重建哪一段。
     //   查看：控制台 window.__beaverDictTiming（实时引用）。
-    const _seg = { proj: 0, map: 0, manifest: 0, rebuild: 0, total: 0 };
+    const _seg = { proj: 0, ranks: 0, map: 0, manifest: 0, rebuild: 0, total: 0 };
     if (typeof window !== 'undefined') window.__beaverDictTiming = _seg;
+    // 分阶段投影 ranks 承诺管线（2026-09-04）：_settleRanks 暂存 resolve，Stage 1 建完
+    //   rank-only Map 即 resolve（扫描侧先重扫出高亮）；loadPromise 异常时兜底 resolve null
+    //   （承诺永不悬空）。resolve 一次即自毁，后续重复调用无操作。
+    let _resolveRanks = null;
+    dictState.ranksPromise = new Promise((r) => { _resolveRanks = r; });
+    dictState.ranksPromise._lang = meaningLang;
+    dictState._settleRanks = (v) => {
+      try { if (_resolveRanks) _resolveRanks(v); } catch (_) {}
+      _resolveRanks = null;
+      dictState._settleRanks = null;
+    };
     let _t0 = performance.now();
+    // 分阶段 Stage 1（2026-09-04）：ranks 投影快通道。2026-09-08：manifest 退役，
+    //   并行管线只剩 ranks 一路。_seg.proj 此后记录整投影耗时（Stage 2），ranks 耗时记 _seg.ranks。
+    let ranksProj = null;
+    ranksProj = await getRanksProjection(meaningLang).catch(() => null);
+    _seg.ranks = Math.round(performance.now() - _t0);
+    // ---- FAST PATH：ranks 先行（分阶段 Stage 1，2026-09-04）----
+    // 判据与慢路径同源（built/version/expected），只是数据源换成 ranksProj 的 meta。
+    // 命中即建 rank-only dictMap 并 resolve ranksPromise——扫描侧先重扫，高亮只认 rank；
+    // 随后 Stage 2 取整投影原位合并 tags/lemma（Map 引用稳定），再 resolve 完整 loadPromise。
+    if (ranksProj && ranksProj.built) {
+      // 2026-09-08：词数基准仅 meta.expected（上次构建同事务写入的实际值）；
+      //   manifest.wordCounts 兜底与 manifest.version 版本比对（清库重建）随包内
+      //   meta.json 一并退役——远程数据以解码后 Map.size 动态对账（_rebuildFromSources）。
+      const expectedFast = Number(ranksProj.expected) || 0;
+      const cntFast = Number(ranksProj.ranksCount) || 0;
+      if (expectedFast && cntFast < expectedFast) {
+        console.warn(`[VocabRadar][dictionary][${_ts()}] 投影不完整: 库内 ${cntFast} / 基准 ${expectedFast} -> 增量补齐(upsert，不清库)`);
+        _t0 = performance.now();
+        await _rebuildFromSources(meaningLang);
+        _seg.rebuild = Math.round(performance.now() - _t0);
+        return dictState.dictMap;
+      }
+      // ranks 命中且完整：建 rank-only Map，resolve ranks，先出高亮
+      _t0 = performance.now();
+      dictState.dictMap = new Map();
+      const _pr = ranksProj.ranks || {};
+      for (const word in _pr) {
+        dictState.dictMap.set(word, { rank: _pr[word], tags: [], lemma: null, translation: undefined, translationLang: undefined, phonetic: undefined });
+      }
+      dictState.ranksReadyLang = meaningLang;
+      _seg.map = Math.round(performance.now() - _t0);
+      console.log(`[VocabRadar][dictionary][${_ts()}] 词频先行就绪(Ranks Stage 1): ${dictState.dictMap.size} 词 (${((Date.now() - startTime) / 1000).toFixed(2)}s)，tags/lemma 随后合并`);
+      try { if (dictState._settleRanks) dictState._settleRanks(dictState.dictMap); } catch (_) {}
+      // ---- Stage 2：整投影合并 tags/lemma（原位合并，Map 引用稳定）----
+      _t0 = performance.now();
+      let _full = null;
+      try { _full = await getLangProjection(meaningLang); } catch (e) { _full = null; }
+      _seg.proj = Math.round(performance.now() - _t0);
+      if (_full && _full.built) {
+        const _pt = _full.tags || {};
+        const _pl = _full.lemmas || {};
+        for (const word in _pt) {
+          const e = dictState.dictMap.get(word);
+          if (e) e.tags = _pt[word] || [];
+          else dictState.dictMap.set(word, { rank: null, tags: _pt[word] || [], lemma: _pl[word] || null, translation: undefined, translationLang: undefined, phonetic: undefined });
+        }
+        for (const word in _pl) {
+          const e = dictState.dictMap.get(word);
+          if (e) { if (typeof e.lemma !== 'string') e.lemma = _pl[word]; }
+          else dictState.dictMap.set(word, { rank: null, tags: [], lemma: _pl[word], translation: undefined, translationLang: undefined, phonetic: undefined });
+        }
+        console.log(`[VocabRadar][dictionary][${_ts()}] 整投影合并完成(Stage 2): tags/lemma 就位，共 ${dictState.dictMap.size} 词`);
+      } else {
+        console.warn(`[VocabRadar][dictionary][${_ts()}] 整投影缺失，仅 ranks 可用（tags/lemma 为空，高亮不受影响）`);
+      }
+      dictState.loadedLang = meaningLang;
+      _seg.total = Math.round(Date.now() - startTime);
+      console.log(`[VocabRadar][dictionary][${_ts()}] 词典完全就绪: ${dictState.dictMap.size} 词 (ranks ${_seg.ranks}ms / 整投影 ${_seg.proj}ms / 合计 ${_seg.total}ms)`);
+      return dictState.dictMap;
+    }
+    // ---- SLOW PATH：ranks 缺失/未 built——沿用旧整投影路径（首屏等多一轮，无分阶段收益）----
+    _t0 = performance.now();
     try {
       proj = await getLangProjection(meaningLang);
     } catch (e) {
@@ -84,21 +182,16 @@ export async function _loadDict(lang) {
       dictState.loadedLang = meaningLang;
       _seg.map = Math.round(performance.now() - _t0);   // 第一百八十八次
       const cost = ((Date.now() - startTime) / 1000).toFixed(2);
-      // 第一百四十一次（用户裁定）：完整性用**实际值**校验，基准优先级：
-      //   ① meta.expected（上次成功构建同事务写入的真实数）② preprocess manifest
-      //   （装包期逐语言解码统计的词表长度和，如 en=28917）。库内实数 ranksCount 比对：
+      // 第一百四十一次（用户裁定）：完整性用**实际值**校验，基准 = meta.expected
+      //   （上次成功构建同事务写入的真实数）。库内实数 ranksCount 比对：
       //   不足 ⇒ 增量补齐（upsert 不清库）；足够 ⇒ 直接用。读操作全程不受影响。
-      let expected = proj.expected || 0;
-      if (!expected) {
-        _t0 = performance.now();   // 第一百八十八次：manifest 对账段计时（含首次 fetch manifest.json）
-        const mc = await getManifestCounts();
-        _seg.manifest = Math.round(performance.now() - _t0);
-        expected = Number(mc[meaningLang]) || 0;
-      }
+      // 2026-09-08：manifest 对账（wordCounts 兜底 + version 版本比对清库重建）随包内
+      //   meta.json 退役——远程数据的词数以解码后 Map.size 动态对账（_rebuildFromSources）。
+      const expected = proj.expected || 0;
       // 第一百九十次修复：total 原用 performance.now() 减 Date.now() 的 startTime（epoch 值），
       //   得出 -1.78e12 的负数（用户实测"合计 -1788164723852ms"）。统一用 Date.now 口径。
       _seg.total = Math.round(Date.now() - startTime);   // 第一百八十八次：总耗时
-      console.log(`[VocabRadar][dictionary][${_ts()}] 词典装载分段耗时: 投影读取 ${_seg.proj}ms / Map构建 ${_seg.map}ms / manifest对账 ${_seg.manifest}ms / 合计 ${_seg.total}ms`);
+      console.log(`[VocabRadar][dictionary][${_ts()}] 词典装载分段耗时: 投影读取 ${_seg.proj}ms / Map构建 ${_seg.map}ms / 合计 ${_seg.total}ms`);
       const cnt = proj.ranksCount || 0;
       if (!expected || cnt >= expected) {
         if (Number(cost) >= 0.25) {
@@ -120,6 +213,14 @@ export async function _loadDict(lang) {
     return dictState.dictMap;
   })();
   dictState.loadPromise._lang = meaningLang;
+  // 分阶段兜底（2026-09-04）：loadPromise 落定（成功/异常）时，若本轮 ranks 承诺还没人
+  //   resolve，就地补一次（成功带完整 Map，异常带 null，扫描侧按无词典继续）。
+  //   闭包捕获本轮 settler——语言切换开新一轮 _loadDict 时，旧轮的落定不得碰新轮的承诺。
+  const _settleMine = dictState._settleRanks;
+  dictState.loadPromise.then(
+    (m) => { try { if (_settleMine) _settleMine(m); } catch (_) {} },
+    () => { try { if (_settleMine) _settleMine(null); } catch (_) {} }
+  );
 
   return dictState.loadPromise;
 }
@@ -137,14 +238,8 @@ async function _rebuildFromSources(lang) {
     loadWordfreq(lang),
     loadWordlists()
   ]);
-  // 第一百四十一次：与 preprocess manifest 对账（实际值 vs 实际值），不一致只告警不阻塞
-  try {
-    const mc = await getManifestCounts();
-    const mCount = Number(mc[lang]) || 0;
-    if (mCount && mCount !== wf.size) {
-      console.warn(`[VocabRadar][dictionary][${_ts()}] 源词条数与 manifest 不一致: 实际 ${wf.size} / manifest ${mCount}（以源为准）`);
-    }
-  } catch (e) { /* ignore */ }
+  // 2026-09-08：与 preprocess manifest 的词数对账随包内 meta.json 退役——
+  //   wf.size 就是远程数据解码后的动态实际词数，直接作为 expected 基准写库。
   // 两个源文件是同一词典的字段：wordfreq 给 rank、wordlists 给 tags，合为一张全属性词条表
   dictState.dictMap = new Map();
   for (const [word, rank] of wf) {
@@ -160,13 +255,32 @@ async function _rebuildFromSources(lang) {
   const cost = ((Date.now() - startTime) / 1000).toFixed(2);
   console.log(`[VocabRadar][dictionary][${_ts()}] 源装载完成并送入词典: lang=${lang} ${dictState.dictMap.size} 词 (rank 基准 ${wf.size}) (${cost}s)`);
 
-  // 装载完成送入词典--分块 upsert + 末块原子标记（含 expected 实际值）。
+  // 装载完成送入词典--分块 upsert + 末块原子标记（含 expected 实际值 + dataVersion 数据版本）。
     try {
-      const ok = await bulkWriteDictionary(lang, dictState.dictMap, wf.size);
+      // 2026-09-08：包内 meta.json 退役后无远程版本号可比对，dataVersion 固定 0
+      //   （= 未记录预处理版本，加载侧版本比对自动跳过）；数据完整性由 expected
+      //   实际值（wf.size 动态词数）对账兜底。
+      const dataVersion = 0;
+      const ok = await bulkWriteDictionary(lang, dictState.dictMap, wf.size, dataVersion);
       if (ok === false) {
         console.warn(`[VocabRadar][dictionary][${_ts()}] 送入词典部分失败（未打构建标记，下次加载将重装）`);
       } else {
-        console.log(`[VocabRadar][dictionary][${_ts()}] 词典已存入词典库（upsert 不清库 + __built__/expected=${wf.size} 同事务原子）`);
+        console.log(`[VocabRadar][dictionary][${_ts()}] 词典已存入词典库（upsert 不清库 + __built__/expected=${wf.size}/dataVersion=v${dataVersion} 同事务原子）`);
+        // 反思（2026-09-04）：内置英中翻译包回填——仅 learnLanguage=en。
+        //   不进内存 dictMap（40k 条释义常驻内存浪费，translation 本就设计为懒读字段），
+        //   直接 bulkWriteTranslations 写 d_trans 分表。失败只告警（不阻塞构建，下次
+        //   版本重建覆盖；translator 首层未命中则照常走在线）。
+        if (lang === 'en') {
+          try {
+            const zhMap = await loadBuiltinEnZh();
+            if (zhMap.size > 0) {
+              const zhOk = await bulkWriteTranslations(lang, zhMap, 'zh');
+              console.log(`[VocabRadar][dictionary][${_ts()}] 内置英中翻译包回填${zhOk ? '完成' : '部分失败'}: ${zhMap.size} 词`);
+            }
+          } catch (e) {
+            console.warn(`[VocabRadar][dictionary][${_ts()}] 内置英中翻译包回填异常（释义走在线）:`, e && e.message);
+          }
+        }
         // 第一百五十三次：写后校验--直读投影确认持久化真实生效（cnt 应≈wf.size）
         try {
           const proj2 = await getLangProjection(lang);
@@ -178,23 +292,4 @@ async function _rebuildFromSources(lang) {
     console.warn(`[VocabRadar][dictionary][${_ts()}] 送入词典失败（忽略，本次内存词典仍可用）:`, e && e.message);
   }
   return dictState.dictMap;
-}
-
-/**
- * 第一百四十一次：preprocess 生成的 manifest（各语言真实词条数，装包期统计）。
- * 会话级缓存；缺失返回空对象（退回 meta.expected 基准）。
- */
-let _manifestCounts = null;
-async function getManifestCounts() {
-  if (_manifestCounts) return _manifestCounts;
-  try {
-    const res = await fetch(chrome.runtime.getURL('src/data/wordfreq/manifest.json'));
-    if (res.ok) {
-      const j = await res.json();
-      _manifestCounts = (j && j.wordCounts) || {};
-    } else {
-      _manifestCounts = {};
-    }
-  } catch (e) { _manifestCounts = {}; }
-  return _manifestCounts;
 }

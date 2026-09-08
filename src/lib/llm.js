@@ -142,12 +142,13 @@ export const LLM_FREE_ROTATION = ['pollinations', 'ovh-kepler', 'ovh-mistral7b']
 export const LLM_DEFAULT_PROVIDER = 'pollinations';
 // 默认对话提示词（第一百八十四次，按用户裁定拆成两套）：
 //   1. 单词类查询（右键查询、悬浮提示里点开的单词）—— 讨论对象是一个词/一小段选区，
-//      故模板带 {} 占位（{} = 该词/选区，{lang} = 释义语言）；
+//      故模板带 {text} 占位（{text} = 该词/选区，{lang} = 释义语言）；
 //   2. 侧栏（文本侧栏正文、视频侧栏字幕）—— 讨论对象是整篇正文，正文另由面板顶部
-//      「The context is」上下文区承载，提问语只需指向"上面的文本"，故模板不含 {}。
-//   旧版只有一套 'please explain this text"{}" in {lang}.'，侧栏也套用它 →
-//   整篇正文被塞进 {} 里，读起来是"解释这段文本"而非"总结上文"。
-export const CHAT_WORD_PROMPT = 'Please explain the text"{}" in {lang}.';
+//      「The context is」上下文区承载，提问语只需指向"上面的文本"，故模板不含 {text}。
+//   旧版只有一套 'Please explain "{text}" in {lang}.'，侧栏也套用它 →
+//   整篇正文被塞进 {text} 里，读起来是"解释这段文本"而非"总结上文"。
+// 2026-09-02 修正占位为 {text}（用户裁定：Please explain "{text}" in {lang}. / Please translate "{text}" in {lang}.）
+export const CHAT_WORD_PROMPT = 'Please explain "{text}" in {lang}.';
 export const CHAT_SIDEBAR_PROMPT = 'Please summarise the text above in {lang}.';
 
 /**

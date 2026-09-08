@@ -23,7 +23,7 @@ import { getPhonetic } from '../../lib/phonetics.js';
 import {
   thState, TOOLTIP_ID, formatStage, isContextValid, syncBodyFontSize, speak
 } from './core.js';
-import { buildPanelHTML, hidePanel, queryWordForPanel } from './panel.js';
+import { buildPanelHTML, hidePanel, queryWordForPanel, renderLemmaInto, bindLemmaChipClick } from './panel.js';
 import { validateSpan, unwrapSingle, backfillSideAnnotation } from './scan.js';
 // 第一百七十一次：悬浮提示卡片底部 chat 按钮（结构复用 buildPanelHTML，故此处也需绑定）
 import { openChatPanel } from '../../lib/chat.js';
@@ -67,6 +67,8 @@ export function ensureTooltip() {
   `;
   const shadow = thState.tooltip.attachShadow({ mode: 'open' });
   shadow.innerHTML = buildCardHTML();
+  // 反思（2026-09-04）：卡片原形 chip 点击委托（与右键面板共用 bindLemmaChipClick）
+  bindLemmaChipClick(shadow);
   document.documentElement.appendChild(thState.tooltip);
 
   // 反思（2026-08-18 第七十五次修正）：用户要求"漂浮提示无停留时间，
@@ -119,14 +121,8 @@ export function showTooltip(data, anchorRect, opts) {
     phoneticEl.textContent = '';
   }
 
-  // 词形还原原形
-  const lemmaEl = shadow.querySelector('.lemma-row');
-  const lemma = (data.lemma || '').trim();
-  if (lemma && lemma.toLowerCase() !== String(data.word || '').toLowerCase()) {
-    lemmaEl.innerHTML = `${t('th.lemma')}: <b>${lemma}</b>`;
-  } else {
-    lemmaEl.innerHTML = '';
-  }
+  // 词形还原原形（2026-09-04：改走面板共用 renderLemmaInto，常显 chip＋小写归一）
+  renderLemmaInto(shadow, data.word, data.lemma);
 
   // 标签
   const tagsEl = shadow.querySelector('.tags-row');

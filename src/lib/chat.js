@@ -7,7 +7,7 @@
  *
  * 职责边界：
  *   1. 面板 DOM（Shadow DOM 隔离，避免宿主页面 CSS 污染）、消息渲染、输入与发送
- *   2. 首条消息由引导页配置的默认提示词生成（{} = 选中文本，{lang} = 释义语言名）
+ *   2. 首条消息由引导页配置的默认提示词生成（{text} = 选中文本，{lang} = 释义语言名）
  *   3. 网络请求不在本文件：content script 受宿主页面 CSP 限制无法直接 fetch 第三方 API，
  *      统一发 LLM_CHAT 消息交由 Service Worker 代理（与既有 OCR_RECOGNIZE / FETCH_URL 同构）
  *   4. 未配置 Key 时不静默失败，显示"打开设置"按钮跳转引导页（OPEN_GUIDE 消息）
@@ -349,12 +349,13 @@ async function sendMessage(content) {
 
 /**
  * 读取引导页配置的默认提示词，并用引用文本与释义语言填充
- * 第一百八十四次（用户："查询默认提示词，对于单词类查询 Please explain the text"{}" in {lang}.
+ * 第一百八十四次（用户："查询默认提示词，对于单词类查询 Please explain "{text}" in {lang}.
  *   右键查询，点开的单词等。侧栏默认提示词 Please summarise the text above in {lang}."）：
+ * 2026-09-02 修正占位为 {text}（兼容旧存 {}）：
  *   提示词从一套拆成两套，按入口类型取用：
- *     · kind='word'    —— 右键查词面板、悬浮提示里点开的单词，模板含 {}（= 该词/选区）
- *     · kind='sidebar' —— 文本侧栏正文、视频侧栏字幕，正文由上下文区承载，模板不含 {}
- *   侧栏模板不含 {} 时 split('{}') 是无害空转，故仍统一走同一套替换。
+ *     · kind='word'    —— 右键查词面板、悬浮提示里点开的单词，模板含 {text}（= 该词/选区）
+ *     · kind='sidebar' —— 文本侧栏正文、视频侧栏字幕，正文由上下文区承载，模板不含 {text}
+ *   侧栏模板不含 {text} 时 split 是无害空转，故仍统一走同一套替换（同时兼容旧 {}）。
  * @param {string} text 引用文本
  * @param {string} kind 'word' | 'sidebar'
  * @returns {Promise<string>} 首条消息
@@ -365,7 +366,7 @@ function buildFirstPrompt(text, kind) {
   const def = isWord ? CHAT_WORD_PROMPT : CHAT_SIDEBAR_PROMPT;
   return new Promise((resolve) => {
     let done = false;
-    const fill = (tpl, langName) => tpl.split('{}').join(text).split('{lang}').join(langName);
+    const fill = (tpl, langName) => tpl.split('{text}').join(text).split('{}').join(text).split('{lang}').join(langName);
     const fallback = () => {
       if (done) return;
       done = true;
