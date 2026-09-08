@@ -30,6 +30,10 @@
  *      - 2026-09-08 全模式 terser 输出加 format beautify（indent_level 2）：
  *        用户裁定产物"不单行"——多行缩进可读，顶层语句仍顶格，行首
  *        export/import 判定语义不变；vendor/data 仍排除。
+ *      - 2026-09-08 第二百三十七次：HTML/CSS 剥注释补齐（用户反馈"html 并没有
+ *        清除注释"）——stripHtmlCssComments 对 dist 内 .html/.css 原位剥 HTML
+ *        注释与 CSS 块注释（含内联 style 块），三模式统一、排除 vendor/data，
+ *        删后清行尾空白并压 3+ 连空行为 1；仅剥注释不压缩空白，产物多行可读。
  *      压缩/混淆的 terser 统一处理跑在 esbuild 预打包之后（散文件 + chunk 一次
  *      覆盖）。产物命名：纯净包名不变；压缩 *-min.zip / dist-min*；上传
  *      *-upload.zip / dist-upload*（2026-09-08 前为 *-obf）。
@@ -337,6 +341,48 @@ async function terserProcess(distDir, { compress = false, mangle = false, label 
   console.log(`[${label}] 总计 ${Math.floor(totalBefore / 1024)}KB -> ${Math.floor(totalAfter / 1024)}KB (节省 ${ratio.toFixed(0)}%)`);
 }
 
+function stripHtmlCssComments(distDir) {
+  // 第二百三十七次（2026-09-08 用户反馈"html并没有清除注释"）：HTML/CSS 剥注释补齐
+  //
+  // 根因：剥离链此前只覆盖 JS（esbuild 预打包 + terser），HTML/CSS 走 copyRuntime
+  // 原样复制，产物注释全保留（实证 popup.html 20 处 / guide.html 44 处 + 3 处内联
+  // style / sidebar.css 133 处 / web-sidebar.css 85 / guide.css 68 / popup.css 15）。
+  //
+  // 口径（2026-09-08 用户 AskUserQuestion 裁定）：
+  //   - 三模式统一执行（与 JS "pure 也剥注释"一致），排除 vendor/data 目录；
+  //   - 仅剥注释，不压缩空白——产物保持多行可读；删注释后清行尾空白，
+  //     3+ 连续空行压成 1（大块注释删除后不留空行沟）；
+  //   - HTML 对全文件跑 CSS 注释正则的依据：grep 实证 .html 中 /* 仅出现在
+  //     内联 <style> 块内、无内联 <script> 代码、CSS content 字符串内无 /*。
+  // 边界：若日后 HTML 出现内联 <script> 且字符串含 "<!--" 或 "/*"，本正则
+  // 会误伤——届时须换真解析器（如 postcss），勿静默扩大正则适用面。
+  const targets = [];
+  for (const dirent of fs.readdirSync(distDir, { recursive: true, withFileTypes: true })) {
+    if (!dirent.isFile()) continue;
+    if (!dirent.name.endsWith('.html') && !dirent.name.endsWith('.css')) continue;
+    const full = path.join(dirent.parentPath, dirent.name);
+    const rel = path.relative(distDir, full);
+    // 与 terserProcess 同口径：排除 vendor（第三方库）与 data（数据）目录
+    if (rel.split(path.sep).some((part) => STRIP_EXCLUDE_DIRS.has(part))) continue;
+    targets.push({ full, rel: rel.split(path.sep).join('/') });
+  }
+  let changed = 0;
+  for (const { full, rel } of targets) {
+    const before = fs.readFileSync(full, 'utf8');
+    const after = before
+      .replace(/<!--[\s\S]*?-->/g, '') // HTML 注释（含跨行；未闭合注释不匹配不破坏）
+      .replace(/\/\*[\s\S]*?\*\//g, '') // CSS 注释（含 <style> 内联块）
+      .replace(/[ \t]+$/gm, '') // 行尾空白
+      .replace(/\n{3,}/g, '\n\n'); // 空行沟压缩（用户裁定）
+    if (after !== before) {
+      fs.writeFileSync(full, after, 'utf8');
+      changed++;
+      console.log(`[HTML/CSS 注释剥离] ${rel} ${Math.floor(before.length / 1024)}KB -> ${Math.floor(after.length / 1024)}KB`);
+    }
+  }
+  console.log(`[HTML/CSS 注释剥离] 完成：${changed}/${targets.length} 个文件有变更`);
+}
+
 function makeZip(distDir, zipPath) {
   // 将 distDir/ 打包成 zip（deflate，等价 zipfile.ZIP_DEFLATED）
   if (fs.existsSync(zipPath)) fs.rmSync(zipPath);
@@ -467,6 +513,9 @@ async function buildBrowser(browser, mode) {
     // 调用与字符串字面量，防缓存补丁不受影响。
     await terserProcess(distDir, { ...cfg.terser, label: cfg.label });
   }
+  // 第二百三十七次：HTML/CSS 剥注释，三模式统一（2026-09-08 用户裁定），在
+  // zip 前最后执行——所有内容步骤（复制/适配/bundle/terser）完成后一次覆盖。
+  stripHtmlCssComments(distDir);
   makeZip(distDir, zipPath);
   console.log(`dist 目录: ${distDir}`);
   console.log(`zip 文件: ${zipPath}`);
