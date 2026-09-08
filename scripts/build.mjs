@@ -13,23 +13,26 @@
  *   5. --mode 打包形态（2026-09-07，与 --browser 正交，纯净为基础）：
  *      - pure（纯净）：terser 仅去注释/压缩空白，不改名不删码；
  *      - compress（压缩）：纯净基础上 terser compress（死代码消除/语法压缩），不改名；
- *      - obfuscate（混淆）：纯净基础上 terser compress + mangle（标识符改名；不开
- *        toplevel——esbuild 分包 chunk 间 import/export 绑定名、classic 入口全局名、
- *        HTML 内联引用的全局函数一律保留，跨文件契约不被打断）；
- *      - auto（自动，默认）：Chrome 上传包 + Firefox 审核源码文件夹。2026-09-08
- *        用户裁定：上传商店的产物后缀统一 -upload（文件名不透出 obf 字样，以免
- *        引发疑虑；构建一律 mangle；以后要改后缀在本 build 内部改）。产出：
+ *      - obfuscate（压缩上传）：纯净基础上 terser compress（压缩深度同 compress），
+ *        2026-09-08 用户裁定"都压缩，但不单行，不混淆，能直接上传"——mangle 关闭
+ *        （对齐 AMO 政策：混淆代码被明令禁止、minification 允许；主流项目
+ *        Firefox 包普遍不混淆）；mode 名保留 CLI 兼容，label 改"压缩"；
+ *      - auto（自动，默认）：一次产出两个上传包（2026-09-08 用户裁定"auto 最终
+ *        生成两个文件，无需审核版"——dist-firefox-review 审核文件夹与自足脚本
+ *        make-upload.mjs 整体取消；包内代码剥注释/压缩/多行可读，审核员直接
+ *        审包）：
  *        a) vocabradar-extension-chrome-upload.zip —— Chrome 商店/Edge 提交包；
- *        b) dist-firefox-review/ 文件夹 —— Firefox 纯净构建产物（去注释/未压缩/
- *           未混淆，可读）+ 专用 README.md（说明从纯净版到上传版的构建命令）；
- *           仅文件夹本身，不含 data/、scripts/ 源码目录（用户明确圈定）。
- *           Firefox 上传包 vocabradar-extension-firefox-upload.zip 按该 README
- *           命令构建（node scripts/build.mjs --mode obfuscate --browser firefox）。
+ *        b) vocabradar-extension-firefox-upload.zip —— Firefox (AMO) 提交包。
+ *        上传后缀统一 -upload（2026-09-08 裁定：文件名不透出 obf 字样，改名
+ *        在本 build 内部改）。
  *        原 make_amo_source_zip.mjs 及其产出的 vocabradar-extension-source.zip
- *        已删除。
+ *        已删除（2026-09-08）。
+ *      - 2026-09-08 全模式 terser 输出加 format beautify（indent_level 2）：
+ *        用户裁定产物"不单行"——多行缩进可读，顶层语句仍顶格，行首
+ *        export/import 判定语义不变；vendor/data 仍排除。
  *      压缩/混淆的 terser 统一处理跑在 esbuild 预打包之后（散文件 + chunk 一次
- *      覆盖）；vendor/data 仍排除。产物命名：纯净包名不变；压缩 *-min.zip /
- *      dist-min*；混淆 *-upload.zip / dist-upload*（2026-09-08 前为 *-obf）。
+ *      覆盖）。产物命名：纯净包名不变；压缩 *-min.zip / dist-min*；上传
+ *      *-upload.zip / dist-upload*（2026-09-08 前为 *-obf）。
  *
  * 数据目录结构（src/data/，由 preprocess.mjs 生成，打包时不处理）：
  *   - config.json          配置文件（panelHideDelay 等）
@@ -100,18 +103,20 @@ const EXCLUDE_NAMES = new Set(['.DS_Store', 'Thumbs.db', 'wordbank.json']);
 // - data：数据目录（wordlists.json 是 JSON、icons/ 是 PNG，均非 JS）
 const STRIP_EXCLUDE_DIRS = new Set(['vendor', 'data']);
 
-// 打包形态配置（2026-09-07 --mode，纯净为基础，其他未混淆——混淆只在 obfuscate 生效）
+// 打包形态配置（2026-09-07 --mode，纯净为基础；2026-09-08 用户裁定全不混淆）
 // terser 为 null = 纯净路径：esbuild 预打包之前仅去注释（现行为不变）；
 // 非 null = esbuild 预打包之后对 dist 全部自研 JS（散文件 + chunk，排除 vendor/data）
 // 统一过一遍 terser：compress=死代码消除/语法压缩；mangle=标识符改名（混淆）。
-// mangle 不开 toplevel、不开 properties——跨文件 import/export 名、classic 全局名、
-// 属性名/dataset/存储键一律不动，保证语义与跨文件契约零风险。
+// 2026-09-08 起所有模式 mangle:false——AMO 政策明令禁止混淆代码、允许 minification；
+// mangle 若未来重开，也不得开 toplevel/properties（跨文件 import/export 名、
+// classic 全局名、属性名/dataset/存储键一律不动，保证语义与跨文件契约零风险）。
 const BUILD_MODES = {
   pure: { label: '纯净', suffix: '', terser: null },
   compress: { label: '压缩', suffix: '-min', terser: { compress: true, mangle: false } },
-  // 混淆产物后缀 -upload（2026-09-08 用户裁定）：提交商店的文件名不透出 obf 字样
-  // （"obf 后缀容易引发疑虑"），构建方式不变（compress + mangle）。
-  obfuscate: { label: '混淆', suffix: '-upload', terser: { compress: true, mangle: true } },
+  // 上传产物后缀 -upload（2026-09-08 用户裁定）：提交商店的文件名不透出 obf 字样
+  // （"obf 后缀容易引发疑虑"）；2026-09-08 起 mangle 关闭，压缩深度同 compress
+  // （mode 名 obfuscate 保留 CLI 兼容，label 改"压缩"）。
+  obfuscate: { label: '压缩', suffix: '-upload', terser: { compress: true, mangle: false } },
 };
 
 function cleanDist(distDir) {
@@ -261,15 +266,16 @@ function patchManifestForFirefox(distDir) {
 async function terserProcess(distDir, { compress = false, mangle = false, label = '注释剥离' }) {
   // terser 统一处理 distDir/src/ 下自研 JS（排除 vendor/data 目录），失败统一 raise
   //
-  // 三种口径（2026-09-07 --mode）：
+  // 两种口径（2026-09-08 用户裁定"都压缩，但不单行，不混淆"后 obfuscate 并入
+  // compress 口径，仅 label/后缀不同）：
   //   - 注释剥离（pure）：compress=false mangle=false——2026-09-04 用户指令
   //     "移除压缩混淆。打包的时候移除注释"：不改任何标识符名、不做死代码删除，
-  //     仅去注释+压缩空白，format.comments=false 连 /*! @license 类默认保留注释
-  //     一并移除（自研代码无需保留版权头）；AMO 政策口径：去注释/压缩空白仍属
-  //     minification，构建说明（README）中如实披露；源码包提供未处理源码，可复现。
-  //   - 压缩（compress）：compress=true mangle=false——死代码消除/语法压缩，不改名。
-  //   - 混淆（obfuscate）：compress=true mangle=true——压缩之上标识符改名
-  //     （不开 toplevel/properties，理由见 BUILD_MODES 注释）。
+  //     仅去注释，format.comments=false 连 /*! @license 类默认保留注释一并移除
+  //     （自研代码无需保留版权头）；
+  //   - 压缩（compress/obfuscate）：compress=true mangle=false——死代码消除/
+  //     语法压缩，不改名（混淆 2026-09-08 取消，理由见 BUILD_MODES 注释）。
+  //   - 输出统一 beautify（indent_level 2）：用户裁定产物"不单行"——多行缩进
+  //     可读；terser beautify 顶层语句顶格，行首 export/import 判定语义不变。
   // 调用时机：pure 在 esbuild 预打包之前（现行为不变）；compress/obfuscate 在
   // 预打包之后——散文件与 chunk 一次覆盖，?v= 补丁先落，terser 不动 getURL 字符串。
   console.log(`[${label}] terser 处理（compress=${compress} mangle=${mangle}，排除 vendor/data）...`);
@@ -296,16 +302,18 @@ async function terserProcess(distDir, { compress = false, mangle = false, label 
     const before = fs.statSync(full).size;
     totalBefore += before;
     // 沿用旧 minify_js 的 module/classic 区分（2026-08-11 第三十七次）：
-    // 有 export/import 的 ES module 按 ESM 解析；classic script 不传。注释剥离
-    // 不 mangle 顶层名；压缩/混淆也不开 toplevel，两种模式顶层名均不变。
+    // 有 export/import 的 ES module 按 ESM 解析；classic script 不传。
+    // module:true 隐含 toplevel 语义：ESM 顶层未引用绑定会被 compress 删除
+    // （模块私有可安全优化）；classic 顶层名即全局名，terser 不动。
+    // mangle:false 下两种模式都不改名，差异仅死代码删除深度。
     const content = fs.readFileSync(full, 'utf8');
     const isModule = /^\s*(export|import)\s/m.test(content);
     try {
-      // pure 等价 CLI：terser <file> --comments false [--module] -o <file>
+      // pure 等价 CLI：terser <file> --comments false --beautify [--module] -o <file>
       const result = await minify(content, {
         compress,
         mangle,
-        format: { comments: false },
+        format: { comments: false, beautify: true, indent_level: 2 },
         module: isModule,
       });
       fs.writeFileSync(full, result.code, 'utf8');
@@ -433,18 +441,15 @@ async function bundleContentScripts(distDir) {
   }
 }
 
-async function buildBrowser(browser, mode, { review = false } = {}) {
+async function buildBrowser(browser, mode) {
   // 按 浏览器 × 打包形态 构建（2026-09-07 自 buildChrome/buildFirefox 合并）
   // browser: 'chrome' | 'firefox'；mode: pure | compress | obfuscate
-  // review（2026-09-08 用户裁定）：审核文件夹模式——Firefox 纯净流程照跑，但
-  //   产物落 dist-firefox-review/ 且不打 zip，构建完写入专用 README
-  //   （FIREFOX_REVIEW_README，说明从纯净版到上传版的构建命令）。
+  // 2026-09-08 用户最终裁定：审核文件夹体系（review 参数 / dist-firefox-review /
+  // FIREFOX_REVIEW_README / make-upload.mjs）整体取消，auto 直出两个上传 zip。
   const cfg = BUILD_MODES[mode];
   // 纯净沿用原目录/包名（dist、dist-firefox，zip 无后缀，Edge 上传等既有流程不受影响）；
-  // 压缩/混淆按后缀另开目录与包名，与纯净产物互不覆盖。
-  const distDir = review
-    ? path.join(ROOT, 'dist-firefox-review')
-    : path.join(ROOT, `${browser === 'chrome' ? 'dist' : 'dist-firefox'}${cfg.suffix}`);
+  // 压缩/上传按后缀另开目录与包名，与纯净产物互不覆盖。
+  const distDir = path.join(ROOT, `${browser === 'chrome' ? 'dist' : 'dist-firefox'}${cfg.suffix}`);
   const zipPath = path.join(ROOT, `vocabradar-extension-${browser}${cfg.suffix}.zip`);
   console.log(`=== 构建 ${browser === 'chrome' ? 'Chrome/Edge' : 'Firefox'}（${cfg.label}）===`);
   cleanDist(distDir);
@@ -457,54 +462,27 @@ async function buildBrowser(browser, mode, { review = false } = {}) {
   }
   await bundleContentScripts(distDir);
   if (mode !== 'pure') {
-    // 压缩/混淆：esbuild 预打包之后统一过一遍 terser——散文件与 chunk 一次覆盖；
+    // 压缩/上传：esbuild 预打包之后统一过一遍 terser——散文件与 chunk 一次覆盖；
     // ?v= 补丁已在 bundleContentScripts 内先落，terser 保留 chrome.runtime.getURL
     // 调用与字符串字面量，防缓存补丁不受影响。
     await terserProcess(distDir, { ...cfg.terser, label: cfg.label });
-  }
-  if (review) {
-    // 审核文件夹模式：不出 zip（文件夹本身即交付物），补写专用 README 后收尾
-    fs.writeFileSync(path.join(distDir, 'README.md'), FIREFOX_REVIEW_README, 'utf8');
-    console.log('[写入] README.md（纯净版 → 上传版构建命令说明）');
-    console.log(`审核文件夹: ${distDir}`);
-    return;
   }
   makeZip(distDir, zipPath);
   console.log(`dist 目录: ${distDir}`);
   console.log(`zip 文件: ${zipPath}`);
 }
 
-// dist-firefox-review/ 专用 README（2026-09-08 用户裁定："带上专用的 readme，
-// 说明从纯净版到上传版的压缩命令。不要多扯。"——本文件夹即纯净构建产物，
-// README 只交代身份与一条构建上传包的命令，不写别的）
-const FIREFOX_REVIEW_README = `# VocabRadar - Firefox review build (not obfuscated)
-
-This folder is the plain build of the extension: comments stripped, nothing
-minified or renamed.
-
-The package submitted to Firefox Add-ons (AMO) is
-\`vocabradar-extension-firefox-upload.zip\`, built from the same sources with
-terser compress + mangle:
-
-    cd scripts
-    npm install
-    cd ..
-    node scripts/build.mjs --mode obfuscate --browser firefox
-`;
-
 async function buildAuto() {
-  // 自动模式（2026-09-08 用户裁定，三次调整）：上传商店的后缀统一 -upload
-  // （"obf 后缀容易引发疑虑"——文件名不透出混淆字样；以后要改名在 build 内部改），
-  // 构建一律 mangle（compress+mangle）。产出两样：
+  // 自动模式（2026-09-08 用户最终裁定）：一次产出两个上传包，直接提交商店。
+  // 统一口径 = 剥离注释 + compress + 多行 beautify（indent_level 2，不单行），
+  // mangle:false 不混淆——AMO 政策明令禁止混淆代码、允许 minification。
+  // 产出：
   //   1. vocabradar-extension-chrome-upload.zip —— Chrome 商店 / Edge 提交包；
-  //   2. dist-firefox-review/ 文件夹 —— Firefox 纯净构建产物（去注释/未压缩/
-  //      未混淆，可读）+ 专用 README（说明从纯净版到上传版的构建命令）。
-  //      注意：只有文件夹本身，不含 data/、scripts/ 源码目录（用户明确圈定）。
-  // Firefox 上传包 vocabradar-extension-firefox-upload.zip 不由 auto 产出，按
-  // dist-firefox-review/README.md 里的命令手动构建（若不够再说）。
-  console.log('=== 自动模式：Chrome 上传包 + Firefox 审核文件夹 ===');
+  //   2. vocabradar-extension-firefox-upload.zip —— Firefox (AMO) 提交包。
+  // dist-firefox-review/ 审核文件夹体系（专用 README + make-upload.mjs）整体取消。
+  console.log('=== 自动模式：Chrome + Firefox 上传包 ===');
   await buildBrowser('chrome', 'obfuscate');
-  await buildBrowser('firefox', 'pure', { review: true });
+  await buildBrowser('firefox', 'obfuscate');
 }
 
 async function main() {
@@ -512,7 +490,7 @@ async function main() {
     options: {
       // 等价旧 argparse --browser choices=[chrome,firefox,all] default=all
       browser: { type: 'string', default: 'all' },
-      // 2026-09-07：打包形态（纯净/压缩/混淆/自动），纯净为基础
+      // 2026-09-07：打包形态（纯净/压缩/上传/自动），纯净为基础
       mode: { type: 'string', default: 'auto' },
     },
   });
@@ -523,7 +501,7 @@ async function main() {
   }
   if (mode !== 'auto' && !(mode in BUILD_MODES)) {
     throw new Error(
-      `--mode 取值须为 pure/compress/obfuscate/auto（纯净/压缩/混淆/自动），收到: ${mode}`
+      `--mode 取值须为 pure/compress/obfuscate/auto（纯净/压缩/上传/自动），收到: ${mode}`
     );
   }
 
@@ -531,9 +509,9 @@ async function main() {
   buildPhonemizeLangpacks();
 
   if (mode === 'auto') {
-    // 自动：固定产出 Chrome 上传包 + Firefox 审核文件夹，--browser 不参与
+    // 自动：固定产出 Chrome + Firefox 两个上传包，--browser 不参与
     if (browser !== 'all') {
-      console.log(`[提示] auto 模式忽略 --browser=${browser}，固定产出 Chrome 上传包 + Firefox 审核文件夹`);
+      console.log(`[提示] auto 模式忽略 --browser=${browser}，固定产出 Chrome + Firefox 两个上传包`);
     }
     await buildAuto();
   } else if (browser === 'chrome') {
