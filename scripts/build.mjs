@@ -11,19 +11,25 @@
  *      minification，须在源码包 README 中如实披露）
  *   4. 将 dist/ 打包成 zip 文件
  *   5. --mode 打包形态（2026-09-07，与 --browser 正交，纯净为基础）：
- *      - pure（纯净，默认）：现行为——terser 仅去注释/压缩空白，不改名不删码；
+ *      - pure（纯净）：terser 仅去注释/压缩空白，不改名不删码；
  *      - compress（压缩）：纯净基础上 terser compress（死代码消除/语法压缩），不改名；
  *      - obfuscate（混淆）：纯净基础上 terser compress + mangle（标识符改名；不开
  *        toplevel——esbuild 分包 chunk 间 import/export 绑定名、classic 入口全局名、
  *        HTML 内联引用的全局函数一律保留，跨文件契约不被打断）；
- *      - auto（自动，默认）：混淆版 Chrome + 混淆版 Firefox + 火狐纯净版（2026-09-08：
- *        纯净 Firefox 包去注释/未压缩/未混淆，本身即可作 AMO 人工阅读用可读包；
- *        原 -review.zip 改名副本与纯净包逐字节相同，纯冗余已删。AMO 政策允许
- *        minified/obfuscated 代码但须附可读源码——正式审核附件是
- *        make_amo_source_zip.mjs 产出的 vocabradar-extension-source.zip）。
+ *      - auto（自动，默认）：Chrome 上传包 + Firefox 审核源码文件夹。2026-09-08
+ *        用户裁定：上传商店的产物后缀统一 -upload（文件名不透出 obf 字样，以免
+ *        引发疑虑；构建一律 mangle；以后要改后缀在本 build 内部改）。产出：
+ *        a) vocabradar-extension-chrome-upload.zip —— Chrome 商店/Edge 提交包；
+ *        b) dist-firefox-review/ 文件夹 —— Firefox 纯净构建产物（去注释/未压缩/
+ *           未混淆，可读）+ 专用 README.md（说明从纯净版到上传版的构建命令）；
+ *           仅文件夹本身，不含 data/、scripts/ 源码目录（用户明确圈定）。
+ *           Firefox 上传包 vocabradar-extension-firefox-upload.zip 按该 README
+ *           命令构建（node scripts/build.mjs --mode obfuscate --browser firefox）。
+ *        原 make_amo_source_zip.mjs 及其产出的 vocabradar-extension-source.zip
+ *        已删除。
  *      压缩/混淆的 terser 统一处理跑在 esbuild 预打包之后（散文件 + chunk 一次
  *      覆盖）；vendor/data 仍排除。产物命名：纯净包名不变；压缩 *-min.zip /
- *      dist-min*；混淆 *-obf.zip / dist-obf*。
+ *      dist-min*；混淆 *-upload.zip / dist-upload*（2026-09-08 前为 *-obf）。
  *
  * 数据目录结构（src/data/，由 preprocess.mjs 生成，打包时不处理）：
  *   - config.json          配置文件（panelHideDelay 等）
@@ -103,7 +109,9 @@ const STRIP_EXCLUDE_DIRS = new Set(['vendor', 'data']);
 const BUILD_MODES = {
   pure: { label: '纯净', suffix: '', terser: null },
   compress: { label: '压缩', suffix: '-min', terser: { compress: true, mangle: false } },
-  obfuscate: { label: '混淆', suffix: '-obf', terser: { compress: true, mangle: true } },
+  // 混淆产物后缀 -upload（2026-09-08 用户裁定）：提交商店的文件名不透出 obf 字样
+  // （"obf 后缀容易引发疑虑"），构建方式不变（compress + mangle）。
+  obfuscate: { label: '混淆', suffix: '-upload', terser: { compress: true, mangle: true } },
 };
 
 function cleanDist(distDir) {
@@ -425,13 +433,18 @@ async function bundleContentScripts(distDir) {
   }
 }
 
-async function buildBrowser(browser, mode) {
+async function buildBrowser(browser, mode, { review = false } = {}) {
   // 按 浏览器 × 打包形态 构建（2026-09-07 自 buildChrome/buildFirefox 合并）
   // browser: 'chrome' | 'firefox'；mode: pure | compress | obfuscate
+  // review（2026-09-08 用户裁定）：审核文件夹模式——Firefox 纯净流程照跑，但
+  //   产物落 dist-firefox-review/ 且不打 zip，构建完写入专用 README
+  //   （FIREFOX_REVIEW_README，说明从纯净版到上传版的构建命令）。
   const cfg = BUILD_MODES[mode];
   // 纯净沿用原目录/包名（dist、dist-firefox，zip 无后缀，Edge 上传等既有流程不受影响）；
   // 压缩/混淆按后缀另开目录与包名，与纯净产物互不覆盖。
-  const distDir = path.join(ROOT, `${browser === 'chrome' ? 'dist' : 'dist-firefox'}${cfg.suffix}`);
+  const distDir = review
+    ? path.join(ROOT, 'dist-firefox-review')
+    : path.join(ROOT, `${browser === 'chrome' ? 'dist' : 'dist-firefox'}${cfg.suffix}`);
   const zipPath = path.join(ROOT, `vocabradar-extension-${browser}${cfg.suffix}.zip`);
   console.log(`=== 构建 ${browser === 'chrome' ? 'Chrome/Edge' : 'Firefox'}（${cfg.label}）===`);
   cleanDist(distDir);
@@ -449,22 +462,49 @@ async function buildBrowser(browser, mode) {
     // 调用与字符串字面量，防缓存补丁不受影响。
     await terserProcess(distDir, { ...cfg.terser, label: cfg.label });
   }
+  if (review) {
+    // 审核文件夹模式：不出 zip（文件夹本身即交付物），补写专用 README 后收尾
+    fs.writeFileSync(path.join(distDir, 'README.md'), FIREFOX_REVIEW_README, 'utf8');
+    console.log('[写入] README.md（纯净版 → 上传版构建命令说明）');
+    console.log(`审核文件夹: ${distDir}`);
+    return;
+  }
   makeZip(distDir, zipPath);
   console.log(`dist 目录: ${distDir}`);
   console.log(`zip 文件: ${zipPath}`);
 }
 
+// dist-firefox-review/ 专用 README（2026-09-08 用户裁定："带上专用的 readme，
+// 说明从纯净版到上传版的压缩命令。不要多扯。"——本文件夹即纯净构建产物，
+// README 只交代身份与一条构建上传包的命令，不写别的）
+const FIREFOX_REVIEW_README = `# VocabRadar - Firefox review build (not obfuscated)
+
+This folder is the plain build of the extension: comments stripped, nothing
+minified or renamed.
+
+The package submitted to Firefox Add-ons (AMO) is
+\`vocabradar-extension-firefox-upload.zip\`, built from the same sources with
+terser compress + mangle:
+
+    cd scripts
+    npm install
+    cd ..
+    node scripts/build.mjs --mode obfuscate --browser firefox
+`;
+
 async function buildAuto() {
-  // 自动模式（2026-09-08 用户裁定）：混淆 Chrome + 混淆 Firefox + 火狐纯净版
-  // 纯净为基础——先出纯净 Firefox 包（vocabradar-extension-firefox.zip），
-  // 该包本身去注释/未压缩/未混淆，可直接作 AMO 人工阅读用可读包（原 -review.zip
-  // 改名副本已删：与纯净包逐字节相同，纯冗余，"需要时再加"）。
-  // 注意：AMO 政策正式审核附件是 make_amo_source_zip.mjs 产出的
-  // vocabradar-extension-source.zip（README 构建说明 + 完整可复现源码链）。
-  console.log('=== 自动模式：混淆 Chrome + 混淆 Firefox + 火狐纯净版（审核可读用） ===');
-  await buildBrowser('firefox', 'pure');
+  // 自动模式（2026-09-08 用户裁定，三次调整）：上传商店的后缀统一 -upload
+  // （"obf 后缀容易引发疑虑"——文件名不透出混淆字样；以后要改名在 build 内部改），
+  // 构建一律 mangle（compress+mangle）。产出两样：
+  //   1. vocabradar-extension-chrome-upload.zip —— Chrome 商店 / Edge 提交包；
+  //   2. dist-firefox-review/ 文件夹 —— Firefox 纯净构建产物（去注释/未压缩/
+  //      未混淆，可读）+ 专用 README（说明从纯净版到上传版的构建命令）。
+  //      注意：只有文件夹本身，不含 data/、scripts/ 源码目录（用户明确圈定）。
+  // Firefox 上传包 vocabradar-extension-firefox-upload.zip 不由 auto 产出，按
+  // dist-firefox-review/README.md 里的命令手动构建（若不够再说）。
+  console.log('=== 自动模式：Chrome 上传包 + Firefox 审核文件夹 ===');
   await buildBrowser('chrome', 'obfuscate');
-  await buildBrowser('firefox', 'obfuscate');
+  await buildBrowser('firefox', 'pure', { review: true });
 }
 
 async function main() {
@@ -491,9 +531,9 @@ async function main() {
   buildPhonemizeLangpacks();
 
   if (mode === 'auto') {
-    // 自动：固定产出混淆 Chrome + 混淆 Firefox + 火狐纯净版，--browser 不参与
+    // 自动：固定产出 Chrome 上传包 + Firefox 审核文件夹，--browser 不参与
     if (browser !== 'all') {
-      console.log(`[提示] auto 模式忽略 --browser=${browser}，固定产出混淆×2 + 火狐纯净版`);
+      console.log(`[提示] auto 模式忽略 --browser=${browser}，固定产出 Chrome 上传包 + Firefox 审核文件夹`);
     }
     await buildAuto();
   } else if (browser === 'chrome') {

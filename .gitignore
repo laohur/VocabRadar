@@ -2,9 +2,10 @@
 dist/
 dist-firefox/
 dist-min/
-dist-obf/
+dist-upload/
 dist-firefox-min/
-dist-firefox-obf/
+dist-firefox-upload/
+dist-firefox-review/
 *.zip
 *.7z
 
