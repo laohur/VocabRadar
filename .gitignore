@@ -16,9 +16,17 @@ change.log
 docs/
 note.txt
 浏览器扩展.txt
+README.md
+PRIVACY.md
+
+# ===== HF 上传包（数据住 HF 仓库，不入库）=====
+data/hf-upload/
 
 # ===== 工作区规则文件（用户裁定不入库）=====
 AGENTS.md
+
+# ===== 截图素材（不入库）=====
+Screenshot/
 
 # ===== 工具/编辑器状态与缓存 =====
 node_modules/
