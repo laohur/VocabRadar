@@ -862,7 +862,7 @@ input::placeholder { color: var(--g-muted); opacity: 1; }
 }
 /* 257 次：占位符覆盖层——上下左右居中（textarea 原生 placeholder 只能左上，
    改绝对定位 flex 居中层，textarea 有值即隐藏，文案走 data-key=parserInputPh） */
-.g-parser-inputwrap { position: relative; }
+.g-parser-inputwrap { position: relative; flex: 0 0 auto; }
 .g-parser-ph {
   position: absolute;
   inset: 0;
@@ -878,7 +878,25 @@ input::placeholder { color: var(--g-muted); opacity: 1; }
   white-space: pre-wrap;
 }
 /* 258 次：拍照/录制预览位（输入区内、只有一个，下次拍照/录制占用替换——用户口径） */
-.g-parser-media { margin-top: 6px; }
+.g-parser-media { margin-top: 6px; position: relative; }
+/* 259 次：预览右上角 ✕（仅撤预览显示，文件删除仍走列表） */
+.g-parser-media-del {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  width: 22px;
+  height: 22px;
+  border: none;
+  border-radius: 50%;
+  background: rgba(0, 0, 0, 0.6);
+  color: #fff;
+  font-size: 13px;
+  line-height: 22px;
+  text-align: center;
+  cursor: pointer;
+  padding: 0;
+}
+.g-parser-media-del:hover { background: rgba(178, 58, 46, 0.9); }
 .g-parser-media img,
 .g-parser-media video {
   display: block;
@@ -895,8 +913,8 @@ input::placeholder { color: var(--g-muted); opacity: 1; }
   flex-direction: column;
   gap: 4px;
   margin-top: 6px;
-  max-height: 150px;
-  overflow-y: auto;
+  /* 259 次（用户"列表多了就延申"）：去 150px 上限——列表自然延申撑长整栏（页面滚动），
+     输入框按自身内容定高不被挤压（inputwrap flex:0 0 auto 兜底） */
 }
 .g-parser-file {
   display: flex;

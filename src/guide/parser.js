@@ -448,6 +448,14 @@ function setPreview(file) {
     video.controls = true;
     box.appendChild(video);
   }
+  // 259 次：右上角 ✕——仅撤预览显示（文件删除仍由列表逐项 ✕ 管）
+  const del = document.createElement('button');
+  del.type = 'button';
+  del.className = 'g-parser-media-del';
+  del.textContent = '✕';
+  del.title = t('parser.fileDelete');
+  del.addEventListener('click', clearPreview);
+  box.appendChild(del);
   box.hidden = false;
   log('Parser 预览已更新:', file.name);
 }
@@ -483,10 +491,18 @@ function autosizeInput() {
   ta.style.height = Math.min(ta.scrollHeight, BOX_MAX_HEIGHT) + 'px';
 }
 
-/** dataURL → File（拍照成品入列+预览） */
-async function dataUrlToFile(dataUrl, name) {
-  const blob = await (await fetch(dataUrl)).blob();
-  return new File([blob], name, { type: blob.type || 'image/png' });
+/** dataURL → File（拍照成品入列+预览）
+ *  259 次：不能用 fetch(dataUrl) 解码——data: URL 同受扩展页 CSP connect-src 管辖
+ *  （实测 "Connecting to 'data:image/png...' violates CSP"），改 atob 纯解码零网络零 CSP */
+function dataUrlToFile(dataUrl, name) {
+  const comma = dataUrl.indexOf(',');
+  const meta = dataUrl.slice(0, comma);
+  const b64 = dataUrl.slice(comma + 1);
+  const mime = (/data:([^;]+)/.exec(meta) || [])[1] || 'application/octet-stream';
+  const bin = atob(b64);
+  const u8 = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) u8[i] = bin.charCodeAt(i);
+  return Promise.resolve(new File([u8], name, { type: mime }));
 }
 
 /** 复制结果到剪贴板（clipboard API 优先，execCommand 兜底） */

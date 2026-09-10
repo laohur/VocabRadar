@@ -70,7 +70,7 @@
     }
   ],
   "content_security_policy": {
-    "extension_pages": "script-src 'self' 'wasm-unsafe-eval'; object-src 'self'; media-src 'self' blob:; connect-src 'self' https://cdn.jsdelivr.net https://fastly.jsdelivr.net https://gcore.jsdelivr.net https://tessdata.projectnaptha.com https://unpkg.com https://huggingface.co https://hf-mirror.com https://*.xenova.com https://*.hf.co https://api.mymemory.translated.net https://translate.googleapis.com https://fanyi.youdao.com https://fanyi.baidu.com https://dict.youdao.com https://libretranslate.com https://api.argos-translate.com https://translate.terraprint.co https://www.bing.com https://lingva.ml https://translate.plausibility.cloud https://lingva.lunar.icu https://api.groq.com https://openrouter.ai https://generativelanguage.googleapis.com https://api.openai.com https://api.deepseek.com https://api.anthropic.com https://text.pollinations.ai https://oai.endpoints.kepler.ai.cloud.ovh.net https://*.endpoints.kepler.ai.cloud.ovh.net"
+    "extension_pages": "script-src 'self' 'wasm-unsafe-eval'; object-src 'self'; media-src 'self' blob:; connect-src 'self' https: http: data: blob:"
   },
   "browser_specific_settings": {
     "gecko": {
