@@ -899,6 +899,16 @@ input::placeholder { color: var(--g-muted); opacity: 1; }
   padding: 0;
 }
 .g-parser-media-del:hover { background: rgba(178, 58, 46, 0.9); }
+/* 265 次：录音实时音量波形画布（用户"录音时候没有预览"——麦克风频谱柱状，
+   只分析不外放无回声；预览槽内与画面预览同宽） */
+.g-parser-media-audio {
+  display: block;
+  width: 100%;
+  height: 80px;
+  border-radius: 8px;
+  border: 1px solid var(--beaver-outline, #c2c9bf);
+  background: #fff;
+}
 .g-parser-media img,
 .g-parser-media video {
   /* 264 次（用户"不是让你补黑边，而是缩放，高度可以扩展。禁止补黑边"）：

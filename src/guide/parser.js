@@ -41,6 +41,7 @@ let _parsing = false;                       // 解析中标志（解析/拍照�
 let _lastResult = '';                       // 最近一次解析结果（复制/导出用）
 let _liveTexts = [];                        // 录制实时识别句缓存（停止后并入结果）
 let _lastFailures = [];                     // 最近一次解析的失败清单（文件列表下逐条展示，263 次）
+let _audioViz = null;                       // 录音实时波形 {ctx, raf, canvas}（265 次，clearPreview 统一撤）
 
 const URL_RE = /^https?:\/\/\S+$/i;
 const TEXT_EXTS = new Set(['txt', 'md', 'markdown', 'csv', 'tsv', 'json', 'xml', 'srt', 'vtt', 'log', 'nfo']);
@@ -154,12 +155,18 @@ function resetOutput() {
   if (out) out.innerHTML = `<div class="g-parser-center g-empty-tip">${escapeHtml(t('parser.outputTip'))}</div>`;
   renderResultMeta();
 }
-/** 录制中实时画面预览（260 次：摄像/录屏录制期间在预览槽看实时流；
- *  muted 防麦克风回声；停止后由 setPreview 用成片文件替换本元素） */
+/** 录制中实时预览（265 次扩音频）：video/screen=画面（srcObject muted）；audio=实时音量
+ *  波形（AnalyserNode 频谱柱状图，只分析不外放——无回声）；停止后由 setPreview 用成片替换 */
 function showLivePreview(stream, kind) {
   const box = $('g-parser-media');
   if (!box) return;
   box.innerHTML = '';
+  if (kind === 'audio') {
+    showLiveAudioViz(stream, box);
+    box.hidden = false;
+    log('Parser 实时音量预览已开启');
+    return;
+  }
   const video = document.createElement('video');
   video.className = 'g-parser-media-video';
   video.srcObject = stream;
@@ -168,11 +175,48 @@ function showLivePreview(stream, kind) {
   video.playsInline = true;
   box.appendChild(video);
   box.hidden = false;
-  log('Parser 实时预览已开启:', kind);
+  log('Parser 实时画面预览已开启:', kind);
+}
+
+/** 音量波形（麦克风实时频谱柱状图；raf 循环以 _audioViz 持有为停止条件，
+ *  clearPreview 统一撤 raf + 关 AudioContext） */
+function showLiveAudioViz(stream, box) {
+  const canvas = document.createElement('canvas');
+  canvas.className = 'g-parser-media-audio';
+  box.appendChild(canvas);
+  const actx = new (window.AudioContext || window.webkitAudioContext)();
+  if (actx.state === 'suspended') actx.resume().catch(() => { /* ignore */ });
+  const src = actx.createMediaStreamSource(stream);
+  const analyser = actx.createAnalyser();
+  analyser.fftSize = 256;
+  analyser.smoothingTimeConstant = 0.8;
+  src.connect(analyser);   // 刻意不连 destination：无扬声器输出 = 无回声
+  const bins = new Uint8Array(analyser.frequencyBinCount);
+  const g = canvas.getContext('2d');
+  _audioViz = { ctx: actx, raf: 0, canvas };
+  const draw = () => {
+    if (!_audioViz || _audioViz.canvas !== canvas) return;   // 已停止/被替换
+    const w = canvas.clientWidth || 300;
+    const h = canvas.clientHeight || 80;
+    if (canvas.width !== w || canvas.height !== h) { canvas.width = w; canvas.height = h; }
+    analyser.getByteFrequencyData(bins);
+    g.clearRect(0, 0, w, h);
+    const bars = 32;
+    const slot = w / bars;
+    g.fillStyle = '#2e6b43';
+    for (let i = 0; i < bars; i++) {
+      const v = bins[Math.floor(i * bins.length / bars)] / 255;
+      const bh = Math.max(2, v * (h - 8));
+      g.fillRect(i * slot + 1, h - bh - 2, Math.max(2, slot - 2), bh);
+    }
+    _audioViz.raf = requestAnimationFrame(draw);
+  };
+  draw();
 }
 
 /** 录制实时识别句流入（parser-media onLiveText 回调） */
-function appendLiveText(text) {  if (!text) return;
+function appendLiveText(text) {
+  if (!text) return;
   _liveTexts.push(text);
   const out = $('g-parser-output');
   if (!out) return;
@@ -551,6 +595,12 @@ function setPreview(file) {
 }
 
 function clearPreview() {
+  if (_audioViz) {
+    // 265 次：撤波形循环 + 关 AudioContext（防止泄漏与空转 raf）
+    try { cancelAnimationFrame(_audioViz.raf); } catch (e) { /* ignore */ }
+    try { _audioViz.ctx.close(); } catch (e) { /* ignore */ }
+    _audioViz = null;
+  }
   if (_preview) {
     try { URL.revokeObjectURL(_preview.url); } catch (e) { /* ignore */ }
     _preview = null;

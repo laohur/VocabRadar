@@ -58,9 +58,9 @@ export async function startParserRecording(kind, onLiveText, onStream) {
   const acq = await acquireMediaStream(kind);
   if (acq.err) { handleAcquireError(kind, acq.err); return; }
   const stream = acq.stream;
-  // 260 次（用户"摄像没视频预览"）：流到手即回调实时画面（video/screen 有画面，
-  //   audio 不回调——纯音频无画面可显且外放会回声）
-  if (kind !== 'audio' && typeof onStream === 'function') {
+  // 265 次（用户"录音时候没有预览"）：audio 也回调——纯音频由 Parser 栏渲染实时音量
+  //   波形（AnalyserNode 只分析不外放，无回声）；video/screen 仍是画面预览
+  if (typeof onStream === 'function') {
     try { onStream(stream, kind); } catch (e) { log('Parser 实时预览回调失败:', e); }
   }
   rec.active = true;
