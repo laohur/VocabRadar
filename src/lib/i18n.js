@@ -144,6 +144,10 @@ const DICT = {
     'parser.multiFiles': '{n} file(s)',
     'parser.copied': 'Copied to clipboard.',
     'parser.copyFail': 'Copy failed: ',
+    // 257 次：空态提示 i18n 化（修复语言混杂）+ 文件列表操作
+    'parser.outputTip': 'Parsed plain text will appear here.',
+    'parser.fileSave': 'Save file',
+    'parser.fileDelete': 'Remove from batch',
     'parser.noInput': 'Enter text or a link, or drop/paste a file first',
     'parser.fileAttached': 'File',
     'parser.linkDetected': 'Link detected',
@@ -523,6 +527,10 @@ const DICT = {
     'parser.multiFiles': '{n} 个文件',
     'parser.copied': '已复制到剪贴板。',
     'parser.copyFail': '复制失败：',
+    // 257 次：空态提示 i18n 化（修复语言混杂）+ 文件列表操作
+    'parser.outputTip': '解析出的纯文本将显示在这里。',
+    'parser.fileSave': '保存文件',
+    'parser.fileDelete': '移出本批',
     'parser.noInput': '请先输入文本/链接，或拖入/粘贴文件',
     'parser.fileAttached': '文件',
     'parser.linkDetected': '识别为链接',

@@ -535,13 +535,10 @@ input::placeholder { color: var(--g-muted); opacity: 1; }
 .func-btn:hover:not(:disabled) { background: var(--g-primary-strong); }
 .func-btn:disabled { opacity: 0.45; cursor: not-allowed; }
 .func-btn.active { background: #b23a2e; }
+/* 257 次（用户"录音中按钮咋一会红一会绿，跟通常不一样"）：去闪烁动画改常亮红——
+   录制中=通用的实心红按钮语义（opacity 闪烁让红底透出下层观感发绿），ASR/Parser 两栏录制按钮同款类一致生效 */
 .func-btn.recording {
   background: #b23a2e;
-  animation: g-blink 1s infinite;
-}
-@keyframes g-blink {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.55; }
 }
 
 /* 展示区（其次）：空态提示居中，媒体 16:9 定比并限制最大宽度 */
@@ -857,21 +854,73 @@ input::placeholder { color: var(--g-muted); opacity: 1; }
   color: var(--g-muted);
   min-height: 18px;
 }
-/* 图片附件缩略图（256 次"拍照之后照片没留"：图片类附件一律留档展示） */
-.g-parser-thumbs {
+/* 257 次：占位符覆盖层——上下左右居中（textarea 原生 placeholder 只能左上，
+   改绝对定位 flex 居中层，textarea 有值即隐藏，文案走 data-key=parserInputPh） */
+.g-parser-inputwrap { position: relative; }
+.g-parser-ph {
+  position: absolute;
+  inset: 0;
   display: flex;
-  flex-wrap: wrap;
-  gap: 4px;
-  width: 100%;
+  align-items: center;
+  justify-content: center;
+  padding: 10px 24px;
+  text-align: center;
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--g-muted);
+  pointer-events: none;
+  white-space: pre-wrap;
 }
-.g-parser-thumb {
-  width: 56px;
-  height: 42px;
-  object-fit: cover;
-  border-radius: 6px;
+/* 257 次：本批文件列表（显示在输入区）——图片带缩略图，每项可 保存(⬇)/删除(✕)；
+   拍照/录制成品经此留档可取（用户"录音拍照要留下文件"） */
+.g-parser-filelist {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 6px;
+  max-height: 150px;
+  overflow-y: auto;
+}
+.g-parser-file {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 8px;
+  font-size: 12px;
+  color: var(--g-text);
+  background: #fff;
   border: 1px solid var(--beaver-outline, #c2c9bf);
+  border-radius: 8px;
+}
+.g-parser-file-thumb {
+  width: 36px;
+  height: 27px;
+  object-fit: cover;
+  border-radius: 4px;
+  border: 1px solid var(--beaver-outline, #c2c9bf);
+  flex: 0 0 auto;
   background: #fff;
 }
+.g-parser-file-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.g-parser-file-size { color: var(--g-muted); flex: 0 0 auto; }
+.g-parser-file-act {
+  border: none;
+  background: none;
+  padding: 0 2px;
+  font-size: 13px;
+  cursor: pointer;
+  flex: 0 0 auto;
+}
+.g-parser-file-act.dl { color: var(--g-primary); text-decoration: none; }
+.g-parser-file-act.dl:hover { text-decoration: underline; }
+.g-parser-file-act.del { color: #b23a2e; }
+.g-parser-file-act.del:hover { text-decoration: underline; }
 /* 清空输入按钮（✕，有输入时才显示） */
 .g-parser-clear {
   border: none;
@@ -891,7 +940,8 @@ input::placeholder { color: var(--g-muted); opacity: 1; }
   gap: 8px;
 }
 .g-parser-out-actions .func-btn { padding: 6px 16px; font-size: 13px; }
-/* 右栏：解析结果（纯文本，pre-wrap 保留换行） */
+/* 右栏：解析结果（纯文本，pre-wrap 保留换行）。257 次：改 flex 列容器，
+   空态/进度/失败提示经 .g-parser-center（margin:auto）上下左右居中（用户"占位符都上下左右居中"） */
 .g-parser-output {
   flex: 1;
   min-height: 340px;
@@ -903,4 +953,10 @@ input::placeholder { color: var(--g-muted); opacity: 1; }
   color: var(--beaver-text, #1a1f1a);
   white-space: pre-wrap;
   word-break: break-word;
+  display: flex;
+  flex-direction: column;
+}
+.g-parser-center {
+  margin: auto;
+  text-align: center;
 }

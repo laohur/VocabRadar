@@ -524,6 +524,13 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         .then((data) => sendResponse({ ok: true, data }))
         .catch((e) => sendResponse({ ok: false, error: String(e.message || e) }));
       return true;
+    case 'FETCH_TEXT':
+      // 257 次：Parser 链接抓取（guide 页 CSP connect-src 白名单不含任意站点，
+      //   页面直 fetch 被拒——见 handleFetchText 头注释），返回纯文本。
+      handleFetchText(msg.url)
+        .then((r) => sendResponse(r))
+        .catch((e) => sendResponse({ ok: false, error: String(e.message || e) }));
+      return true;
     case 'KURO_FETCH':
       // kuromoji 日语注音词典 CDN 中转（2026-09-08）：词典 12 个 .dat.gz 不随包，
       //   phonemize-ja.mjs（构建时 patch 过的 BrowserDictionaryLoader）经本消息请求，
@@ -1901,6 +1908,34 @@ async function handleFetchUrl(url) {
   } catch (e) {
     console.error('[VocabRadar][sw][' + _ts() + '] fetchUrl 异常:', e);
     return { ok: false, error: String(e.message || e) };
+  }
+}
+
+// === 257 次：Parser 链接抓取文本中转（guide/parser.js parseLink） ===
+// 反思（2026-09-10）：255 次让引导页直接 fetch 任意链接是错误前提——扩展页 CSP
+//   extension_pages 的 connect-src 是固定白名单（词典/翻译/LLM CDN），任意站点
+//   （用户实测 usepomo.ai）被拒："Refused to connect because it violates the
+//   document's Content Security Policy"。SW 无页面 CSP、有 host_permissions
+//   <all_urls>，页面经消息中转即可。镜像 handleFetchUrl 风格，返回纯文本。
+async function handleFetchText(url) {
+  if (!url) return { ok: false, error: 'empty url' };
+  log('[VocabRadar][sw][' + _ts() + '] fetchText:', url.slice(0, 120));
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), 30000);   // 30s 超时防挂死
+  try {
+    const res = await fetch(url, { credentials: 'omit', cache: 'no-store', redirect: 'follow', signal: ctrl.signal });
+    if (!res.ok) {
+      console.warn('[VocabRadar][sw][' + _ts() + '] fetchText HTTP ' + res.status + ':', url.slice(0, 80));
+      return { ok: false, error: 'HTTP ' + res.status + ' ' + url.slice(0, 80) };
+    }
+    const text = await res.text();
+    log('[VocabRadar][sw][' + _ts() + '] fetchText 成功, ' + text.length + ' chars');
+    return { ok: true, text, finalUrl: res.url || url };
+  } catch (e) {
+    console.error('[VocabRadar][sw][' + _ts() + '] fetchText 异常:', e);
+    return { ok: false, error: String(e.message || e) };
+  } finally {
+    clearTimeout(timer);
   }
 }
 

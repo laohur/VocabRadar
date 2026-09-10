@@ -470,13 +470,17 @@
           <!-- 中部：左右两栏（左=大输入框+解析按钮，右=纯文本结果） -->
           <div class="g-parser-cols">
             <div class="g-parser-left">
-              <!-- 大输入框：粘贴文本/链接（多行皆链接=批量链接），拖入或 Ctrl+V 粘贴多文件；
-                   自动延高随内容长高（上限同输出框 560px），到底再内部滚动 -->
-              <textarea id="g-parser-input" class="g-parser-input" data-ph-key="parserInputPh" placeholder="在此粘贴文本或链接，或拖入/粘贴文件（文本网页、音视频、图片、PDF、DOCX 等）" spellcheck="false"></textarea>
+              <!-- 大输入框（257 次）：占位符改绝对定位覆盖层（上下左右居中，textarea 有值即隐）；
+                   多行皆链接=批量链接；拖入/Ctrl+V 粘贴/上传 = 替换本批输入（多文件为一批） -->
+              <div id="g-parser-inputwrap" class="g-parser-inputwrap">
+                <textarea id="g-parser-input" class="g-parser-input" spellcheck="false"></textarea>
+                <div class="g-parser-ph" data-key="parserInputPh">在此粘贴文本或链接，或拖入/粘贴文件（文本网页、音视频、图片、PDF、DOCX 等）</div>
+              </div>
+              <!-- 本批文件列表（257 次，用户"文件列表显示在输入区，还有删除标识"）：
+                   图片带缩略图，每项含 保存(⬇)/删除(✕)——拍照/录制成品留档可取 -->
+              <div id="g-parser-filelist" class="g-parser-filelist"></div>
               <div class="g-parser-input-info">
                 <span id="g-parser-input-info-text"></span>
-                <!-- 图片附件缩略图（拍照/图片文件留档，256 次"拍照之后照片没留"） -->
-                <div id="g-parser-thumbs" class="g-parser-thumbs"></div>
                 <!-- 清空输入（✕，有输入时才显示） -->
                 <button type="button" class="g-parser-clear" id="g-parser-clear" data-key="parserClear" hidden>✕ 清空</button>
               </div>
@@ -490,7 +494,9 @@
               <div class="g-sidebar" id="g-parser-output-box">
                 <div class="g-results-head" data-key="parserOutputTitle">解析结果</div>
                 <div class="g-parser-output" id="g-parser-output">
-                  <div class="g-empty-tip" data-key="parserOutputTip">解析出的纯文本将显示在这里</div>
+                  <!-- 257 次：空态提示文案移至 i18n（parser.outputTip），parser.js resetOutput
+                       统一绘制（居中 + 随界面语言）——修复"解析出的纯文本将显示在这里"语言混杂 -->
+                  <div class="g-empty-tip">解析出的纯文本将显示在这里</div>
                 </div>
               </div>
               <!-- 结果栏底下：复制 / 导出（256 次） -->

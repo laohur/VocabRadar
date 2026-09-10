@@ -107,7 +107,8 @@ const MSG = {
   parserExport: { en: 'Export', zh: '导出' },
   parserClear: { en: 'Clear', zh: '清空' },
   parserOutputTitle: { en: 'Parse Result', zh: '解析结果' },
-  parserOutputTip: { en: 'Parsed plain text will appear here.', zh: '解析出的纯文本将显示在这里。' },
+  // 257 次：parserOutputTip 移至 i18n（parser.outputTip）——空态提示由 parser.js resetOutput
+  //   统一绘制，修复"解析出的纯文本将显示在这里"语言混杂（静态 HTML/MSG 双源导致）
   tabHelp: { en: 'Help', zh: '说明栏' },
   groupGlobal: { en: 'Global Parameters', zh: '全局参数' },
   groupModel: { en: 'Models', zh: '模型' },
