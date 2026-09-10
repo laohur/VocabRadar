@@ -819,12 +819,16 @@ input::placeholder { color: var(--g-muted); opacity: 1; }
 @media (max-width: 720px) {
   .g-parser-cols { flex-direction: column; }
 }
-/* 左栏大输入框：粘贴文本/链接，拖入或 Ctrl+V 粘贴文件（dragover 高亮提示可放） */
+/* 左栏大输入框：粘贴文本/链接，拖入或 Ctrl+V 粘贴多文件（dragover 高亮提示可放）
+   256 次：自动延高——JS 随内容设 height（autosizeInput），CSS 上限与输出框一致（560px），
+   到底再内部滚动；resize 交给自动延高，不再手动拉伸 */
 .g-parser-input {
   width: 100%;
   box-sizing: border-box;
   min-height: 340px;
-  resize: vertical;
+  max-height: 560px;
+  overflow-y: auto;
+  resize: none;
   padding: 10px 12px;
   font-size: 13px;
   line-height: 1.55;
@@ -853,8 +857,40 @@ input::placeholder { color: var(--g-muted); opacity: 1; }
   color: var(--g-muted);
   min-height: 18px;
 }
+/* 图片附件缩略图（256 次"拍照之后照片没留"：图片类附件一律留档展示） */
+.g-parser-thumbs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  width: 100%;
+}
+.g-parser-thumb {
+  width: 56px;
+  height: 42px;
+  object-fit: cover;
+  border-radius: 6px;
+  border: 1px solid var(--beaver-outline, #c2c9bf);
+  background: #fff;
+}
+/* 清空输入按钮（✕，有输入时才显示） */
+.g-parser-clear {
+  border: none;
+  background: none;
+  padding: 0;
+  font-size: 12px;
+  color: #b23a2e;
+  cursor: pointer;
+}
+.g-parser-clear:hover { text-decoration: underline; }
 /* 解析按钮行（左栏底部） */
 .g-parser-left .g-recognize-row { margin-top: auto; padding-top: 14px; }
+/* 结果栏底下复制/导出按钮行（256 次） */
+.g-parser-out-actions {
+  margin-top: 8px;
+  display: flex;
+  gap: 8px;
+}
+.g-parser-out-actions .func-btn { padding: 6px 16px; font-size: 13px; }
 /* 右栏：解析结果（纯文本，pre-wrap 保留换行） */
 .g-parser-output {
   flex: 1;

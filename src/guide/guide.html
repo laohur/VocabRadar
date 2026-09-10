@@ -463,17 +463,22 @@
             <label class="g-radio" data-title-key="ws.recordVideoTitle"><input type="radio" name="g-parser-source" id="g-parser-record-video" value="video"><span class="g-radio-text" data-key="ws.recordVideo">Camera</span></label>
             <label class="g-radio" data-title-key="ws.recordScreenTitle"><input type="radio" name="g-parser-source" id="g-parser-record-screen" value="screen"><span class="g-radio-text" data-key="ws.recordScreen">Screen</span></label>
             <span class="g-radio-label" data-key="ws.recordFromEnd">)</span>
-            <!-- 隐藏文件选择器（「上传文件」触发；拖入/Ctrl+V 粘贴不走它），accept 覆盖常见类型 -->
-            <input type="file" id="g-parser-file-input" hidden
+            <!-- 隐藏文件选择器（「上传文件」触发；拖入/Ctrl+V 粘贴不走它），multiple 多选累计 -->
+            <input type="file" id="g-parser-file-input" multiple hidden
                    accept=".txt,.md,.markdown,.html,.htm,.xml,.json,.csv,.srt,.vtt,.docx,.pdf,text/*,audio/*,video/*,image/*">
           </div>
           <!-- 中部：左右两栏（左=大输入框+解析按钮，右=纯文本结果） -->
           <div class="g-parser-cols">
             <div class="g-parser-left">
-              <!-- 大输入框：粘贴文本/链接，拖入或 Ctrl+V 粘贴文件 -->
+              <!-- 大输入框：粘贴文本/链接（多行皆链接=批量链接），拖入或 Ctrl+V 粘贴多文件；
+                   自动延高随内容长高（上限同输出框 560px），到底再内部滚动 -->
               <textarea id="g-parser-input" class="g-parser-input" data-ph-key="parserInputPh" placeholder="在此粘贴文本或链接，或拖入/粘贴文件（文本网页、音视频、图片、PDF、DOCX 等）" spellcheck="false"></textarea>
               <div class="g-parser-input-info">
                 <span id="g-parser-input-info-text"></span>
+                <!-- 图片附件缩略图（拍照/图片文件留档，256 次"拍照之后照片没留"） -->
+                <div id="g-parser-thumbs" class="g-parser-thumbs"></div>
+                <!-- 清空输入（✕，有输入时才显示） -->
+                <button type="button" class="g-parser-clear" id="g-parser-clear" data-key="parserClear" hidden>✕ 清空</button>
               </div>
               <!-- 底下：解析按钮（输入非空可用） -->
               <div class="g-recognize-row">
@@ -481,12 +486,17 @@
               </div>
             </div>
             <div class="g-parser-right">
-              <!-- 右栏：解析结果（纯文本）。第二百五十四次移除 Sidebar 切换——本页已有正常侧栏 -->
+              <!-- 右栏：解析结果（纯文本）。254 次移除 Sidebar 切换——本页已有正常侧栏 -->
               <div class="g-sidebar" id="g-parser-output-box">
                 <div class="g-results-head" data-key="parserOutputTitle">解析结果</div>
                 <div class="g-parser-output" id="g-parser-output">
                   <div class="g-empty-tip" data-key="parserOutputTip">解析出的纯文本将显示在这里</div>
                 </div>
+              </div>
+              <!-- 结果栏底下：复制 / 导出（256 次） -->
+              <div class="g-parser-out-actions">
+                <button class="func-btn" id="g-parser-copy" data-key="parserCopy">📋 复制</button>
+                <button class="func-btn" id="g-parser-export" data-key="parserExport">⬇ 导出</button>
               </div>
             </div>
           </div>

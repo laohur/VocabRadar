@@ -139,6 +139,11 @@ const DICT = {
     'parser.empty': 'No text extracted.',
     'parser.fail': 'Parse failed: ',
     'parser.unsupported': 'Unsupported type: {what}',
+    // 256 次：多链接/多文件/复制导出
+    'parser.linksCount': '{n} link(s)',
+    'parser.multiFiles': '{n} file(s)',
+    'parser.copied': 'Copied to clipboard.',
+    'parser.copyFail': 'Copy failed: ',
     'parser.noInput': 'Enter text or a link, or drop/paste a file first',
     'parser.fileAttached': 'File',
     'parser.linkDetected': 'Link detected',
@@ -513,6 +518,11 @@ const DICT = {
     'parser.empty': '未解析出文本。',
     'parser.fail': '解析失败：',
     'parser.unsupported': '暂不支持的类型：{what}',
+    // 256 次：多链接/多文件/复制导出
+    'parser.linksCount': '{n} 条链接',
+    'parser.multiFiles': '{n} 个文件',
+    'parser.copied': '已复制到剪贴板。',
+    'parser.copyFail': '复制失败：',
     'parser.noInput': '请先输入文本/链接，或拖入/粘贴文件',
     'parser.fileAttached': '文件',
     'parser.linkDetected': '识别为链接',

@@ -102,6 +102,10 @@ const MSG = {
     zh: '在此粘贴文本或链接，或拖入/粘贴文件（文本网页、音视频、图片、PDF、DOCX 等）'
   },
   parserRun: { en: 'Parse', zh: '解析' },
+  // 第二百五十六次：结果操作与输入清空按钮（parser 面板 data-key）
+  parserCopy: { en: 'Copy', zh: '复制' },
+  parserExport: { en: 'Export', zh: '导出' },
+  parserClear: { en: 'Clear', zh: '清空' },
   parserOutputTitle: { en: 'Parse Result', zh: '解析结果' },
   parserOutputTip: { en: 'Parsed plain text will appear here.', zh: '解析出的纯文本将显示在这里。' },
   tabHelp: { en: 'Help', zh: '说明栏' },
