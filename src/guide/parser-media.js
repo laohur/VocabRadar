@@ -48,14 +48,21 @@ function pickMime(kind) {
  * 开始录制（来源由 Parser 栏 radio 决定）；按钮切 ⏹ 停止态
  * @param {string} kind 'audio'|'video'|'screen'
  * @param {(text: string) => void} [onLiveText] 实时识别句子回调（browser ASR final 结果）
+ * @param {(stream: MediaStream, kind: string) => void} [onStream] 媒体流回调
+ *   （260 次：摄像/录屏录制期间实时画面预览，Parser 栏渲到预览槽；audio 不回调无画面）
  */
-export async function startParserRecording(kind, onLiveText) {
+export async function startParserRecording(kind, onLiveText, onStream) {
   if (rec.active) return;
   if (!chrome.runtime?.id) { toast(t('ws.extUpdated'), { error: true }); return; }
   // 用户手势内直接 getUserMedia/getDisplayMedia（授权框必弹，复用 ASR 栏同款逻辑）
   const acq = await acquireMediaStream(kind);
   if (acq.err) { handleAcquireError(kind, acq.err); return; }
   const stream = acq.stream;
+  // 260 次（用户"摄像没视频预览"）：流到手即回调实时画面（video/screen 有画面，
+  //   audio 不回调——纯音频无画面可显且外放会回声）
+  if (kind !== 'audio' && typeof onStream === 'function') {
+    try { onStream(stream, kind); } catch (e) { log('Parser 实时预览回调失败:', e); }
+  }
   rec.active = true;
   rec.kind = kind;
   rec.stream = stream;

@@ -135,7 +135,7 @@ const DICT = {
     // 第二百五十三次：Parser 栏功能提示；第二百五十五次接线——todo* 占位键退役，换解析过程键
     'parser.parsing': 'Parsing…',
     'parser.fetching': 'Fetching page…',
-    'parser.done': 'Parsed: {n} characters',
+    'parser.bytes': 'bytes',
     'parser.empty': 'No text extracted.',
     'parser.fail': 'Parse failed: ',
     'parser.unsupported': 'Unsupported type: {what}',
@@ -144,7 +144,7 @@ const DICT = {
     'parser.multiFiles': '{n} file(s)',
     'parser.copied': 'Copied to clipboard.',
     'parser.copyFail': 'Copy failed: ',
-    // 257 次：空态提示 i18n 化（修复语言混杂）+ 文件列表操作
+    // 257/260 次：空态提示 i18n 化、结果框元信息行（字符+字节，替代完成 toast）
     'parser.outputTip': 'Parsed plain text will appear here.',
     'parser.needDocx': 'Legacy .doc is not supported — please save it as .docx first.',
     'parser.fileSave': 'Save file',
@@ -519,7 +519,7 @@ const DICT = {
     // 第二百五十三次：Parser 栏功能提示；第二百五十五次接线——todo* 占位键退役，换解析过程键
     'parser.parsing': '解析中…',
     'parser.fetching': '抓取网页…',
-    'parser.done': '解析完成：{n} 字符',
+    'parser.bytes': '字节',
     'parser.empty': '未解析出文本。',
     'parser.fail': '解析失败：',
     'parser.unsupported': '暂不支持的类型：{what}',
@@ -528,7 +528,7 @@ const DICT = {
     'parser.multiFiles': '{n} 个文件',
     'parser.copied': '已复制到剪贴板。',
     'parser.copyFail': '复制失败：',
-    // 257 次：空态提示 i18n 化（修复语言混杂）+ 文件列表操作
+    // 257/260 次：空态提示 i18n 化、结果框元信息行（字符+字节，替代完成 toast）
     'parser.outputTip': '解析出的纯文本将显示在这里。',
     'parser.needDocx': '旧版 .doc 暂不支持——请先另存为 .docx。',
     'parser.fileSave': '保存文件',

@@ -116,7 +116,18 @@ function setResult(text) {
     out.innerHTML = `<div class="g-parser-center g-empty-tip">${escapeHtml(t('parser.empty'))}</div>`;
     return;
   }
-  out.textContent = plain;
+  // 260 次（用户"应当在结果框显示多少字节"）：结果框头部元信息行=字符数 + UTF-8 字节数，
+  //   解析完成不再弹 toast（信息即在此行，随结果长期可见）
+  const bytes = new TextEncoder().encode(plain).length;
+  out.innerHTML = '';
+  const meta = document.createElement('div');
+  meta.className = 'g-parser-meta';
+  meta.textContent = `${plain.length} ${t('parser.chars')} · ${bytes} ${t('parser.bytes')}`;
+  out.appendChild(meta);
+  const body = document.createElement('div');
+  body.className = 'g-parser-result-text';
+  body.textContent = plain;
+  out.appendChild(body);
 }
 function setFail(msg) {
   const out = $('g-parser-output');
@@ -129,9 +140,25 @@ function resetOutput() {
   const out = $('g-parser-output');
   if (out) out.innerHTML = `<div class="g-parser-center g-empty-tip">${escapeHtml(t('parser.outputTip'))}</div>`;
 }
+/** 录制中实时画面预览（260 次：摄像/录屏录制期间在预览槽看实时流；
+ *  muted 防麦克风回声；停止后由 setPreview 用成片文件替换本元素） */
+function showLivePreview(stream, kind) {
+  const box = $('g-parser-media');
+  if (!box) return;
+  box.innerHTML = '';
+  const video = document.createElement('video');
+  video.className = 'g-parser-media-video';
+  video.srcObject = stream;
+  video.muted = true;
+  video.autoplay = true;
+  video.playsInline = true;
+  box.appendChild(video);
+  box.hidden = false;
+  log('Parser 实时预览已开启:', kind);
+}
+
 /** 录制实时识别句流入（parser-media onLiveText 回调） */
-function appendLiveText(text) {
-  if (!text) return;
+function appendLiveText(text) {  if (!text) return;
   _liveTexts.push(text);
   const out = $('g-parser-output');
   if (!out) return;
@@ -211,9 +238,6 @@ async function runJob(job) {
   try {
     const text = await job();
     setResult(text);
-    if (text && String(text).trim()) {
-      toast(t('parser.done', { n: String(text).trim().length }));
-    }
     log('Parser 完成:', String(text || '').trim().length, 'chars,',
       ((Date.now() - started) / 1000).toFixed(1) + 's');
   } catch (e) {
@@ -622,15 +646,17 @@ export function initParser() {
     recordBtn.addEventListener('click', async () => {
       if (isParserRecording()) {
         const out2 = await stopParserRecording();
+        // 260 次：成片无条件入列表+占预览槽（258 版在有实时文本时把成片丢了——用户
+        // "录制完也没见"根因），文件与结果两不误
+        if (out2 && out2.file) {
+          attachFiles([out2.file]);
+          setPreview(out2.file);
+        }
         if (_liveTexts.length > 0) {
-          // 实时识别已产出：直接收编为结果（避免重复转写）
           const text = _liveTexts.join('\n');
           _liveTexts = [];
           setResult(text);
-          toast(t('parser.done', { n: text.length }));
         } else if (out2 && out2.file) {
-          attachFiles([out2.file]);
-          setPreview(out2.file);
           onParseClick();
         } else {
           resetOutput();
@@ -642,7 +668,7 @@ export function initParser() {
       _liveTexts = [];
       resetOutput();
       setStatus('🎙 ' + t('ws.recording'), t('ws.realtimeRecognition'));
-      await startParserRecording(kind, appendLiveText);
+      await startParserRecording(kind, appendLiveText, showLivePreview);
     });
   }
   refreshInputUI();
