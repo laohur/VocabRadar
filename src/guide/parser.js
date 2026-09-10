@@ -1,37 +1,217 @@
-// VocabRadar 引导页 功能栏 Parser（文档解析）——第二百五十三次新增（用户："引导页 asr ocr
-// 之后增加 parser … 先实现界面"）。本阶段=界面：左栏大输入框（粘贴文本/链接、拖入/粘贴/
-// 上传选文件）+ 底下解析按钮，右栏纯文本结果。Capture / 录制按钮界面占位：点击 toast 明示
-// "待接入"，不静默、不伪装（AGENTS：不可遮蔽错误）。
+// VocabRadar 引导页 功能栏 Parser（文档解析）——第二百五十三次新增界面，第二百五十五次接线。
+// 职责：左栏输入（粘贴文本/链接、拖入/粘贴/上传文件、拍照、录制）→ 解析 → 右栏纯文本。
 //
-// 第二百五十四次（用户反馈）修订：
-//   - 「上传文件」按钮按 ASR 栏先例加入第一行（替原"浏览文件"小链接——看不清是啥）；
-//   - 右栏移除 Sidebar 切换——本页已有正常侧栏（文本侧栏悬浮球 + ASR 栏内联视频侧栏）；
-//   - 网页正文提取用 defuddle 系既有定论（2026-08-31 用户裁定引入 Defuddle，
-//     src/lib/vendor/defuddle.js 已落地、main-text.js loadDefuddle()/getAiMainText 主链=
-//     Defuddle→密度法→直接解析，见 docs/正文提取替代方案调研.md）——勿再引入 Readability；
-//   - vendor 组织规则（project_summary 2026-09-08 起）：单文件库一律平铺 vendor/ 顶层，
-//     仅多文件功能保留子目录——mammoth.browser.min.js/pdf.min.mjs/pdf.worker.min.mjs 已
-//     自 vendor/parser/ 拉平，多文件的 unpdf/ 保留子目录（勿再建 parser/ 分组目录）。
-//
-// 解析接线方案（下一步实现；vendor 库已就位，直接消费、不再加封装层）：
-//   - 网页/链接 → SW FETCH_URL 拉 HTML + 复用 lib/main-text.js getAiMainText 主链
-//     （Defuddle→密度法→直接解析）
-//   - PDF  → unpdf（extractText({mergePages:true})，内联 pdf.js worker 免配置）
-//   - DOCX → mammoth（extractRawText({arrayBuffer}) 即纯文本）
-//   - 纯文本类（txt/md/srt/vtt/json/csv…）→ 直接按文本读
-//   - 音视频 → 复用既有 ASR 管线（START_ASR/ASR_AUDIO_SEGMENT）
-//   - 图片/拍照 → 复用既有 OCR 管线（OCR_RECOGNIZE）
+// 解析分发（只提纯文本，全部复用既有能力，不加封装层）：
+//   - 文本      → 直接输出
+//   - 链接      → 页面直接 fetch（host_permissions=<all_urls> 实证，免 SW 中转）
+//                 → lib/main-text.js extractDefuddleFromHtml 主链（Defuddle→密度法→直接解析）
+//   - PDF       → vendor/unpdf（extractText mergePages，自包含 ESM）
+//   - DOCX      → vendor/mammoth.browser.min.js（UMD，script 注入取 window.mammoth，
+//                 extractRawText 即纯文本）
+//   - HTML 文件 → 同链接（extractDefuddleFromHtml）
+//   - 文本类    → file.text() 直读（txt/md/csv/srt/vtt/json/xml…）
+//   - 图片      → OCR_RECOGNIZE（后台 offscreen Tesseract/视觉 API，语言随 learnLanguage）
+//   - 音视频    → parser-media.js transcribeAvFile（与 asr.js 文件 ASR 同消息协议：
+//                 START_ASR→分段/ASR_LLM_FILE→STOP_ASR），本地 Whisper / API 引擎随设定栏
+//   - 拍照      → ocr.js openCamera（复用相机模态）→ 图片 OCR
+//   - 录制      → parser-media.js（MediaRecorder 收录）→ 音视频转写
+//   - epub/rtf 等未支持类型 → toast 如实提示（accept列表已收窄，不虚假承诺）
+//   vendor 组织守则（project_summary 2026-09-08 起）：单文件库平铺 vendor/ 顶层，多文件
+//   功能保留子目录；直接消费第三方库，不再建分组目录/封装层。
 
 import { t } from '../lib/i18n.js';
-import { $, log, toast, formatFileSize } from './guide-common.js';
+import { extractDefuddleFromHtml } from '../lib/main-text.js';
+import { $, log, toast, formatFileSize, escapeHtml } from './guide-common.js';
+import { openCamera } from './ocr.js';
+import {
+  isParserRecording, startParserRecording, stopParserRecording, transcribeAvFile
+} from './parser-media.js';
 
 // 输入状态机（一个输入框、一个输出框）：
 //   { mode:'none' }
 //   { mode:'text', text, isUrl }        — 文本/链接（用户键入或粘贴文本）
-//   { mode:'file', file, objectURL }    — 文件（拖入 / Ctrl+V / 上传选择）
+//   { mode:'file', file, objectURL }    — 文件（拖入 / Ctrl+V / 上传选择 / 录制成品）
 let _input = { mode: 'none' };
+let _parsing = false;   // 解析中标志（解析/拍照互斥，按钮防重入）
 
 const URL_RE = /^https?:\/\/\S+$/i;
+// 文本类扩展名（直读）；html/htm 走 Defuddle 链、pdf/docx/媒体各有专路
+const TEXT_EXTS = new Set(['txt', 'md', 'markdown', 'csv', 'tsv', 'json', 'xml', 'srt', 'vtt', 'log', 'nfo']);
+const AUDIO_EXTS = new Set(['mp3', 'wav', 'ogg', 'oga', 'm4a', 'flac', 'aac', 'opus', 'weba']);
+const VIDEO_EXTS = new Set(['mp4', 'webm', 'mkv', 'mov', 'avi', 'm4v', 'flv', 'ts']);
+
+/** 文件类型判定（mime 优先，扩展名兜底）→ pdf|docx|html|text|image|audio|video|null */
+function detectParserKind(file) {
+  const mt = (file.type || '').toLowerCase();
+  const ext = ((file.name || '').split('.').pop() || '').toLowerCase();
+  if (mt === 'application/pdf' || ext === 'pdf') return 'pdf';
+  if (mt.includes('officedocument.wordprocessingml.document') || ext === 'docx') return 'docx';
+  if (mt === 'text/html' || ['html', 'htm', 'xhtml'].includes(ext)) return 'html';
+  if (mt.startsWith('image/') || ['png', 'jpg', 'jpeg', 'gif', 'bmp', 'webp'].includes(ext)) return 'image';
+  if (mt.startsWith('audio/') || AUDIO_EXTS.has(ext)) return 'audio';
+  if (mt.startsWith('video/') || VIDEO_EXTS.has(ext)) return 'video';
+  if (mt.startsWith('text/') || TEXT_EXTS.has(ext)) return 'text';
+  return null;
+}
+
+/** 动态加载 UMD 版 mammoth（script 注入取 window.mammoth；ESM import 对 UMD 无效） */
+function loadMammoth() {
+  if (window.mammoth) return Promise.resolve(window.mammoth);
+  return new Promise((resolve, reject) => {
+    const s = document.createElement('script');
+    s.src = chrome.runtime.getURL('src/lib/vendor/mammoth.browser.min.js');
+    s.onload = () => {
+      if (window.mammoth) resolve(window.mammoth);
+      else reject(new Error('mammoth loaded but global missing'));
+    };
+    s.onerror = () => reject(new Error('mammoth.script load failed'));
+    document.head.appendChild(s);
+  });
+}
+
+// === 输出区渲染（纯文本；状态/错误用 g-empty-tip 行） ===
+function setStatus(stage, detail) {
+  const out = $('g-parser-output');
+  if (!out) return;
+  out.innerHTML = `<div class="g-empty-tip">${escapeHtml(stage || '')}`
+    + (detail ? `<br><span style="font-size:12px">${escapeHtml(String(detail).slice(0, 120))}</span>` : '')
+    + '</div>';
+}
+function setResult(text) {
+  const out = $('g-parser-output');
+  if (!out) return;
+  const plain = String(text || '').trim();
+  if (!plain) {
+    out.innerHTML = `<div class="g-empty-tip">${escapeHtml(t('parser.empty'))}</div>`;
+    return;
+  }
+  out.textContent = plain;
+}
+function setFail(msg) {
+  const out = $('g-parser-output');
+  if (!out) return;
+  out.innerHTML = `<div class="g-empty-tip" style="color:#b23a2e">${escapeHtml(t('parser.fail') + String(msg).slice(0, 200))}</div>`;
+}
+
+// === 各类型解析器 ===
+
+/** 链接：页面直连抓取（<all_urls> 主机权限）→ Defuddle 主链提正文 */
+async function parseLink(url) {
+  setStatus(t('parser.fetching'), url);
+  const res = await fetch(url, { credentials: 'omit' });
+  if (!res.ok) throw new Error(`HTTP ${res.status} ${url.slice(0, 80)}`);
+  const html = await res.text();
+  const { text } = await extractDefuddleFromHtml(html, url);
+  return text;
+}
+
+/** PDF：unpdf extractText（mergePages 合并全页） */
+async function parsePdf(file) {
+  const mod = await import(chrome.runtime.getURL('src/lib/vendor/unpdf/index.mjs'));
+  const data = new Uint8Array(await file.arrayBuffer());
+  const pdf = await mod.getDocumentProxy(data);
+  const { text } = await mod.extractText(pdf, { mergePages: true });
+  return text || '';
+}
+
+/** DOCX：mammoth extractRawText */
+async function parseDocx(file) {
+  const mammoth = await loadMammoth();
+  const { value } = await mammoth.extractRawText({ arrayBuffer: await file.arrayBuffer() });
+  return value || '';
+}
+
+/** File/Blob → dataURL（图片 OCR 输入） */
+function fileToDataUrl(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result || ''));
+    reader.onerror = () => reject(reader.error || new Error('FileReader failed'));
+    reader.readAsDataURL(file);
+  });
+}
+
+/** 图片 OCR（后台 OCR_RECOGNIZE，语言随 learnLanguage，与 OCR 栏同消息） */
+async function parseImageOcr(dataUrl) {
+  const { learnLanguage } = await chrome.storage.local.get({ learnLanguage: 'en' });
+  const resp = await chrome.runtime.sendMessage({
+    type: 'OCR_RECOGNIZE',
+    imageDataUrl: dataUrl,
+    lang: learnLanguage || 'en'
+  });
+  if (!resp || !resp.ok) throw new Error((resp && resp.error) || t('ocr.unknownErr'));
+  return resp.text || '';
+}
+
+// === 统一执行壳：状态/结果/失败渲染 + 防重入 ===
+async function runJob(job) {
+  if (_parsing) { toast(t('parser.parsing')); return; }
+  _parsing = true;
+  const btn = $('g-parser-btn');
+  if (btn) btn.disabled = true;
+  const started = Date.now();
+  try {
+    const text = await job();
+    setResult(text);
+    if (text && String(text).trim()) {
+      toast(t('parser.done', { n: String(text).trim().length }));
+    }
+    log('Parser 完成:', String(text || '').trim().length, 'chars,',
+      ((Date.now() - started) / 1000).toFixed(1) + 's');
+  } catch (e) {
+    const msg = String((e && e.message) || e);
+    setFail(msg);
+    toast(t('parser.fail') + msg.slice(0, 120), { error: true, duration: 6000 });
+    log('Parser 解析失败:', e);
+  } finally {
+    _parsing = false;
+    refreshInputUI();
+  }
+}
+
+/** 解析按钮：按输入态分发 */
+function onParseClick() {
+  if (!hasInput()) {
+    toast(t('parser.noInput'), { error: true });
+    return;
+  }
+  runJob(async () => {
+    if (_input.mode === 'text') {
+      const plain = _input.text.trim();
+      setStatus(t('parser.parsing'), '');
+      return plain;
+    }
+    const kind = detectParserKind(_input.file);
+    if (kind === 'audio' || kind === 'video') {
+      // 音视频 → ASR 转写（本地 Whisper / API 引擎随设定栏；进度经 setStatus 进输出区）
+      return transcribeAvFile(_input.file, (stage, detail) => setStatus(stage, detail));
+    }
+    if (kind === 'image') {
+      setStatus(t('parser.parsing'), 'OCR');
+      return parseImageOcr(await fileToDataUrl(_input.file));
+    }
+    if (kind === 'pdf') {
+      setStatus(t('parser.parsing'), 'PDF');
+      return parsePdf(_input.file);
+    }
+    if (kind === 'docx') {
+      setStatus(t('parser.parsing'), 'DOCX');
+      return parseDocx(_input.file);
+    }
+    if (kind === 'html') {
+      setStatus(t('parser.parsing'), 'HTML');
+      return (await extractDefuddleFromHtml(await _input.file.text(), '')).text;
+    }
+    if (kind === 'text') {
+      setStatus(t('parser.parsing'), '');
+      return _input.file.text();
+    }
+    // 未支持类型：如实报错（epub/rtf 等）
+    throw new Error(t('parser.unsupported', { what: _input.file.name || 'unknown' }));
+  });
+}
+
+// === 输入状态机 ===
 
 /** 输入是否可解析（文本非空或已附文件） */
 function hasInput() {
@@ -57,10 +237,10 @@ function refreshInputUI() {
       info.textContent = '';
     }
   }
-  if (btn) btn.disabled = !hasInput();
+  if (btn) btn.disabled = _parsing || !hasInput();
 }
 
-/** 附着文件（拖入/粘贴/上传共用）：撤旧 objectURL，记录文件态 */
+/** 附着文件（拖入/粘贴/上传/录制成品共用）：撤旧 objectURL，记录文件态 */
 function attachFile(file) {
   if (!file) return;
   if (_input.mode === 'file' && _input.objectURL) {
@@ -80,28 +260,7 @@ function setText(text) {
   refreshInputUI();
 }
 
-/** 解析按钮（本阶段占位：输入校验 + 输出区待接入提示，不伪装解析结果） */
-function onParseClick() {
-  if (!hasInput()) {
-    toast(t('parser.noInput'), { error: true });
-    return;
-  }
-  const out = $('g-parser-output');
-  if (out) {
-    out.innerHTML = '';
-    const tip = document.createElement('div');
-    tip.className = 'g-empty-tip';
-    tip.textContent = t('parser.todoParse');
-    out.appendChild(tip);
-  }
-  const what = (_input.mode === 'file')
-    ? `file=${_input.file.name}`
-    : `text ${_input.text.trim().length} chars${_input.isUrl ? ' (link)' : ''}`;
-  toast(t('parser.todoParse'));
-  log('Parser 解析点击（待接线）:', what);
-}
-
-/** 初始化（guide.js init 调用；仅绑事件与状态机，不触碰 storage/后台） */
+// === 初始化（guide.js init 调用） ===
 export function initParser() {
   const input = $('g-parser-input');
   const upload = $('g-parser-upload');
@@ -143,24 +302,37 @@ export function initParser() {
       fileInput.value = '';
     });
   }
-  // 解析按钮（占位）
+  // 解析按钮
   if (parseBtn) parseBtn.addEventListener('click', onParseClick);
-  // Capture / 录制：界面占位（toast 明示待接入，不静默）
+  // 拍照：复用 ocr.js 相机模态，快照转 OCR 出纯文本
   if (captureBtn) {
-    captureBtn.addEventListener('click', () => {
-      toast(t('parser.todoCapture'));
-      log('Parser 拍照点击（待接线）');
+    captureBtn.addEventListener('click', async () => {
+      await openCamera((dataUrl, w, h) => {
+        runJob(async () => {
+          setStatus(t('parser.parsing'), `OCR ${w}x${h}`);
+          return parseImageOcr(dataUrl);
+        });
+      });
     });
   }
+  // 录制：点击开始（⏹ 停止态），再点停止 → 成品 File 附着并自动转写
   if (recordBtn) {
-    recordBtn.addEventListener('click', () => {
-      toast(t('parser.todoRecord'));
-      log('Parser 录制点击（待接线），来源=',
-        (document.querySelector('input[name="g-parser-source"]:checked') || {}).value || 'audio');
+    recordBtn.addEventListener('click', async () => {
+      if (isParserRecording()) {
+        const out = await stopParserRecording();
+        if (out && out.file) {
+          attachFile(out.file);
+          onParseClick();
+        }
+        return;
+      }
+      if (_parsing) { toast(t('parser.parsing')); return; }
+      const kind = (document.querySelector('input[name="g-parser-source"]:checked') || {}).value || 'audio';
+      await startParserRecording(kind);
     });
   }
   refreshInputUI();
-  log('Parser 界面已初始化（界面阶段，解析逻辑待接线）');
+  log('Parser 已初始化（文本/链接/PDF/DOCX/HTML/文本类/图片OCR/音视频ASR）');
 }
 
 /** 页面卸载清理（与 disposeAsrCommon 等对称；仅撤本模块持有的 objectURL） */

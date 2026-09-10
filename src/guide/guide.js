@@ -290,7 +290,8 @@ const HELP = [
   {
     title: { en: 'Document parser', zh: '文档解析（Parser）' },
     items: [
-      { en: 'In the Parser tab, upload / drop / paste a file, or paste text or a link (web page, audio/video, image, PDF, DOCX…); the parsed plain text shows on the right.', zh: '在「Parser 栏」上传/拖入/粘贴文件，或粘贴文本与链接（文本网页、音视频、图片、PDF、DOCX 等），解析出的纯文本显示在右栏。' }
+      { en: 'In the Parser tab, paste text or a link, or upload / drop / paste a file (web page HTML, PDF, DOCX, txt/md/srt…, image, audio/video); the parsed plain text shows on the right.', zh: '在「Parser 栏」粘贴文本或链接，或上传/拖入/粘贴文件（网页 HTML、PDF、DOCX、txt/md/srt 等文本类、图片、音视频），解析出的纯文本显示在右栏。' },
+      { en: 'Images are recognized by OCR and audio/video by speech recognition (engine chosen in Settings → Models); Capture uses the camera, Record uses microphone/camera/screen.', zh: '图片走 OCR 识别、音视频走语音识别（引擎在「设定栏 → 模型」选择）；「拍照」用摄像头，「录制」来源为麦克风/摄像头/屏幕。' }
     ]
   },
   {

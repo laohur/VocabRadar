@@ -7,6 +7,9 @@
 //     - 录音/录像/录屏（媒体流获取 + 浏览器 ASR 实时识别 / Whisper 流式分段）
 //     - 麦克风授权与错误分类（acquireMediaStream 在用户手势内直接 getUserMedia）
 //   公共基础设施见 guide-common.js（第二百五十三次由 asr-common.js 改名）；OCR 见 ocr.js（本文件不 import ocr.js）。
+// 第二百五十五次：为 Parser 栏导出四个复用件（parser-media.js 消费，避免复制粘贴漂移）——
+//   acquireMediaStream（媒体流获取+授权错误分类）、handleAcquireError（失败 toast）、
+//   decodeFileToPcm（音视频→16k PCM）、arrayBufferToBase64（LLM 转写整段上传）。
 
 import { t } from '../lib/i18n.js';
 import {
@@ -274,7 +277,7 @@ export function stopAsr() {
   log('ASR 已停止');
 }
 
-async function decodeFileToPcm(file) {
+export async function decodeFileToPcm(file) {
   const arrayBuffer = await file.arrayBuffer();
   const AudioCtx = window.AudioContext || window.webkitAudioContext;
   const audioCtx = new AudioCtx();
@@ -383,7 +386,7 @@ function handleMicDenied() {
 // 但 iframe 无独立用户激活、且 await 消耗手势，Chrome 上主文档 getUserMedia 不再弹授权框
 // （用户反馈"录音按钮并不请求话筒权限"）。重构：点击按钮时在主文档直接调用 getUserMedia/
 // getDisplayMedia 请求流（授权框必弹），授权成功后再进入 startRecord（复用已获取的流）。
-async function acquireMediaStream(kind) {
+export async function acquireMediaStream(kind) {
   if (kind === 'screen') {
     if (!navigator.mediaDevices || typeof navigator.mediaDevices.getDisplayMedia !== 'function') {
       return { err: { type: 'no-get-display-media' } };
@@ -445,7 +448,7 @@ async function acquireMediaStream(kind) {
 }
 
 // 媒体流获取失败处理（含授权被拒判定，三来源统一复用）
-function handleAcquireError(kind, err) {
+export function handleAcquireError(kind, err) {
   const type = (err && err.type) || '';
   const name = (err && err.name) || '';
   const msg = String((err && err.message) || err || '');
@@ -1104,7 +1107,7 @@ export function disposeAsr() {
 }
 
 // 第二百一十五次：ArrayBuffer → base64（分块拼接，避免大文件 apply 栈溢出）
-function arrayBufferToBase64(buffer) {
+export function arrayBufferToBase64(buffer) {
   const bytes = new Uint8Array(buffer);
   let binary = '';
   const CH = 0x8000;

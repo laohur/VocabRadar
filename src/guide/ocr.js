@@ -12,7 +12,14 @@ import { S, $, log, toast, flashButton, clearResults, appendResult, formatFileSi
 import { stopAsr, stopRecording } from './asr.js';
 
 // === 拍照（摄像头） ===
-async function onCapturePhotoClick() {
+// 第二百五十五次（Parser 栏接线）：摄像头拍照重构为可复用 openCamera(onCapture)——
+//   授权/取流/错误分类/取景模态统在此处，快照 dataUrl 交回调消费（OCR 栏=loadOcrImage，
+//   Parser 栏=图片 OCR 转纯文本），消除两栏各自实现相机模态的漂移风险。
+/**
+ * 打开摄像头取景模态，快照后回调
+ * @param {(dataUrl: string, width: number, height: number) => void} onCapture 快照回调（流已停、模态已关）
+ */
+export async function openCamera(onCapture) {
   if (!chrome.runtime?.id) { toast(t('ws.extUpdated'), { error: true }); return; }
   if (!navigator.mediaDevices || typeof navigator.mediaDevices.getUserMedia !== 'function') {
     toast(t('ws.noGetUserMedia'), { error: true });
@@ -39,10 +46,10 @@ async function onCapturePhotoClick() {
     }
     return;
   }
-  showCameraModal(stream);
+  showCameraModal(stream, onCapture);
 }
 
-function showCameraModal(stream) {
+function showCameraModal(stream, onCapture) {
   let modal = document.getElementById('g-camera-modal');
   if (modal) modal.remove();
   modal = document.createElement('div');
@@ -63,7 +70,7 @@ function showCameraModal(stream) {
   const captureBtn = document.createElement('button');
   captureBtn.className = 'g-camera-capture';
   captureBtn.textContent = t('ws.captureRecognize');
-  captureBtn.addEventListener('click', async () => {
+  captureBtn.addEventListener('click', () => {
     if (!video.videoWidth || !video.videoHeight) {
       toast(t('ws.cameraNotReady'));
       return;
@@ -76,9 +83,11 @@ function showCameraModal(stream) {
     const dataUrl = canvas.toDataURL('image/png');
     stream.getTracks().forEach((tr) => tr.stop());
     modal.remove();
-    // 反思（2026-08-14 第五十八次）：拍照只载入展示区并启用「开始识别」，
-    //   不再自动识别，与上传图片流程一致（OCR 同构：输入→展示→识别→结果）。
-    loadOcrImage(dataUrl, `${t('ws.photo')} (${canvas.width}x${canvas.height})`);
+    document.removeEventListener('keydown', escHandler);
+    // 反思（2026-08-14 第五十八次）：OCR 栏拍照只载入展示区并启用「开始识别」，
+    //   不自动识别，与上传图片流程一致（OCR 同构：输入→展示→识别→结果）；
+    //   Parser 栏由 onCapture 自行决定（转 OCR 出纯文本）。
+    onCapture(dataUrl, canvas.width, canvas.height);
   });
 
   const closeBtn = document.createElement('button');
@@ -87,6 +96,7 @@ function showCameraModal(stream) {
   closeBtn.addEventListener('click', () => {
     stream.getTracks().forEach((tr) => tr.stop());
     modal.remove();
+    document.removeEventListener('keydown', escHandler);
   });
 
   actions.appendChild(captureBtn);
@@ -95,6 +105,8 @@ function showCameraModal(stream) {
   document.body.appendChild(modal);
   video.play().catch(() => { /* ignore */ });
 
+  // 反思（第二百五十五次）：补 closeBtn/快照路径的 escHandler 移除——旧版仅 Esc 分支移除，
+  //   经按钮关闭后监听滞留（下次 Esc 空触发 stream.stop/modal.remove on 已关实例）。
   const escHandler = (e) => {
     if (e.key === 'Escape') {
       stream.getTracks().forEach((tr) => tr.stop());
@@ -103,6 +115,10 @@ function showCameraModal(stream) {
     }
   };
   document.addEventListener('keydown', escHandler);
+}
+
+async function onCapturePhotoClick() {
+  await openCamera((dataUrl, w, h) => loadOcrImage(dataUrl, `${t('ws.photo')} (${w}x${h})`));
 }
 
 // === OCR ===
