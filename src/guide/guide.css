@@ -901,15 +901,14 @@ input::placeholder { color: var(--g-muted); opacity: 1; }
 .g-parser-media-del:hover { background: rgba(178, 58, 46, 0.9); }
 .g-parser-media img,
 .g-parser-media video {
-  /* 262 次（用户"预览宽度沾满"）：宽度占满输入区整行，高不超 180，比例内 contain 不裁切 */
+  /* 264 次（用户"不是让你补黑边，而是缩放，高度可以扩展。禁止补黑边"）：
+     纯等比缩放——宽度占满整行，高度按原始比例跟随扩展（无 180 上限），
+     禁止 object-fit:contain + 黑底造成的上下黑边 */
   display: block;
   width: 100%;
   height: auto;
-  max-height: 180px;
-  object-fit: contain;
   border-radius: 8px;
   border: 1px solid var(--beaver-outline, #c2c9bf);
-  background: #000;
 }
 /* 257 次：本批文件列表（显示在输入区）——图片带缩略图，每项可 保存(⬇)/删除(✕)；
    拍照/录制成品经此留档可取（用户"录音拍照要留下文件"） */
