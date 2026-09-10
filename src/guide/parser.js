@@ -660,13 +660,12 @@ export function initParser() {
           const file = await dataUrlToFile(dataUrl, `capture-${Date.now()}.png`);
           attachFiles([file]);
           setPreview(file);
+          log('拍照成品已入列:', file.name, `${w}x${h}`);
         } catch (e) {
           log('拍照成品转 File 失败:', e);
         }
-        runJob(async () => {
-          setStatus(t('parser.parsing'), `OCR ${w}x${h}`);
-          return parseImageOcr(dataUrl);
-        });
+        // 262 次（用户"拍照不应当自动解析"）：去掉自动 OCR——是否解析、何时解析
+        // 由用户点「解析」决定，拍照只负责入列+预览
       });
     });
   }

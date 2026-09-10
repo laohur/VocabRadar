@@ -828,7 +828,9 @@ input::placeholder { color: var(--g-muted); opacity: 1; }
 .g-parser-input {
   width: 100%;
   box-sizing: border-box;
-  min-height: 340px;
+  /* 262 次：去 min-height:340——261 的"没内容收一行"靠 JS 设 inline height:38px，
+     CSS min-height 会顶住 inline 高度致收一行永不生效（用户复测仍不缩的根因）；
+     高度完全由 autosizeInput 控制（无内容 38px 一行，有内容按内容延高上限 560） */
   max-height: 560px;
   overflow-y: auto;
   resize: none;
@@ -899,9 +901,12 @@ input::placeholder { color: var(--g-muted); opacity: 1; }
 .g-parser-media-del:hover { background: rgba(178, 58, 46, 0.9); }
 .g-parser-media img,
 .g-parser-media video {
+  /* 262 次（用户"预览宽度沾满"）：宽度占满输入区整行，高不超 180，比例内 contain 不裁切 */
   display: block;
-  max-width: 100%;
+  width: 100%;
+  height: auto;
   max-height: 180px;
+  object-fit: contain;
   border-radius: 8px;
   border: 1px solid var(--beaver-outline, #c2c9bf);
   background: #000;

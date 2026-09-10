@@ -501,8 +501,10 @@
                   <div class="g-empty-tip">解析出的纯文本将显示在这里</div>
                 </div>
               </div>
-              <!-- 结果栏底下：复制 / 导出（256 次） -->
-              <div class="g-parser-out-actions">
+              <!-- 结果栏底下：复制 / 导出（256 次）。262 次：补 id——261 的 renderResultMeta
+                   按 getElementById 找本行，HTML 只有 class 致元信息从未渲染（字节统计
+                   "不见了"根因） -->
+              <div class="g-parser-out-actions" id="g-parser-out-actions">
                 <button class="func-btn" id="g-parser-copy" data-key="parserCopy">📋 复制</button>
                 <button class="func-btn" id="g-parser-export" data-key="parserExport">⬇ 导出</button>
               </div>
