@@ -147,6 +147,7 @@ const DICT = {
     // 257/260 次：空态提示 i18n 化、结果框元信息行（字符+字节，替代完成 toast）
     'parser.outputTip': 'Parsed plain text will appear here.',
     'parser.needDocx': 'Legacy .doc is not supported — please save it as .docx first.',
+    'parser.fileListEmpty': 'Drop / paste / upload files to add to the batch',
     'parser.fileSave': 'Save file',
     'parser.fileDelete': 'Remove from batch',
     'parser.noInput': 'Enter text or a link, or drop/paste a file first',
@@ -531,6 +532,7 @@ const DICT = {
     // 257/260 次：空态提示 i18n 化、结果框元信息行（字符+字节，替代完成 toast）
     'parser.outputTip': '解析出的纯文本将显示在这里。',
     'parser.needDocx': '旧版 .doc 暂不支持——请先另存为 .docx。',
+    'parser.fileListEmpty': '拖入/粘贴/上传文件加入本批',
     'parser.fileSave': '保存文件',
     'parser.fileDelete': '移出本批',
     'parser.noInput': '请先输入文本/链接，或拖入/粘贴文件',

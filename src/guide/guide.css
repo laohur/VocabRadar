@@ -866,16 +866,16 @@ input::placeholder { color: var(--g-muted); opacity: 1; }
 .g-parser-ph {
   position: absolute;
   inset: 0;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 10px 24px;
+  /* 261 次：输入框无内容/有预览时收一行（38px），占位符单行垂直居中+横向溢出省略 */
+  padding: 0 24px;
+  line-height: 38px;
   text-align: center;
   font-size: 13px;
-  line-height: 1.6;
   color: var(--g-muted);
   pointer-events: none;
-  white-space: pre-wrap;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 /* 258 次：拍照/录制预览位（输入区内、只有一个，下次拍照/录制占用替换——用户口径） */
 .g-parser-media { margin-top: 6px; position: relative; }
@@ -915,6 +915,15 @@ input::placeholder { color: var(--g-muted); opacity: 1; }
   margin-top: 6px;
   /* 259 次（用户"列表多了就延申"）：去 150px 上限——列表自然延申撑长整栏（页面滚动），
      输入框按自身内容定高不被挤压（inputwrap flex:0 0 auto 兜底） */
+}
+/* 261 次：空列表单行提示（虚线一行，兼拖放指引；有文件时被列表取代） */
+.g-parser-file-empty {
+  padding: 4px 8px;
+  font-size: 12px;
+  color: var(--g-muted, #72797a);
+  text-align: center;
+  border: 1px dashed var(--beaver-outline, #c2c9bf);
+  border-radius: 8px;
 }
 .g-parser-file {
   display: flex;
@@ -975,20 +984,15 @@ input::placeholder { color: var(--g-muted); opacity: 1; }
   gap: 8px;
 }
 .g-parser-out-actions .func-btn { padding: 6px 16px; font-size: 13px; }
-/* 260 次：结果框头部元信息行（字符数+UTF-8 字节数，替代完成 toast）——
-   sticky 置顶，长结果滚动时元信息恒可见 */
+/* 261 次（用户"在结果框末尾显示，就是导出按钮行靠右"）：元信息行移到复制/导出按钮行
+   右端（margin-left:auto 顶到行尾），有结果才显示 */
 .g-parser-meta {
-  flex: 0 0 auto;
-  padding-bottom: 6px;
-  margin-bottom: 8px;
-  border-bottom: 1px solid var(--beaver-outline, #c2c9bf);
+  margin-left: auto;
+  align-self: center;
   font-size: 12px;
   color: var(--g-muted, #72797a);
-  position: sticky;
-  top: 0;
-  background: var(--beaver-bg, #fbfdf9);
+  white-space: nowrap;
 }
-.g-parser-result-text { min-width: 0; }
 /* 右栏：解析结果（纯文本，pre-wrap 保留换行）。257 次：改 flex 列容器，
    空态/进度/失败提示经 .g-parser-center（margin:auto）上下左右居中（用户"占位符都上下左右居中"） */
 .g-parser-output {

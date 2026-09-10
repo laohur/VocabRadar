@@ -47,6 +47,8 @@ const AUDIO_EXTS = new Set(['mp3', 'wav', 'ogg', 'oga', 'm4a', 'flac', 'aac', 'o
 const VIDEO_EXTS = new Set(['mp4', 'webm', 'mkv', 'mov', 'avi', 'm4v', 'flv', 'ts']);
 // 输入/输出框高度上限（与输出框一致，到底再内部滚动）
 const BOX_MAX_HEIGHT = 560;
+// 输入框收起态=一行高（261 次：无内容/有预览时收一行；与 .g-parser-ph line-height 保持一致）
+const ONE_LINE_HEIGHT = 38;
 
 /** 文件类型判定（mime 优先，扩展名兜底）→ pdf|docx|doc|epub|html|text|image|audio|video|null */
 function detectParserKind(file) {
@@ -114,20 +116,30 @@ function setResult(text) {
   _lastResult = plain;
   if (!plain) {
     out.innerHTML = `<div class="g-parser-center g-empty-tip">${escapeHtml(t('parser.empty'))}</div>`;
+  } else {
+    out.textContent = plain;
+  }
+  // 261 次（用户"应当在结果框末尾显示，就是导出按钮行靠右"）：元信息行（字符数+字节数）
+  //   从结果框顶部移到复制/导出按钮行右端
+  renderResultMeta();
+}
+
+/** 结果元信息（字符数 + UTF-8 字节数）：渲染在导出按钮行右端（有结果才显示） */
+function renderResultMeta() {
+  const row = $('g-parser-out-actions');
+  if (!row) return;
+  let meta = row.querySelector('.g-parser-meta');
+  if (!_lastResult) {
+    if (meta) meta.remove();
     return;
   }
-  // 260 次（用户"应当在结果框显示多少字节"）：结果框头部元信息行=字符数 + UTF-8 字节数，
-  //   解析完成不再弹 toast（信息即在此行，随结果长期可见）
-  const bytes = new TextEncoder().encode(plain).length;
-  out.innerHTML = '';
-  const meta = document.createElement('div');
-  meta.className = 'g-parser-meta';
-  meta.textContent = `${plain.length} ${t('parser.chars')} · ${bytes} ${t('parser.bytes')}`;
-  out.appendChild(meta);
-  const body = document.createElement('div');
-  body.className = 'g-parser-result-text';
-  body.textContent = plain;
-  out.appendChild(body);
+  if (!meta) {
+    meta = document.createElement('span');
+    meta.className = 'g-parser-meta';
+    row.appendChild(meta);
+  }
+  const bytes = new TextEncoder().encode(_lastResult).length;
+  meta.textContent = `${_lastResult.length} ${t('parser.chars')} · ${bytes} ${t('parser.bytes')}`;
 }
 function setFail(msg) {
   const out = $('g-parser-output');
@@ -139,6 +151,7 @@ function resetOutput() {
   _lastResult = '';
   const out = $('g-parser-output');
   if (out) out.innerHTML = `<div class="g-parser-center g-empty-tip">${escapeHtml(t('parser.outputTip'))}</div>`;
+  renderResultMeta();
 }
 /** 录制中实时画面预览（260 次：摄像/录屏录制期间在预览槽看实时流；
  *  muted 防麦克风回声；停止后由 setPreview 用成片文件替换本元素） */
@@ -375,6 +388,14 @@ function renderFileList() {
   const box = $('g-parser-filelist');
   if (!box) return;
   box.innerHTML = '';
+  if (_input.items.length === 0) {
+    // 261 次（用户"只有自己没内容时候就一行"）：空列表收为一行虚线提示（也是拖放目标指引）
+    const empty = document.createElement('div');
+    empty.className = 'g-parser-file-empty';
+    empty.textContent = t('parser.fileListEmpty');
+    box.appendChild(empty);
+    return;
+  }
   _input.items.forEach((it, idx) => {
     const row = document.createElement('div');
     row.className = 'g-parser-file';
@@ -481,6 +502,7 @@ function setPreview(file) {
   del.addEventListener('click', clearPreview);
   box.appendChild(del);
   box.hidden = false;
+  autosizeInput();   // 261 次：预览占用后输入框收一行
   log('Parser 预览已更新:', file.name);
 }
 
@@ -491,6 +513,7 @@ function clearPreview() {
   }
   const box = $('g-parser-media');
   if (box) { box.innerHTML = ''; box.hidden = true; }
+  autosizeInput();   // 261 次：预览撤除后输入框按内容恢复
 }
 
 /** 清空输入（✕ 清除所有——用户"清除按钮可以清除所有"）：文本+文件批+预览槽 */
@@ -507,10 +530,16 @@ function clearInput() {
   log('Parser 输入已全部清空');
 }
 
-/** 输入框自动延高：随内容长高至上限（与输出框同 560px），到底再内部滚动 */
+/** 输入框高度（261 次规则）：有内容→按内容延高（上限 560，到底内部滚动）；
+ *  自己没内容→收一行；有预览槽时也收一行（文本保留在 value 里照常参与解析，
+ *  仅显示收起——用户"有预览时输入框也缩短为一行"） */
 function autosizeInput() {
   const ta = $('g-parser-input');
   if (!ta) return;
+  if (!ta.value || _preview) {
+    ta.style.height = ONE_LINE_HEIGHT + 'px';
+    return;
+  }
   ta.style.height = 'auto';
   ta.style.height = Math.min(ta.scrollHeight, BOX_MAX_HEIGHT) + 'px';
 }
