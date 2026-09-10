@@ -1,32 +1,29 @@
-// VocabRadar 引导页 功能栏 Parser（文档解析）——253 界面 / 255 接线 / 256·257 按用户实测修订。
-// 职责：左栏输入（粘贴文本/链接、拖入/粘贴/上传**一批**多文件、拍照、录制）→ 解析 → 右栏纯文本
+// VocabRadar 引导页 功能栏 Parser（文档解析）——253 界面 / 255 接线 / 256·257·258 按用户实测修订。
+// 职责：左栏输入（粘贴文本/链接、拖入/粘贴/上传文件、拍照、录制）→ 解析 → 右栏纯文本
 //       （底部复制/导出按钮）。
 //
-// 257 次修订清单（用户实测反馈逐条）：
-//   - 批次语义纠正（256 次理解错）：多文件/多链接 = **解析前一次输入**的一批；换输入
-//     （再拖/再传/再贴/拍照/录制成品）要**替换**旧批，不叠加——attachFiles 改替换语义
-//   - 链接抓取改走 SW FETCH_TEXT 中转：扩展页 CSP connect-src 是固定白名单，页面直
-//     fetch 任意站点被拒（实测 usepomo.ai）；SW 无页面 CSP 且 host_permissions=<all_urls>
-//   - 文件列表显示在输入区：每项 缩略图(图片)+文件名+大小+保存(⬇)+删除(✕)；删除逐个可移
-//   - 录音/拍照成品留档可取：进文件列表，⬇ 可保存原文件
-//   - 占位符与空态提示上下左右居中：输入框占位符改绝对定位覆盖层；输出区空态/进度/失败
-//     提示经 .g-parser-center（margin:auto）居中
-//   - 空态提示 i18n 化（t('parser.outputTip')）——修复"解析出的纯文本将显示在这里"语言混杂
-//   - 录制按钮常亮红（CSS 层，见 guide.css .func-btn.recording）
+// 258 次修订清单（用户实测反馈逐条）：
+//   - 清除策略定型（用户口径）："输入框有啥，解析识别啥"——输入态=文本+文件列表统一容器，
+//     不再互斥；"一个接一个上传，只要输入框有这个文件"→ 上传/拖/贴改为**累积**（257 的
+//     替换语义废除）；"清除按钮可以清除所有"→ ✕ 清文本+文件+预览全部
+//   - 拍照/录制预览位：输入区内唯一预览槽（#g-parser-media），下次拍照/录制**占用替换**；
+//     成品同时进文件列表留档（⬇ 可取），"其他方法不是清除"——上传/拖入不动预览槽
+//   - EPUB 支持（新 parser-epub.js：自研最小 ZIP 读取+DecompressionStream+spine 逐章）；
+//     旧版 .doc 无法浏览器端解析（mammoth 仅 docx）→ 如实报"请另存为 .docx"
+//   - 链接失败隔离：批链接逐条 try/catch（单链接失败不拖垮整批），失败带 URL 定位
+//   - 录制按钮红色闪动恢复（红↔亮红背景动画，见 guide.css——旧 opacity 闪法透绿是根因）
 //
 // 解析分发（只提纯文本，全部复用既有能力，不加封装层）：
 //   - 文本      → 直接输出
-//   - 链接      → SW FETCH_TEXT（30s 超时）→ lib/main-text.js extractDefuddleFromHtml
-//                 主链（Defuddle→密度法→直接解析，勿引 Readability）
-//   - PDF       → vendor/unpdf（definePDFJSModule 预解析 vendor pdfjs.mjs，绕过裸 specifier）
+//   - 链接      → SW FETCH_TEXT（30s 超时）→ lib/main-text.js extractDefuddleFromHtml 主链
+//   - PDF       → vendor/unpdf（definePDFJSModule 预解析 vendor pdfjs.mjs）
 //   - DOCX      → vendor/mammoth.browser.min.js（UMD，script 注入取 window.mammoth）
+//   - EPUB      → parser-epub.js（自研最小 zip + spine 逐章）
 //   - HTML 文件 → 同链接（extractDefuddleFromHtml）
 //   - 文本类    → file.text() 直读（txt/md/csv/srt/vtt/json/xml…）
 //   - 图片      → OCR_RECOGNIZE（后台 offscreen，语言随 learnLanguage）
 //   - 音视频    → parser-media.js transcribeAvFile（与 asr.js 文件 ASR 同消息协议）
-//   - 拍照      → ocr.js openCamera → 成品转 File 入本批（列表留档）→ OCR
-//   - 录制      → parser-media.js（MediaRecorder + 实时识别）→ 停止后按需转写
-//   - epub/rtf 等未支持类型 → toast 如实提示（accept 列表已收窄，不虚假承诺）
+//   - .doc 等未支持类型 → 按类型给可行动指引（.doc→另存 docx），不虚假承诺
 
 import { t } from '../lib/i18n.js';
 import { extractDefuddleFromHtml } from '../lib/main-text.js';
@@ -36,29 +33,29 @@ import {
   isParserRecording, startParserRecording, stopParserRecording, transcribeAvFile
 } from './parser-media.js';
 
-// 输入状态机（一批输入 = 一次解析单元）：
-//   { mode:'none' }
-//   { mode:'text', text, links|null }   — 文本；规范化后每行都是链接则 links=URL 数组（批链接）
-//   { mode:'file', items:[{file, objectURL}] } — 一批文件（可多个；换输入整体替换，不叠加）
-let _input = { mode: 'none' };
-let _parsing = false;     // 解析中标志（解析/拍照互斥，按钮防重入）
-let _lastResult = '';     // 最近一次解析结果（复制/导出用）
-let _liveTexts = [];      // 录制实时识别句缓存（停止后并入结果）
+// 输入态（统一容器——"输入框有啥，解析识别啥"）：文本与文件列表共存，
+//   解析=文本（链接批或纯文本）+ 全部文件 顺序拼接
+let _input = { text: '', items: [] };       // items: [{file, objectURL}]
+let _preview = null;                        // 拍照/录制预览槽 {url, file, kind}（仅一个，占用替换）
+let _parsing = false;                       // 解析中标志（解析/拍照互斥，按钮防重入）
+let _lastResult = '';                       // 最近一次解析结果（复制/导出用）
+let _liveTexts = [];                        // 录制实时识别句缓存（停止后并入结果）
 
 const URL_RE = /^https?:\/\/\S+$/i;
-// 文本类扩展名（直读）；html/htm 走 Defuddle 链、pdf/docx/媒体各有专路
 const TEXT_EXTS = new Set(['txt', 'md', 'markdown', 'csv', 'tsv', 'json', 'xml', 'srt', 'vtt', 'log', 'nfo']);
 const AUDIO_EXTS = new Set(['mp3', 'wav', 'ogg', 'oga', 'm4a', 'flac', 'aac', 'opus', 'weba']);
 const VIDEO_EXTS = new Set(['mp4', 'webm', 'mkv', 'mov', 'avi', 'm4v', 'flv', 'ts']);
 // 输入/输出框高度上限（与输出框一致，到底再内部滚动）
 const BOX_MAX_HEIGHT = 560;
 
-/** 文件类型判定（mime 优先，扩展名兜底）→ pdf|docx|html|text|image|audio|video|null */
+/** 文件类型判定（mime 优先，扩展名兜底）→ pdf|docx|doc|epub|html|text|image|audio|video|null */
 function detectParserKind(file) {
   const mt = (file.type || '').toLowerCase();
   const ext = ((file.name || '').split('.').pop() || '').toLowerCase();
   if (mt === 'application/pdf' || ext === 'pdf') return 'pdf';
   if (mt.includes('officedocument.wordprocessingml.document') || ext === 'docx') return 'docx';
+  if (mt === 'application/msword' || ext === 'doc') return 'doc';
+  if (mt === 'application/epub+zip' || ext === 'epub') return 'epub';
   if (mt === 'text/html' || ['html', 'htm', 'xhtml'].includes(ext)) return 'html';
   if (mt.startsWith('image/') || ['png', 'jpg', 'jpeg', 'gif', 'bmp', 'webp'].includes(ext)) return 'image';
   if (mt.startsWith('audio/') || AUDIO_EXTS.has(ext)) return 'audio';
@@ -126,7 +123,7 @@ function setFail(msg) {
   if (!out) return;
   out.innerHTML = `<div class="g-parser-center g-empty-tip" style="color:#b23a2e">${escapeHtml(t('parser.fail') + String(msg).slice(0, 200))}</div>`;
 }
-/** 换输入清旧结果（257 次：文案走 i18n，随界面语言——修复"语言混杂"） */
+/** 换输入清旧结果（文案走 i18n 随界面语言） */
 function resetOutput() {
   _lastResult = '';
   const out = $('g-parser-output');
@@ -153,8 +150,7 @@ function appendLiveText(text) {
 
 // === 各类型解析器 ===
 
-/** 链接：SW FETCH_TEXT 中转（257 次——扩展页 CSP connect-src 白名单不含任意站点，
- *  页面直 fetch 被拒；SW 无页面 CSP 且 host_permissions=<all_urls>）→ Defuddle 主链提正文 */
+/** 链接：SW FETCH_TEXT 中转（扩展页 CSP connect-src 白名单不含任意站点）→ Defuddle 主链 */
 async function parseLink(url) {
   setStatus(t('parser.fetching'), url);
   const resp = await new Promise((resolve) => {
@@ -231,7 +227,7 @@ async function runJob(job) {
   }
 }
 
-/** 单文件解析（批循环体；kind 判定 + 分发，未支持如实抛错） */
+/** 单文件解析（批循环体；kind 判定 + 分发，未支持按类型给可行动指引） */
 async function parseSingleFile(file, idx, total) {
   const kind = detectParserKind(file);
   const tag = (total > 1) ? `(${idx + 1}/${total}) ` : '';
@@ -250,6 +246,11 @@ async function parseSingleFile(file, idx, total) {
     setStatus(tag + t('parser.parsing'), 'DOCX');
     return parseDocx(file);
   }
+  if (kind === 'epub') {
+    // EPUB：自研最小 zip + spine 逐章（parser-epub.js，无第三方依赖）
+    const { parseEpub } = await import('./parser-epub.js');
+    return parseEpub(file, (stage, detail) => setStatus(tag + stage, detail));
+  }
   if (kind === 'html') {
     setStatus(tag + t('parser.parsing'), 'HTML');
     return (await extractDefuddleFromHtml(await file.text(), '')).text;
@@ -258,82 +259,86 @@ async function parseSingleFile(file, idx, total) {
     setStatus(tag + t('parser.parsing'), '');
     return file.text();
   }
+  if (kind === 'doc') {
+    // 旧版二进制 .doc：浏览器端无成熟解析器（mammoth 仅 docx），如实给转存指引
+    throw new Error(t('parser.needDocx'));
+  }
   throw new Error(t('parser.unsupported', { what: file.name || 'unknown' }));
 }
 
-/** 解析按钮：按输入态分发（批链接/批文件循环拼接；部分失败继续并汇总报错） */
+/** 解析按钮："输入框有啥，解析识别啥"——文本（批链接或纯文本）+ 全部文件 顺序拼接；
+ *  批链接逐条容错（单链接失败不拖垮整批），文件逐个容错，失败汇总定位到条目 */
 function onParseClick() {
   if (!hasInput()) {
     toast(t('parser.noInput'), { error: true });
     return;
   }
   runJob(async () => {
-    if (_input.mode === 'text') {
-      if (_input.links) {
-        const texts = [];
-        for (const link of _input.links) {
-          texts.push(await parseLink(link));
+    const parts = [];
+    const failed = [];
+    const links = extractLinks(_input.text);
+    if (links) {
+      for (const link of links) {
+        try {
+          parts.push(await parseLink(link));
+        } catch (e) {
+          log('单链接解析失败:', link, e);
+          failed.push(`${link.slice(0, 60)}: ${String((e && e.message) || e).slice(0, 60)}`);
         }
-        return texts.join('\n\n');
       }
+    } else if (_input.text.trim()) {
       setStatus(t('parser.parsing'), '');
-      return _input.text.trim();
+      parts.push(_input.text.trim());
     }
     const items = _input.items;
-    const texts = [];
-    const failed = [];
     for (let i = 0; i < items.length; i++) {
       try {
-        texts.push(await parseSingleFile(items[i].file, i, items.length));
+        parts.push(await parseSingleFile(items[i].file, i, items.length));
       } catch (e) {
         log('单文件解析失败:', items[i].file.name, e);
         failed.push(`${items[i].file.name}: ${String((e && e.message) || e).slice(0, 60)}`);
       }
     }
-    if (texts.length === 0 && failed.length > 0) {
+    if (parts.length === 0 && failed.length > 0) {
       throw new Error(failed.join(' | '));
     }
     if (failed.length > 0) {
       toast(t('parser.fail') + failed.join(' | ').slice(0, 120), { error: true, duration: 6000 });
     }
-    return texts.join('\n\n');
+    return parts.join('\n\n');
   });
 }
 
-// === 输入状态机 ===
+// === 输入状态机（统一容器） ===
 
-/** 输入是否可解析（文本非空/有链接/本批有文件） */
+/** 输入是否可解析（文本非空或本批有文件） */
 function hasInput() {
-  if (_input.mode === 'file') return _input.items.length > 0;
-  if (_input.mode === 'text') return _input.text.trim().length > 0;
-  return false;
+  return _input.text.trim().length > 0 || _input.items.length > 0;
 }
 
-/** 占位符覆盖层显隐（textarea 有值即隐——257 次居中占位符） */
+/** 占位符覆盖层显隐（textarea 有值即隐） */
 function updatePh() {
   const ta = $('g-parser-input');
   const ph = document.querySelector('.g-parser-ph');
   if (ta && ph) ph.style.display = ta.value ? 'none' : 'flex';
 }
 
-/** 刷新输入状态行/文件列表/清空钮/解析按钮可用态（唯一入口，任何输入变化后调用） */
+/** 刷新输入状态行/预览/文件列表/清空钮/解析按钮可用态（唯一入口，任何输入变化后调用） */
 function refreshInputUI() {
   const info = $('g-parser-input-info-text');
   const btn = $('g-parser-btn');
   const clearBtn = $('g-parser-clear');
   if (info) {
-    if (_input.mode === 'file') {
-      const items = _input.items;
-      info.textContent = `${t('parser.multiFiles', { n: items.length })} · ${formatFileSize(items.reduce((s, it) => s + it.file.size, 0))}`;
-    } else if (_input.mode === 'text' && _input.text.trim()) {
-      if (_input.links) {
-        info.textContent = t('parser.linksCount', { n: _input.links.length });
-      } else {
-        info.textContent = `${_input.text.trim().length} ${t('parser.chars')}`;
-      }
-    } else {
-      info.textContent = '';
+    const segs = [];
+    if (_input.items.length > 0) {
+      segs.push(`${t('parser.multiFiles', { n: _input.items.length })} · ${formatFileSize(_input.items.reduce((s, it) => s + it.file.size, 0))}`);
     }
+    if (_input.text.trim()) {
+      const links = extractLinks(_input.text);
+      segs.push(links ? t('parser.linksCount', { n: links.length })
+        : `${_input.text.trim().length} ${t('parser.chars')}`);
+    }
+    info.textContent = segs.join(' · ');
   }
   renderFileList();
   if (clearBtn) clearBtn.hidden = !hasInput();
@@ -341,12 +346,11 @@ function refreshInputUI() {
   updatePh();
 }
 
-/** 本批文件列表（257 次：显示在输入区——缩略图(图片)+文件名+大小+保存(⬇)+删除(✕)） */
+/** 本批文件列表（显示在输入区——缩略图(图片)+文件名+大小+保存(⬇)+删除(✕)；逐个可移） */
 function renderFileList() {
   const box = $('g-parser-filelist');
   if (!box) return;
   box.innerHTML = '';
-  if (_input.mode !== 'file') return;
   _input.items.forEach((it, idx) => {
     const row = document.createElement('div');
     row.className = 'g-parser-file';
@@ -387,63 +391,91 @@ function renderFileList() {
   });
 }
 
-/** 移除本批中单个文件（撤 objectURL；删空则回空态并清旧结果） */
+/** 移除本批中单个文件（撤 objectURL；仅删列表，不动文本与预览槽） */
 function removeFile(idx) {
-  if (_input.mode !== 'file' || !_input.items[idx]) return;
+  if (!_input.items[idx]) return;
   try { URL.revokeObjectURL(_input.items[idx].objectURL); } catch (e) { /* ignore */ }
   _input.items.splice(idx, 1);
-  if (_input.items.length === 0) {
-    _input = { mode: 'none' };
-    resetOutput();
-  }
   refreshInputUI();
-  log('Parser 文件已移除, 剩余', (_input.mode === 'file') ? _input.items.length : 0);
+  log('Parser 文件已移除, 剩余', _input.items.length);
 }
 
-/** 附着一批文件（257 次语义纠正：多文件/多链接=一次输入的一批；换输入**替换**旧批，
- *  不叠加——撤全部旧 objectURL 后建新批）。拖入/粘贴/上传/录制成品/拍照共用 */
+/** 附着一批文件（258 次口径："一个接一个上传，只要输入框有这个文件"——**累积**追加，
+ *  不替换不叠加冲突；换输入的清场走 ✕ 清除全部）。拖入/粘贴/上传/录制成品/拍照共用 */
 function attachFiles(fileList) {
   const files = [...(fileList || [])].filter(Boolean);
   if (files.length === 0) return;
-  if (_input.mode === 'file') {
-    for (const it of _input.items) {
-      try { URL.revokeObjectURL(it.objectURL); } catch (e) { /* ignore */ }
-    }
+  for (const f of files) {
+    _input.items.push({ file: f, objectURL: URL.createObjectURL(f) });
   }
-  _input = { mode: 'file', items: files.map((f) => ({ file: f, objectURL: URL.createObjectURL(f) })) };
   resetOutput();
   refreshInputUI();
-  log('Parser 本批文件（替换）:', files.map((f) => `${f.name}(${formatFileSize(f.size)})`).join(', '));
+  log('Parser 文件已追加:', files.map((f) => `${f.name}(${formatFileSize(f.size)})`).join(', '),
+    '本批共', _input.items.length, '个');
 }
 
-/** 切回文本态（textarea 输入/文本粘贴时；多链接规范化在此；文件批撤销） */
+/** 切回文本态（textarea 输入/文本粘贴时；文件列表保留——统一容器不互斥） */
 function setText(text) {
-  if (_input.mode === 'file') {
-    for (const it of _input.items) {
-      try { URL.revokeObjectURL(it.objectURL); } catch (e) { /* ignore */ }
-    }
-  }
-  _input = { mode: 'text', text: String(text || ''), links: extractLinks(text) };
+  _input.text = String(text || '');
   resetOutput();
   refreshInputUI();
 }
 
-/** 清空输入（✕ 按钮）：撤全部 objectURL、清 textarea、清输出 */
-function clearInput() {
-  if (_input.mode === 'file') {
-    for (const it of _input.items) {
-      try { URL.revokeObjectURL(it.objectURL); } catch (e) { /* ignore */ }
-    }
+/** 拍照/录制预览槽（仅一个，下次拍照/录制占用替换；文件列表全量留档） */
+function setPreview(file) {
+  const box = $('g-parser-media');
+  if (!box) return;
+  clearPreview();
+  const url = URL.createObjectURL(file);
+  const kind = detectParserKind(file);
+  _preview = { url, file, kind };
+  box.innerHTML = '';
+  if (kind === 'image') {
+    const img = document.createElement('img');
+    img.src = url;
+    img.alt = file.name;
+    box.appendChild(img);
+  } else if (kind === 'audio') {
+    const audio = document.createElement('audio');
+    audio.className = 'g-parser-media-video';
+    audio.src = url;
+    audio.controls = true;
+    box.appendChild(audio);
+  } else {
+    const video = document.createElement('video');
+    video.className = 'g-parser-media-video';
+    video.src = url;
+    video.controls = true;
+    box.appendChild(video);
   }
-  _input = { mode: 'none' };
+  box.hidden = false;
+  log('Parser 预览已更新:', file.name);
+}
+
+function clearPreview() {
+  if (_preview) {
+    try { URL.revokeObjectURL(_preview.url); } catch (e) { /* ignore */ }
+    _preview = null;
+  }
+  const box = $('g-parser-media');
+  if (box) { box.innerHTML = ''; box.hidden = true; }
+}
+
+/** 清空输入（✕ 清除所有——用户"清除按钮可以清除所有"）：文本+文件批+预览槽 */
+function clearInput() {
+  for (const it of _input.items) {
+    try { URL.revokeObjectURL(it.objectURL); } catch (e) { /* ignore */ }
+  }
+  _input = { text: '', items: [] };
   const ta = $('g-parser-input');
   if (ta) { ta.value = ''; autosizeInput(); }
+  clearPreview();
   resetOutput();
   refreshInputUI();
-  log('Parser 输入已清空');
+  log('Parser 输入已全部清空');
 }
 
-/** 输入框自动延高（256 次）：随内容长高至上限（与输出框同 560px），到底再内部滚动 */
+/** 输入框自动延高：随内容长高至上限（与输出框同 560px），到底再内部滚动 */
 function autosizeInput() {
   const ta = $('g-parser-input');
   if (!ta) return;
@@ -451,7 +483,7 @@ function autosizeInput() {
   ta.style.height = Math.min(ta.scrollHeight, BOX_MAX_HEIGHT) + 'px';
 }
 
-/** dataURL → File（拍照成品入本批，列表留档可取） */
+/** dataURL → File（拍照成品入列+预览） */
 async function dataUrlToFile(dataUrl, name) {
   const blob = await (await fetch(dataUrl)).blob();
   return new File([blob], name, { type: blob.type || 'image/png' });
@@ -509,13 +541,13 @@ export function initParser() {
   const copyBtn = $('g-parser-copy');
   const exportBtn = $('g-parser-export');
 
-  // 初始空态（i18n 文案 + 居中；替代静态 HTML 提示——修复语言混杂）
+  // 初始空态（i18n 文案 + 居中）
   resetOutput();
 
-  // 文本输入/文本粘贴 → 文本态（多链接规范化；换输入即清旧结果）
+  // 文本输入/文本粘贴 → 文本态（多链接规范化；文件列表保留，统一容器）
   if (input) {
     input.addEventListener('input', () => { setText(input.value); autosizeInput(); });
-    // Ctrl+V 粘贴文件：剪贴板带文件时拦截，替换本批（文本粘贴走 input 事件）
+    // Ctrl+V 粘贴文件：剪贴板带文件时拦截，追加进本批（文本粘贴走 input 事件）
     input.addEventListener('paste', (e) => {
       const files = e.clipboardData && e.clipboardData.files;
       if (files && files.length > 0) {
@@ -523,7 +555,7 @@ export function initParser() {
         attachFiles(files);
       }
     });
-    // 拖拽文件：dragover 高亮，drop 替换本批（可多个）
+    // 拖拽文件：dragover 高亮，drop 追加进本批（可多个）
     input.addEventListener('dragover', (e) => {
       e.preventDefault();
       input.classList.add('dragover');
@@ -536,7 +568,7 @@ export function initParser() {
       if (files && files.length > 0) attachFiles(files);
     });
   }
-  // 「上传文件」按钮（ASR 栏先例）→ 隐藏 file input（multiple 一批多选，替换旧批）
+  // 「上传文件」按钮（ASR 栏先例）→ 隐藏 file input（multiple 一批多选，累积追加）
   if (upload && fileInput) {
     upload.addEventListener('click', () => fileInput.click());
     fileInput.addEventListener('change', () => {
@@ -546,18 +578,19 @@ export function initParser() {
   }
   // 解析按钮
   if (parseBtn) parseBtn.addEventListener('click', onParseClick);
-  // 清空按钮：主动清场（文件 objectURL + 输入框 + 输出区）
+  // 清空按钮：清除所有（文本+文件批+预览槽）
   if (clearBtn) clearBtn.addEventListener('click', clearInput);
   // 复制/导出（结果栏底下）
   if (copyBtn) copyBtn.addEventListener('click', copyResult);
   if (exportBtn) exportBtn.addEventListener('click', exportResult);
-  // 拍照：复用 ocr.js 相机模态；成品转 File 替换本批（列表留档可取）并自动 OCR
+  // 拍照：复用 ocr.js 相机模态；成品入列（留档）+ 占用预览槽 + 自动 OCR
   if (captureBtn) {
     captureBtn.addEventListener('click', async () => {
       await openCamera(async (dataUrl, w, h) => {
         try {
           const file = await dataUrlToFile(dataUrl, `capture-${Date.now()}.png`);
           attachFiles([file]);
+          setPreview(file);
         } catch (e) {
           log('拍照成品转 File 失败:', e);
         }
@@ -581,6 +614,7 @@ export function initParser() {
           toast(t('parser.done', { n: text.length }));
         } else if (out2 && out2.file) {
           attachFiles([out2.file]);
+          setPreview(out2.file);
           onParseClick();
         } else {
           resetOutput();
@@ -597,15 +631,14 @@ export function initParser() {
   }
   refreshInputUI();
   autosizeInput();
-  log('Parser 已初始化（文本/批链接/PDF/DOCX/HTML/文本类/图片OCR/音视频ASR；批次=替换语义）');
+  log('Parser 已初始化（文本/批链接/PDF/DOCX/EPUB/HTML/文本类/图片OCR/音视频ASR；统一输入态可累积）');
 }
 
-/** 页面卸载清理（与 disposeAsrCommon 等对称；撤本批持有的全部 objectURL） */
+/** 页面卸载清理（撤本批全部 objectURL 与预览槽） */
 export function disposeParser() {
-  if (_input.mode === 'file') {
-    for (const it of _input.items) {
-      try { URL.revokeObjectURL(it.objectURL); } catch (e) { /* ignore */ }
-    }
+  for (const it of _input.items) {
+    try { URL.revokeObjectURL(it.objectURL); } catch (e) { /* ignore */ }
   }
-  _input = { mode: 'none' };
+  clearPreview();
+  _input = { text: '', items: [] };
 }

@@ -535,10 +535,16 @@ input::placeholder { color: var(--g-muted); opacity: 1; }
 .func-btn:hover:not(:disabled) { background: var(--g-primary-strong); }
 .func-btn:disabled { opacity: 0.45; cursor: not-allowed; }
 .func-btn.active { background: #b23a2e; }
-/* 257 次（用户"录音中按钮咋一会红一会绿，跟通常不一样"）：去闪烁动画改常亮红——
-   录制中=通用的实心红按钮语义（opacity 闪烁让红底透出下层观感发绿），ASR/Parser 两栏录制按钮同款类一致生效 */
+/* 258 次（用户再纠正："通常都是红色闪动"）——恢复闪动，但改纯红系背景色动画：
+   257 次之前的旧实现闪的是 opacity，红底半透时透出按钮原绿底观感发绿（"一会红一会绿"根因）。
+   现固定红底、亮红间闪，ASR/Parser 两栏录制按钮同款类一致生效 */
 .func-btn.recording {
   background: #b23a2e;
+  animation: g-blink 1s infinite;
+}
+@keyframes g-blink {
+  0%, 100% { background: #b23a2e; }
+  50% { background: #e2574a; }
 }
 
 /* 展示区（其次）：空态提示居中，媒体 16:9 定比并限制最大宽度 */
@@ -870,6 +876,17 @@ input::placeholder { color: var(--g-muted); opacity: 1; }
   color: var(--g-muted);
   pointer-events: none;
   white-space: pre-wrap;
+}
+/* 258 次：拍照/录制预览位（输入区内、只有一个，下次拍照/录制占用替换——用户口径） */
+.g-parser-media { margin-top: 6px; }
+.g-parser-media img,
+.g-parser-media video {
+  display: block;
+  max-width: 100%;
+  max-height: 180px;
+  border-radius: 8px;
+  border: 1px solid var(--beaver-outline, #c2c9bf);
+  background: #000;
 }
 /* 257 次：本批文件列表（显示在输入区）——图片带缩略图，每项可 保存(⬇)/删除(✕)；
    拍照/录制成品经此留档可取（用户"录音拍照要留下文件"） */

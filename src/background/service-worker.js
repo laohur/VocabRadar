@@ -1933,7 +1933,10 @@ async function handleFetchText(url) {
     return { ok: true, text, finalUrl: res.url || url };
   } catch (e) {
     console.error('[VocabRadar][sw][' + _ts() + '] fetchText 异常:', e);
-    return { ok: false, error: String(e.message || e) };
+    // 258 次：Failed to fetch 无法定位——Chrome 网络错误的具体原因在 e.cause
+    //   （DNS 失败/TLS/被拒等），带上便于用户与排查定位
+    const cause = e && e.cause ? ' (' + String(e.cause.message || e.cause).slice(0, 120) + ')' : '';
+    return { ok: false, error: String(e.message || e) + cause };
   } finally {
     clearTimeout(timer);
   }
