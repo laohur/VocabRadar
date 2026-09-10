@@ -259,6 +259,10 @@ async function _loadImpl() {
           console.warn('[VocabRadar][text-hint] 对账: settings.textHintEnabled 缺键（读取异常），按启用处理（60s 限频）');
         }
         s.textHintEnabled = true;
+        // 第二百四十五次（用户拍板"修"）：补救只写内存不回写 storage，缺键状态永远存在，
+        //   警告每 60s 反复出现（用户日志实证）。与 startHint 入口写法（L106）同款回写
+        //   顶层键，一次回写后键常驻，警告此后不再出现。回写失败静默（下轮对账再试）。
+        try { await chrome.storage.local.set({ textHintEnabled: true }); } catch (_) { /* ignore */ }
       }
       // 反思（2026-08-15 第五十八次·续）：判定语义统一为"仅显式 false 才停用"。
       //   诊断实证 storage.textHintEnabled=undefined（键缺失或异常值），旧判定 `if (s.textHintEnabled)`
@@ -385,7 +389,9 @@ async function _loadImpl() {
     // 右键菜单查词消息
     chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       if (msg.type === 'SHOW_CONTEXT_PANEL' && msg.text) {
-        _impl.showContextPanel(msg.text, _lastClickX, _lastClickY);
+        // w4：panel.js 已改动态转发，catch 打日志防加载失败被静默吞掉
+        _impl.showContextPanel(msg.text, _lastClickX, _lastClickY)
+          .catch((e) => console.error('[VocabRadar][text-hint] 查词面板加载失败', e));
       }
       sendResponse({ ok: true });
       return true;
@@ -398,7 +404,9 @@ async function _loadImpl() {
     window.addEventListener('beaver-ocr-result', (e) => {
       if (!_impl) return;
       const detail = e.detail || {};
-      _impl.showOcrResultPanel(detail.text || '', _lastClickX, _lastClickY, detail.info || '');
+      // w4：panel.js 已改动态转发，catch 打日志防加载失败被静默吞掉
+      _impl.showOcrResultPanel(detail.text || '', _lastClickX, _lastClickY, detail.info || '')
+        .catch((e) => console.error('[VocabRadar][text-hint] OCR 结果面板加载失败', e));
     });
   } catch (e) {
     console.error('[VocabRadar][text-hint] 加载失败', e);

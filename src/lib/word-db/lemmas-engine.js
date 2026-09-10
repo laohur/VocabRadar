@@ -114,11 +114,8 @@ export async function swLemmatizeWord(word, lang) {
     // 反思（2026-08-16 第六十八次）：失败明示（③：不能讳疾忌医，错误要报出来）
     console.warn(`[VocabRadar][词形引擎] 查询 "${lower}"(${key}) 词形还原失败: ${e && e.message}, 按原词即原形`);
   }
-  // 反思（2026-08-16 第六十八次）：恢复逐词查询日志（running->run），页面逐词缓存，
-  //   每词每会话只查一次，日志不会刷屏
-  if (lemma !== lower) {
-    console.log(`[VocabRadar][词形引擎] "${lower}"(${key}) -> 原形 "${lemma}"（${res && res.method ? res.method : '?'}，候选 ${candidates.size} 个）`);
-  }
+  // 2026-09-08 第二百四十次（日志降噪，用户批复）：删逐词成功日志（第六十八次曾恢复，
+  //   实际页面批量查询时仍逐词刷屏，用户裁定删除）
   return { ok: true, lemma, candidates: Array.from(candidates) };
 }
 

@@ -32,6 +32,27 @@ import { cleanDictEntry, isBalancedParens } from '../../lib/dict-clean.js';
 import { beginBatch, countChars, countTokens, countUnique, incField, incScalar, getBatches, logBatch } from '../../lib/dict-stats.js';
 import { emitBlock, resetScan } from '../page-scan-bus.js';
 import { lookupWord } from '../../lib/annotator.js';
+// === 2026-09-09（w4，ESM 模块图装载 1986ms 优化，用户拍板"拆分懒加载"）===
+// tooltip.js / panel.js 及其重依赖（chat.js、main-text.js、phonetics.js、
+//   diverse-lemmas/languages 词形表等）只服务 hover 悬浮 / 右键面板 / OCR 面板等
+//   **交互**场景——启动路径（startHint→扫描）不再静态加载它们：本模块只绑惰性
+//   转发壳，首次交互才动态 import 真实现（模块缓存后近零开销）。两个 ensure 均
+//   幂等（thState.tooltip/panel 存在即 return），_uiLoad 完成后自动补建容器，
+//   保证 onWordHover 等转发时容器已就绪。未加载即无容器，hide 类调用直接跳过
+//   （stopHint/scroll 时模块未加载 = 浮层/面板不存在 = 无需隐藏）。
+let _uiMods = null;
+function _uiLoad() {
+  if (!_uiMods) {
+    _uiMods = Promise.all([import('./tooltip.js'), import('./panel.js')])
+      .then(([tt, pp]) => {
+        tt.ensureTooltip();
+        pp.ensurePanel();
+        return { tt, pp };
+      })
+      .catch((e) => { _uiMods = null; throw e; }); // 失败不缓存，允许下次交互重试
+  }
+  return _uiMods;
+}
 import {
   thState, HIGHLIGHT_CLASS, FIRST_CLASS, LATER_CLASS, HIDE_WORD_CLASS, SIDE_ANN_CLASS,
   PROCESSED_ATTR, TOOLTIP_ID, PANEL_ID, STYLE_ID, WORD_G_PATTERN, SELECT_PATTERN,
@@ -39,10 +60,6 @@ import {
   waitForBody, isContextValid, injectStyles, applyColorVars, pickColors,
   thMark, thAdd, getHintTiming
 } from './core.js';
-import {
-  ensureTooltip, hideTooltip, onScrollHide, onWordHover, onWordLeave, onWordClick
-} from './tooltip.js';
-import { ensurePanel, hidePanel } from './panel.js';
 
 // 模块级：扫描门闸看门狗定时器（见 scheduleScan#run 的 release）
 // 反思（2026-08-30 第一百八十三次）：scanRunning 只靠 onDone 复位，异常路径会永久卡死全部扫描
@@ -123,8 +140,9 @@ export async function startHint(settings) {
     }
     injectStyles();
     applyColorVars();
-    ensureTooltip();
-    ensurePanel();
+    // w4：tooltip/panel 惰性化——启动时不再同步建容器，首次交互动态加载时 _uiLoad
+    //   内自动 ensure；此处仅预热（不 await，不阻塞扫描），失败静默（下次交互重试）。
+    _uiLoad().catch(() => {});
     // 第一百一十二次：委托兜底（幂等）——覆盖 Firefox 直绑监听器失效场景
     installDelegationGuard();
     // 反思（2026-08-12 第四十四次）：等待 body 就绪后再扫描和观察，
@@ -150,7 +168,8 @@ export async function startHint(settings) {
     let _scrollScanTimer = null;
     if (!thState.scrollHandler) {
       thState.scrollHandler = () => {
-        onScrollHide();
+        // w4：未加载 = 无浮层/面板可藏，跳过；已加载才转发隐藏
+        if (_uiMods) _uiMods.then((m) => m.tt.onScrollHide()).catch(() => {});
         // 节流重新扫描可见区域
         if (_scrollScanTimer) clearTimeout(_scrollScanTimer);
         _scrollScanTimer = setTimeout(() => {
@@ -178,9 +197,9 @@ export function stopHint() {
   thState.scanPendingRoot = null;
   // 第一百八十三次：一并清掉看门狗定时器，避免停用后仍打出"强制解闸"错误日志。
   if (_scanWatchdog) { clearTimeout(_scanWatchdog); _scanWatchdog = null; }
-  unwrapAll();
-  hideTooltip();
-  hidePanel();
+  // w4：UI 模块未加载 = 无浮层/面板可藏，跳过；已加载才转发隐藏
+  if (_uiMods) _uiMods.then((m) => m.tt.hideTooltip()).catch(() => {});
+  if (_uiMods) _uiMods.then((m) => m.pp.hidePanel()).catch(() => {});
   console.log('[VocabRadar][text-hint] 已停止');
 }
 
@@ -914,9 +933,10 @@ export function wrapWordAt(textNode, h) {
     appendSideAnnotation(span, h.translations);
   }
 
-  span.addEventListener('mouseenter', onWordHover);
-  span.addEventListener('mouseleave', onWordLeave);
-  span.addEventListener('click', onWordClick);
+  // w4：tooltip.js 已改惰性动态加载，事件处理经 _uiLoad 转发（微任务延迟对交互无感）
+  span.addEventListener('mouseenter', (e) => _uiLoad().then((m) => m.tt.onWordHover(e)).catch(() => {}));
+  span.addEventListener('mouseleave', (e) => _uiLoad().then((m) => m.tt.onWordLeave(e)).catch(() => {}));
+  span.addEventListener('click', (e) => _uiLoad().then((m) => m.tt.onWordClick(e)).catch(() => {}));
   // 第一百一十二次：标记"直绑监听器已挂"。Firefox 下部分动态 span 的直绑监听器
   // 可能因未知机制失效（用户实测：前几个有悬浮提示、之后只有高亮无悬浮）——
   // 文档级委托兜底（installDelegationGuard）据此判定是否代为触发。
@@ -951,13 +971,14 @@ export function installDelegationGuard() {
     el.__beaverLastHover = now;
     if (el.__beaverDirect) return;
     console.warn('[VocabRadar][text-hint] hover 委托兜底触发（该 span 直接监听器未生效）word=', el.dataset.word);
-    onWordHover({ currentTarget: el, stopPropagation() {} });
+    // w4：经 _uiLoad 转发，确保 tooltip 模块已加载
+    _uiLoad().then((m) => m.tt.onWordHover({ currentTarget: el, stopPropagation() {} })).catch(() => {});
   }, { capture: true });
   document.addEventListener('mouseout', (e) => {
     const el = hit(e);
     if (!el || el.__beaverDirect) return;
     const now = Date.now();
-    if (now - (el.__beaverLastHover || 0) >= 0 && !el.__beaverDirect) onWordLeave();
+    if (now - (el.__beaverLastHover || 0) >= 0 && !el.__beaverDirect) _uiLoad().then((m) => m.tt.onWordLeave()).catch(() => {});
   }, { capture: true });
   document.addEventListener('click', (e) => {
     const el = hit(e);
@@ -966,7 +987,8 @@ export function installDelegationGuard() {
     if (now - (el.__beaverLastClick || 0) < 300) return;
     el.__beaverLastClick = now;
     if (el.__beaverDirect) return;
-    onWordClick({ currentTarget: el, stopPropagation() {} });
+    // w4：经 _uiLoad 转发，确保 tooltip/panel 模块已加载
+    _uiLoad().then((m) => m.tt.onWordClick({ currentTarget: el, stopPropagation() {} })).catch(() => {});
   }, { capture: true });
 }
 

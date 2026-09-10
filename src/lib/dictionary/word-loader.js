@@ -5,14 +5,19 @@
 // 装载函数（loadWordfreq/loadWordlists）与词典无关--仅在初始化或词典数据
 //   缺失/不全时启用（由 projection.js 的 _rebuildFromSources 调用），装载完成
 //   经 bulkWriteDictionary 送入词典（word-db.js）后不再读取（readme 权威设计）。
-// 含：fetchWfViaBackground（2026-09-08 HF dataset 中转，SW 直传 ArrayBuffer）、
+// 含：fetchWfViaBackground（2026-09-08 HF dataset 中转，SW 返回 base64 字符串）——
+//   （2026-09-08 第二百四十次反思：chrome.runtime 消息默认 JSON 序列化，官方博客
+//   实锤 structured clone 仅 Chrome 148+ manifest 可选项，ArrayBuffer 直传变 {}，
+//   故 SW 端 base64 编码回传，页面端 b64ToU8 解码）、
 //   loadWordfreq（HF CDN 拉取 + DecompressionStream 解压 + msgpack/cBpack 解码 ->
-//   Map<word, rank>）、loadWordlists（JSON -> Map<word, tags>）、
+//   Map<word, rank>；2026-09-09（用户裁定）解码后比对 SW 随包回传的远程 meta.json
+//   kept 词数基准，不匹配即弃包）、loadWordlists（JSON -> Map<word, tags>）、
 //   loadBuiltinEnZh（内置英中翻译包 JSON -> Map<word, translation定稿字符串>）。
 // 仅使用 state.js 的 _ts() 时间戳辅助，无共享状态写入（产物 Map 由调用方消费）。
 // ============================================================
 
 import { _ts } from './state.js';
+import { b64ToU8 } from '../b64.js';
 import { decode as msgpackDecode } from '../vendor/msgpack-lite.js';
 
 /**
@@ -21,30 +26,52 @@ import { decode as msgpackDecode } from '../vendor/msgpack-lite.js';
  *   content script 受宿主页面 CSP connect-src 约束（B站/YouTube 等不放行
  *   huggingface.co），须由 SW 代理 fetch（含 files.json SHA-256 校验，见
  *   service-worker.js handleWfFetch；SW 恒为 secure context，crypto.subtle 可用）。
+ * 2026-09-09（用户实测 0.3.1 upload 包日志）：SW 冷启动窗口——onInstalled 清库日志已出
+ *   但 ESM 模块图仍在装载、runtime.onMessage 未注册——页面 sendMessage 立即得
+ *   "Could not establish connection. Receiving end does not exist."（首装/版本变更
+ *   场景页面消息恒早于监听器就绪，首次词频拉取必败）。修复：识别该错误延迟 500ms
+ *   重试（最多 3 次发送，SW 通常数百 ms 内就绪）；其余错误不重试。
+ *   失败日志一律带 HF 完整 URL（用户裁定："网络失败要说是啥链接连不上"）。
  * @param {string} file 相对路径（data/small_xx.msgpack.gz，SW 端正则白名单，防借道 SSRF）
- * @returns {Promise<{ok:true,data:ArrayBuffer}|null>} 成功返回 {ok,data}（SW 直传，
- *   结构化克隆支持 ArrayBuffer），失败返回 null
+ * @returns {Promise<{ok:true,b64:string,sha256:string,bytes:number,kept:number=}|null>} 成功返回
+ *   {ok,b64(base64 字符串，页面端 b64ToU8 解码),sha256,bytes,kept(远程 meta.json 词数
+ *   基准 languages[lang].kept，SW 端 sha256 校验后顺手取得；meta 不可得时缺省)}，失败返回 null
  */
+// HF 数据源 URL（与 SW 端 WF_BASE 对齐，仅用于日志报错指路；实际 fetch 在 SW 端双源回退）
+const WF_HF_URL = 'https://huggingface.co/datasets/vocabradar/wordfreq/resolve/main/';
+
 function fetchWfViaBackground(file) {
+  const url = WF_HF_URL + file;
   return new Promise((resolve) => {
-    try {
-      chrome.runtime.sendMessage({ type: 'WF_FETCH', file }, (response) => {
-        if (chrome.runtime.lastError) {
-          console.warn('[VocabRadar][dictionary] wordfreq 后台拉取消息错误:', chrome.runtime.lastError.message);
-          resolve(null);
-          return;
-        }
-        if (response && response.ok && response.data) {
-          resolve(response);
-        } else {
-          console.warn('[VocabRadar][dictionary] wordfreq 后台拉取失败:', response && response.error);
-          resolve(null);
-        }
-      });
-    } catch (e) {
-      console.warn('[VocabRadar][dictionary] wordfreq 后台拉取消息发送失败:', e);
-      resolve(null);
-    }
+    let attempts = 0;
+    const send = () => {
+      attempts++;
+      try {
+        chrome.runtime.sendMessage({ type: 'WF_FETCH', file }, (response) => {
+          if (chrome.runtime.lastError) {
+            const msg = String(chrome.runtime.lastError.message || '');
+            // SW 冷启动窗口（监听器未注册）：延迟重试；其余错误（扩展上下文失效等）不重试
+            if (attempts < 3 && /Receiving end does not exist|message port closed/i.test(msg)) {
+              setTimeout(send, 500);
+              return;
+            }
+            console.warn(`[VocabRadar][dictionary] wordfreq 后台拉取消息错误（第 ${attempts} 次发送）: ${msg}；目标 URL: ${url}`);
+            resolve(null);
+            return;
+          }
+          if (response && response.ok && response.b64) {
+            resolve(response);
+          } else {
+            console.warn(`[VocabRadar][dictionary] wordfreq 后台拉取失败: ${(response && response.error) || '空响应'}；目标 URL: ${url}`);
+            resolve(null);
+          }
+        });
+      } catch (e) {
+        console.warn(`[VocabRadar][dictionary] wordfreq 后台拉取消息发送失败: ${e}；目标 URL: ${url}`);
+        resolve(null);
+      }
+    };
+    send();
   });
 }
 
@@ -69,7 +96,7 @@ export async function loadWordfreq(lang) {
   //   内部已兜底为 resolve(null)，永不 reject。
   const r = await fetchWfViaBackground(file);
   if (!r) {
-    console.warn(`[VocabRadar][dictionary][${_ts()}] wordfreq 拉取失败（${file}），返回空 Map`);
+    console.warn(`[VocabRadar][dictionary][${_ts()}] wordfreq 拉取失败（${file}，URL: ${WF_HF_URL + file}；网络失败原因见上方后台拉取日志），返回空 Map`);
     return new Map();
   }
 
@@ -77,7 +104,7 @@ export async function loadWordfreq(lang) {
   // 2026-09-08（用户批复）：删旧"回退 SW 代解压"分支——直传改造后该分支已无触发
   //   条件（SW 从未实现 DECOMPRESS_GZIP handler，sendMessage 恒得 lastError，纯死路）。
   //   解压失败即返回空 Map（所有词按表外处理），不阻塞功能。
-  const compressed = r.data;
+  const compressed = b64ToU8(r.b64); // 2026-09-08 第二百四十次：base64 解码（JSON 消息通道，直传 ArrayBuffer 会变 {}）
   console.log(`[VocabRadar][dictionary][${_ts()}] wordfreq[${lang}] 压缩大小: ${(compressed.byteLength / 1024).toFixed(1)} KB`);
   let decompressedBuf;
   try {
@@ -172,6 +199,20 @@ export async function loadWordfreq(lang) {
     }
   }
   console.log(`[VocabRadar][dictionary][${_ts()}] wordfreq[${lang}] 构建完成: ${map.size} 词`);
+  // 2026-09-09（用户裁定："先校验sha256算文件，再读取后校验词数。从远程的meta拉取的
+  //   词数才是正确的"）：sha256 在 SW 端验文件，词数在解码后比对 SW 随包回传的远程
+  //   meta.json kept（languages[lang].kept，en=28811）。不匹配=数据发布事故，弃包返回
+  //   空 Map 且**不写** wfInstalled 基线（坏 sha 不进基线，等下次对账/更新重拉）。
+  //   kept 缺省（SW 端 meta 拉取失败）只告警不阻塞——sha256 已保文件完整性。
+  if (r.kept != null) {
+    if (map.size !== r.kept) {
+      console.error(`[VocabRadar][dictionary][${_ts()}] wordfreq[${lang}] 词数校验失败: 解码 ${map.size} ≠ 远程 meta.json kept ${r.kept}，弃包返回空 Map`);
+      return new Map();
+    }
+    console.log(`[VocabRadar][dictionary][${_ts()}] wordfreq[${lang}] 词数校验通过: ${map.size} = meta.json kept ${r.kept}`);
+  } else {
+    console.warn(`[VocabRadar][dictionary][${_ts()}] wordfreq[${lang}] 无 kept 词数基准（meta.json 不可得），词数校验跳过`);
+  }
   // 2026-09-08（用户批复"HF 数据更新自动重建"）：成功拉取并解码后，把 SW 校验过的
   //   sha256/bytes 写入 storage.wfInstalled[lang]（SW checkWfUpdates 每 24h 轮询比对的
   //   基线），并清除 wfUpdates[lang] 待处理标记。失败路径（返回空 Map）不写——保持

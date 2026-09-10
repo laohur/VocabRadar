@@ -4,10 +4,11 @@
 //     - 拍照（getUserMedia 摄像头 → 截帧为 dataURL）
 //     - 图片载入（loadOcrImage：上传图片/拍照共用，载入展示区并启用「开始识别」）
 //     - 文字识别（OCR_RECOGNIZE 经 SW 中转至 offscreen Tesseract，语言随 learnLanguage）
-//   ASR/录制控制从 asr.js 导入（loadOcrImage 需停 ASR/录制），公共基础设施见 asr-common.js。
+//   ASR/录制控制从 asr.js 导入（loadOcrImage 需停 ASR/录制），公共基础设施见 guide-common.js
+//   （第二百五十三次由 asr-common.js 改名）。
 
 import { t } from '../lib/i18n.js';
-import { S, $, log, toast, flashButton, clearResults, appendResult, formatFileSize } from './asr-common.js';
+import { S, $, log, toast, flashButton, clearResults, appendResult, formatFileSize } from './guide-common.js';
 import { stopAsr, stopRecording } from './asr.js';
 
 // === 拍照（摄像头） ===

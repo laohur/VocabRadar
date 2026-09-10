@@ -27,7 +27,7 @@ export let _root = null;                  // 根元素 #beaver-web-sidebar
 
 export let _activeTab = 'sentences';     // 当前标签：sentences | words | asr | ocr
 
-export let _noAnnotation = false;        // 不显示注释（第六十九次：注释按钮已移除，恒为 false=常显）
+export let _noAnnotation = false;        // 不显示注释（第二百三十九次：句标签工具栏加回 Annotation 按钮控制；inactive=true → 句子面板渲染 defuddle 提取的纯正文）
 
 export let _detailMode = false;          // 详略模式：false=简略，true=详细
 
@@ -147,11 +147,17 @@ export function clampPosToViewport(left, top) {
 //   maxT = 视口高 - 48。一个 380×760 的面板只要 top 略大，就被夹到 “视口高-48”，
 //   于是面板整体沉到视口底边只露 48px，用户看到的就是“位置乱跑”。
 //   本函数按面板自身宽高夹取，保证整块面板留在视口内；装不下时贴左上。
-export function clampRectToViewport(left, top, width, height) {
+// 第二百四十六次（用户："侧栏不能拖动太低"；拍板"把手可见即可"）：top 上限从
+//   "整高不出屏"（innerHeight - h，75vh 侧栏顶部最多到 25vh）放宽为"把手可见即可"
+//   ——标题栏约 42px（sidebar-topbar.js padding 10+10 + 内容），取 44px 留屏内可抓，
+//   主体允许探出下沿。与 ui.js onMove 的拖动 clamp 同语义，恢复路径不再把用户拖低的
+//   位置拉回。x 方向与 top 下限保持"不出上/左沿"不变（用户未诉求放宽）。
+export function clampRectToViewport(left, top, width, height, grabH = 44) {
   const w = Math.max(0, Number(width) || 0);
   const h = Math.max(0, Number(height) || 0);
+  const grab = Math.max(0, Math.min(Number(grabH) || 44, h));
   const maxL = Math.max(0, window.innerWidth - w);
-  const maxT = Math.max(0, window.innerHeight - h);
+  const maxT = Math.max(0, window.innerHeight - grab);
   const l = isFinite(left) ? left : maxL;
   const t = isFinite(top) ? top : 0;
   return {
@@ -454,6 +460,7 @@ export function set_annotationsCache(v) { _annotationsCache = v; }
 export function set_collectedSubs(v) { _collectedSubs = v; }
 export function set_detailMode(v) { _detailMode = v; }
 export function set_firstSentMap(v) { _firstSentMap = v; }
+export function set_noAnnotation(v) { _noAnnotation = v; }
 export function set_pageSentenceEls(v) { _pageSentenceEls = v; }
 export function set_pageSentences(v) { _pageSentences = v; }
 export function set_panelRect(v) { _panelRect = v; }

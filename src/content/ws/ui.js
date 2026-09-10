@@ -6,10 +6,13 @@
 //       跨模块共享状态一律来自 ./core.js，写入走 core 导出的 set_xxx 接缝，绝不另存副本。
 
 import { LANG_NAMES, LANG_NAMES_EN, TRANSLATE_LANGS, UI_LANGS, setLang, t } from '../../lib/i18n.js';
+// 第二百四十三次：expand 是侧栏扫描回填翻译（ws/scanner.js schedulePendingTranslate）的手势源头，
+//   展开点击（click 手势）同步链上 prime 内置翻译，扫描回填的 translate 即可复用实例。
+import { primeTranslator } from '../../lib/translator.js';
 import { buildTopbarHTML, ensureTopbarCss } from '../../lib/sidebar-topbar.js';
 import { SUBTITLE_TEXT_STYLES, findStyle } from '../../lib/styles.js';
 import { reviveSidebarIfPossible, startVideoController } from '../video-controller.js';
-import { _activeTab, _allAnnotations, _cachedLearnLang, _detailMode, _pageSentences, _panelRect, _preExpandPos, _root, _wordOnlyMode, clampPosToViewport, clampRectToViewport, formatTime, getInjectionRoot, log, saveState, set_activeTab, set_detailMode, set_panelRect, set_preExpandPos, set_wordOnlyMode, toast, ts } from './core.js';
+import { _activeTab, _allAnnotations, _cachedLearnLang, _detailMode, _pageSentences, _panelRect, _preExpandPos, _root, _wordOnlyMode, clampPosToViewport, clampRectToViewport, formatTime, getInjectionRoot, log, saveState, set_activeTab, set_detailMode, set_noAnnotation, set_panelRect, set_preExpandPos, set_wordOnlyMode, toast, ts } from './core.js';
 import { rerenderAllSlots, schedulePageScan, toggleLemmaGroup } from './scanner.js';
 // 第一百七十一次：文本侧栏底部对话按钮 —— 对话面板唯一实现在 lib/chat.js
 import { openChatPanel } from '../../lib/chat.js';
@@ -78,8 +81,12 @@ export function buildSidebar() {
         <!-- 第一百八十五次：练习统一叫 learn（原 train/practice，2026-09-07 T9 改名） -->
         <div class="beaver-web-tab" data-tab="learn">${t('tab.learn')}</div>
       </div>
-      <!-- 句标签工具栏：详情（注释开关移到底部工具栏，第六十八次） -->
+      <!-- 句标签工具栏：第二百三十九次加回注释总开关（用户："在detail之前 也加Annotation标签按钮"）——
+           active=网页提示（text-hint 高亮/侧邻注释）+ 侧栏句子注释标记；
+           取消=撤掉网页提示（stopForPage，本页会话停用）+ 句子面板渲染 defuddle 提取的纯正文（_noAnnotation=true）。
+           初始 active 态由 textHintEnabled 校正（见绑定区 storage.get）。 -->
       <div class="beaver-web-toolbar" data-tab-toolbar="sentences">
+        <button class="beaver-web-tool-btn active" id="beaver-web-annotation" title="${t('ws.annotation')}">${t('ws.annotation')}</button>
         <button class="beaver-web-tool-btn" id="beaver-web-detail" title="${t('ws.detail')}">${t('ws.detail')}</button>
       </div>
       <!-- 词汇标签工具栏：词表按钮 -->
@@ -114,7 +121,9 @@ export function buildSidebar() {
            反思（2026-08-16 第六十八次）："注释按钮移走"——原句子工具栏的注释开关
            与详情按钮并排，用户要求移走，曾移至底部工具栏挨着复制。
            反思（2026-08-16 第六十九次）：用户再次要求"注释按钮移走"→ 彻底移除注释
-           开关按钮（含 HTML/绑定/onAnnotationClick），注释常显（_noAnnotation 恒为 false）。 -->
+           开关按钮（含 HTML/绑定/onAnnotationClick），注释常显（_noAnnotation 恒为 false）。
+           第二百三十九次：用户要求加回——注释开关恢复到句标签工具栏（detail 之前，
+           与视频侧栏 Annotation 按钮同语义），并联动 text-hint 网页提示启停。 -->
       <div class="beaver-web-footer">
         <button class="beaver-web-action-btn" id="beaver-web-copy" title="${t('ws.copy')}">📋 ${t('ws.copy')}</button>
         <!-- 第一百七十一次：copy 右侧新增导出（存为文件），最右侧为对话按钮 -->
@@ -266,9 +275,23 @@ makeResizable();
     tab.addEventListener('click', () => switchTab(tab.dataset.tab));
   });
 
-  // 工具栏（第六十九次：注释按钮已彻底移除，仅详情/词表按钮）
+  // 工具栏（第二百三十九次：加回注释总开关 Annotation，与详情/词表按钮并列）
+  _root.querySelector('#beaver-web-annotation').addEventListener('click', onAnnotationClick);
   _root.querySelector('#beaver-web-detail').addEventListener('click', onDetailClick);
   _root.querySelector('#beaver-web-export').addEventListener('click', onWordListToggle);
+
+  // 第二百三十九次：Annotation 按钮初始态对齐 text-hint 全局开关（与 scanner.js 口径
+  //   一致：仅显式 false 才算关）。全局关提示的用户按钮置 inactive 且侧栏走纯正文，
+  //   保证"按钮态=实际行为"；读回后重绘一次覆盖首帧（HTML 模板默认 active）。
+  try {
+    chrome.storage.local.get({ textHintEnabled: true }, (res) => {
+      const on = res.textHintEnabled !== false;
+      const btn = _root.querySelector('#beaver-web-annotation');
+      if (btn) btn.classList.toggle('active', on);
+      set_noAnnotation(!on);
+      rerenderAllSlots();
+    });
+  } catch (e) { /* ignore */ }
 
   // 反思（2026-08-14 第五十八次）：移除 web-sidebar 字幕样式按钮（原 bindSubtitleStylePanel）。
   //   字幕样式选择集中在引导页，启动时恢复已保存的 overlay 字幕样式 class 保留。
@@ -514,6 +537,9 @@ function applyPanelRect(rect) {
 }
 
 export function expand(anchor) {
+  // 第二百四十三次：温和 prime 内置翻译（不清冷却）——本次展开点击即 user activation，
+  //   同步链上发起 create；后续扫描回填的 translate 复用实例。冷却期内快速跳过。
+  primeTranslator();
   // 第一百二十一次：统一侧栏路由——页面存在视频侧栏且有 <video> 时，点球直接展开视频形态；
   // 文本形态改由视频侧栏头部 📄 按钮进入（或无视频时默认）。
   _absentSince = 0; // 第一百三十六次：用户手动展开即清零"正片页缺席"闸门计时器，避免12s后球被误收起
@@ -535,6 +561,16 @@ export function expand(anchor) {
   _root.classList.add('expanded');
   // 第一百七十一次：开启展开保护窗——双击悬浮球时第二击会落在刚出现的顶行 ◀/✕ 上
   markExpandGuard();
+  // 第二百三十九次：重开侧栏时恢复网页提示——✕ 关闭曾 stopForPage（本页会话停用），
+  //   按 Annotation 按钮当前态复活（active 才调 start：清 _sessionStop + startOrReport，
+  //   诊断窗同款幂等入口）；按钮 inactive（全局关提示）则不碰。否则按钮亮着网页却无提示。
+  if (_hintStoppedForPage) {
+    _hintStoppedForPage = false;
+    try {
+      const annBtn = _root.querySelector('#beaver-web-annotation');
+      if (annBtn && annBtn.classList.contains('active')) window.__beaverHintCtl?.start?.();
+    } catch (e) { /* ignore */ }
+  }
   // 第一百二十八次：防御性重注顶行样式（幂等）——用户反馈"球展开后无顶行"，
   //   若宿主页面清除了 <style id=beaver-topbar-css> 则顶行失去布局；展开时补一次。
   try { ensureTopbarCss(); } catch (e) { /* ignore */ }
@@ -715,11 +751,15 @@ function makeDraggable() {
     _dragMoved = true;
     let x = e.clientX - _dragOffsetX;
     let y = e.clientY - _dragOffsetY;
-    // 边界约束：保持在视口内
+    // 第二百四十六次（用户："侧栏不能拖动太低"；拍板"把手可见即可"）：边界从
+    //   "整栏不出屏"放宽为"把手可见即可"——把手（展开态=标题栏，折叠态=悬浮球）
+    //   留 8px 在视口内可抓，主体允许探出屏沿。旧版 y 上限 innerHeight - 全高：
+    //   侧栏 75vh 时顶部最多拖到 25vh 处，"拖不低"即此。
     const w = _root.offsetWidth;
     const h = _root.offsetHeight;
-    x = Math.max(0, Math.min(x, window.innerWidth - w));
-    y = Math.max(0, Math.min(y, window.innerHeight - h));
+    const grab = (header && header.offsetHeight) || 40;
+    x = Math.max(8 - w, Math.min(x, window.innerWidth - 8));
+    y = Math.max(8 - grab, Math.min(y, window.innerHeight - 8));
     _root.classList.add('dragged');
     // 反思（2026-08-13 第五十二次）：折叠态 critical CSS 用 !important 钉死
     //   right/top/left/bottom，普通内联样式被覆盖 → 悬浮球拖不动。
@@ -912,6 +952,10 @@ function speakWord(word) {
   } catch (_) { /* ignore */ }
 }
 
+// 第二百三十九次：✕ 关闭是否停用过本页 text-hint（expand 重开时按此恢复网页提示，
+//   避免每次展开都对正常运行的 text-hint 多打一次 startHint）
+let _hintStoppedForPage = false;
+
 function close() {
   _root.classList.remove('expanded', 'collapsed');
   _root.classList.add('closed');
@@ -922,6 +966,7 @@ function close() {
   //   stopForPage 会拦住 reconcile 的 5s 自动复活路径。text-hint impl 尚未就绪时
   //   钩子缺席，可选链静默跳过（此时注解本就尚未生成）。
   try { window.__beaverHintCtl?.stopForPage?.(); } catch (e) { console.warn('[VocabRadar][web-sidebar] stopForPage 调用失败:', e); }
+  _hintStoppedForPage = true;
 }
 
 // === 第一百二十三次：重置位置与尺寸（⋯ 设定菜单项）===
@@ -1013,6 +1058,27 @@ async function onDraftImportAndOpenClick() {
   if (r.ok) window.open(SITE_URL + '/#/my-scrolls', '_blank');
 }
 // === 工具栏 ===
+// 第二百三十九次：注释总开关（与视频侧栏 Annotation 按钮同语义，active=显示注释）。
+//   开：__beaverHintCtl.start() 复活网页提示（诊断窗同款入口：清 _sessionStop +
+//   startOrReport），_noAnnotation=false 恢复侧栏注释标记。
+//   取消：__beaverHintCtl.stopForPage() 撤掉网页提示（本页会话停用，不写 storage，
+//   reconcile 不复活；与 ✕ 关侧栏同一路径），_noAnnotation=true → 句子面板渲染
+//   defuddle 提取的纯正文（scanner.js：highlightWords 空注释数组、无注释条）。
+function onAnnotationClick() {
+  const btn = _root.querySelector('#beaver-web-annotation');
+  const isActive = btn.classList.toggle('active');
+  set_noAnnotation(!isActive);
+  try {
+    if (isActive) {
+      window.__beaverHintCtl?.start?.();
+    } else {
+      window.__beaverHintCtl?.stopForPage?.();
+    }
+  } catch (e) { console.warn('[VocabRadar][web-sidebar] 切换网页提示失败:', e); }
+  log('注释开关:', isActive ? '开（网页提示+侧栏注释）' : '关（网页提示撤除+纯正文）');
+  rerenderAllSlots();
+}
+
 function onDetailClick() {
   set_detailMode(!_detailMode);
   const btn = _root.querySelector('#beaver-web-detail');

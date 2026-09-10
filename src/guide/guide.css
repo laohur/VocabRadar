@@ -793,3 +793,78 @@ input::placeholder { color: var(--g-muted); opacity: 1; }
 .help-list li { margin: 4px 0; font-size: 14px; color: var(--g-text); }
 
 
+
+/* === Parser 栏（第二百五十三次新增：文档解析界面） ===
+   布局：第一行 Capture+录制来源（复用 .g-source-row），之下左右两栏——
+   左栏大输入框 + 解析按钮，右栏纯文本结果 + 侧栏切换。
+   配色沿用 guide 令牌（--g-*）与 beaver 令牌（sidebar.css 同源），不新建设计体系。 */
+.g-parser-cols {
+  display: flex;
+  align-items: stretch;
+  gap: 12px;
+  margin-top: 14px;
+}
+.g-parser-left {
+  flex: 1 1 50%;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+.g-parser-right {
+  flex: 1 1 50%;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+@media (max-width: 720px) {
+  .g-parser-cols { flex-direction: column; }
+}
+/* 左栏大输入框：粘贴文本/链接，拖入或 Ctrl+V 粘贴文件（dragover 高亮提示可放） */
+.g-parser-input {
+  width: 100%;
+  box-sizing: border-box;
+  min-height: 340px;
+  resize: vertical;
+  padding: 10px 12px;
+  font-size: 13px;
+  line-height: 1.55;
+  font-family: inherit;
+  color: var(--g-text);
+  background: #fff;
+  border: 1px solid var(--beaver-outline, #c2c9bf);
+  border-radius: var(--beaver-radius, 12px);
+}
+.g-parser-input:focus {
+  outline: none;
+  border-color: var(--g-primary);
+}
+.g-parser-input.dragover {
+  border-color: var(--g-primary);
+  background: var(--g-primary-soft, #eef5ef);
+}
+/* 输入状态行：文件名/大小、链接识别、字符数（第二百五十四次移除"浏览文件"链接，改 ASR 先例的上传按钮） */
+.g-parser-input-info {
+  margin-top: 6px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  font-size: 12px;
+  color: var(--g-muted);
+  min-height: 18px;
+}
+/* 解析按钮行（左栏底部） */
+.g-parser-left .g-recognize-row { margin-top: auto; padding-top: 14px; }
+/* 右栏：解析结果（纯文本，pre-wrap 保留换行） */
+.g-parser-output {
+  flex: 1;
+  min-height: 340px;
+  max-height: 560px;
+  overflow-y: auto;
+  padding: 10px 12px;
+  font-size: 13px;
+  line-height: 1.55;
+  color: var(--beaver-text, #1a1f1a);
+  white-space: pre-wrap;
+  word-break: break-word;
+}

@@ -333,9 +333,9 @@ function buildSidebar() {
         <button id="beaver-export-file" data-i18n="btn.export">💾 Export</button>
       </div>
       <div class="beaver-footer-row">
-        <button id="beaver-ocr" data-i18n="btn.ocr">📷 OCR</button>
+        <button class="beaver-icon-btn" id="beaver-ocr" data-i18n="btn.ocr" data-i18n-title="btn.ocrTitle" title="OCR current frame">📷</button>
         <!-- 第九十六次：弹幕按钮移除，改为下载音频按钮（保存当前视频原格式音轨） -->
-        <button id="beaver-dlaudio" data-i18n="btn.downloadAudio">⬇️ Audio</button>
+        <button class="beaver-icon-btn" id="beaver-dlaudio" data-i18n="btn.downloadAudio" data-i18n-title="btn.downloadAudioTitle" title="Download audio">⬇️</button>
         <!-- 第一百七十一次：评论按钮左侧新增对话按钮 -->
         <button id="beaver-chat" data-i18n="btn.chat">💬 Chat</button>
         <button id="beaver-comment" data-i18n="btn.comment">📝 Comment</button>

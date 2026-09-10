@@ -1,4 +1,6 @@
 // VocabRadar 引导页逻辑（第五十四次大改：四子标签 设定栏/ASR/OCR/说明栏，默认设定栏）
+// 第二百五十三次（用户："引导页 asr ocr 之后增加 parser … 先实现界面"）：五子标签
+//   设定栏/ASR/OCR/Parser/说明栏，新增 Parser 文档解析界面（parser.js，解析逻辑待接线）。
 // 反思（2026-08-14 第五十四次修正）：用户要求 asr 跟 ocr 跟 设定栏、说明栏并列，
 //   即四子标签：设定栏=按功能分组的参数与样式
 //   （全局参数组 + 网页生词提示/文本侧栏/视频侧栏/视频叠加字幕四个可折叠组，组头带启用开关），
@@ -38,9 +40,12 @@ import {
   TEXT_STYLES, ANN_STYLES, VANN_STYLES,
   SUBTITLE_TEXT_STYLES, SUBTITLE_POSITIONS, findStyle, styleLabel, BUILD_STAMP
 } from '../lib/styles.js';
-import { initAsrCommon, disposeAsrCommon } from './asr-common.js';
+// 第二百五十三次：asr-common.js 名实不符改名 guide-common.js（import 同步）
+import { initAsrCommon, disposeAsrCommon } from './guide-common.js';
 import { initAsr, disposeAsr } from './asr.js';
 import { initOcr, disposeOcr } from './ocr.js';
+// 第二百五十三次：Parser 文档解析界面（本阶段界面，解析逻辑待接线）
+import { initParser, disposeParser } from './parser.js';
 // 第一百七十次：对话大模型来源预置表（与后台共用同一份，避免地址/模型名两处不一致）
 // 第一百七十四次：新增 LLM_FORMAT_GROUPS —— 下拉按「免费直连 / OpenAI 格式 / Anthropic 格式」三类分组
 import {
@@ -85,6 +90,20 @@ const MSG = {
   tabSettings: { en: 'Settings', zh: '设定栏' },
   tabAsr: { en: 'ASR', zh: 'ASR' },
   tabOcr: { en: 'OCR', zh: 'OCR' },
+  // 第二百五十三次：Parser 标签与面板文案；第二百五十四次：desc 补链接、删 browse/sidebar 键
+  tabParser: { en: 'Parser', zh: 'Parser' },
+  parserTitle: { en: 'Document Parser', zh: '文档解析（Parser）' },
+  parserDesc: {
+    en: 'Parse links / web pages / files (text, audio/video, images, PDF, DOCX and other common types) into plain text for word annotation and learning.',
+    zh: '把链接/网页/文件（文本、音视频、图片、PDF、DOCX 等常见类型）解析为纯文本，供生词标注与学习。'
+  },
+  parserInputPh: {
+    en: 'Paste text or a link here, or drop / paste a file (web page, audio/video, image, PDF, DOCX, TXT…)',
+    zh: '在此粘贴文本或链接，或拖入/粘贴文件（文本网页、音视频、图片、PDF、DOCX 等）'
+  },
+  parserRun: { en: 'Parse', zh: '解析' },
+  parserOutputTitle: { en: 'Parse Result', zh: '解析结果' },
+  parserOutputTip: { en: 'Parsed plain text will appear here.', zh: '解析出的纯文本将显示在这里。' },
   tabHelp: { en: 'Help', zh: '说明栏' },
   groupGlobal: { en: 'Global Parameters', zh: '全局参数' },
   groupModel: { en: 'Models', zh: '模型' },
@@ -206,7 +225,8 @@ const MSG = {
   recognize: { en: 'Recognize', zh: '开始识别' },
   uploadImg: { en: 'Upload', zh: '上传图片' },
   capturePhoto: { en: 'Capture', zh: '拍照' },
-  asrHint: { en: 'Upload a file, or click Record after choosing a source (audio/video/screen) above, then click Recognize to start.', zh: '上传文件、或选择 (audio/video/screen) 后点击「录制」，再点击「开始识别」即可。' },
+  // 第一百七十八次：来源措辞与录制行同步（microphone/camera/screen，不再用 audio/video/screen）
+  asrHint: { en: 'Upload a file, or click Record after choosing a source (microphone/camera/screen) above, then click Recognize to start.', zh: '上传文件、或选择来源（麦克风/摄像头/屏幕）后点击「录制」，再点击「开始识别」即可。' },
   ocrHint: { en: 'Upload an image or capture a photo, then click Recognize to start.', zh: '上传图片或拍照后，点击「开始识别」即可识别。' },
   asrResultTip: { en: 'Recognized sentences will appear here.', zh: '识别出的句子将显示在这里。' },
   // 反思（2026-08-21 第九十二次）：OCR 右侧面板标题改回"识别结果"——它只是纯文本结果列表，
@@ -265,6 +285,12 @@ const HELP = [
     items: [
       { en: 'In the OCR tab, upload an image or capture from camera to recognize text in it.', zh: '在「OCR 栏」上传图片或拍照，识别画面中的文字。' },
       { en: 'Recognized lines are annotated with word meanings for your vocabulary.', zh: '识别出的每行文字会标注生词释义。' }
+    ]
+  },
+  {
+    title: { en: 'Document parser', zh: '文档解析（Parser）' },
+    items: [
+      { en: 'In the Parser tab, upload / drop / paste a file, or paste text or a link (web page, audio/video, image, PDF, DOCX…); the parsed plain text shows on the right.', zh: '在「Parser 栏」上传/拖入/粘贴文件，或粘贴文本与链接（文本网页、音视频、图片、PDF、DOCX 等），解析出的纯文本显示在右栏。' }
     ]
   },
   {
@@ -645,6 +671,13 @@ function fillByDataKey() {
     const key = el.dataset.titleKey;
     const txt = m(key);
     if (txt !== '') el.title = txt;
+  });
+  // 第二百五十三次：data-ph-key——textarea/input 占位符本地化（Parser 输入框用；
+  //   placeholder 是属性而非文本内容，data-key 的 textContent 路径不适用）
+  document.querySelectorAll('[data-ph-key]').forEach((el) => {
+    const key = el.dataset.phKey;
+    const txt = m(key);
+    if (txt !== '') el.placeholder = txt;
   });
 }
 
@@ -1243,11 +1276,14 @@ async function init() {
   // 反思（2026-08-14 第五十六次修正）：底部按钮栏已整栏删除（用户要求"这一栏全删掉"）。
   // 反思（2026-08-21 第八十八次）：diagnose.js 已彻底删除（用户要求），诊断问题已解决。
 
-  // 功能栏 ASR/OCR（拆分自 asr-ocr.js：公共初始化 → ASR → OCR）
+  // 功能栏 ASR/OCR/Parser（拆分自 asr-ocr.js：公共初始化 → ASR → OCR；253 次 + Parser）
   initAsrCommon();
   initAsr();
   initOcr();
-  window.addEventListener('pagehide', () => { disposeAsrCommon(); disposeAsr(); disposeOcr(); });
+  initParser();
+  window.addEventListener('pagehide', () => {
+    disposeAsrCommon(); disposeAsr(); disposeOcr(); disposeParser();
+  });
 
   // 其他标签页改了设置（如字幕样式）→ 本页监听同步
   chrome.storage.onChanged.addListener((changes, area) => {

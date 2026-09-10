@@ -18,7 +18,10 @@
 //   → tooltip.js: hideTooltip（ensurePanel 的 mousedown 同时管 tooltip 与 panel）
 //   → scan.js: processTextNode（OCR 文本注释生词）
 import { lookupFull } from '../../lib/dictionary.js';
-import { translate, getLastTranslateChannel } from '../../lib/translator.js';
+// 2026-09-09 第二百四十二次：补 primeTranslator——查词/OCR 面板打开即用户手势上下文，
+//   此时机创建内置翻译实例（Chrome Translator API 的 create() 需 user activation），
+//   创建后自动注释场景复用（translate 无需手势）。
+import { translate, getLastTranslateChannel, primeTranslator } from '../../lib/translator.js';
 import { lemmaFamily } from '../../lib/lemmatizer.js';
 // 2026-09-04（原形折叠进悬浮/面板）：diverse-lemmas 语言名单（纯数据无依赖），
 // 无覆盖语种不显示常显原形（中/日原形即本身，无意义）。
@@ -195,6 +198,13 @@ export function bindLemmaChipClick(shadow) {
  */
 export function showContextPanel(text, clientX, clientY) {  const trimmed = text.trim();
   if (!trimmed) return;
+  // 2026-09-09 第二百四十二次：手势入口 prime 内置翻译（不 await，不阻塞面板）。
+  //   本函数由右键菜单（SW 转发 SHOW_CONTEXT_PANEL）触发，距用户在页面右键 1-3s，
+  //   transient activation（约 5s 窗口）仍有效，Translator.create() 此刻可成功；
+  //   实例缓存后自动注释场景复用。已就绪/冷却期内为 no-op，重复调用无害。
+  //   第二百四十三次：改显式 force=true——右键是明确查词意图，清冷却强制重试；
+  //   force 语义现由 primeTranslator(opts) 控制，hover 等高频入口不得用。
+  primeTranslator({ force: true });
   ensurePanel();
   syncBodyFontSize(thState.panel);
 
@@ -688,6 +698,10 @@ export function hideOcrPanel() {
  *   注释生词（侧邻注释+高亮）。不自动消失，关闭按钮/Escape/点击外部关闭。
  */
 export function showOcrResultPanel(text, clientX, clientY, info = '') {
+  // 2026-09-09 第二百四十二次：手势入口 prime 内置翻译（同 showContextPanel 注释）。
+  //   OCR 面板由侧栏按钮点击触发，按钮在手势上下文中，距点击仍在 activation 窗口内。
+  //   第二百四十三次：改显式 force=true（同 showContextPanel）。
+  primeTranslator({ force: true });
   ensureOcrPanel();
   const textEl = thState.ocrPanel.querySelector('.beaver-ocr-text');
   // 清空旧内容（含已注释的 .beaver-word span）

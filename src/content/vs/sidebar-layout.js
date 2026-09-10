@@ -1187,11 +1187,15 @@ function makeSidebarDraggable() {
     _sidebarDragMoved = true;
     let x = e.clientX - _sidebarDragOffsetX;
     let y = e.clientY - _sidebarDragOffsetY;
-    // 边界约束：保持在视口内
+    // 第二百四十六次补充（用户："侧栏拖动还是限定"）：与文本侧栏同拍板——
+    //   "把手可见即可"。旧版"整栏不出屏"（y 上限 innerHeight-h）在视频侧栏
+    //   高 75vh+ 时同样"拖不低"。把手=标题栏（.beaver-header，L1168 已查询），
+    //   留 8px 屏内可抓，主体允许探出屏沿。
     const w = getRoot().offsetWidth;
     const h = getRoot().offsetHeight;
-    x = Math.max(0, Math.min(x, window.innerWidth - w));
-    y = Math.max(0, Math.min(y, window.innerHeight - h));
+    const grab = (header && header.offsetHeight) || 40;
+    x = Math.max(8 - w, Math.min(x, window.innerWidth - 8));
+    y = Math.max(8 - grab, Math.min(y, window.innerHeight - 8));
     getRoot().classList.add('beaver-sidebar-dragged');
     _userPlaced = true; // 第一百二十二次：接管——高度同步/对位永久停写
     _shortsRealign = null; // 对位已无意义（用户自由定位）
@@ -1452,15 +1456,15 @@ export function handleDragResize() {
       getRoot().style.right = '';
       getRoot().style.bottom = '';
     } else {
-      // 仅约束位置，不改变尺寸
-      let x = rect.left;
-      let y = rect.top;
+      // 第二百四十六次补充：与文本侧栏窗口守卫（ws/ui.js）同款——"只移回，不缩
+      //   尺寸"，保证面板至少 40px 可见即可。旧版整栏钳回视口（innerHeight-h），
+      //   窗口一变就把用户拖低的位置拉回顶部区域。
       const w = getRoot().offsetWidth;
       const h = getRoot().offsetHeight;
-      x = Math.max(0, Math.min(x, window.innerWidth - w));
-      y = Math.max(0, Math.min(y, window.innerHeight - h));
-      getRoot().style.left = x + 'px';
-      getRoot().style.top = y + 'px';
+      const x = Math.max(-(w - 40), Math.min(rect.left, window.innerWidth - 40));
+      const y = Math.max(-(h - 40), Math.min(rect.top, window.innerHeight - 40));
+      if (x !== rect.left) getRoot().style.left = x + 'px';
+      if (y !== rect.top) getRoot().style.top = y + 'px';
     }
   });
 }

@@ -107,7 +107,10 @@ if (typeof window !== 'undefined') {
         uniq: byWord.size,
         dupCount: dups.length,
         dupKeys: dups.slice(0, 8).join('、'),
-        sentences: sp ? sp.childElementCount : -1,
+        // 第二百四十六次：只数真句子槽位（.beaver-web-sub-item）——旧口径 childElementCount
+        //   会把 empty-tip 占位自身也计成"1 条句子"，0 命中场景误导排查（用户实测"句子 1 条
+        //   却一直 Scanning"即此）。
+        sentences: sp ? sp.querySelectorAll('.beaver-web-sub-item').length : -1,
         arrLen: _allAnnotations.length
       };
     } catch (e) { return { err: (e && e.message) || String(e) }; }
@@ -248,7 +251,10 @@ function scanPageText() {
       try { bootDead = !!(window.__beaverHintBoot && window.__beaverHintBoot.ok === false); } catch (_) { /* ignore */ }
       if (hintOn && !bootDead && _busWaitRetries < BUS_WAIT_MAX) {
         _busWaitRetries++;
-        log(`页面扫描: 总线仍无产出（text-hint 开启，词典可能冷装载中），第 ${_busWaitRetries}/${BUS_WAIT_MAX} 轮等待后重试`);
+        // 2026-09-08 第二百四十次（日志降噪，用户批复）：中间轮静默重试，仅末轮打印一次
+        if (_busWaitRetries === BUS_WAIT_MAX) {
+          log(`页面扫描: 总线仍无产出（text-hint 开启，词典可能冷装载中），已重试 ${_busWaitRetries}/${BUS_WAIT_MAX} 轮，下轮转兜底扫描`);
+        }
         scanPageText();
         return;
       }
@@ -477,6 +483,8 @@ function scanPageTextFromSpans(allSpans) {
       if (origBlocks > 0 || fallbackBlocks > 0) {
         log(`页面文本同源扫描完成: 块=${origBlocks + fallbackBlocks} 个（源 data-beaver-orig=${origBlocks}，getBlockText 兜底=${fallbackBlocks}）`);
       }
+      // 第二百四十六次：扫描收尾——0 命中时无句入库，占位换"暂无生词"防永久滞留。
+      finalizeScanningTip();
       return;
     }
     const end = Math.min(i + BATCH, allSpans.length);
@@ -674,6 +682,8 @@ async function scanPageTextFallback() {
 
   if (sentences.length === 0) {
     log('视口 TreeWalker：无有效句子');
+    // 第二百四十六次：无有效句子也是"扫描完成"——占位换"暂无生词"防永久滞留。
+    finalizeScanningTip();
     return;
   }
 
@@ -717,6 +727,10 @@ async function scanPageTextFallback() {
     if (idx < sentences.length) {
       if ('requestIdleCallback' in window) requestIdleCallback(nextBatch, { timeout: 1000 });
       else setTimeout(nextBatch, 30);
+    } else {
+      // 第二百四十六次：本轮批次全部完成——句子面板仍无任何入库句时，
+      //   把"Scanning page..."占位换成"暂无生词"，避免 0 命中场景占位永久滞留。
+      finalizeScanningTip();
     }
   };
   nextBatch();
@@ -1534,6 +1548,23 @@ function insertItemBySeq(panel, div, seq) {
 }
 
 // === 清空句子（按来源） ===
+/**
+ * 第二百四十六次（用户："侧栏一直显示Scanning page..."）：扫描收尾占位纠正。
+ * 说人话：句子面板的"Scanning page..."占位原本只在句子真正入库时才被移除；
+ *   0 命中（词典空/无生词）时没有任何句子入库，占位就永远停在那。
+ *   本函数在每轮扫描收尾时检查：面板里没有任何真句子槽位、占位还挂着 →
+ *   把占位文案换成"暂无生词"（ws.noWords），让用户知道扫描完了而不是还在扫。
+ *   已有句子时不动（正常场景占位已被 appendPageSentence 移除）。
+ */
+function finalizeScanningTip() {
+  if (!_root) return;
+  const sp = _root.querySelector('#beaver-web-sentence-panel');
+  if (!sp) return;
+  if (sp.querySelector('.beaver-web-sub-item')) return;
+  const tip = sp.querySelector('.beaver-web-empty-tip');
+  if (tip) tip.textContent = t('ws.noWords');
+}
+
 export function clearPageSentences() {
   set_pageSentences([]);
   set_pageSentenceEls([]);

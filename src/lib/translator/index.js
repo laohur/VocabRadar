@@ -225,7 +225,7 @@ async function _translateInternal(word) {
           result = cleanDictEntry(trimmed);
           stepBuiltin = '成功';
           _setLastChannel('浏览器内置翻译');
-          log(`[VocabRadar][translator][${_ts()}] 渠道[浏览器内置翻译] "${word}" -> "${result}"`);
+          // 2026-09-08 第二百四十次（日志降噪，用户批复）：删逐词成功日志（渠道见 UI）
         }
       } else {
         stepBuiltin = '返回空结果';
@@ -258,15 +258,18 @@ async function _translateInternal(word) {
           result = cleanDictEntry(resp.text.trim());
           stepOnline = '成功(渠道:' + resp.channel + ')';
           _setLastChannel('在线:' + resp.channel);
-          log(`[VocabRadar][translator][\${_ts()}] 渠道[在线:\${resp.channel}] "${word}" -> "\${result}"`);
+          // 2026-09-08 第二百四十次（日志降噪，用户批复）：删逐词成功日志（渠道信息
+          //   已由 _setLastChannel 呈现到 UI），控制台不再逐词刷屏
         } else if (resp && resp.error) {
           stepOnline = '失败: ' + resp.error;
-          console.warn(`[VocabRadar][translator][\${_ts()}] 渠道[在线翻译] 翻译 "${word}" 失败: \${resp.error}`);
+          // 2026-09-08 第二百四十次（修转义 bug）：旧串 \${...} 反斜杠转义致模板不插值，
+          //   控制台原样打出 "${resp.error}"（用户贴的"乱码日志"即此）
+          console.warn(`[VocabRadar][translator][${_ts()}] 渠道[在线翻译] 翻译 "${word}" 失败: ${resp.error}`);
         } else {
           // 反思（2026-08-13 第四十九次）：sendMessage 超时/异常返回 null 时旧版静默跳过。
           //   这正是"翻译一直没结果"的隐蔽根因之一，补日志定位。
           stepOnline = 'SW 未响应或返回空';
-          console.warn(`[VocabRadar][translator][\${_ts()}] 渠道[在线翻译] 翻译 "${word}" 失败: service worker 未响应或返回空`);
+          console.warn(`[VocabRadar][translator][${_ts()}] 渠道[在线翻译] 翻译 "${word}" 失败: service worker 未响应或返回空`);
         }
       }
     } catch (e) {
@@ -281,7 +284,7 @@ async function _translateInternal(word) {
       if (resp && resp.ok && resp.text) {
         result = cleanDictEntry(resp.text.trim());
         _setLastChannel('LLM');
-        log(`[VocabRadar][translator][${_ts()}] 渠道[LLM] "${word}" -> "${result}"`);
+        // 2026-09-08 第二百四十次（日志降噪，用户批复）：删逐词成功日志（同前）
       } else {
         stepLlm = '失败: ' + String((resp && resp.error) || '空响应');
         console.warn(`[VocabRadar][translator][${_ts()}] 渠道[LLM] 翻译 "${word}" 失败:`, stepLlm);
@@ -308,7 +311,8 @@ async function _translateInternal(word) {
     const entry = dictLookup(word);
     const lemma = entry && entry.lemma ? entry.lemma : null;
     if (lemma && lemma.toLowerCase() !== word.toLowerCase()) {
-      log(`[VocabRadar][translator][${_ts()}] 原形回退: "${word}" -> "${lemma}"`);
+      // 2026-09-08 第二百四十次（日志降噪，用户批复）：删原形回退三处逐词日志
+      //   （回退过程/缓存命中/成功，状态已由 stepLemma 记录），控制台不再刷屏
       // 查 lemma 的缓存
       const lemmaCached = await getWordCached(transState.learnLang, transState.meaningLang, lemma);
       if (lemmaCached !== null) {
@@ -317,7 +321,6 @@ async function _translateInternal(word) {
         await setWordCached(transState.learnLang, transState.meaningLang, word, lemmaClean);
         stepLemma = '缓存命中(' + lemma + ')';
         _setLastChannel('原形回退:缓存');
-        log(`[VocabRadar][translator][${_ts()}] 原形回退缓存命中: "${lemma}" -> "${lemmaClean}"`);
         return lemmaClean;
       }
       // 用 lemma 重新走所有渠道（Translator API + 在线）
@@ -329,7 +332,6 @@ async function _translateInternal(word) {
         await setWordCached(transState.learnLang, transState.meaningLang, lemma, lemmaClean);
         stepLemma = '渠道成功(' + lemma + ')';
         _setLastChannel('原形回退:' + (getLastTranslateChannel() || ''));
-        log(`[VocabRadar][translator][${_ts()}] 原形回退成功: "${word}"->"${lemma}"->"${lemmaClean}"`);
         return lemmaClean;
       }
       stepLemma = '渠道失败(' + lemma + ')';
@@ -370,7 +372,7 @@ async function translateWithLemma(word) {
         } else {
           result = cleanDictEntry(trimmed);
           _setLastChannel('浏览器内置翻译');
-          log(`[VocabRadar][translator][${_ts()}] 渠道[浏览器内置翻译] lemma "${word}" -> "${result}"`);
+          // 2026-09-08 第二百四十次（日志降噪，用户批复）：删逐词成功日志（同前）
         }
       }
     }
@@ -389,7 +391,7 @@ async function translateWithLemma(word) {
       if (resp && resp.ok && resp.text) {
         result = cleanDictEntry(resp.text.trim());
         _setLastChannel('在线:' + resp.channel);
-        log(`[VocabRadar][translator][${_ts()}] 渠道[在线:${resp.channel}] lemma "${word}" -> "${result}"`);
+        // 2026-09-08 第二百四十次（日志降噪，用户批复）：删逐词成功日志（同前）
       }
     } catch (e) {
       console.warn(`[VocabRadar][translator][${_ts()}] 渠道[在线翻译] lemma 翻译 "${word}" 异常:`, e);
@@ -400,4 +402,5 @@ async function translateWithLemma(word) {
 
 // === 目录统一出口：re-export 其余原导出符号（符号名不变） ===
 export { getLastTranslateChannel, getMeaningLang } from './shared.js';
-export { getAvailability } from './builtin-translator.js';
+// 2026-09-09 第二百四十二次：primeTranslator 手势入口 prime（th/panel.js 查词/OCR 面板用）
+export { getAvailability, primeTranslator } from './builtin-translator.js';

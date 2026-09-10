@@ -16,7 +16,8 @@
 // 跨模块调用（受控循环 import，两端均为函数声明，顶层不调用）：
 //   → panel.js: buildPanelHTML（卡片结构）、hidePanel（滚动同隐）、queryWordForPanel（统一词典译文）
 //   → scan.js: validateSpan / unwrapSingle（失效 span 清理）、backfillSideAnnotation（同步侧邻注释）
-import { translate } from '../../lib/translator.js';
+// 第二百四十三次：补 primeTranslator——onWordHover 是 hover/点击高亮词两条翻译链的汇聚点。
+import { translate, primeTranslator } from '../../lib/translator.js';
 import { t } from '../../lib/i18n.js';
 import { isBalancedParens } from '../../lib/dict-clean.js';
 import { getPhonetic } from '../../lib/phonetics.js';
@@ -253,6 +254,10 @@ export function pointerOutOfTooltipZone() {
 }
 
 export function onWordHover(e) {
+  // 第二百四十三次：温和 prime 内置翻译（不清冷却）。hover 本身不产生 user activation
+  //   （浏览器只认 click/keydown 等），但用户近 5s 内点过页面时 isActive 有效 → create 成功；
+  //   点击高亮词是 click 手势，activation 必定有效。冷却期内快速 return，实例就绪后零开销。
+  primeTranslator();
   if (thState.hideTimer) { clearTimeout(thState.hideTimer); thState.hideTimer = null; }
   const el = e.currentTarget;
   // 校验 span 仍有效：框架可能改动 textContent，失效则清理且不显示 tooltip

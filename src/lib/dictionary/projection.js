@@ -31,6 +31,41 @@ import { loadWordfreq, loadWordlists, loadBuiltinEnZh } from './word-loader.js';
 export async function _loadDict(lang) {
   const meaningLang = lang || dictState.currentLearnLang || DEFAULT_SOURCE_LANG;
 
+  // ---- 同步段守卫与注册（第二百四十五次，用户拍板"实施修复"）----
+  //   旧结构把"已加载返回/在途复用/ranksPromise 注册"全放在首个 await（L42 wfUpdates
+  //   检查）之后：首个调用者 ensureRanksReady（query.js L87 兜底）同步启动 _loadDict 后
+  //   即让出，等 wfUpdates 检查回来才走到装载体内部 L83 建 ranksPromise——首调者永远
+  //   只能拿到整装载 Promise（244 兜底），"词频先行（Stage 1）"分阶段收益整个丢失
+  //   （实测时序表：词频先行就绪与词典就绪仅差 0.9ms，Stage 2 整投影 116ms 被吞进等待）。
+  //   修法：把三步全部提到同步段（async 函数体首个 await 之前同步执行）——
+  //   ① 已加载快速返回；② 在途复用；③ 先注册 Stage 1 ranksPromise（_lang 立即标记），
+  //   首调者即刻持有分阶段承诺，Stage 1 建完 rank-only Map 即 settle 重扫出高亮，
+  //   tags/lemma 由 Stage 2 原位合并随后补齐（2026-09-04 设计意图恢复）。
+  // 已加载相同语言：直接返回（不打日志--用户反馈"每次都要加载 wordfreq/wordlists"，
+  //   实际是单例缓存命中，只是多处调用触发了日志）。
+  if (dictState.loadedLang === meaningLang && dictState.dictMap) {
+    return dictState.dictMap;
+  }
+  // 已有加载中 Promise：复用
+  if (dictState.loadPromise && dictState.loadPromise._lang === meaningLang) {
+    return dictState.loadPromise;
+  }
+  // Stage 1 ranksPromise 同步注册（一次性 settler：resolve 即自毁，防旧轮误碰新轮）
+  if (!dictState.ranksPromise || dictState.ranksPromise._lang !== meaningLang) {
+    let _resolveRanksEarly = null;
+    dictState.ranksPromise = new Promise((r) => { _resolveRanksEarly = r; });
+    dictState.ranksPromise._lang = meaningLang;
+    dictState._settleRanks = (v) => {
+      try { if (_resolveRanksEarly) _resolveRanksEarly(v); } catch (_) {}
+      _resolveRanksEarly = null;
+      dictState._settleRanks = null;
+    };
+  }
+
+  // 第二百四十六次：每轮装载重置"空投影已重建过"标记（SLOW PATH 自愈守卫用），
+  //   防语言切换后旧语言的标记误放行新语言的空投影（真 0 词库时逐页死循环的保险丝）。
+  dictState._emptyProjRebuilt = false;
+
   // 2026-09-08（用户批复"主动轮询 files.json 检测更新并自动重建"）：SW 每 24h 比对
   //   storage.wfInstalled[lang].sha256 与 HF files.json（checkWfUpdates），差异写
   //   storage.wfUpdates[lang]。此处入口检查（60s 内存节流）：有更新 → clearByLang
@@ -53,16 +88,8 @@ export async function _loadDict(lang) {
     console.warn(`[VocabRadar][dictionary][${_ts()}] wfUpdates 检查失败（不影响正常加载）:`, e);
   }
 
-  // 已加载相同语言：直接返回（不打日志--用户反馈"每次都要加载 wordfreq/wordlists"，
-  //   实际是单例缓存命中，只是多处调用触发了日志）。
-  if (dictState.loadedLang === meaningLang && dictState.dictMap) {
-    return dictState.dictMap;
-  }
-
-  // 已有加载中 Promise：复用
-  if (dictState.loadPromise && dictState.loadPromise._lang === meaningLang) {
-    return dictState.loadPromise;
-  }
+  // （第二百四十五次）"已加载返回/在途复用"两守卫已上移至同步段（首个 await 之前），
+  //   见函数开头——原位置在 wfUpdates 检查之后，处于让出点之后，守卫失效窗口见顶部注释。
 
   dictState.loadPromise = (async () => {
     const startTime = Date.now();
@@ -79,14 +106,8 @@ export async function _loadDict(lang) {
     // 分阶段投影 ranks 承诺管线（2026-09-04）：_settleRanks 暂存 resolve，Stage 1 建完
     //   rank-only Map 即 resolve（扫描侧先重扫出高亮）；loadPromise 异常时兜底 resolve null
     //   （承诺永不悬空）。resolve 一次即自毁，后续重复调用无操作。
-    let _resolveRanks = null;
-    dictState.ranksPromise = new Promise((r) => { _resolveRanks = r; });
-    dictState.ranksPromise._lang = meaningLang;
-    dictState._settleRanks = (v) => {
-      try { if (_resolveRanks) _resolveRanks(v); } catch (_) {}
-      _resolveRanks = null;
-      dictState._settleRanks = null;
-    };
+    //   （第二百四十五次）ranksPromise 的创建与 settler 定义已上移至 _loadDict 同步段
+    //   （函数开头）——此处不再重复创建，直接沿用同步段注册的本轮 Stage 1 承诺。
     let _t0 = performance.now();
     // 分阶段 Stage 1（2026-09-04）：ranks 投影快通道。2026-09-08：manifest 退役，
     //   并行管线只剩 ranks 一路。_seg.proj 此后记录整投影耗时（Stage 2），ranks 耗时记 _seg.ranks。
@@ -97,7 +118,11 @@ export async function _loadDict(lang) {
     // 判据与慢路径同源（built/version/expected），只是数据源换成 ranksProj 的 meta。
     // 命中即建 rank-only dictMap 并 resolve ranksPromise——扫描侧先重扫，高亮只认 rank；
     // 随后 Stage 2 取整投影原位合并 tags/lemma（Map 引用稳定），再 resolve 完整 loadPromise。
-    if (ranksProj && ranksProj.built) {
+    // 第二百四十六次修复（用户实测"非常慢+0命中+词表0"）：ranksCount=0 的 built=true 坏投影
+    //   （240 修复前 NaN 时期写入：expected=NaN→0、ranks 表空）不得走快道——旧版会建
+    //   空 rank-only Map 并 settle（词频先行假就绪）→ lookup(the)=null → 0 命中死锁。
+    //   ranksCount>0 才快道；空投影落 SLOW PATH，由收紧后的判据强制重建自愈。
+    if (ranksProj && ranksProj.built && (Number(ranksProj.ranksCount) || 0) > 0) {
       // 2026-09-08：词数基准仅 meta.expected（上次构建同事务写入的实际值）；
       //   manifest.wordCounts 兜底与 manifest.version 版本比对（清库重建）随包内
       //   meta.json 一并退役——远程数据以解码后 Map.size 动态对账（_rebuildFromSources）。
@@ -193,16 +218,29 @@ export async function _loadDict(lang) {
       _seg.total = Math.round(Date.now() - startTime);   // 第一百八十八次：总耗时
       console.log(`[VocabRadar][dictionary][${_ts()}] 词典装载分段耗时: 投影读取 ${_seg.proj}ms / Map构建 ${_seg.map}ms / 合计 ${_seg.total}ms`);
       const cnt = proj.ranksCount || 0;
-      if (!expected || cnt >= expected) {
+      // 第二百四十六次修复：旧判据 `!expected || cnt >= expected` 中 `!expected` 把
+      //   built=true 但 expected=0 的老格式坏投影当"完整"放行 → 空 Map 返回 →
+      //   lookup(the)=null → 0 命中，且永不触发自愈重建（空词典死锁）。
+      //   收紧：expected>0 且 cnt>=expected 才放行；expected=0 或残缺一律增量补齐
+      //   （_rebuildFromSources 末块同事务重写 __built__+expected 实际值，下次装载即正常）。
+      if (expected > 0 && cnt >= expected) {
         if (Number(cost) >= 0.25) {
           console.log(`[VocabRadar][dictionary][${_ts()}] 词典已就绪(投影): ${dictState.dictMap.size} 词 (${cost}s)`);
         }
         return dictState.dictMap;
       }
-      console.warn(`[VocabRadar][dictionary][${_ts()}] 投影不完整: 库内 ${cnt} / 基准 ${expected} -> 增量补齐(upsert，不清库)`);
+      // 空 Map 且本会话已重建过仍空（真 0 词库/坏源）：放行防逐页死循环（标记见下方补齐后）。
+      if (cnt === 0 && dictState._emptyProjRebuilt) {
+        return dictState.dictMap;
+      }
+      console.warn(`[VocabRadar][dictionary][${_ts()}] 投影不完整/空投影: 库内 ${cnt} / 基准 ${expected} -> 增量补齐(upsert，不清库)`);
       _t0 = performance.now();   // 第一百八十八次：增量补齐段计时
       await _rebuildFromSources(meaningLang);
       _seg.rebuild = Math.round(performance.now() - _t0);
+      // 第二百四十六次：补齐后 Map 仍空 → 置标记，本会话后续装载放行（真 0 词库保险丝）。
+      if (!dictState.dictMap || dictState.dictMap.size === 0) {
+        dictState._emptyProjRebuilt = true;
+      }
       return dictState.dictMap;
     }
 

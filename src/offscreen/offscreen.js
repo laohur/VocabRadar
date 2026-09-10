@@ -350,10 +350,14 @@ async function getOcrWorker(lang) {
     } catch (e) { /* 终止失败忽略 */ }
     _tesseractWorker = null;
   }
-  // 本地加载 Tesseract.js（vendor 目录，符合 script-src 'self'）
+  // 本地加载 Tesseract.js（vendor/tesseract/ 子目录，符合 script-src 'self'）。
+  // 反思（2026-09-08 第二百三十九次）："OCR failed: Tesseract.js 本地加载失败"根因——
+  //   vendor 平铺重构把 tesseract 六件套移入 tesseract/ 子目录（单文件库才平铺顶层，
+  //   多文件功能保留子目录），本文件三处路径漏加 /tesseract/ 段 → script 404 →
+  //   onerror reject。修正三处路径（不加 CDN 回退：本地 vendor 资源自包含）。
   if (!window.Tesseract) {
     const _loadStart = Date.now();
-    const tessUrl = chrome.runtime.getURL('src/lib/vendor/tesseract.min.js');
+    const tessUrl = chrome.runtime.getURL('src/lib/vendor/tesseract/tesseract.min.js');
     console.log('[VocabRadar][offscreen][' + _ts() + '] 加载本地 Tesseract.js: ' + tessUrl);
     await new Promise((resolve, reject) => {
       const script = document.createElement('script');
@@ -364,7 +368,7 @@ async function getOcrWorker(lang) {
       };
       script.onerror = (e) => {
         console.warn('[VocabRadar][offscreen][' + _ts() + '] Tesseract.js 加载失败, 耗时=' + ((Date.now() - _loadStart) / 1000).toFixed(2) + 's, error=', e);
-        reject(new Error('Tesseract.js 本地加载失败'));
+        reject(new Error('Failed to load Tesseract.js locally'));
       };
       document.head.appendChild(script);
     });
@@ -388,9 +392,9 @@ async function getOcrWorker(lang) {
     try {
       console.log('[VocabRadar][offscreen][' + _ts() + '] 尝试 tessdata 源: ' + _src.name + ' (gzip=' + _src.gzip + ')');
       _tesseractWorker = await Tesseract.createWorker(langKey, 1, {
-        workerPath: chrome.runtime.getURL('src/lib/vendor/tesseract-worker.min.js'),
+        workerPath: chrome.runtime.getURL('src/lib/vendor/tesseract/tesseract-worker.min.js'),
         workerBlobURL: false,
-        corePath: chrome.runtime.getURL('src/lib/vendor'),
+        corePath: chrome.runtime.getURL('src/lib/vendor/tesseract'),
         langPath: _src.langPath,
         gzip: _src.gzip,
         logger: (m) => {
@@ -413,7 +417,7 @@ async function getOcrWorker(lang) {
     }
   }
   if (!_tesseractWorker) {
-    throw new Error('tessdata 所有 CDN 源均失败 (' + TESSDATA_SOURCES.map((s) => s.name).join(' → ') + '): ' + String((_lastSrcErr && _lastSrcErr.message) || _lastSrcErr));
+    throw new Error('All tessdata CDN sources failed (' + TESSDATA_SOURCES.map((s) => s.name).join(' -> ') + '): ' + String((_lastSrcErr && _lastSrcErr.message) || _lastSrcErr));
   }
   _tesseractLang = langKey;
   return _tesseractWorker;
@@ -490,7 +494,7 @@ async function getWhisper() {
     console.log('[VocabRadar][offscreen][' + _ts() + '] 加载 transformers.min.js (ESM):', tfUrl);
     const mod = await import(tfUrl);
     const pipeline = mod.pipeline;
-    if (!pipeline) throw new Error('transformers.pipeline 未找到（ESM 导出异常）');
+    if (!pipeline) throw new Error('transformers.pipeline not found (unexpected ESM exports)');
     console.log('[VocabRadar][offscreen][' + _ts() + '] transformers ESM 已就绪, env=', !!mod.env);
 
     // 配置下载源 + ONNX wasm

@@ -125,6 +125,21 @@ const DICT = {
     // 第一百七十一次：视频侧栏 copy 右侧的导出按钮（按本文件惯例 emoji 写在词条值里）
     'btn.export': '💾 Export',
     'btn.ocr': '📷 OCR Frame',
+    // 第二百三十九次：OCR 链路用户可见提示（vs/ocr.js）——原中文硬编码改 i18n（用户："英文哪来的中文提示？"）；
+    //   offscreen 技术性错误消息固定英文，不进本表
+    'ocr.failPrefix': 'OCR failed: ',
+    'ocr.extUpdated': 'Extension updated. Refresh the page (F5) before using OCR.',
+    'ocr.noVideo': 'No video found for OCR',
+    'ocr.unknownErr': 'Unknown error',
+    'ocr.noText': 'No text recognized',
+    // 第二百五十三次：Parser 栏功能提示（guide/parser.js）——界面阶段，接线动作给占位提示不静默
+    'parser.todoCapture': 'UI ready — capture wiring lands with the parsing logic (next step)',
+    'parser.todoRecord': 'UI ready — recording wiring lands with the parsing logic (next step)',
+    'parser.todoParse': 'UI ready — parsing logic not wired yet (next step)',
+    'parser.noInput': 'Enter text or a link, or drop/paste a file first',
+    'parser.fileAttached': 'File',
+    'parser.linkDetected': 'Link detected',
+    'parser.chars': 'characters',
     // 第一百七十一次：Chat 对话面板（src/lib/chat.js）
     'chat.title': '💬 VocabRadar Chat',
     'chat.placeholder': 'Ask a follow-up (Enter to send, Shift+Enter for a new line)',
@@ -276,9 +291,15 @@ const DICT = {
     'ws.avRecognition': 'Audio/Video Recognition',
     'ws.uploadAv': 'Upload',
     'ws.record': 'Record',
-    'ws.recordAudio': 'Record',
+    // 第二百五十三次（修复第一百七十八次遗留）：录制来源 radio 改设备名（Microphone/Camera/Screen）——
+    //   178 次只改了 guide.html 引用，本表从未补键：ws.recordFrom/recordFromEnd 缺失（EN 硬编码
+    //   "from (" 兜底、zh 也显示英文括号），recordAudio/Video/Screen 旧值 Record/Video/Screen
+    //   与意图不符。三键全库仅 guide.html 消费（grep 实证），改值无连带。
+    'ws.recordFrom': 'from (',
+    'ws.recordFromEnd': ')',
+    'ws.recordAudio': 'Microphone',
     'ws.recordScreen': 'Screen',
-    'ws.recordVideo': 'Video',
+    'ws.recordVideo': 'Camera',
     'ws.recordAudioTitle': 'Record microphone audio (browser ASR)',
     'ws.recordVideoTitle': 'Record camera video with audio (browser ASR)',
     'ws.recordScreenTitle': 'Record screen (with audio, Whisper model)',
@@ -447,7 +468,8 @@ const DICT = {
     'lang.ui': 'UI Language',
     'title': 'VocabRadar',
     'lang.en-zh': 'English → 中文',
-    'asr.realtime': '🎤 ASR(Live)',
+    'asr.realtime': '🎤',
+    'asr.realtimeTitle': 'ASR (Live)',
     'ws.title': 'VocabRadar',
     'ws.uploadAvTitle': '上传视频/音频文件',
     'ws.modelError': '模型错误',
@@ -475,6 +497,20 @@ const DICT = {
     // 第一百七十一次：视频侧栏 copy 右侧的导出按钮
     'btn.export': '💾 导出',
     'btn.ocr': '📷 识别当前帧',
+    // 第二百三十九次：OCR 链路用户可见提示（vs/ocr.js），与 en 段同键
+    'ocr.failPrefix': 'OCR 失败: ',
+    'ocr.extUpdated': '扩展已更新，请刷新页面（F5）后再使用 OCR',
+    'ocr.noVideo': '未找到视频，无法 OCR',
+    'ocr.unknownErr': '未知错误',
+    'ocr.noText': '未识别到文字',
+    // 第二百五十三次：Parser 栏功能提示（guide/parser.js），与 en 段同键
+    'parser.todoCapture': '界面已就绪：拍照接线随解析逻辑下一步实现',
+    'parser.todoRecord': '界面已就绪：录制接线随解析逻辑下一步实现',
+    'parser.todoParse': '界面已就绪：解析逻辑尚未接入（下一步实现）',
+    'parser.noInput': '请先输入文本/链接，或拖入/粘贴文件',
+    'parser.fileAttached': '文件',
+    'parser.linkDetected': '识别为链接',
+    'parser.chars': '字符',
     // 第一百七十一次：Chat 对话面板（src/lib/chat.js）
     'chat.title': '💬 VocabRadar 对话',
     'chat.placeholder': '继续追问（回车发送，Shift+回车换行）',
@@ -559,7 +595,8 @@ const DICT = {
     'noSubtitleTip': '无字幕，可点击 🎤 按钮启动语音识别',
     'subtitleTimeoutTip': '字幕加载超时，可点击 🎤 按钮启动语音识别',
     'asr.track': 'ASR 字幕',
-    'asr.realtime': '🎤 ASR(Live)',
+    'asr.realtime': '🎤',
+    'asr.realtimeTitle': '实时语音识别',
     'tool.track': '轨道',
     'tool.none': '空',
     'asr.start': '点击开始识别',
@@ -626,9 +663,12 @@ const DICT = {
     'ws.avRecognition': '音视频识别',
     'ws.uploadAv': '上传',
     'ws.record': '录制',
-    'ws.recordAudio': '录音',
-    'ws.recordScreen': '录屏',
-    'ws.recordVideo': '录像',
+    // 第二百五十三次：同 EN 段——录制来源改设备名 + 补 recordFrom/recordFromEnd（zh 用全角括号）
+    'ws.recordFrom': '来源（',
+    'ws.recordFromEnd': '）',
+    'ws.recordAudio': '麦克风',
+    'ws.recordScreen': '屏幕',
+    'ws.recordVideo': '摄像头',
     'ws.uploadAvTitle': '上传视频/音频文件',
     'ws.recordAudioTitle': '录制麦克风音频（浏览器ASR实时识别）',
     'ws.recordVideoTitle': '录制摄像头视频（含音频，浏览器ASR实时识别）',

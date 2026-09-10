@@ -37,7 +37,19 @@
 export { updateColors, applyTextStyleClass } from './th/core.js';
 
 // 右键查词面板 / OCR 结果面板 / 视频帧 OCR（来源：th/panel.js）
-export { showContextPanel, showOcrResultPanel, ocrVideoFrame } from './th/panel.js';
+// w4（2026-09-09）：panel.js 连带 dictionary/translator/lemmatizer/phonetics/chat 等重依赖，
+//   静态 re-export 会把整串拖进启动模块图，抵消 scan.js 惰性化收益，故改动态转发。
+//   调用方（text-hint.js L392/L405）对前两个函数均为 fire-and-forget（忽略返回值），
+//   Promise 转发兼容；ocrVideoFrame 当前无外部调用方，保留转发不删功能。
+export function showContextPanel(text, clientX, clientY) {
+  return import('./th/panel.js').then((m) => m.showContextPanel(text, clientX, clientY));
+}
+export function showOcrResultPanel(text, clientX, clientY, info = '') {
+  return import('./th/panel.js').then((m) => m.showOcrResultPanel(text, clientX, clientY, info));
+}
+export function ocrVideoFrame(clientX, clientY) {
+  return import('./th/panel.js').then((m) => m.ocrVideoFrame(clientX, clientY));
+}
 
 // 生命周期、设置入口与诊断（来源：th/scan.js）
 export {

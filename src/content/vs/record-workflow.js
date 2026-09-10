@@ -26,6 +26,7 @@ import { fmtTpl } from './asr-stage.js';
 import { t } from '../../lib/i18n.js';
 import { showASRProgress, hideASRProgress } from '../vs-asr-progress.js';
 import { getBilibiliAudioInfo } from '../../lib/bilibili-audio.js';
+import { b64ToU8 } from '../../lib/b64.js';
 import { log } from './logger.js';
 
 // ⬇️下载音频按钮（第九十六次，替代弹幕按钮）：保存当前视频最高音质原格式音轨文件
@@ -89,9 +90,12 @@ export async function onDownloadAudioClick() {
             });
           } catch (e) { resolve(null); }
         });
-        if (!r || !r.ok || !r.arrayBuffer) throw new Error((r && r.error) || fmtTpl(t('dl.chunkFail'), { pos }));
-        parts.push(r.arrayBuffer);
-        showASRProgress(t('asr.dlAudioFile'), Math.round(((pos + r.arrayBuffer.byteLength) / meta.size) * 100) + '%（' + Math.round(meta.size / 1024 / 1024) + 'MB）');
+        // 2026-09-08 第二百四十次：SW 通道返回 base64（chrome.runtime 消息默认 JSON
+        //   序列化，ArrayBuffer 直传变 {}），解码为 ArrayBuffer 追加分块
+        if (!r || !r.ok || !r.b64) throw new Error((r && r.error) || fmtTpl(t('dl.chunkFail'), { pos }));
+        const u8 = b64ToU8(r.b64);
+        parts.push(u8.buffer);
+        showASRProgress(t('asr.dlAudioFile'), Math.round(((pos + u8.byteLength) / meta.size) * 100) + '%（' + Math.round(meta.size / 1024 / 1024) + 'MB）');
       }
     }
     // 原格式保存：audio/mp4→.m4a；audio/webm→.webm；其余取 mime 子型

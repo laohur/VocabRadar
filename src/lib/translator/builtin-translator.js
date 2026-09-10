@@ -35,6 +35,7 @@ if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.local) {
       _translator = null;
       _initPromise = null;
       _availability = null;
+      _lastFailTs = 0; // 第二百四十二次：新语言对清失败冷却（旧语言对的失败与它无关）
     }
   });
 }
@@ -42,17 +43,26 @@ if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.local) {
 let _translator = null;       // 单例 Translator 实例
 let _initPromise = null;      // 初始化 Promise（避免并发重复初始化）
 let _availability = null;     // 缓存可用性检测结果
+// 2026-09-09 第二百四十二次（用户："浏览器翻译需要手势，右键查询等地方加手势再用"）：
+//   失败冷却——create 失败（多为无手势 NotAllowedError）后 60s 内 getTranslator 直接
+//   返回 null，防止自动注释逐词高频调用反复发起 create；手势入口 primeTranslator()
+//   可清冷却强制重试。
+let _lastFailTs = 0;          // 上次 create 失败时刻（ms 时间戳，0=无失败记录）
+const FAIL_COOLDOWN_MS = 60000;
 
 /**
- * 预加载 Translator 模型
- * content script 启动时调用，后台异步下载，不阻塞页面
- * 独立于任何开关--模型常驻，翻译能力常开
+ * 预热：探测内置翻译模型状态（不创建实例）
+ * 2026-09-09 第二百四十二次改语义（原"预加载模型"）：
+ *   Chrome 138+ Translator.create() 需要 user activation（官方文档明确要求），content
+ *   script 启动时无手势必 NotAllowedError——旧版此处启动即 create 从未成功过，且因
+ *   getTranslator 的 _initPromise 失败锁死把之后有手势的重试也堵死。改为仅探测
+ *   availability 打日志；实例创建延迟到有手势的入口（th/panel.js 查词/OCR 面板）prime。
  */
 function preloadTranslator() {
-  if (_translator || _initPromise) return;
   if (typeof Translator === 'undefined') return;
-  // 异步触发 getTranslator，不 await（后台下载）
-  getTranslator().catch(() => {});
+  getAvailability().then((avail) => {
+    log(`[VocabRadar][translator][${_ts()}] 内置翻译模型状态: ${avail}（实例将在查词等手势入口创建）`);
+  }).catch(() => {});
 }
 
 /**
@@ -85,86 +95,76 @@ export async function getAvailability() {
 
 export async function getTranslator() {
   if (_translator) return _translator;
-  if (_initPromise) return _initPromise;
+  if (typeof Translator === 'undefined') return null;
+  // 2026-09-09 第二百四十二次：失败锁死修复——旧版 _initPromise 失败（resolve null）后
+  //   从不清空（仅语言对变更时重置），后续所有调用（含有手势的 prime）永远拿到已定格
+  //   的 null，渠道终身报废（这就是"浏览器内置翻译从未成功过"的第二根因，第一根因是
+  //   启动 preload 无手势 create 必败）。改为：promise 收尾即复位；失败记 _lastFailTs
+  //   进 60s 冷却，冷却期内快速 return null（自动注释逐词高频调用不再反复 create）。
+  if (!_initPromise && Date.now() - _lastFailTs < FAIL_COOLDOWN_MS) return null;
+  if (!_initPromise) {
+    _initPromise = _createTranslatorOnce();
+  }
+  try {
+    const translator = await _initPromise;
+    if (!translator) _lastFailTs = Date.now();
+    return translator;
+  } finally {
+    _initPromise = null;
+  }
+}
 
-  _initPromise = (async () => {
-    const avail = await getAvailability();
-    if (avail === 'unsupported' || avail === 'unavailable') {
-      return null;
-    }
-    // downloadable 状态直接尝试 create()
-    //   - content script 在用户激活上下文（用户已点击页面）中可能成功
-    //   - 失败（无用户手势）则回退到在线渠道
-    //   downloading 状态等待完成（轮询 availability）
-    if (avail === 'downloadable') {
-      log(`[VocabRadar][translator][${_ts()}] Translator 模型可下载, 尝试 create()...`);
-      try {
-        // 反思（2026-08-12）：create 加 15 秒超时（模型下载可能较慢，但不允许永久挂起）
-        _translator = await withTimeout(
-          Translator.create({
-            sourceLanguage: transState.learnLang,
-            targetLanguage: transState.meaningLang
-          }),
-          15000,
-          'Translator.create(downloadable)'
-        );
-        log(`[VocabRadar][translator][${_ts()}] Translator 已就绪 (${transState.learnLang}->${transState.meaningLang})`);
-        return _translator;
-      } catch (e) {
-        console.warn(`[VocabRadar][translator][${_ts()}] Translator.create 失败/超时（可能需用户手势，回退在线渠道）:`, e);
-        return null;
-      }
-    }
-    if (avail === 'downloading') {
-      log(`[VocabRadar][translator][${_ts()}] Translator 模型下载中, 等待完成...`);
-      // 轮询等待下载完成（最多 30 秒）
-      for (let i = 0; i < 30; i++) {
-        await new Promise(r => setTimeout(r, 1000));
-        const newAvail = await Translator.availability({
-          sourceLanguage: transState.learnLang,
-          targetLanguage: transState.meaningLang
-        });
-        if (newAvail === 'available') {
-          try {
-            // 反思（2026-08-12）：下载后 create 加 15 秒超时
-            _translator = await withTimeout(
-              Translator.create({
-                sourceLanguage: transState.learnLang,
-                targetLanguage: transState.meaningLang
-              }),
-              15000,
-              'Translator.create(downloading)'
-            );
-            log(`[VocabRadar][translator][${_ts()}] Translator 下载完成已就绪 (${transState.learnLang}->${transState.meaningLang})`);
-            return _translator;
-          } catch (e) {
-            console.warn(`[VocabRadar][translator][${_ts()}] 下载后 create 失败/超时:`, e);
-            return null;
-          }
-        }
-      }
-      console.warn(`[VocabRadar][translator][${_ts()}] Translator 下载超时（30秒）`);
-      return null;
-    }
-    try {
-      // 反思（2026-08-12）：available 状态下 create 加 15 秒超时
-      _translator = await withTimeout(
-        Translator.create({
-          sourceLanguage: transState.learnLang,
-          targetLanguage: transState.meaningLang
-        }),
-        15000,
-        'Translator.create(available)'
-      );
-      log(`[VocabRadar][translator][${_ts()}] Translator 已就绪 (${transState.learnLang}->${transState.meaningLang})`);
-      return _translator;
-    } catch (e) {
-      console.warn(`[VocabRadar][translator][${_ts()}] Translator.create 失败/超时:`, e);
-      return null;
-    }
-  })();
+/**
+ * 单次创建 Translator 实例（内部）
+ * 2026-09-09 第二百四十二次：合并旧版 downloadable/downloading/available 三态分支。
+ *   旧版 downloading 态先轮询 availability 变 available 再 create——多余：W3C 解释稿
+ *   与 Chrome 文档均明确 create() 在 downloadable 态触发下载、downloading 态等待进行中
+ *   的下载，完成后才 resolve，一处 await 即覆盖三态。超时分级：available（模型已就绪，
+ *   本地初始化）15s 足够；downloadable/downloading（要下载 1-2GB 模型）放宽到 300s——
+ *   旧版统一 15s 必超时，下载被 race 掉后下次重试继续，模型永远下不完。
+ */
+async function _createTranslatorOnce() {
+  const avail = await getAvailability();
+  if (avail === 'unsupported' || avail === 'unavailable') {
+    return null;
+  }
+  const CREATE_TIMEOUT_MS = avail === 'available' ? 15000 : 300000;
+  try {
+    // 注意（第二百二十五次）：下方对象字面量的两个属性名是 Chrome Translator API 的
+    //   固定参数名，不可随本项目改名；其值取 transState 的 learnLang/meaningLang。
+    const translator = await withTimeout(
+      Translator.create({
+        sourceLanguage: transState.learnLang,
+        targetLanguage: transState.meaningLang
+      }),
+      CREATE_TIMEOUT_MS,
+      'Translator.create'
+    );
+    log(`[VocabRadar][translator][${_ts()}] Translator 已就绪 (${transState.learnLang}->${transState.meaningLang}, 模型态:${avail})`);
+    return translator;
+  } catch (e) {
+    console.warn(`[VocabRadar][translator][${_ts()}] Translator.create(${avail}) 失败/超时（无手势场景属预期，查词手势入口会重试）:`, e);
+    return null;
+  }
+}
 
-  return _initPromise;
+/**
+ * 手势入口 prime：在用户手势上下文中创建 Translator 实例并缓存
+ * 2026-09-09 第二百四十二次（用户："浏览器翻译需要手势，右键查询等地方加手势再用"）：
+ *   调用时机=th/panel.js 的 showContextPanel（右键菜单查词）与 showOcrResultPanel
+ *   （OCR 查词）——两者均由页面内交互触发（右键/按钮点击），距手势 1-3s，transient
+ *   activation（约 5s 窗口）仍有效，此处 create 可成功。创建后 translate() 无需手势，
+ *   自动注释场景直接复用单例。清冷却强制重试：即使启动探测/上次 create 失败也重试。
+ * @returns {Promise<Object|null>} Translator 实例（失败 null，调用方无需 await）
+ */
+export function primeTranslator(opts = {}) {
+  if (typeof Translator === 'undefined') return Promise.resolve(null);
+  if (_translator) return Promise.resolve(_translator);
+  // 第二百四十三次：force 仅限明确手势入口（右键/OCR 查词面板）——清冷却强制重试。
+  //   高频入口（hover 悬浮卡、侧栏展开）须用默认温和模式：自带 60s 冷却防反复空试，
+  //   冷却外 create 仍会发起（此时 activation 有效即成功），失败自动续冷却。
+  if (opts.force) _lastFailTs = 0;
+  return getTranslator().catch(() => null);
 }
 
 /**

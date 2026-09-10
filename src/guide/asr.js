@@ -2,11 +2,11 @@
 // 反思（2026-08-20 第八十六次）：用户要求"asr-ocr.js 拆分为 asr.js + ocr.js + 公共模块"。
 //   本文件承载：
 //     - ASR 消息监听（START_ASR/ASR_AUDIO_SEGMENT 经 SW 中转，ASR_STATUS/ASR_SEGMENT/
-//       ASR_ERROR 回传本页，识别结果渲染见 asr-common.js appendResult）
+//       ASR_ERROR 回传本页，识别结果渲染见 guide-common.js appendResult）
 //     - 文件 ASR（Whisper 离线识别，段式发送）
 //     - 录音/录像/录屏（媒体流获取 + 浏览器 ASR 实时识别 / Whisper 流式分段）
 //     - 麦克风授权与错误分类（acquireMediaStream 在用户手势内直接 getUserMedia）
-//   公共基础设施见 asr-common.js；OCR 见 ocr.js（本文件不 import ocr.js）。
+//   公共基础设施见 guide-common.js（第二百五十三次由 asr-common.js 改名）；OCR 见 ocr.js（本文件不 import ocr.js）。
 
 import { t } from '../lib/i18n.js';
 import {
@@ -14,7 +14,7 @@ import {
   showAsrProgress, hideAsrProgress, updateAsrProgressFill,
   translateStage, clearResults, appendResult, setAsrControls,
   showVideoSidebarEmpty
-} from './asr-common.js';
+} from './guide-common.js';
 
 // === ASR 消息监听 ===
 function ensureMessageListener() {
@@ -542,6 +542,18 @@ function startBrowserAsr(lang) {
         // 无语音是正常的，不提示
       } else if (event.error === 'not-allowed') {
         toast(t('ws.browserAsrError') + ' permission denied', { error: true });
+      } else if (event.error === 'network') {
+        // 第一百七十八次（用户：network 错误"要让用户知道"）：浏览器 ASR 走 Google
+        //   语音服务，国内网络不可达为常态；旧逻辑 onend 无条件重启 → 无限
+        //   「network→重启」循环，错误只进进度区（易被忽略）。改为：每次录制一次性
+        //   toast 明示用户（带指引），并停止浏览器 ASR 阻断重启循环——mediaRecorder
+        //   录音不受影响，停止录制后可改用 API 引擎或本地 Whisper 识别整段音频。
+        if (!S.browserAsrNetErrShown) {
+          S.browserAsrNetErrShown = true;
+          toast(t('ws.browserAsrNetErr'), { error: true, duration: 10000 });
+        }
+        showAsrProgress(t('ws.browserAsrError'), event.error);
+        stopBrowserAsr();
       } else {
         showAsrProgress(t('ws.browserAsrError'), event.error);
       }
@@ -580,6 +592,8 @@ async function beginRecording(stream, kind) {
 
   S.recordingActive = true;
   S.recordingKind = kind;
+  // 第一百七十八次：浏览器 ASR network 错误 toast 每次录制只弹一次（标志见 startBrowserAsr onerror）
+  S.browserAsrNetErrShown = false;
   S.recordingStream = stream;
   S.recordingPcmBuffer = [];
   S.recordingPcmLength = 0;

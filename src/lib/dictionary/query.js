@@ -43,7 +43,22 @@ function _ensureInit() {
 //   await 本函数，确保扫描前词典已装载（wordfreq/wordlists 送入词典）。
 //   装载函数只在初始化或数据损坏不全时启用；之后业务只查词典。
 export function ensureReady() {
-  if (!dictState.loadPromise) _loadDict().catch(() => {});
+  if (!dictState.loadPromise) {
+    // 2026-09-09 第二百四十一次竞态修复（用户："OCR failed: Cannot read properties of
+    //   null (reading 'catch')"）：_loadDict 是 async，同步段在 projection.js L42
+    //   await storage.get(wfUpdates 检查) 处让出，L67 dictState.loadPromise=... 尚未执行；
+    //   旧实现此处直接 return dictState.loadPromise → 首个调用者拿到 null。
+    //   第二百四十次删 startGuideVideoSidebar 词典预载后，引导页 OCR 场景本句注释链
+    //   （asr-common L442 ensureReady().catch）成为首调用者 → null.catch 同步炸 →
+    //   异常沿 appendResult 抛到 guide/ocr.js catch → toast 报错。
+    //   修法：把本次装载 Promise 同步持有为 loadPromise 兜底（与 projection.js 后续
+    //   自赋值共存——_loadDict 恢复后 L63 复用检查不匹配即覆盖为内部 Promise 并打
+    //   _lang 标记，本 Promise resolve 值即其 return，语义不变）。对照组
+    //   ensureRanksReady 同形态（有 || Promise.resolve(null) 兜底不炸但首轮空转，
+    //   自愈）——第二百四十四次已同款修复，见下方。同批受益：scan.js L112 /
+    //   web-sidebar-impl L229 同形态链式调用。
+    dictState.loadPromise = _loadDict().catch(() => {});
+  }
   return dictState.loadPromise;
 }
 
@@ -56,9 +71,23 @@ export function ensureReady() {
 export function ensureRanksReady() {
   if (dictState.ranksReadyLang && dictState.dictMap) return Promise.resolve(dictState.dictMap);
   if (!dictState.ranksPromise) {
-    try { _loadDict().catch(() => {}); } catch (_) { /* ignore */ }
+    // 第二百四十四次竞态修复（同 ensureReady 第二百四十一次形态，用户拍板"修ensureRanksReady"）：
+    //   _loadDict 是 async，同步段在 projection.js L42 await storage.get(wfUpdates) 处
+    //   让出，L83 dictState.ranksPromise=new Promise(...) 尚未执行；旧实现
+    //   return dictState.ranksPromise || Promise.resolve(null) → 首个调用者
+    //   （scan.js L103 ensureRanksReady().then）拿到立即 resolve 的 null，
+    //   首轮按"无词典"空转一轮（自愈但白跑，第二次起才正常）。
+    // 第二百四十五次修正（用户拍板）：上式兜底把整装载 Promise 赋给 ranksPromise 后，
+    //   首调者（scan.js L103）被绑死在"完整装载完成"上，Stage 1 分阶段收益丢失
+    //   （实测词频先行就绪与词典就绪仅差 0.9ms，Stage 2 整投影 116ms 被吞进等待）。
+    //   projection.js _loadDict 已把 Stage 1 ranksPromise 注册上移至同步段（首个 await
+    //   之前）——本函数现在只需触发装载再读回同步段注册的承诺；仅当 _loadDict 因
+    //   "已装载命中"快速返回未注册（SLOW 首装完成后 ranksReadyLang 未标记的窗口）时，
+    //   才用本次整装载结果兜底，承诺永不悬空（原语义保留）。
+    const _p = _loadDict().catch(() => null);
+    if (!dictState.ranksPromise) dictState.ranksPromise = _p;
   }
-  return dictState.ranksPromise || Promise.resolve(null);
+  return dictState.ranksPromise;
 }
 
 /**

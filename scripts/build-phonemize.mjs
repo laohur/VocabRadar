@@ -87,14 +87,18 @@ const KURO_LOADER_BODY = `BrowserDictionaryLoader.prototype.loadArrayBuffer = fu
     /* ${KURO_MARK}：VocabRadar 构建时注入（scripts/build-phonemize.mjs），勿手改。
        词典 12 个 .dat.gz 改从 CDN 加载并经 background SW 中转：content script 的 XHR
        受宿主页面 CSP connect-src 约束（B站/YouTube 等不放行 CDN 域），SW 的 fetch
-       不受限。SW 直传 ArrayBuffer（结构化克隆，Chrome 102+；2026-09-08 去 base64
-       转换），内容仍是 gzip 原始字节，gunzip 由 kuromoji 自己做。 */
+       不受限。SW 返回 base64 字符串（2026-09-08 第二百四十次：chrome.runtime 消息
+       默认 JSON 序列化，ArrayBuffer 直传会变 {}；此为独立 patch 上下文，不引
+       src/lib/b64.js，内联 atob 解码），内容仍是 gzip 原始字节，gunzip 由 kuromoji 自己做。 */
     chrome.runtime.sendMessage({ type: "KURO_FETCH", url: url }, function (resp) {
-        if (!resp || !resp.ok) {
+        if (!resp || !resp.ok || !resp.b64) {
             callback(new Error((resp && resp.error) || "KURO_FETCH: no response"), null);
             return;
         }
-        var gz = new zlib.Zlib.Gunzip(new Uint8Array(resp.data));
+        var bin = atob(resp.b64);
+        var u8 = new Uint8Array(bin.length);
+        for (var i = 0; i < bin.length; i++) u8[i] = bin.charCodeAt(i);
+        var gz = new zlib.Zlib.Gunzip(u8);
         callback(null, gz.decompress().buffer);
     });
 };`;
@@ -110,7 +114,7 @@ const KURO_LOADER_BODY = `BrowserDictionaryLoader.prototype.loadArrayBuffer = fu
   const replaced = before.replace(re, () => KURO_LOADER_BODY);
   if (replaced !== before) {
     fs.writeFileSync(browserLoaderPath, replaced);
-    console.log('[build-phonemize] 已 patch BrowserDictionaryLoader.js：loadArrayBuffer → SW 中转（直传 ArrayBuffer）');
+    console.log('[build-phonemize] 已 patch BrowserDictionaryLoader.js：loadArrayBuffer → SW 中转（base64 回传）');
   }
 }
 

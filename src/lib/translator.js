@@ -45,4 +45,5 @@
 // 跨模块共享状态铁律：transState（语言对）与 _lastChannel 唯一实例在 shared.js，
 //   各子模块经 import 同源引用，绝不复制两份。
 // 本门面仅 re-export 全部原导出符号（符号名不变），所有引用方零改动。
-export { translate, getLastTranslateChannel, getMeaningLang, getAvailability } from './translator/index.js';
+// 2026-09-09 第二百四十二次：补 primeTranslator（手势入口 prime，th/panel.js 查词/OCR 面板用）
+export { translate, getLastTranslateChannel, getMeaningLang, getAvailability, primeTranslator } from './translator/index.js';

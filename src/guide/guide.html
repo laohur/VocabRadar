@@ -30,11 +30,13 @@
     </a>
   </header>
 
-  <!-- ===== 四子标签（设定栏 / ASR / OCR / 说明栏），默认设定栏 ===== -->
+  <!-- ===== 五子标签（设定栏 / ASR / OCR / Parser / 说明栏），默认设定栏 =====
+       第二百五十三次（用户："引导页 asr ocr 之后增加 parser"）：新增 Parser 文档解析标签 -->
   <nav class="guide-tabs" id="guideTabs">
     <button class="guide-tab active" data-tab="settings" data-key="tabSettings">设定栏</button>
     <button class="guide-tab" data-tab="asr" data-key="tabAsr">ASR</button>
     <button class="guide-tab" data-tab="ocr" data-key="tabOcr">OCR</button>
+    <button class="guide-tab" data-tab="parser" data-key="tabParser">Parser</button>
     <button class="guide-tab" data-tab="help" data-key="tabHelp">说明栏</button>
   </nav>
 
@@ -346,13 +348,14 @@
           <div class="g-source-row">
             <button class="func-btn" id="g-upload-av" data-key="uploadAv">📁 上传文件</button>
             <button class="func-btn g-record-btn" id="g-asr-record-btn" data-key="record">🎙 录制</button>
-            <span class="g-radio-label">(</span>
-            <!-- 反思（2026-08-16 第七十一次）：⑥ radio 本地化——span 加 data-key（文案走 i18n），
-                 label 加 data-title-key（悬浮提示走 *_Title 键），不再硬编码 audio/video/screen 英文。 -->
-            <label class="g-radio" data-title-key="ws.recordAudioTitle"><input type="radio" name="g-asr-source" id="g-record-audio" value="audio" checked><span class="g-radio-text" data-key="ws.recordAudio">audio</span></label>
-            <label class="g-radio" data-title-key="ws.recordVideoTitle"><input type="radio" name="g-asr-source" id="g-record-video" value="video"><span class="g-radio-text" data-key="ws.recordVideo">video</span></label>
-            <label class="g-radio" data-title-key="ws.recordScreenTitle"><input type="radio" name="g-asr-source" id="g-record-screen" value="screen"><span class="g-radio-text" data-key="ws.recordScreen">screen</span></label>
-            <span class="g-radio-label">)</span>
+            <!-- 第一百七十八次（用户："引导页录音改为 record from（microphone camera screen）"）：
+                 前括号 span 加 data-key（en "from (" / zh "来源（"），radio 文案改来源设备名
+                 （走 i18n ws.recordAudio/Video/Screen，value 不动），后括号 zh 用全角。 -->
+            <span class="g-radio-label" data-key="ws.recordFrom">from (</span>
+            <label class="g-radio" data-title-key="ws.recordAudioTitle"><input type="radio" name="g-asr-source" id="g-record-audio" value="audio" checked><span class="g-radio-text" data-key="ws.recordAudio">Microphone</span></label>
+            <label class="g-radio" data-title-key="ws.recordVideoTitle"><input type="radio" name="g-asr-source" id="g-record-video" value="video"><span class="g-radio-text" data-key="ws.recordVideo">Camera</span></label>
+            <label class="g-radio" data-title-key="ws.recordScreenTitle"><input type="radio" name="g-asr-source" id="g-record-screen" value="screen"><span class="g-radio-text" data-key="ws.recordScreen">Screen</span></label>
+            <span class="g-radio-label" data-key="ws.recordFromEnd">)</span>
             <input type="file" id="g-av-input" accept="video/*,audio/*" hidden>
           </div>
           <!-- 其次：展示 + 视频侧栏（2026-08-21 第八十九次：右侧为真实视频侧栏内联挂载容器
@@ -432,6 +435,61 @@
           <!-- 反思（2026-08-21 第九十一次）：用户要求删除 OCR 的 Annotated Words（展示注释结果）栏目——
                右侧文本侧栏面板即识别结果（纯文本 + 行内文本提示样式生词(释义)），
                生词汇总由右侧悬浮文本侧栏的"词汇"标签承担，此处不再重复。 -->
+        </div>
+      </div>
+    </section>
+
+    <!-- ===== Parser 栏：文档解析（第二百五十三次新增，与设定栏/ASR/OCR/说明栏并列） =====
+         布局（用户口径）：第一行 上传文件（第二百五十四次按 ASR 栏先例补 upload，替原"浏览文件"
+         小链接——看不清是啥）+ Capture + 录制来源（microphone/camera/screen）；
+         之下分左右两栏——左栏大输入框（输入文件/链接/粘贴）+ 底下解析按钮，右栏纯文本解析结果
+         （第二百五十四次移除右栏 Sidebar 切换——本页已有正常侧栏：文本侧栏悬浮球 + ASR 栏
+         内联视频侧栏）。本阶段先实现界面，解析逻辑待方案落地接线（调研结论见 parser.js
+         头注释与 change.log；网页正文提取用 defuddle 系既有定论，勿再引入 Readability）。 -->
+    <section class="guide-panel" id="panel-parser" data-panel="parser">
+      <div class="group func-group">
+        <div class="group-head">
+          <span class="group-name" data-key="parserTitle">文档解析（Parser）</span>
+        </div>
+        <div class="group-body">
+          <p class="style-desc" data-key="parserDesc">把链接/网页/文件（文本、音视频、图片、PDF、DOCX 等常见类型）解析为纯文本，供生词标注与学习。</p>
+          <!-- 第一行：上传文件（ASR 先例） + Capture + 录制（来源三选一，value 与 ASR 栏一致） -->
+          <div class="g-source-row">
+            <button class="func-btn" id="g-parser-upload" data-key="uploadAv">📁 上传文件</button>
+            <button class="func-btn" id="g-parser-capture" data-key="capturePhoto">📷 拍照</button>
+            <button class="func-btn g-record-btn" id="g-parser-record-btn" data-key="record">🎙 录制</button>
+            <span class="g-radio-label" data-key="ws.recordFrom">from (</span>
+            <label class="g-radio" data-title-key="ws.recordAudioTitle"><input type="radio" name="g-parser-source" id="g-parser-record-audio" value="audio" checked><span class="g-radio-text" data-key="ws.recordAudio">Microphone</span></label>
+            <label class="g-radio" data-title-key="ws.recordVideoTitle"><input type="radio" name="g-parser-source" id="g-parser-record-video" value="video"><span class="g-radio-text" data-key="ws.recordVideo">Camera</span></label>
+            <label class="g-radio" data-title-key="ws.recordScreenTitle"><input type="radio" name="g-parser-source" id="g-parser-record-screen" value="screen"><span class="g-radio-text" data-key="ws.recordScreen">Screen</span></label>
+            <span class="g-radio-label" data-key="ws.recordFromEnd">)</span>
+            <!-- 隐藏文件选择器（「上传文件」触发；拖入/Ctrl+V 粘贴不走它），accept 覆盖常见类型 -->
+            <input type="file" id="g-parser-file-input" hidden
+                   accept=".txt,.md,.markdown,.html,.htm,.xml,.json,.csv,.srt,.vtt,.rtf,.epub,.docx,.pdf,text/*,audio/*,video/*,image/*">
+          </div>
+          <!-- 中部：左右两栏（左=大输入框+解析按钮，右=纯文本结果） -->
+          <div class="g-parser-cols">
+            <div class="g-parser-left">
+              <!-- 大输入框：粘贴文本/链接，拖入或 Ctrl+V 粘贴文件 -->
+              <textarea id="g-parser-input" class="g-parser-input" data-ph-key="parserInputPh" placeholder="在此粘贴文本或链接，或拖入/粘贴文件（文本网页、音视频、图片、PDF、DOCX 等）" spellcheck="false"></textarea>
+              <div class="g-parser-input-info">
+                <span id="g-parser-input-info-text"></span>
+              </div>
+              <!-- 底下：解析按钮（输入非空可用） -->
+              <div class="g-recognize-row">
+                <button class="func-btn" id="g-parser-btn" data-key="parserRun" disabled>🔍 解析</button>
+              </div>
+            </div>
+            <div class="g-parser-right">
+              <!-- 右栏：解析结果（纯文本）。第二百五十四次移除 Sidebar 切换——本页已有正常侧栏 -->
+              <div class="g-sidebar" id="g-parser-output-box">
+                <div class="g-results-head" data-key="parserOutputTitle">解析结果</div>
+                <div class="g-parser-output" id="g-parser-output">
+                  <div class="g-empty-tip" data-key="parserOutputTip">解析出的纯文本将显示在这里</div>
+                </div>
+              </div>
+            </div>
+          </div>
         </div>
       </div>
     </section>

@@ -1,5 +1,8 @@
-// VocabRadar 引导页 功能栏 公共模块（ASR / OCR 共享基础设施）
+// VocabRadar 引导页 功能栏 公共模块（ASR / OCR / Parser 共享基础设施）
 // 反思（2026-08-20 第八十六次）：用户要求"asr-ocr.js 拆分为 asr.js + ocr.js + 公共模块"。
+// 第二百五十三次（用户："asr-common.js 名实不符，改名"）：asr-common.js → guide-common.js——
+//   本文件实为引导页功能栏（ASR/OCR，及后续 Parser）共享基础设施，并非 ASR 专属；
+//   import 路径同步 guide.js/asr.js/ocr.js 三处。
 //   本文件承载两者共用的：
 //     - 模块状态 S（asr/recording/ocr 共用状态）
 //     - 工具函数（log/toast/时间/转义/闪灯/随机短释义）
@@ -41,8 +44,11 @@ let _videoSubsTimer = null;     // updateSubtitles 防抖（逐句到达，合�
 
 async function startGuideVideoSidebar() {
   try {
-    // 反思（2026-08-21 第九十二次）：词典就绪后再挂载/推句——否则早期句子注释全落空
-    await ensureReady();
+    // 2026-09-08 第二百四十次（用户批复"引导页后台咋还跑那么多"）：删第九十二次的
+    //   await ensureReady() 词典预载——用户只在 OCR 标签页时不点视频侧栏注释，
+    //   不该为挂侧栏预载整本词典（实测引导页冷装载 11.2s+ 网络拉词频）。
+    //   改懒加载：首句注释时 L439 ensureReady().then(getAnnotations) 幂等触发
+    //   （query.js loadPromise 缓存，重复调用安全），OCR-only 场景后台零词典工作。
     const mount = $('g-asr-sidebar-mount');
     const video = $('g-asr-video');
     if (!mount || !video) return;

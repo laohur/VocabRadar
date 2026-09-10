@@ -31,6 +31,8 @@
  *   （text-hint 侧另有一份历史副本，属高亮路径，本次不动，以免影响高亮行为。）
  */
 
+import { getBatches } from './dict-stats.js'; // 2026-09-09（w3）：时序表聚合 text-hint 扫描挡量
+
 // 不扫描这些标签内的文本（代码/表单/媒体/脚本/非正文语义等）
 export const SKIP_TAGS = new Set([
   'SCRIPT', 'STYLE', 'NOSCRIPT', 'IFRAME', 'SVG', 'INPUT', 'BUTTON',
@@ -1101,6 +1103,21 @@ function renderHintTiming(esc, ms) {
   html += '<tr><td class="k">文本节点 / 批次 / 串行查词</td><td class="v">'
     + esc((ex.nodes || 0) + ' / ' + (ex.batches || 0) + ' / ' + (ex.queries || 0))
     + '</td><td class="n">批间还各等一次空闲回调（最长 250ms/批，第二百零七次 1000→250）</td></tr>';
+  // 2026-09-09（w3 拍板）：扫描挡量行——上方 ex.batches 是生命周期批次计数，这里从
+  //   dict-stats 环形账本（最多 8 批）聚合 text-hint 批次的"挡"量：高频挡（rank≤阈值
+  //   不高亮）、表外挡（rank=null）、跨批重复、缓存命中，用户一眼看到扫描侧拦了多少词。
+  const thBatches = getBatches().filter((b) => b && b.source === 'text-hint');
+  const agg = thBatches.reduce((s, b) => ({
+    tokens: s.tokens + (b.tokens || 0),
+    skipSeen: s.skipSeen + (b.skipSeen || 0),
+    cacheHit: s.cacheHit + (b.cacheHit || 0),
+    highFreq: s.highFreq + (b.highFreq || 0),
+    oov: s.oov + (b.oov || 0)
+  }), { tokens: 0, skipSeen: 0, cacheHit: 0, highFreq: 0, oov: 0 });
+  html += '<tr><td class="k">扫描挡量（text-hint 最近' + thBatches.length + ' 批）</td><td class="v">'
+    + '分词 ' + agg.tokens + ' ｜ 高频挡 ' + agg.highFreq + ' ｜ 表外挡 ' + agg.oov
+    + '</td><td class="n">跨批重复 ' + agg.skipSeen + ' / 缓存命中 ' + agg.cacheHit
+    + '（dict-stats 账本，最多保留 8 批）</td></tr>';
   // 第一百八十八次：词表去重诊断行（用户"文本生词重复还没解决"——
   //   计数器在 ws/scanner.js 的 _wsDiag，这里从 window.__beaverWsDedup 实时读取；
   //   三个失联字段（重复实锤/键集DOM失联/重排清重）任一 >0 即防护层失联，标红）。
@@ -1255,10 +1272,15 @@ export async function openMainTextDiag() {
     });
     hd.addEventListener('pointermove', (e) => {
       if (!dragState) return;
-      // 第二百一十三次（用户："诊断窗口要能自由移动，越过边界也行"）：去除视口钳位，
-      //   标题栏按住拖到哪算哪（窗口可整体拖出屏幕外，拖回标题栏即可找回）。
-      host.style.left = (e.clientX - dragState.dx) + 'px';
-      host.style.top = (e.clientY - dragState.dy) + 'px';
+      // 第二百一十三次：去除视口钳位允许自由拖出。
+      // 2026-09-09（w2 拍板"把手可见即可"）：恢复宽松钳位——标题栏露出 ≥8px 可抓
+      //   即可（x∈[8-w, innerWidth-8]，y∈[8-grab, innerHeight-8]，grab=标题栏高兜底
+      //   40），窗口其余部分仍可整体拖出屏幕外，避免整窗拖丢找不回。
+      const grab = hd.offsetHeight || 40;
+      const x = Math.min(Math.max(e.clientX - dragState.dx, 8 - host.offsetWidth), window.innerWidth - 8);
+      const y = Math.min(Math.max(e.clientY - dragState.dy, 8 - grab), window.innerHeight - 8);
+      host.style.left = x + 'px';
+      host.style.top = y + 'px';
       host.style.right = 'auto';
       host.style.bottom = 'auto';
     });

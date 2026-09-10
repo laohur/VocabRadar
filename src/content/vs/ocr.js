@@ -15,6 +15,8 @@
 
 import { toast, getActiveVideo, getRoot, getVideoLearnLang } from '../video-sidebar.js';
 import { flashButton } from './dom-utils.js';
+// 第二百三十九次：OCR 用户可见提示走 i18n（用户："英文哪来的中文提示？"）
+import { t } from '../../lib/i18n.js';
 
 let _ocrRunning = false;     // OCR 进行中
 
@@ -34,13 +36,13 @@ export async function onOcrClick() {
   // 前置检查：扩展上下文是否有效（扩展重载后旧 content script 会失效）
   if (!chrome.runtime?.id) {
     console.warn('[VocabRadar][video-sidebar] OCR 跳过: 扩展上下文已失效（chrome.runtime.id 为空）');
-    toast('扩展已更新，请刷新页面（F5）后再使用 OCR');
+    toast(t('ocr.extUpdated'));
     return;
   }
   const video = getActiveVideo();
   if (!video || !video.videoWidth || !video.videoHeight) {
     console.warn('[VocabRadar][video-sidebar] OCR 跳过: 未找到可用视频元素');
-    toast('未找到视频，无法 OCR');
+    toast(t('ocr.noVideo'));
     return;
   }
   _ocrRunning = true;
@@ -67,9 +69,9 @@ export async function onOcrClick() {
     });
     const _ocrCost = ((Date.now() - _ocrStart) / 1000).toFixed(2);
     if (!resp || !resp.ok) {
-      const errMsg = resp && resp.error ? resp.error : '未知错误';
+      const errMsg = resp && resp.error ? resp.error : t('ocr.unknownErr');
       console.warn('[VocabRadar][video-sidebar] OCR 失败: ' + errMsg + ', 耗时=' + _ocrCost + 's, resp=', resp);
-      toast('OCR 失败: ' + errMsg);
+      toast(t('ocr.failPrefix') + errMsg);
       return;
     }
     const result = resp.text || '';
@@ -81,7 +83,7 @@ export async function onOcrClick() {
     window.dispatchEvent(new CustomEvent('beaver-ocr-result', {
       detail: {
         text: result,
-        info: result.trim() ? '' : '未识别到文字'
+        info: result.trim() ? '' : t('ocr.noText')
       }
     }));
     if (!result.trim()) {
@@ -93,9 +95,10 @@ export async function onOcrClick() {
     console.error('[VocabRadar][video-sidebar] OCR 异常: 耗时=' + _ocrCost + 's, error=', e, 'stack=', e && e.stack);
     // 扩展上下文失效（扩展重载后旧 content script 仍在页面上）
     if (errMsg.includes('Extension context invalidated')) {
-      toast('扩展已更新，请刷新页面（F5）后再使用 OCR');
+      toast(t('ocr.extUpdated'), { error: true, duration: 8000 });
     } else {
-      toast('OCR 失败: ' + errMsg);
+      // 第一百七十八次：同上——OCR 失败改 error 样式 + 8 秒，让用户看到
+      toast(t('ocr.failPrefix') + errMsg, { error: true, duration: 8000 });
     }
   } finally {
     _ocrRunning = false;

@@ -714,6 +714,16 @@
   cursor: not-allowed;
 }
 
+/* 第一百七十八次（用户："asr ocr 下载音频按钮都改为只有图标，前两个按钮可以更窄
+   而不至于多行"）：icon-only 按钮（#beaver-asr-toggle/#beaver-ocr/#beaver-dlaudio）
+   不参与 flex:1 拉伸、padding 收窄，把宽度让给文字按钮，避免 footer 两排换行。
+   特异性（0,2,1）高于 .beaver-footer-row button（0,1,1）与 .beaver-asr-toggle-btn（0,1,0），
+   可覆盖二者的 flex 与 padding。 */
+.beaver-footer-row button.beaver-icon-btn {
+  flex: 0 0 auto;
+  padding: 8px 7px;
+}
+
 /* 设定浮层：M3 large 圆角 + 阴影替代 border */
 .beaver-settings-pop {
   position: absolute;

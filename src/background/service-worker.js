@@ -20,6 +20,12 @@ import { cleanDictEntry } from '../lib/dict-clean.js';
 // 第一百七十一次：LLM 对话（Chat）配置解析——引导页「模型」行写入 storage，此处解析成请求参数
 // 第一百七十五次：getFreeProviders 提供免费直连轮替清单，供 402/429 自动回退
 import { resolveLlmConfig, getFreeProviders } from '../lib/llm.js';
+// 第二百四十六次：词典门面静态引入（原为 onInstalled 内动态 import，被
+//   ServiceWorkerGlobalScope 禁止——HTML 规范 w3c/ServiceWorker#1356，本机 Chrome
+//   实测报错，后台初始化沦为死路）。增量仅 dictionary 门面+projection/query/state/
+//   word-loader 链（~70KB 源码解析，与已静态引入的 word-db 链大量共享依赖），
+//   顶层无 IO 副作用（state.js 仅注册 chrome.storage 源语言监听，SW 可用）。
+import { ensureReady } from '../lib/dictionary.js';
 
 // 第一百九十一次：SW 每次被唤醒立即后台预热词典投影。
 // MV3 SW 闲置 ~30s 休眠即清空 _projCache（SW 内存态），下一页首请求要付
@@ -31,21 +37,22 @@ warmupDictProjection();
 
 // 第一百四十次（用户裁定"扩展安装更新的时候应该初始化词典"）：
 // onInstalled（install/update）时在后台一次性完成词典构建——页面从此只读 IDB，
-// 不再承担首次冷构建。动态 import dictionary.js（避免拉入重依赖拖慢 SW 常驻启动）；
-// 失败静默降级：首页异步装载路径仍会构建（分块原子+expected 校验保证最终一致）。
+// 不再承担首次冷构建。失败静默降级：首页异步装载路径仍会构建（分块原子+expected
+// 校验保证最终一致）。
+// 第二百四十六次补充（用户反馈 SW 日志报 import() 被禁）：改用顶部静态 import 的
+//   ensureReady 直接调用（本机 Chrome 实测动态 import 被 ServiceWorkerGlobalScope
+//   禁止，原动态 import 路径从未成功过）。
 chrome.runtime.onInstalled.addListener((details) => {
   if (details.reason !== 'install' && details.reason !== 'update') return;
   console.log(`[VocabRadar][sw][${_ts()}] [init] 扩展${details.reason === 'install' ? '安装' : '更新'} → 后台初始化词典…`);
-  import('../lib/dictionary.js').then(async ({ ensureReady }) => {
+  (async () => {
     try {
       const m = await ensureReady();
       console.log(`[VocabRadar][sw][${_ts()}] [init] 词典初始化完成: ${m ? m.size : 0} 词`);
     } catch (e) {
       console.warn(`[VocabRadar][sw][${_ts()}] [init] 词典初始化失败（将由页面路径重建）:`, e && e.message);
     }
-  }).catch((e) => {
-    console.warn(`[VocabRadar][sw][${_ts()}] [init] dictionary 模块加载失败（将由页面路径重建）:`, e && e.message);
-  });
+  })();
 });
 
 // 默认设置（与 popup.js DEFAULTS 保持一致）
@@ -191,12 +198,23 @@ chrome.runtime.onInstalled.addListener(async (details) => {
       log('[VocabRadar][sw][' + _ts() + '] 版本变更(' + curVersion + ')，清空 IDB 词典缓存');
     } else {
       log('[VocabRadar][sw][' + _ts() + '] 版本未变更(' + curVersion + ')，保留词典缓存');
+      // 2026-09-09（用户批复"扩展更新安装，不应该就拉取吗"→ 拍板"补 onInstalled 对账"）：
+      //   版本未变更（本地重载同版本等）也跑一次 wfInstalled 基线 vs 远程 files.json 对账，
+      //   覆盖"浏览器长期不重启、onStartup 兜底未跑"的窗口。节流 1h（storage._lastWfAudit）：
+      //   开发期反复 load unpacked 同版本时避免每次 onInstalled 都拉 files.json。
+      chrome.storage.local.get('_lastWfAudit', (a) => {
+        if (Date.now() - (a._lastWfAudit || 0) < 3600000) return; // 1h 内已对账
+        chrome.storage.local.set({ _lastWfAudit: Date.now() });
+        checkWfUpdates();
+      });
     }
   });
   createContextMenus();
   // 反思（2026-08-13 第五十次）：新安装时自动打开引导页（(16) 新装弹引导页）。
-  //   仅 reason==='install' 触发，扩展更新(reason='update')不打扰用户。
-  if (details && details.reason === 'install') {
+  //   2026-09-09 第二百五十次（用户指令"安装更新应当跳转到引导页，初始化"）：update
+  //   也跳转——版本变更清 IDB 后词频需重新拉取，引导页走初始化链路（原设计"更新
+  //   不打扰"废止：更新后词典空窗期用户无从得知，引导页明示初始化进度更稳）。
+  if (details && (details.reason === 'install' || details.reason === 'update')) {
     chrome.tabs.create({ url: chrome.runtime.getURL('src/guide/guide.html') }).catch(() => {});
   }
   log('[VocabRadar][sw][' + _ts() + '] onInstalled');
@@ -229,15 +247,9 @@ chrome.runtime.onStartup.addListener(() => {
 // 都确保菜单存在。removeAll+create 是幂等操作，反复调用安全。
 createContextMenus();
 
-// 反思（2026-08-08）：用户反馈「菜单依旧中英文夹杂」。
-//   界面语言切换时重建右键菜单，使标题语言同步更新。
-if (chrome.storage && chrome.storage.onChanged) {
-  chrome.storage.onChanged.addListener((changes, area) => {
-    if (area === 'local' && changes.uiLanguage) {
-      createContextMenus();
-    }
-  });
-}
+// 第二百四十四次（用户裁定）：原此处有 storage.onChanged 监听 uiLanguage 变化重建菜单
+//   （2026-08-08"中英文夹杂"修法）。标题已统一为固定格式 "VocabRadar: query {word}"，
+//   不再随界面语言分叉，监听失去存在意义，随菜单实现一并退役。
 
 // 反思（2026-07-06）：用户反馈"为啥每次开启 ASR 都要下载模型？"。
 // 根因：offscreen document 仅在 START_ASR 时创建，SW 被回收后 offscreen 也可能被回收，
@@ -246,34 +258,26 @@ if (chrome.storage && chrome.storage.onChanged) {
 ensureOffscreen().catch(() => { /* 首次创建可能失败，不影响主流程 */ });
 
 /**
- * 创建右键菜单（i18n，随界面语言动态切换）
+ * 创建右键菜单
  * 反思（2026-08-05 修正）：用户要求"ocr改为之前，点击识别当前帧"。
  *   移除 image/video 上下文 OCR 菜单项（很多视频无法右键识别），
  *   OCR 回归侧栏按钮点击截帧方式。保留 selection 上下文的查词菜单。
- * 反思（2026-08-08）：用户反馈「菜单依旧中英文夹杂」。
- *   根因：右键菜单标题硬编码中文 '🦫VocabRadar：查 "%s"'，
- *   界面语言为英文时仍是中文，造成中英文夹杂。
- *   修正：从 chrome.storage.local 读取 uiLanguage，动态选择标题语言。
- *   同时监听 storage 变化，语言切换时重建菜单。
+ * 第二百四十四次（用户裁定）：标题统一 "VocabRadar: query %s"（%s=选中文本），
+ *   不再按 uiLanguage 分叉。历史沿革：第一百零九次"查词/Look up"→"翻译/Translate"，
+ *   2026-08-08 为"中英文夹杂"引入按界面语言动态选标题（含 onChanged 重建监听）；
+ *   现用户直接定死单一格式，storage 读取（每次菜单重建一次 IO）一并退役。
+ *   removeAll+create 幂等。
+ * 第二百四十五次（用户裁定）：标题改版 "VocabRadar: 🔍 %s"。🔍 为 Unicode 6.0（2010）
+ *   老字符，Win10 系统字形普遍覆盖，与 177 次退役的 🦫（Emoji 13 新字符致豆腐块）不同源。
  */
 function createContextMenus() {
-  // 先尝试从 storage 读取界面语言，异步创建菜单
-  // 第一百零九次（用户裁定）：菜单语义从"查词/Look up"改为"翻译/Translate"——
-  // 选中文本面板支持整句翻译，不只是单词查询。
-  chrome.storage.local.get({ uiLanguage: 'en' }, (res) => {
-    const lang = res.uiLanguage || 'en';
-    // 第一百七十七次：去掉 🦫（Win10 旧版 Segoe UI Emoji 无字形，菜单里显示为豆腐块）
-    const title = (lang === 'zh')
-      ? 'VocabRadar：翻译 "%s"'
-      : 'VocabRadar: Translate "%s"';
-    chrome.contextMenus.removeAll(() => {
-      chrome.contextMenus.create({
-        id: 'beaver-lookup',
-        title: title,
-        contexts: ['selection']
-      });
-      log('[VocabRadar][sw][' + _ts() + '] 右键菜单已注册（翻译, lang=' + lang + '）');
+  chrome.contextMenus.removeAll(() => {
+    chrome.contextMenus.create({
+      id: 'beaver-lookup',
+      title: 'VocabRadar: 🔍 %s',
+      contexts: ['selection']
     });
+    log('[VocabRadar][sw][' + _ts() + '] 右键菜单已注册（🔍 查词）');
   });
 }
 
@@ -1731,7 +1735,9 @@ async function handleFetchAudio(url, urls) {
         }
         const arrayBuffer = await res.arrayBuffer();
         log('[VocabRadar][sw][' + _ts() + '] fetchAudio 成功(第' + (i + 1) + '次), 大小:', Math.round(arrayBuffer.byteLength / 1024) + 'KB');
-        return { ok: true, arrayBuffer };
+        // 2026-09-08 第二百四十次：base64 回传（chrome.runtime 消息默认 JSON 序列化，
+        //   ArrayBuffer 直传变 {}），页面端 asr-client.js b64ToU8 解码
+        return { ok: true, b64: abToB64(arrayBuffer), bytes: arrayBuffer.byteLength };
       } catch (e) {
         const host = safeHostOf(cu);
         console.error('[VocabRadar][sw][' + _ts() + '] fetchAudio 异常(第' + (i + 1) + '次, host=' + host + ', credentials=' + attempts[i].credentials + '):', e);
@@ -1746,6 +1752,22 @@ async function handleFetchAudio(url, urls) {
 // 提取 URL host，便于异常诊断；失败返回 'unknown'
 function safeHostOf(url) {
   try { return new URL(url).host; } catch (e) { return 'unknown'; }
+}
+
+// ArrayBuffer → base64（2026-09-08 第二百四十次）：扩展消息回传二进制的统一出口。
+//   根因（官方博客《Unlock Structured Clone for Chrome Extension Messaging》2026-04）：
+//   chrome.runtime 消息默认 JSON 序列化（结构化克隆为 Chrome 148 起 manifest 可选项），
+//   JSON 下 ArrayBuffer 实测变空对象 {}（byteLength=undefined）——wordfreq 词频
+//   "压缩大小: NaN KB" 即此根因。凡经消息回传的二进制一律先转 base64 字符串
+//   （JSON 100% 安全），页面端 src/lib/b64.js b64ToU8 解码。
+//   分块 fromCharCode：apply 单次参数上限约 65k，0x8000 步进防栈溢出。
+function abToB64(buf) {
+  const u8 = new Uint8Array(buf);
+  let s = '';
+  for (let i = 0; i < u8.length; i += 0x8000) {
+    s += String.fromCharCode.apply(null, u8.subarray(i, i + 0x8000));
+  }
+  return btoa(s);
 }
 
 /**
@@ -1833,7 +1855,8 @@ async function handleFetchAudioRange(url, start, end, urls) {
         if (res.status === 206) {
           const ab = await res.arrayBuffer();
           log('[VocabRadar][sw][' + _ts() + '] fetchAudioRange[' + range + '] ' + Math.round(ab.byteLength / 1024) + 'KB');
-          return { ok: true, arrayBuffer: ab };
+          // 2026-09-08 第二百四十次：base64 回传（同 fetchAudio），页面端解码
+          return { ok: true, b64: abToB64(ab), bytes: ab.byteLength };
         }
         if (res.status === 200) {
           // CDN 不支持 Range：中止并放弃全量响应体
@@ -1890,8 +1913,10 @@ async function handleFetchUrl(url) {
 //   固定值；即使宿主页面伪造消息，也只能拉到这 12 个公开词典文件（防借道 SSRF）。
 // 回退链：jsdelivr 三镜像（cdn→fastly→gcore，/npm/ 前缀）→ unpkg（无 /npm/ 前缀），
 //   与 tessdata 回退链同构（offscreen.js TESSDATA_SOURCES）。
-// 回传：直传 ArrayBuffer（结构化克隆；2026-09-08 用户质疑"下载文件为何要来回
-//   转换传递"——去掉 base64 转换，与 WF_FETCH 同口径）；内容仍是 gzip 原始
+// 回传：base64 字符串（2026-09-08 第二百四十次：chrome.runtime 消息默认 JSON 序列化，
+//   ArrayBuffer 直传实测变 {}——此前"去 base64 转换直传"基于结构化克隆的错误假设，
+//   官方博客实锤 structured clone 仅 Chrome 148+ manifest 可选项；页面端
+//   build-phonemize.mjs 注入的 loader 内联 atob 解码）；内容仍是 gzip 原始
 //   字节，gunzip 由 kuromoji 自己做。命中本地 Cache API 时直接回缓存不发网络。
 const KURO_DICT_BASE = 'kuromoji@0.1.2/dict/';
 const KURO_DICT_FILES = new Set([
@@ -1920,6 +1945,7 @@ async function handleKuroFetch(url) {
     //   异常（无 Cache API/配额满）均退化纯网络，不阻塞多源回退链。
     let cache = null;
     try { cache = await caches.open('kuro-dict-v1'); } catch (_) { /* Cache API 不可用，退化纯网络 */ }
+    const srcErrs = []; // 逐源失败原因收集（2026-09-09 用户裁定：失败要说清哪个链接连不上）
     for (const src of KURO_SOURCES) {
       const tryUrl = 'https://' + src.host + src.prefix + dictPath;
       try {
@@ -1927,11 +1953,12 @@ async function handleKuroFetch(url) {
         if (hit) {
           const cbuf = await hit.arrayBuffer();
           log('[VocabRadar][sw][' + _ts() + '] kuroFetch ' + file + ' ← 本地缓存 ' + (cbuf.byteLength / 1024).toFixed(1) + 'KB');
-          return { ok: true, data: cbuf };
+          return { ok: true, b64: abToB64(cbuf) };
         }
         const res = await fetch(tryUrl, { credentials: 'omit' });
         if (!res.ok) {
-          log('[VocabRadar][sw][' + _ts() + '] kuroFetch HTTP ' + res.status + ': ' + tryUrl.slice(0, 60));
+          log('[VocabRadar][sw][' + _ts() + '] kuroFetch HTTP ' + res.status + ': ' + tryUrl);
+          srcErrs.push(tryUrl + ' -> HTTP ' + res.status);
           continue;
         }
         // 回填本地缓存（clone 后 put；失败静默——缓存是加速项不是依赖项）
@@ -1939,12 +1966,16 @@ async function handleKuroFetch(url) {
           try { await cache.put(tryUrl, res.clone()); } catch (_) { /* 配额满等，忽略 */ }
         }
         const buf = await res.arrayBuffer();
-        if (!buf || buf.byteLength === 0) continue;
+        if (!buf || buf.byteLength === 0) {
+          log('[VocabRadar][sw][' + _ts() + '] kuroFetch 空响应: ' + tryUrl);
+          srcErrs.push(tryUrl + ' -> 空响应');
+          continue;
+        }
         log('[VocabRadar][sw][' + _ts() + '] kuroFetch ' + file + ' ← ' + src.host + ' ' + (buf.byteLength / 1024).toFixed(1) + 'KB');
-        return { ok: true, data: buf };
-      } catch (_) { /* 该源网络异常，试下一源 */ }
+        return { ok: true, b64: abToB64(buf) };
+      } catch (e) { srcErrs.push(tryUrl + ' -> ' + String((e && e.message) || e)); }
     }
-    return { ok: false, error: 'kuroFetch: 全部 CDN 源失败: ' + file };
+    return { ok: false, error: 'kuroFetch 全源失败: ' + srcErrs.join(' | ') };
   } catch (e) {
     return { ok: false, error: String(e.message || e) };
   }
@@ -1961,7 +1992,9 @@ async function handleKuroFetch(url) {
 //   content script 无 crypto.subtle，故 SHA-256 在 SW 端做：逐源拉 files.json →
 //   找 entry → bytes + sha256 双比对，不匹配即弃包试下一源，杜绝截断/篡改包入词典。
 const WF_BASE = 'datasets/vocabradar/wordfreq/resolve/main/';
-const WF_FILE_RE = /^data\/small_[a-z]{2,3}\.msgpack\.gz$/;
+// 2026-09-09：正则加捕获组提取语言码——handleWfFetch 拿它查 meta.json 的
+//   languages[lang].kept 词数基准（用户裁定：词数基准从远程 meta 拉取，扩展不写死）。
+const WF_FILE_RE = /^data\/small_([a-z]{2,3})\.msgpack\.gz$/;
 const WF_SOURCES = ['https://huggingface.co/' + WF_BASE, 'https://hf-mirror.com/' + WF_BASE];
 let _wfFilesCache = null; // files.json promise 缓存（失败置空允许下次重试）
 
@@ -1985,45 +2018,97 @@ function getWfFilesJson() {
   return _wfFilesCache;
 }
 
+// meta.json 词数基准（2026-09-09，用户裁定："从远程的meta拉取的词数才是正确的，
+//   校验词数和sha256不都是一下子，先校验sha256算文件，再读取后校验词数"）。
+//   meta.json 在 HF 数据集根（不在 files.json 清单内），结构
+//   { version, generatedAt, languages: { <lang>: { total, removed, kept } } }，
+//   kept = clean 过滤后词数（en=28811，与本地解码实测一致）。双源拉取+失败不缓存，
+//   与 getWfFilesJson 同款模式。
+let _wfMetaCache = null;
+
+function getWfMeta() {
+  if (!_wfMetaCache) {
+    _wfMetaCache = (async () => {
+      for (const base of WF_SOURCES) {
+        try {
+          const res = await fetch(base + 'meta.json', { credentials: 'omit', cache: 'no-store' });
+          if (!res.ok) continue;
+          const j = await res.json();
+          if (j && j.languages && typeof j.languages === 'object') return j;
+        } catch (_) { /* 该源异常，试下一源 */ }
+      }
+      return null;
+    })().then((j) => {
+      if (!j) _wfMetaCache = null; // 失败不缓存，允许下次重试
+      return j;
+    });
+  }
+  return _wfMetaCache;
+}
+
 async function handleWfFetch(file) {
   try {
     if (typeof file !== 'string' || !WF_FILE_RE.test(file)) {
       return { ok: false, error: 'wfFetch: 非白名单词频文件: ' + file };
     }
     const manifest = await getWfFilesJson();
-    if (!manifest) return { ok: false, error: 'wfFetch: files.json 全源失败' };
+    if (!manifest) return { ok: false, error: 'wfFetch: files.json 全源失败: ' + WF_SOURCES.map((b) => b + 'files.json').join(' | ') };
     const entry = manifest.files.find((f) => f.file === file);
     if (!entry || !entry.sha256) return { ok: false, error: 'wfFetch: files.json 无记录: ' + file };
+    const srcErrs = []; // 逐源失败原因收集（2026-09-09 用户裁定：失败要说清哪个链接连不上）
     for (const base of WF_SOURCES) {
       try {
         const res = await fetch(base + file, { credentials: 'omit' });
         if (!res.ok) {
-          log('[VocabRadar][sw][' + _ts() + '] wfFetch HTTP ' + res.status + ': ' + file);
+          log('[VocabRadar][sw][' + _ts() + '] wfFetch HTTP ' + res.status + ': ' + base + file);
+          srcErrs.push(base + file + ' -> HTTP ' + res.status);
           continue;
         }
         const buf = await res.arrayBuffer();
-        if (!buf || buf.byteLength === 0) continue;
+        if (!buf || buf.byteLength === 0) {
+          log('[VocabRadar][sw][' + _ts() + '] wfFetch 空响应: ' + base + file);
+          srcErrs.push(base + file + ' -> 空响应');
+          continue;
+        }
         if (entry.bytes && buf.byteLength !== entry.bytes) {
-          log('[VocabRadar][sw][' + _ts() + '] wfFetch ' + file + ' bytes 不符 ' + buf.byteLength + '≠' + entry.bytes + '，弃包');
+          log('[VocabRadar][sw][' + _ts() + '] wfFetch ' + base + file + ' bytes 不符 ' + buf.byteLength + '≠' + entry.bytes + '，弃包');
+          srcErrs.push(base + file + ' -> bytes 不符 ' + buf.byteLength + '≠' + entry.bytes);
           continue;
         }
         // SHA-256 校验（SW 恒 secure context，crypto.subtle 可用）
         const digest = await crypto.subtle.digest('SHA-256', buf);
         const hex = Array.prototype.map.call(new Uint8Array(digest), (b) => b.toString(16).padStart(2, '0')).join('');
         if (hex !== String(entry.sha256).toLowerCase()) {
-          log('[VocabRadar][sw][' + _ts() + '] wfFetch ' + file + ' sha256 不符，弃包');
+          log('[VocabRadar][sw][' + _ts() + '] wfFetch ' + base + file + ' sha256 不符，弃包');
+          srcErrs.push(base + file + ' -> sha256 不符');
           continue;
         }
-        // 2026-09-08（用户质疑"下载文件为何要来回转换传递"）：去掉 ArrayBuffer→base64
-        //   分块转换，直接经 chrome.runtime.sendMessage 结构化克隆回传 ArrayBuffer——
-        //   Chrome 102+ / Firefox 均支持（与 KURO_FETCH 同口径）。
+        // 2026-09-08 第二百四十次（当日教训）：上午曾按用户质疑"去掉 base64 转换直传"，
+        //   实测页面端 byteLength=NaN、解压 Failed to fetch——根因是 chrome.runtime 消息
+        //   默认 JSON 序列化（官方博客实锤，structured clone 仅 Chrome 148+ manifest
+        //   可选项），ArrayBuffer 直传变空对象 {}。改回 base64 分块编码回传（abToB64），
+        //   页面端 word-loader.js b64ToU8 解码。
         log('[VocabRadar][sw][' + _ts() + '] wfFetch ' + file + ' ← ' + base.slice(8, 24) + ' ' + (buf.byteLength / 1024).toFixed(1) + 'KB（sha256 校验通过）');
         // sha256/bytes 随返回值回传：调用方（word-loader.js loadWordfreq）成功后写入
         //   storage.wfInstalled[lang]，作为 HF files.json 轮询比对（checkWfUpdates）的基线
-        return { ok: true, data: buf, sha256: hex, bytes: buf.byteLength };
-      } catch (_) { /* 该源网络异常，试下一源 */ }
+        // 2026-09-09（用户裁定）：顺手取 meta.json 的 kept 词数基准一并回传（"校验词数
+        //   和sha256不都是一下子"）——sha256 验文件在此，词数比对在页面端解码后做。
+        //   meta 不可得只告警不阻塞（sha256 已保文件完整性），kept 不匹配才由页面端弃包。
+        let kept;
+        const langM = WF_FILE_RE.exec(file);
+        if (langM && langM[1]) {
+          const meta = await getWfMeta();
+          const rec = meta && meta.languages && meta.languages[langM[1]];
+          if (rec && Number.isFinite(rec.kept)) {
+            kept = rec.kept;
+          } else {
+            log('[VocabRadar][sw][' + _ts() + '] wfFetch ' + file + ' meta.json 词数基准不可得，词数校验本次跳过');
+          }
+        }
+        return { ok: true, b64: abToB64(buf), sha256: hex, bytes: buf.byteLength, kept };
+      } catch (e) { srcErrs.push(base + file + ' -> ' + String((e && e.message) || e)); }
     }
-    return { ok: false, error: 'wfFetch: 全部源失败或校验不过: ' + file };
+    return { ok: false, error: 'wfFetch 全源失败: ' + srcErrs.join(' | ') };
   } catch (e) {
     return { ok: false, error: String(e.message || e) };
   }

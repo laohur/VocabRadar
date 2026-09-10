@@ -49,6 +49,7 @@
 // 第九十五次：流式下载需要 fMP4 解析（moof 边界/tfdt 时间戳/mdhd 时标）与带宽信息
 import { getBilibiliAudioInfo } from './bilibili-audio.js';
 import { walkBoxes, findMoofSync, parseMdhdTimescale, parseTfdtSeconds, completePrefixEnd } from './fmp4.js';
+import { b64ToU8 } from './b64.js';
 
 // === 模块状态 ===
 // 反思（2026-07-06）：用户反馈"为啥一直要间隔几十毫秒就有日志输出"。
@@ -1008,10 +1009,16 @@ function fetchRangeWithTimeout(urls, start, end, timeoutMs) {
       _contentChanFails++;
       pushStatusLocal('diag', '内容通道失败(' + String(c.error || '').slice(0, 40) + ')，转SW通道');
     }
-    return Promise.race([
+    // 2026-09-08 第二百四十次：SW 通道返回 base64（chrome.runtime 消息默认 JSON
+    //   序列化，ArrayBuffer 直传变 {}），解码后统一为 { ok, arrayBuffer } 与内容通道对齐
+    const r = await Promise.race([
       sendMessage({ type: 'FETCH_AUDIO_RANGE', url: urls[0], urls, start, end }),
       new Promise((resolve) => setTimeout(() => resolve({ ok: false, error: 'range超时(' + Math.round(timeoutMs / 1000) + 's)' }), timeoutMs))
     ]);
+    if (r && r.ok && r.b64) {
+      return { ok: true, arrayBuffer: b64ToU8(r.b64).buffer };
+    }
+    return r;
   })();
 }
 
@@ -1038,10 +1045,15 @@ async function legacyPrepareFromUrl(urls, videoEl) {
       _contentChanFails++;
       console.warn('[VocabRadar][asr-client][' + _ts() + '] 同源整文件失败，转SW:', c.error);
     }
-    return Promise.race([
+    // 2026-09-08 第二百四十次：SW 通道返回 base64，解码统一为 { ok, arrayBuffer }（同上）
+    const r = await Promise.race([
       sendMessage({ type: 'FETCH_AUDIO', url: urls[0], urls }),
       new Promise((resolve) => setTimeout(() => resolve({ ok: false, error: '下载超时(120s)' }), 120000))
     ]);
+    if (r && r.ok && r.b64) {
+      return { ok: true, arrayBuffer: b64ToU8(r.b64).buffer };
+    }
+    return r;
   })();
   if (!dlResp || !dlResp.ok || !dlResp.arrayBuffer) {
     console.warn('[VocabRadar][asr-client][' + _ts() + '] B站路径：音频下载失败', dlResp?.error);
