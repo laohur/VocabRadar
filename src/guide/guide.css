@@ -828,9 +828,9 @@ input::placeholder { color: var(--g-muted); opacity: 1; }
 .g-parser-input {
   width: 100%;
   box-sizing: border-box;
-  /* 262 次：去 min-height:340——261 的"没内容收一行"靠 JS 设 inline height:38px，
-     CSS min-height 会顶住 inline 高度致收一行永不生效（用户复测仍不缩的根因）；
-     高度完全由 autosizeInput 控制（无内容 38px 一行，有内容按内容延高上限 560） */
+  /* 263 次：恢复 min-height:340（用户"输入框恢复之前大小"，261/262 的一行收起整套废除；
+     autosizeInput 按内容在 340~560 间延高） */
+  min-height: 340px;
   max-height: 560px;
   overflow-y: auto;
   resize: none;
@@ -921,15 +921,6 @@ input::placeholder { color: var(--g-muted); opacity: 1; }
   /* 259 次（用户"列表多了就延申"）：去 150px 上限——列表自然延申撑长整栏（页面滚动），
      输入框按自身内容定高不被挤压（inputwrap flex:0 0 auto 兜底） */
 }
-/* 261 次：空列表单行提示（虚线一行，兼拖放指引；有文件时被列表取代） */
-.g-parser-file-empty {
-  padding: 4px 8px;
-  font-size: 12px;
-  color: var(--g-muted, #72797a);
-  text-align: center;
-  border: 1px dashed var(--beaver-outline, #c2c9bf);
-  border-radius: 8px;
-}
 .g-parser-file {
   display: flex;
   align-items: center;
@@ -989,6 +980,18 @@ input::placeholder { color: var(--g-muted); opacity: 1; }
   gap: 8px;
 }
 .g-parser-out-actions .func-btn { padding: 6px 16px; font-size: 13px; }
+/* 263 次：解析失败清单（文件列表下逐条红字） */
+.g-parser-failures {
+  margin-top: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.g-parser-failure {
+  font-size: 12px;
+  color: #b23a2e;
+  word-break: break-all;
+}
 /* 261 次（用户"在结果框末尾显示，就是导出按钮行靠右"）：元信息行移到复制/导出按钮行
    右端（margin-left:auto 顶到行尾），有结果才显示 */
 .g-parser-meta {

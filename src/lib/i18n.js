@@ -138,7 +138,8 @@ const DICT = {
     'parser.bytes': 'bytes',
     'parser.empty': 'No text extracted.',
     'parser.fail': 'Parse failed: ',
-    'parser.unsupported': 'Unsupported type: {what}',
+    'parser.textFail': 'Cannot parse as text (binary or unknown encoding)',
+    'parser.failSeeList': ' failed item(s) — see the list under the file list',
     // 256 次：多链接/多文件/复制导出
     'parser.linksCount': '{n} link(s)',
     'parser.multiFiles': '{n} file(s)',
@@ -147,7 +148,6 @@ const DICT = {
     // 257/260 次：空态提示 i18n 化、结果框元信息行（字符+字节，替代完成 toast）
     'parser.outputTip': 'Parsed plain text will appear here.',
     'parser.needDocx': 'Legacy .doc is not supported — please save it as .docx first.',
-    'parser.fileListEmpty': 'Drop / paste / upload files to add to the batch',
     'parser.fileSave': 'Save file',
     'parser.fileDelete': 'Remove from batch',
     'parser.noInput': 'Enter text or a link, or drop/paste a file first',
@@ -523,7 +523,8 @@ const DICT = {
     'parser.bytes': '字节',
     'parser.empty': '未解析出文本。',
     'parser.fail': '解析失败：',
-    'parser.unsupported': '暂不支持的类型：{what}',
+    'parser.textFail': '无法按文本解析（二进制或未知编码）',
+    'parser.failSeeList': ' 条失败——详见文件列表下方清单',
     // 256 次：多链接/多文件/复制导出
     'parser.linksCount': '{n} 条链接',
     'parser.multiFiles': '{n} 个文件',
@@ -532,7 +533,6 @@ const DICT = {
     // 257/260 次：空态提示 i18n 化、结果框元信息行（字符+字节，替代完成 toast）
     'parser.outputTip': '解析出的纯文本将显示在这里。',
     'parser.needDocx': '旧版 .doc 暂不支持——请先另存为 .docx。',
-    'parser.fileListEmpty': '拖入/粘贴/上传文件加入本批',
     'parser.fileSave': '保存文件',
     'parser.fileDelete': '移出本批',
     'parser.noInput': '请先输入文本/链接，或拖入/粘贴文件',

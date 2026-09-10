@@ -40,6 +40,7 @@ let _preview = null;                        // 拍照/录制预览槽 {url, file
 let _parsing = false;                       // 解析中标志（解析/拍照互斥，按钮防重入）
 let _lastResult = '';                       // 最近一次解析结果（复制/导出用）
 let _liveTexts = [];                        // 录制实时识别句缓存（停止后并入结果）
+let _lastFailures = [];                     // 最近一次解析的失败清单（文件列表下逐条展示，263 次）
 
 const URL_RE = /^https?:\/\/\S+$/i;
 const TEXT_EXTS = new Set(['txt', 'md', 'markdown', 'csv', 'tsv', 'json', 'xml', 'srt', 'vtt', 'log', 'nfo']);
@@ -47,8 +48,6 @@ const AUDIO_EXTS = new Set(['mp3', 'wav', 'ogg', 'oga', 'm4a', 'flac', 'aac', 'o
 const VIDEO_EXTS = new Set(['mp4', 'webm', 'mkv', 'mov', 'avi', 'm4v', 'flv', 'ts']);
 // 输入/输出框高度上限（与输出框一致，到底再内部滚动）
 const BOX_MAX_HEIGHT = 560;
-// 输入框收起态=一行高（261 次：无内容/有预览时收一行；与 .g-parser-ph line-height 保持一致）
-const ONE_LINE_HEIGHT = 38;
 
 /** 文件类型判定（mime 优先，扩展名兜底）→ pdf|docx|doc|epub|html|text|image|audio|video|null */
 function detectParserKind(file) {
@@ -146,9 +145,11 @@ function setFail(msg) {
   if (!out) return;
   out.innerHTML = `<div class="g-parser-center g-empty-tip" style="color:#b23a2e">${escapeHtml(t('parser.fail') + String(msg).slice(0, 200))}</div>`;
 }
-/** 换输入清旧结果（文案走 i18n 随界面语言） */
+/** 换输入清旧结果（文案走 i18n 随界面语言）；失败清单一并清空 */
 function resetOutput() {
   _lastResult = '';
+  _lastFailures = [];
+  renderFailures();
   const out = $('g-parser-output');
   if (out) out.innerHTML = `<div class="g-parser-center g-empty-tip">${escapeHtml(t('parser.outputTip'))}</div>`;
   renderResultMeta();
@@ -300,11 +301,52 @@ async function parseSingleFile(file, idx, total) {
     // 旧版二进制 .doc：浏览器端无成熟解析器（mammoth 仅 docx），如实给转存指引
     throw new Error(t('parser.needDocx'));
   }
-  throw new Error(t('parser.unsupported', { what: file.name || 'unknown' }));
+  // 263 次（用户"尝试纯文本解析，解析失败的，注明"）：未知类型不再直接报不支持，
+  //   先尝试按文本解（编码探测链），失败才进失败清单
+  return parseUnknownAsText(file);
+}
+
+/** 未知类型按文本解析尝试：编码探测链 utf-8 严格 → utf-16le 严格（Windows ini 等常见）→
+ *  gb18030 严格（简中 ANSI）；全失败按 NUL 字节占比判二进制，抛出可行动原因
+ *  （调用方收入失败清单，在文件列表下逐条展示） */
+async function parseUnknownAsText(file) {
+  const buf = new Uint8Array(await file.arrayBuffer());
+  for (const enc of ['utf-8', 'utf-16le', 'gb18030']) {
+    if (enc === 'utf-16le' && buf.length % 2 !== 0) continue;
+    try {
+      return new TextDecoder(enc, { fatal: true }).decode(buf).replace(/^\uFEFF/, '');
+    } catch (e) { /* 试下一种编码 */ }
+  }
+  const sample = buf.subarray(0, Math.min(buf.length, 8192));
+  let nuls = 0;
+  for (const b of sample) { if (b === 0) nuls++; }
+  if (sample.length > 0 && nuls / sample.length > 0.02) {
+    throw new Error(t('parser.textFail') + ' (binary)');
+  }
+  throw new Error(t('parser.textFail') + ' (unknown encoding)');
+}
+
+/** 解析失败清单渲染（263 次，用户"在文件列表下逐条说"）：每条一行（红字），
+ *  来源=最近一次解析的失败条目（链接/文件）；新输入或新解析开始时清空 */
+function renderFailures() {
+  const box = $('g-parser-failures');
+  if (!box) return;
+  box.innerHTML = '';
+  if (!_lastFailures.length) {
+    box.hidden = true;
+    return;
+  }
+  box.hidden = false;
+  for (const line of _lastFailures) {
+    const item = document.createElement('div');
+    item.className = 'g-parser-failure';
+    item.textContent = line;
+    box.appendChild(item);
+  }
 }
 
 /** 解析按钮："输入框有啥，解析识别啥"——文本（批链接或纯文本）+ 全部文件 顺序拼接；
- *  批链接逐条容错（单链接失败不拖垮整批），文件逐个容错，失败汇总定位到条目 */
+ *  批链接/文件逐条容错（单条失败不拖垮整批），失败清单在文件列表下逐条展示 */
 function onParseClick() {
   if (!hasInput()) {
     toast(t('parser.noInput'), { error: true });
@@ -320,7 +362,7 @@ function onParseClick() {
           parts.push(await parseLink(link));
         } catch (e) {
           log('单链接解析失败:', link, e);
-          failed.push(`${link.slice(0, 60)}: ${String((e && e.message) || e).slice(0, 60)}`);
+          failed.push(`${link.slice(0, 60)}: ${String((e && e.message) || e).slice(0, 80)}`);
         }
       }
     } else if (_input.text.trim()) {
@@ -333,14 +375,17 @@ function onParseClick() {
         parts.push(await parseSingleFile(items[i].file, i, items.length));
       } catch (e) {
         log('单文件解析失败:', items[i].file.name, e);
-        failed.push(`${items[i].file.name}: ${String((e && e.message) || e).slice(0, 60)}`);
+        failed.push(`${items[i].file.name}: ${String((e && e.message) || e).slice(0, 80)}`);
       }
     }
+    // 263 次：失败清单落文件列表下方逐条展示（清 toast 独扛——toast 保留摘要提示）
+    _lastFailures = failed;
+    renderFailures();
     if (parts.length === 0 && failed.length > 0) {
       throw new Error(failed.join(' | '));
     }
     if (failed.length > 0) {
-      toast(t('parser.fail') + failed.join(' | ').slice(0, 120), { error: true, duration: 6000 });
+      toast(t('parser.fail') + failed.length + t('parser.failSeeList'), { error: true, duration: 6000 });
     }
     return parts.join('\n\n');
   });
@@ -388,14 +433,9 @@ function renderFileList() {
   const box = $('g-parser-filelist');
   if (!box) return;
   box.innerHTML = '';
-  if (_input.items.length === 0) {
-    // 261 次（用户"只有自己没内容时候就一行"）：空列表收为一行虚线提示（也是拖放目标指引）
-    const empty = document.createElement('div');
-    empty.className = 'g-parser-file-empty';
-    empty.textContent = t('parser.fileListEmpty');
-    box.appendChild(empty);
-    return;
-  }
+  // 263 次：空列表不再渲染任何占位行（261 的虚线提示行被用户视为"多了个框"）——
+  // 没文件就没有列表，拖入/上传指引由输入框占位符承担
+  if (_input.items.length === 0) return;
   _input.items.forEach((it, idx) => {
     const row = document.createElement('div');
     row.className = 'g-parser-file';
@@ -502,7 +542,11 @@ function setPreview(file) {
   del.addEventListener('click', clearPreview);
   box.appendChild(del);
   box.hidden = false;
-  autosizeInput();   // 261 次：预览占用后输入框收一行
+  // 263 次：预览独占输入框（用户口径"拍照录制会独占输入框为预览"）——隐藏 textarea，
+  //   预览槽顶替其位置；清除预览后输入框恢复
+  const wrap = $('g-parser-inputwrap');
+  if (wrap) wrap.style.display = 'none';
+  autosizeInput();
   log('Parser 预览已更新:', file.name);
 }
 
@@ -513,7 +557,9 @@ function clearPreview() {
   }
   const box = $('g-parser-media');
   if (box) { box.innerHTML = ''; box.hidden = true; }
-  autosizeInput();   // 261 次：预览撤除后输入框按内容恢复
+  const wrap = $('g-parser-inputwrap');
+  if (wrap) wrap.style.display = '';
+  autosizeInput();
 }
 
 /** 清空输入（✕ 清除所有——用户"清除按钮可以清除所有"）：文本+文件批+预览槽 */
@@ -530,16 +576,12 @@ function clearInput() {
   log('Parser 输入已全部清空');
 }
 
-/** 输入框高度（261 次规则）：有内容→按内容延高（上限 560，到底内部滚动）；
- *  自己没内容→收一行；有预览槽时也收一行（文本保留在 value 里照常参与解析，
- *  仅显示收起——用户"有预览时输入框也缩短为一行"） */
+/** 输入框高度（263 次定稿）：按内容延高（CSS min-height 340 起步，上限 560 内滚）——
+ *  261/262 的"没内容/有预览收一行"整批废除（用户："就一个框…输入框恢复之前大小，
+ *  内容多了会撑，文件列表多了也会撑"）；预览存在时输入框整体隐藏（预览独占输入框） */
 function autosizeInput() {
   const ta = $('g-parser-input');
   if (!ta) return;
-  if (!ta.value || _preview) {
-    ta.style.height = ONE_LINE_HEIGHT + 'px';
-    return;
-  }
   ta.style.height = 'auto';
   ta.style.height = Math.min(ta.scrollHeight, BOX_MAX_HEIGHT) + 'px';
 }
