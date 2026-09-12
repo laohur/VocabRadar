@@ -46,7 +46,7 @@ import { getAnnotations } from '../lib/annotator.js';
 // 282次：SUB_FONTS/subFontFamily/subFxDecl/buildUserStyleDecl 收敛到共享层 styles.js——
 //   字体栈、特效声明、用户样式声明与 guide 页预览同源（预览=真实渲染），删除本文件
 //   本地 SUB_FONTS 常量（旧三栈与共享层重复，字体扩列后必然脱节）。
-import { SUBTITLE_TEXT_STYLES, SUBTITLE_POSITIONS, POOL_STYLES, SUB_FONTS, findStyle, annDecl, splitAnnTemplate, DEFAULT_ANN_TEMPLATE, BUILD_STAMP, subFontFamily, subFxDecl, buildUserStyleDecl } from '../lib/styles.js';
+import { SUBTITLE_TEXT_STYLES, SUBTITLE_POSITIONS, POOL_STYLES, SUB_FONTS, findStyle, annDecl, splitAnnTemplate, DEFAULT_ANN_TEMPLATE, BUILD_STAMP, subFontFamily, subFxDecl, buildUserStyleDecl, pxToSizePct, subFontSizePct } from '../lib/styles.js';
 
 let _overlay = null;
 let _video = null;
@@ -108,7 +108,7 @@ function injectOverlayStyles() {
   padding: 8px 14px;
   border-radius: 6px;
   /* 第一百二十七次：默认字号随视频高度自适应——--beaver-sub-fs 由
-   * updateOverlayPosition 按 rect.height*4.5% 注入（clamp 18-40px）。
+   * updateOverlayPosition 按视频高×当前样式百分比注入（297次无 clamp；298次短边作废）。
    * 依据：YouTube 默认 ≈24-28px / Netflix 28-32px@1080p / BBC ≈8% 帧高、
    * Captionator polyfill 默认 4.5%；原固定 16px 低于广播下限，用户反馈太小。 */
   font-size: var(--beaver-sub-fs, 24px);
@@ -198,15 +198,32 @@ ${buildSubtitleStyleCss()}
  *   个性化字幕（style-custom）外观走 CSS 变量（setSubtitleCustom 写入内联值）。
  * @returns {string} CSS 规则文本
  */
+// 293次：当前样式的字号百分比（字号=视频高×pct；custom/用户样式各取其值）。
+// 297次缺省默认 5%（298次：基线改回统一视频高，短边作废）。
+let _sizePct = 5;
+let _customPct = 5;
+function sizePctOfStyle(id) {
+  if (id === 'custom') return _customPct;
+  if (id && id.indexOf('user-') === 0) {
+    const st = _userStylesCache.find((s) => s.id === id);
+    if (st) return subFontSizePct(st);
+  }
+  if (id && id !== 'none') {
+    const s = findStyle(SUBTITLE_TEXT_STYLES, id);
+    if (s) return subFontSizePct(s);
+  }
+  return 7;
+}
+function refreshActivePct() { _sizePct = sizePctOfStyle(_styleId); }
+
 function buildSubtitleStyleCss() {
-  // 正文样式规则（none + 内置）：字体/颜色/字号/背景/描边/粗细全部来自元数据
+  // 正文样式规则（none + 内置）：字体/颜色/背景/描边/粗细来自元数据；
+  // 293次：字号不再写死 px（旧 size 固定值小屏大、大屏小），统一走基础层
+  //   var(--beaver-sub-fs)——updateOverlayPosition 按视频高×当前样式 sizePct 注入。
   const textRules = SUBTITLE_TEXT_STYLES.map((s) => {
     const parts = [];
     parts.push('background:' + (s.bg || 'transparent'));
     parts.push('color:' + s.fg);
-    // 第一百二十七次：size=null（默认外观）不写死字号，回落基础层的
-    // var(--beaver-sub-fs)——随视频高度 4.5% 自适应（clamp 18-40px）
-    if (s.size) parts.push('font-size:' + s.size + 'px');
     parts.push('font-family:' + (SUB_FONTS[s.font] || SUB_FONTS.sans));
     parts.push('border-radius:4px');
     parts.push('max-width:90%');
@@ -225,12 +242,12 @@ function buildSubtitleStyleCss() {
   //   subFxDecl(c.fx) 拆分写入；缺省值须合法——'none' 对 -webkit-text-stroke 非法，
   //   描边缺省用 '0 transparent'，投影缺省 'none'，paint-order 缺省 'normal'。
   // 283次：缺省值对齐 guide 页 Custom 默认（用户"默认底色为透明，不小的字体"）——
-  //   bg 缺省 transparent、fs 缺省 28px（guide.js _subCustom 同源；旧 storage 残留
-  //   已由 guide 首次写回兜底，此处变量缺省只为无 guide 数据时的兜底渲染）。
+  //   bg 缺省 transparent（guide.js _subCustom 同源；旧 storage 残留已由 guide 首次写回兜底）。
+  // 293次：字号不再自带变量（旧 --beaver-custom-fs），与内置/用户样式一样走基础层
+  //   var(--beaver-sub-fs)（按视频高×custom sizePct 注入），setSubtitleCustom 只存百分比。
   const customRule = '#beaver-subtitle-overlay.style-custom{' +
     'background:var(--beaver-custom-bg,transparent);' +
     'color:var(--beaver-custom-fg,#ffffff);' +
-    'font-size:var(--beaver-custom-fs,28px);' +
     'font-family:var(--beaver-custom-ff,' + SUB_FONTS.sans + ');' +
     'text-shadow:var(--beaver-custom-tsh,none);' +
     '-webkit-text-stroke:var(--beaver-custom-stroke,0 transparent);' +
@@ -262,10 +279,13 @@ function buildSubtitleStyleCss() {
  *   改用独立 <style> 元素整表重写——声明由共享层 buildUserStyleDecl 生成，
  *   与 guide 预览（subCard/buildSubBoxCss）同源，预览=真实渲染。
  * 同步缓存 _userStylesCache 供 storage 监听判定「激活样式被删除」。
- * @param {Array<{id:string,bg?:string,fg?:string,fontSize?:number,fontFamily?:string,fx?:string}>} list
+ * @param {Array<{id:string,bg?:string,fg?:string,sizePct?:number,fontSize?:number,fontFamily?:string,fx?:string}>} list
  */
 function syncUserStyleRules(list) {
   _userStylesCache = Array.isArray(list) ? list.filter((st) => st && typeof st.id === 'string' && st.id.indexOf('user-') === 0) : [];
+  // 293次：用户规则字号同样走 --beaver-sub-fs 实时变量（静态表无法跟视频高），此处过滤
+  //   font-size 声明（旧值残留经 subFontSizePct 在 refreshActivePct 内换算）。
+  refreshActivePct();
   if (!document.head) return;
   if (!_userStyleSheet) {
     _userStyleSheet = document.createElement('style');
@@ -273,7 +293,7 @@ function syncUserStyleRules(list) {
     document.head.appendChild(_userStyleSheet);
   }
   const css = _userStylesCache.map((st) => {
-    const decl = buildUserStyleDecl(st);
+    const decl = buildUserStyleDecl(st).filter((d) => d.indexOf('font-size') !== 0);
     decl.push('border-radius:4px');
     decl.push('max-width:90%');
     return '#beaver-subtitle-overlay.style-' + st.id + '{' + decl.join(';') + ';}';
@@ -311,10 +331,13 @@ function updateOverlayPosition() {
   const posMeta = findStyle(SUBTITLE_POSITIONS, _posId);
   const ratio = (posMeta && typeof posMeta.ratio === 'number') ? posMeta.ratio : 0.1;
   _overlay.style.left = (rect.left + rect.width / 2) + 'px';
-  // 第一百二十七次：默认字号随视频高度自适应——4.5% 视频高（Captionator polyfill
-  // 同款比例），clamp 18-40px；预设样式自带固定 px 时其类规则优先，不受影响。
+  // 第一百二十七次：默认字号随视频高度自适应（Captionator polyfill 同款比例）。
+  // 293次：全部样式统一按当前样式百分比换算（预设固定 px 已退役）。
+  // 297次 clamp 删除（用户"clamp 不是失真么"）——大小屏纯比例；缺省默认 5%。
+  // 298次（用户笔误纠正）：基线改回统一视频高（短边方案作废）。
   {
-    const fs = Math.round(Math.min(40, Math.max(18, rect.height * 0.045)));
+    const pct = (typeof _sizePct === 'number' && isFinite(_sizePct)) ? _sizePct : 5;
+    const fs = Math.round(rect.height * pct / 100);
     _overlay.style.setProperty('--beaver-sub-fs', fs + 'px');
   }
   const h = _overlay.offsetHeight || 0;
@@ -816,7 +839,8 @@ export function setSubtitleStyle(style) {
     } catch (e) { /* 清理失败忽略 */ }
   }
   _styleId = id;
-  // 反思（2026-08-16 第七十一次）：④ 恒加类——'none' 也加 .style-none（显式黑底条），
+  refreshActivePct();   // 293次：切换样式即刷新字号百分比（随后 onTimeUpdate 经 updateOverlayPosition 落 px）
+  // 反思（2026-08-16 第七十一次）：④ 恒加类——'none' 也加 .style-none（显式黑底条）、
   //   不再依赖基础规则隐式兜底，避免"选了透明样式却仍显示黑底"。
   _overlay.classList.add('style-' + _styleId);
   // 反思（2026-08-16 第七十一次）：④ 应用后打印计算样式取证——computed backgroundColor
@@ -859,15 +883,20 @@ export function setSubtitlePosition(posId) {
  * 外观走 CSS 变量（buildSubtitleStyleCss 生成的 style-custom 规则消费），
  * 变量写入 overlay 内联 style；字号/字体变化会改变 overlay 尺寸，custom 激活时
  * 清 _lastKey 强制重渲染（渲染末尾会 updateOverlayPosition 重定位）。
- * @param {{bg?:string, fg?:string, fontSize?:number, fontFamily?:string}|null} c
+ * @param {{bg?:string, fg?:string, fontSizePct?:number, sizePct?:number, fontSize?:number, fontFamily?:string}|null} c
  */
 export function setSubtitleCustom(c) {
   if (!_overlay || !c || typeof c !== 'object') return;
-  // 283次：缺省对齐引导页新默认（透明底/28px）——空值回落不再是黑条/小字
+  // 283次：缺省对齐引导页新默认（透明底；旧 storage 残留由 guide 首次写回兜底）。
+  // 293次：字号改百分比，经 refreshActivePct 进入 --beaver-sub-fs 实时变量
+  //   （--beaver-custom-fs 退役）。295次：参数名 fontSizePct（过渡 sizePct 与旧 fontSize 照收）。
   _overlay.style.setProperty('--beaver-custom-bg', c.bg || 'transparent');
   _overlay.style.setProperty('--beaver-custom-fg', c.fg || '#ffffff');
-  const fs = Number(c.fontSize);
-  _overlay.style.setProperty('--beaver-custom-fs', (fs > 0 ? fs : 28) + 'px');
+  _customPct = (typeof c.fontSizePct === 'number' && isFinite(c.fontSizePct))
+    ? Math.min(12, Math.max(2, c.fontSizePct))
+    : ((typeof c.sizePct === 'number' && isFinite(c.sizePct))
+      ? Math.min(12, Math.max(2, c.sizePct)) : pxToSizePct(c.fontSize));
+  refreshActivePct();
   _overlay.style.setProperty('--beaver-custom-ff', subFontFamily(c.fontFamily));
   // 282次：fx 特效拆分写三变量（style-custom 规则消费，见 buildSubtitleStyleCss）。
   //   subFxDecl 输出形如 'text-shadow:…' 或 '-webkit-text-stroke:…;paint-order:…'，

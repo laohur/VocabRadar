@@ -43,8 +43,8 @@ export let _annotateOov = false;             // 注释表外词
 export let _annotateRepeat = false;
 
 // 280次：侧邻注释模板（annBrackets 布尔退役；ws/scanner.js 消费）
-// 281次：默认改 {word}{meaning}（直接相连无空格，与 styles.js DEFAULT_ANN_TEMPLATE 同步）
-export let _annTemplate = '{word}{meaning}';
+// 284次：默认组合 {target} {annotation}（与 styles.js DEFAULT_ANN_TEMPLATE 同步）
+export let _annTemplate = '{target} {annotation}';
 
 export let _wordOnlyMode = false;        // 词单模式：仅显示单词
 
@@ -461,8 +461,8 @@ export function set_allAnnotations(v) {
 export function set_annotateOov(v) { _annotateOov = v; }
 export function set_annotateRepeat(v) { _annotateRepeat = v; }
 // 280次：侧邻注释模板 setter（原 set_annBrackets）
-// 281次：回落默认同步 {word}{meaning}
-export function set_annTemplate(v) { _annTemplate = (typeof v === 'string' && v.trim()) ? v : '{word}{meaning}'; }
+// 284次：回落默认同步 {target} {annotation}
+export function set_annTemplate(v) { _annTemplate = (typeof v === 'string' && v.trim()) ? v : '{target} {annotation}'; }
 export function set_annotationsCache(v) { _annotationsCache = v; }
 export function set_collectedSubs(v) { _collectedSubs = v; }
 export function set_detailMode(v) { _detailMode = v; }

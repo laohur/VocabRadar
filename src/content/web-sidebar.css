@@ -281,8 +281,9 @@
 }
 /* 278次（用户"查询输入框跟周围颜色几乎无区分度"）：#c2c9bf 浅描边在近白面板
    （--beaver-bg #fbfdf9）上消失——改中性深描边，focus 主绿不变。
-   280次：与中段短搜索框同交互——非激活=透明底+半透明描边+占位符隐藏；
-   激活（聚焦）=白底实态+主绿描边+占位符显现。 */
+   285次：常态即白底（用户"展开输入框没有底色而用外框颜色"）；
+   286次：聚焦绿描边不保留——聚焦边框与常态同色；
+   占位符仍非聚焦隐藏、聚焦显现。 */
 #beaver-web-sidebar .beaver-web-qinput {
   flex: 1 1 auto;
   min-width: 0;
@@ -292,11 +293,13 @@
   padding: 0 10px;
   font-size: 13px;
   color: var(--beaver-text, #1a1f1a);
-  background: transparent;
+  /* 285次（用户"展开输入框没有底色而用外框颜色"）：常态即白底，不再透明融进面板 */
+  background: #ffffff;
 }
 #beaver-web-sidebar .beaver-web-qinput:focus {
   outline: none;
-  border-color: var(--beaver-primary, #2e6b43);
+  /* 286次（用户"聚焦绿描边不保留"）：聚焦只去外框线，边框色与常态一致 */
+  border-color: rgba(26, 31, 26, 0.30);
   background: #ffffff;
 }
 #beaver-web-sidebar .beaver-web-qinput::placeholder {

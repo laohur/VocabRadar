@@ -75,9 +75,12 @@ export function isBalancedParens(s) {
 export function pickCleanShortTrans(translations) {
   if (!Array.isArray(translations) || translations.length === 0) return '';
   // 顺序遍历：优先用第一条释义；仅当它清洗后无有效短义项时才试下一条
+  // 292次（用户实测 radar → "雷达, 无线电探测器 | [计] 雷达图"，短释义应为"雷达"）：
+  //   在线渠道分隔符多样（, ， | ｜ 、），cleanDictEntry 只认 ;；——此处再按宽分隔符
+  //   切分取首段（只动短义项选取，cleanDictEntry 全文输出不动，他处显示不变）。
   for (const full of translations) {
     if (!full) continue;
-    const parts = cleanDictEntry(full).split('；').map((s) => s.trim()).filter(Boolean);
+    const parts = cleanDictEntry(full).split(/[；;，,|｜、]/).map((s) => s.trim()).filter(Boolean);
     if (parts.length === 0) continue;
     // 括号平衡守卫：截断残片（如 "短裤( shor"）不进注释
     const balanced = parts.filter(isBalancedParens);

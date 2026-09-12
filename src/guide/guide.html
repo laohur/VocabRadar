@@ -76,11 +76,43 @@
               <input id="annotateRepeat" type="checkbox">
               <span data-key="chkAnnotateRepeat">注释重复生词</span>
             </label>
-            <!-- 第二百七十二次：Query 独立开关（queryEnabled）——右键查询与搜索栏（悬浮搜索条）
-                 的总开关，不再由网页提示负责（提示关了查询仍可用）；停用规则同步新增搜索栏项 -->
+          </div>
+        </div>
+      </div>
+
+      <!-- 286次：word hits 栏目——六处生词触达开关集中设定（右键查询/查询栏/网页提示/
+           文本侧栏/视频侧栏/视频叠加字幕），分别从原 Query（拆分为右键查询+查询栏）、
+           Web Hints、Text Sidebar、Video Sidebar、Video Overlay Subtitles 开关抽取，
+           原位置开关删除（popup 快捷开关不动，写同一存储键）。 -->
+      <div class="group" id="group-wordhits">
+        <div class="group-head">
+          <span class="group-name" data-key="groupWordHits">Word Hits</span>
+        </div>
+        <div class="group-body">
+          <div class="field-row">
             <label class="chk">
-              <input id="queryEnabled" type="checkbox">
-              <span data-key="chkQuery">Query（右键查询与搜索栏）</span>
+              <input id="hitContextLookup" type="checkbox">
+              <span data-key="hitContextLookup">右键查询</span>
+            </label>
+            <label class="chk">
+              <input id="hitQueryBar" type="checkbox">
+              <span data-key="hitQueryBar">查询栏</span>
+            </label>
+            <label class="chk">
+              <input id="hitTextHint" type="checkbox">
+              <span data-key="hitTextHint">网页提示</span>
+            </label>
+            <label class="chk">
+              <input id="hitTextSidebar" type="checkbox">
+              <span data-key="hitTextSidebar">文本侧栏</span>
+            </label>
+            <label class="chk">
+              <input id="hitVideoSidebar" type="checkbox">
+              <span data-key="hitVideoSidebar">视频侧栏</span>
+            </label>
+            <label class="chk">
+              <input id="hitOverlay" type="checkbox">
+              <span data-key="hitOverlay">视频叠加字幕</span>
             </label>
           </div>
         </div>
@@ -268,10 +300,7 @@
               <div class="pool-item" data-target="textStyle">
                 <div class="pool-item-name" data-key="poolItemWebHint">Web Hints</div>
                 <div class="pool-item-ctl">
-                  <label class="group-switch">
-                    <input id="textHintEnabled" type="checkbox">
-                    <span data-key="switchOn">On</span>
-                  </label>
+                  <!-- 286次：网页提示开关抽至 word hits 栏目；本卡只留 Side hint 子选项 -->
                   <label class="chk">
                     <input id="hintSideAnnotation" type="checkbox">
                     <span data-key="chkSideAnnotation">Side hint</span>
@@ -281,22 +310,12 @@
               </div>
               <div class="pool-item" data-target="annotationStyle">
                 <div class="pool-item-name" data-key="poolItemWebSidebar">Text Sidebar</div>
-                <div class="pool-item-ctl">
-                  <label class="group-switch">
-                    <input id="webSidebarEnabled" type="checkbox">
-                    <span data-key="switchOn">On</span>
-                  </label>
-                </div>
+                <!-- 286次：文本侧栏开关抽至 word hits 栏目 -->
                 <div class="pool-item-demo"></div>
               </div>
               <div class="pool-item" data-target="videoAnnotationStyle">
                 <div class="pool-item-name" data-key="poolItemSidebar">Video Sidebar</div>
-                <div class="pool-item-ctl">
-                  <label class="group-switch">
-                    <input id="sidebarEnabled" type="checkbox">
-                    <span data-key="switchOn">On</span>
-                  </label>
-                </div>
+                <!-- 286次：视频侧栏开关抽至 word hits 栏目 -->
                 <div class="pool-item-demo"></div>
               </div>
               <div class="pool-item" data-target="videoOverlayAnnStyle">
@@ -317,34 +336,38 @@
               <div class="pool-note pool-note-2" id="poolNoteRerender" data-key="poolNoteRerender">Annotation template — changing it re-renders the samples.</div>
               <div class="ann-tpl-row">
                 <label for="annTemplate" data-key="fieldAnnTemplate">Annotation template</label>
-                <input id="annTemplate" type="text" placeholder="{word}{meaning}">
-                <span class="ann-tpl-hint" data-key="annTemplateHint">{word} {meaning} are variables</span>
+                <input id="annTemplate" type="text" placeholder="{target} {annotation}">
+                <span class="ann-tpl-hint" data-key="annTemplateHint">{target} {annotation} are variables</span>
               </div>
             </div>
           </div>
         </div>
       </div>
 
-      <!-- 视频叠加字幕（281次重做）：正文样式只管字幕正文（内置 + 个性化 + 用户自建），
-           注释行外观由 Word Annotation 组第四栏 Subtitle hints on video 控制。
-           282次：个性化样式 = 底色/字色/字号/字体/特效五控件（字体 12 项、特效下拉
-           无/阴影/发光/描边/立体），行尾大加号把当前参数保存为新正文样式
-           （storage.subtitleUserStyles，样卡右上角可删除）；位置单选行；下方预览窗
-           （横屏 16:9 / 竖屏 9:16 切换，1080p 真实像素等比缩放），
-           正文/位置/注释任一变化立即刷新预览。 -->
+       <!-- 视频叠加字幕（281次重做）：正文样式只管字幕正文（内置 + 个性化 + 用户自建），
+            注释行外观由 Word Annotation 组第四栏 Subtitle hints on video 控制。
+            282次：个性化样式 = 底色/字色/字号/字体/特效五控件（字体 12 项、特效下拉
+            无/阴影/发光/描边/立体），行尾大加号把当前参数保存为新正文样式
+            （storage.subtitleUserStyles，样卡右上角可删除，283次样卡名可改）；位置单选行；
+            下方预览窗（横屏 16:9 / 竖屏 9:16 切换，1080p 真实像素等比缩放），
+            正文/位置/注释任一变化立即刷新预览。
+            288次：点击样例卡回填个性化行（选中不变）；预览注释落首尾两词。 -->
       <div class="group" data-collapsible>
         <div class="group-head">
           <button class="group-toggle" type="button">▸</button>
           <span class="group-name" data-key="groupOverlay">视频叠加字幕</span>
-          <label class="group-switch">
-            <input id="overlayEnabled" type="checkbox">
-            <span data-key="switchOn">开启</span>
-          </label>
+          <!-- 286次：叠加字幕开关抽至 word hits 栏目 -->
         </div>
         <div class="group-body" style="display:none;">
           <p class="style-desc" data-key="subStyleDesc">Text styles apply to subtitle text only; the annotation line follows “Subtitle hints on video” in Word Annotation. Any change (style / custom / position) updates the preview immediately.</p>
           <div class="sub-sec-label" data-key="subTextStyle">Subtitle Text Style</div>
           <div class="style-grid" id="subtitleStyleGrid"></div>
+          <!-- 290次：样例文字输入框——驱动样式卡与预览的样例句子（默认 VocabRadar is short
+               for vocabulary 词汇 radar(雷达).），持久化 storage.subtitleSample -->
+          <div class="sub-sample-row">
+            <span class="sub-sample-label" data-key="subSampleText">Sample text</span>
+            <input id="subSampleText" type="text" data-ph-key="subSamplePh">
+          </div>
           <div class="sub-sec-label" data-key="subCustomStyle">Custom Style</div>
           <!-- 282次：字体/特效下拉由 JS 按 SUB_FONT_OPTIONS（12 项）/SUB_FX_OPTIONS（5 项）
                填充，与 overlay 渲染同源；行尾大加号 = 把当前参数存为新正文样式 -->
@@ -354,13 +377,28 @@
             <label class="sub-custom-item"><span data-key="subCustomBg">Background</span><input id="subCustomBg" type="color" value="#000000"></label>
             <label class="sub-custom-item"><input id="subCustomBgTransparent" type="checkbox"><span data-key="subCustomTransparent">Transparent</span></label>
             <label class="sub-custom-item"><span data-key="subCustomFg">Text color</span><input id="subCustomFg" type="color" value="#ffffff"></label>
-            <label class="sub-custom-item"><span data-key="subCustomSize">Font size</span><input id="subCustomSize" type="number" min="12" max="60" step="1" value="28"></label>
+            <!-- 293次：字号改视频高百分比（2-12%，步进 0.5，默认 5） -->
+            <label class="sub-custom-item"><span data-key="subCustomSize">Font size</span><input id="subCustomSize" type="number" min="2" max="12" step="0.5" value="5"></label>
             <label class="sub-custom-item"><span data-key="subCustomFont">Font</span><select id="subCustomFont"></select></label>
             <label class="sub-custom-item"><span data-key="subCustomFx">Effect</span><select id="subCustomFx"></select></label>
+          </div>
+          <!-- 289次：CSS 代码行——左代码框（当前个性化样式的生成代码，可查看编辑，
+               作用于预览）+ 右大加号（存为新样式）；与五控件双向同步，同源渲染 -->
+          <div class="sub-css-row" id="subCssRow">
+            <textarea id="subCustomCss" rows="6" spellcheck="false" data-ph-key="subCustomCssPh"></textarea>
+            <!-- 290次：个性化样例卡（原网格内 custom 卡搬至此处，代码右侧）——原地刷新不闪；
+                 点击选中 custom -->
+            <div class="style-card sub-side-card" id="subCustomSideCard">
+              <div class="demo sub-stage" id="subCustomSideDemo"></div>
+              <div class="card-label" id="subCustomSideLabel">个性化</div>
+            </div>
             <button id="subCustomAdd" class="sub-add-btn" type="button" title="Save current custom as a new style">+</button>
           </div>
           <div class="sub-sec-label" data-key="subPosition">Position</div>
           <div class="sub-pos-radios" id="subPosRadios"></div>
+          <!-- 291次：注释方式单选（side 侧邻/detail 详细，写 storage.videoOverlayAnnMode，
+               与视频侧栏 Detail 按钮同一键，控制字幕注释布局） -->
+          <div class="sub-pos-radios" id="subAnnModeRadios"></div>
           <div class="sub-sec-label" data-key="subPreview">Preview</div>
           <div class="sub-preview-row" id="subPreviewRow"></div>
         </div>
@@ -368,7 +406,7 @@
 
       <!-- 停用站点（Deactivate）（第二百七十次新增）：默认折叠。逐条记录=左侧地址输入
            （支持 * 通配，可含端口与路径前缀），右侧点选要停用的功能
-           （所有/搜索栏/网页提示/文本侧栏/视频侧栏/视频叠加字幕）；「所有」全停时扩展
+            （所有/query bar/网页提示/文本侧栏/视频侧栏/视频叠加字幕）；「所有」全停时扩展
            在该站尽量不活动。HTML 兜底文案用英文（272 次：fillByDataKey 按界面语言覆盖，
            兜底不再写中文——避免英文界面闪现中文；匹配/存储唯一来源 src/lib/deactivate.js）。 -->
       <div class="group" id="group-deactivate" data-collapsible>

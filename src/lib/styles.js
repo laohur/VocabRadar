@@ -21,7 +21,8 @@
 //      视觉重复者去重（s2=马克笔半高、s4=微信波浪线、s12=微读红字、s14=蓝光）；
 //   3. 新增字段模型（见 POOL_STYLES 注释）与共享 CSS 生成器 buildAnnPoolCss——
 //      两处侧栏的手写 16 条 CSS（sidebar.css / web-sidebar.css）由生成器取代；
-//   4. annBrackets 布尔开关退役，改 annTemplate 字符串模板（默认 {word}({meaning})），
+//   4. annBrackets 布尔开关退役，改 annTemplate 字符串模板（280次默认 {word}({meaning})；
+//      284次默认改为 {target} {annotation}，旧变量名兼容），
 //      导出 splitAnnTemplate / renderAnnText / migrateAnnBrackets 工具；
 //   5. SUBTITLE_TEXT_STYLES 再增补 4 条调研所得流行字幕样式。
 export const BUILD_STAMP = '__BUILD_STAMP__';
@@ -177,18 +178,19 @@ export const VANN_TO_ANN_MIGRATION = {
 // ================================================================
 // 注释模板（280次：annBrackets 布尔退役 → annTemplate 字符串模板）
 // ================================================================
-// 模板变量：{word}=生词原词、{meaning}=释义。
-// 281次（用户裁定）：默认改为 {word}{meaning}——直接相连无空格，去掉 280 次的
-//   一层括号（渲染如「apple苹果」）。migrateAnnBrackets 引用本常量自动跟随。
-// 侧邻注释渲染时生词 span 已独立存在，{word} token 被丢弃（不重复输出），
-// 即渲染结果 = {meaning} 前后的字面量（pre + 释义 + post）。
-// 详细模式（注释另起一行）保持"词头+释义"结构，不套模板（维持现状）。
-export const DEFAULT_ANN_TEMPLATE = '{word}{meaning}';
+// 模板变量：{target}=目标文本（旧名 {word}，兼容）、{annotation}=注释（旧名 {meaning}，兼容）。
+// 284次（用户裁定）：默认组合改为 {target} {annotation}——目标文本后接空格再接注释
+//   （渲染如「apple 苹果」）。旧模板 {word}{meaning} / {word}({meaning}) 仍可解析。
+// 侧邻注释渲染时目标 span 已独立存在，{target} token 被丢弃（不重复输出），
+// 即渲染结果 = {annotation} 前后的字面量（pre + 注释 + post）。
+// 详细模式（注释另起一行）保持"词头+注释"结构，不套模板（维持现状）。
+export const DEFAULT_ANN_TEMPLATE = '{target} {annotation}';
 
-/** 拆分模板为 {meaning} 前后字面量；{word} 丢弃 */
+/** 拆分模板为 {annotation} 前后字面量；{target} 丢弃（兼容旧 {word}/{meaning}） */
 export function splitAnnTemplate(tpl) {
   const t = (typeof tpl === 'string' && tpl.trim()) ? tpl : DEFAULT_ANN_TEMPLATE;
-  const marked = t.split('{meaning}').join('\x00').split('{word}').join('');
+  const marked = t.split('{annotation}').join('\x00').split('{meaning}').join('\x00')
+    .split('{target}').join('').split('{word}').join('');
   const i = marked.indexOf('\x00');
   if (i === -1) return { pre: marked, post: '' };
   return { pre: marked.slice(0, i), post: marked.slice(i + 1) };
@@ -200,9 +202,9 @@ export function renderAnnText(tpl, meaning) {
   return pre + (meaning || '') + post;
 }
 
-/** 旧 annBrackets 布尔 → 模板（true/缺省 = 带括号，false = 素释义） */
+/** 旧 annBrackets 布尔 → 模板（true/缺省 = 默认组合，false = 素注释无目标） */
 export function migrateAnnBrackets(v) {
-  return v === false ? '{meaning}' : DEFAULT_ANN_TEMPLATE;
+  return v === false ? '{annotation}' : DEFAULT_ANN_TEMPLATE;
 }
 
 // ================================================================
@@ -296,9 +298,8 @@ export function buildAnnPoolCss({ root, word, annInline, annWord }) {
 }
 
 // === 字幕文字样式（视频内字幕外观，class style-{id} 定义在 subtitle-overlay.js） ===
-// 反思（2026-08-16 第六十九次）：字幕样式 = 文字样式 × 位置样式 两维独立选择——
+// 反思（2026-08-16 第六十九次）：字幕样式 = 文字样式×位置样式 两维独立选择——
 //   位置不编码在文字样式里，改由 SUBTITLE_POSITIONS 单独选择（storage.subtitlePosition）。
-// 第一百二十七次：'none' 的 size 置 null——字号随视频高度自适应（4.5%，clamp 18-40px）。
 // 281次：精简内置条目；残留旧 id 由 sanitizeStyleId 回落 'none'（渲染端 findStyle
 //   找不到即用首项，不会崩）。字幕正文样式只管字幕正文——注释（释义行）外观改由
 //   样式池第四栏 subtitle hints on video（storage.videoOverlayAnnStyle 池条目）单独控制。
@@ -307,31 +308,62 @@ export function buildAnnPoolCss({ root, word, annInline, annWord }) {
 //   TikTok Hormozi 大字（海外最火的字幕流派）、TikTok 卡拉OK黄、TikTok 极简、
 //   短视频竖屏大字描边、字幕组黄字黑边、CapCut 优雅斜体、电影衬线描边、立体弹幕。
 //   按流行度降序排列；全部 annMode:'side'（正文样式不牵扯注释布局）。
-//   字段仍限 bg/fg/size/font/weight/bold/italic/edge/shadow——shadow 支持字符串
+//   字段仍限 bg/fg/sizePct/font/weight/bold/italic/edge/shadow——shadow 支持字符串
 //   （第六十四次），pop3d 借此实现硬阴影立体字。
+// 293次（用户"字号用百分比"）：size（px）→ 百分比（Netflix 只用百分比、
+//   BBC 行高 8%、ASS 相对 PlayResY、YouTube 按默认倍率，见调研）：换算基准
+//   SUBTITLE_REF_H=540（px 时代设计短边，16:9 下即高度；22→4、24→4.5、26→5、28→5、
+//   30→5.5、32→6，karaoke/fancy/pop3d 较旧值 ±1px，540p 下观感一致）。
+// 297次百分比基线（298次：改回统一视频高，短边方案作废）：换算基准
+//   SUBTITLE_REF_H=540（px 时代设计高）；缺省默认 5%。旧 size 键不再读取。
+export const SUBTITLE_REF_H = 540;
+// px（旧）→ 视频高百分比（custom 控件/用户样式 2-12%）
+// 297次：缺省默认 5%（298次：基线改回统一视频高）。
+export function pxToSizePct(px) {
+  const n = Number(px);
+  if (!isFinite(n)) return 5;
+  return Math.min(12, Math.max(2, Math.round(n / SUBTITLE_REF_H * 100 * 2) / 2));
+}
+// 视频高百分比 → px（297次：clamp 系失真（用户原话），删除——大小屏纯比例，
+//   与 Netflix/BBC 无钳制口径一致；refH 缺省 540 设计高；缺省默认 5%）。
+// 298次（用户笔误纠正）：基线改回统一视频高（短边方案作废）。
+export function sizePctToPx(pct, refH) {
+  const h = (typeof refH === 'number' && refH > 0) ? refH : SUBTITLE_REF_H;
+  const p = (typeof pct === 'number' && isFinite(pct)) ? pct : 5;
+  return Math.round(p / 100 * h);
+}
+// 条目字号百分比统一入口（fontSizePct 优先 → 293-294 过渡 sizePct → 旧 fontSize px 换算 → 缺省）
+// 295次（用户"那就fontSizePct吧"）：参数名统一为 fontSizePct。
+// 297次：缺省默认 5%。
+export function subFontSizePct(item) {
+  if (item && typeof item.fontSizePct === 'number' && isFinite(item.fontSizePct)) return item.fontSizePct;
+  if (item && typeof item.sizePct === 'number' && isFinite(item.sizePct)) return item.sizePct;
+  if (item && item.fontSize !== undefined) return pxToSizePct(item.fontSize);
+  return 5;
+}
 export const SUBTITLE_TEXT_STYLES = [
   // 'none' = 默认字幕外观（深色半透明条 + 白字），不应用任何额外样式覆盖
-  { id: 'none', label: { en: 'Default', zh: '默认外观' }, font: 'sans', fg: '#ffffff', bg: 'rgba(0,0,0,0.75)', size: null, edge: null, bold: false, italic: false, shadow: false, annMode: 'side', sample: 'He passed the quiz.' },
+  { id: 'none', label: { en: 'Default', zh: '默认外观' }, font: 'sans', fg: '#ffffff', bg: 'rgba(0,0,0,0.75)', fontSizePct: 5, edge: null, bold: false, italic: false, shadow: false, annMode: 'side', sample: 'He passed the quiz.' },
   // 1. YouTube 官方默认：白字 + 黑半透明底（全球覆盖面最大的字幕样式）
-  { id: 'yt-box', label: { en: 'YouTube', zh: 'YouTube 底条' }, font: 'sans', fg: '#ffffff', bg: 'rgba(8,8,8,0.75)', size: 22, edge: null, bold: false, italic: false, shadow: false, annMode: 'side', sample: 'He passed the quiz.' },
+  { id: 'yt-box', label: { en: 'YouTube', zh: 'YouTube 底条' }, font: 'sans', fg: '#ffffff', bg: 'rgba(8,8,8,0.75)', fontSizePct: 4, edge: null, bold: false, italic: false, shadow: false, annMode: 'side', sample: 'He passed the quiz.' },
   // 2. Netflix 官方：白字 + 软阴影（无底条，阴影保证亮暗场景均可读）
-  { id: 'netflix', label: { en: 'Netflix', zh: 'Netflix 阴影' }, font: 'sans', fg: '#ffffff', bg: null, size: 24, edge: null, bold: false, italic: false, shadow: '0 1px 3px rgba(0,0,0,.9),0 0 8px rgba(0,0,0,.7)', annMode: 'side', sample: 'He passed the quiz.' },
+  { id: 'netflix', label: { en: 'Netflix', zh: 'Netflix 阴影' }, font: 'sans', fg: '#ffffff', bg: null, fontSizePct: 4.5, edge: null, bold: false, italic: false, shadow: '0 1px 3px rgba(0,0,0,.9),0 0 8px rgba(0,0,0,.7)', annMode: 'side', sample: 'He passed the quiz.' },
   // 3. TikTok Hormozi 大字：特粗 Impact 白字 + 黑底（Alex Hormozi 带火的短视频字幕流派）
-  { id: 'hormozi', label: { en: 'Hormozi Big', zh: 'Hormozi 大字' }, font: 'impact', fg: '#ffffff', bg: 'rgba(0,0,0,0.92)', size: 32, edge: null, bold: false, italic: false, shadow: false, weight: 800, annMode: 'side', sample: 'He passed the quiz.' },
+  { id: 'hormozi', label: { en: 'Hormozi Big', zh: 'Hormozi 大字' }, font: 'impact', fg: '#ffffff', bg: 'rgba(0,0,0,0.92)', fontSizePct: 6, edge: null, bold: false, italic: false, shadow: false, weight: 800, annMode: 'side', sample: 'He passed the quiz.' },
   // 4. TikTok 卡拉OK：黄字 + 黑底（逐词高亮字幕的经典配色）
-  { id: 'karaoke', label: { en: 'Karaoke Yellow', zh: '卡拉OK黄' }, font: 'sans', fg: '#ffe135', bg: 'rgba(0,0,0,0.88)', size: 28, edge: null, bold: true, italic: false, shadow: false, annMode: 'side', sample: 'He passed the quiz.' },
+  { id: 'karaoke', label: { en: 'Karaoke Yellow', zh: '卡拉OK黄' }, font: 'sans', fg: '#ffe135', bg: 'rgba(0,0,0,0.88)', fontSizePct: 5, edge: null, bold: true, italic: false, shadow: false, annMode: 'side', sample: 'He passed the quiz.' },
   // 5. TikTok 极简：纯白字无装饰（最克制，不遮挡画面）
-  { id: 'minimal', label: { en: 'Minimal White', zh: '极简白字' }, font: 'sans', fg: '#ffffff', bg: null, size: 24, edge: null, bold: false, italic: false, shadow: false, annMode: 'side', sample: 'He passed the quiz.' },
-  // 6. 短视频竖屏大字：特粗白字黑描边（无底条，30px 大字号）
-  { id: 'shorts-big', label: { en: 'Shorts Big', zh: '短视频大字' }, font: 'sans', fg: '#ffffff', bg: null, size: 30, edge: '#000000', bold: false, italic: false, shadow: false, weight: 800, annMode: 'side', sample: 'He passed the quiz.' },
+  { id: 'minimal', label: { en: 'Minimal White', zh: '极简白字' }, font: 'sans', fg: '#ffffff', bg: null, fontSizePct: 4.5, edge: null, bold: false, italic: false, shadow: false, annMode: 'side', sample: 'He passed the quiz.' },
+  // 6. 短视频竖屏大字：特粗白字黑描边（无底条）
+  { id: 'shorts-big', label: { en: 'Shorts Big', zh: '短视频大字' }, font: 'sans', fg: '#ffffff', bg: null, fontSizePct: 5.5, edge: '#000000', bold: false, italic: false, shadow: false, weight: 800, annMode: 'side', sample: 'He passed the quiz.' },
   // 7. 字幕组经典：黄字黑描边（人人影视/射手年代沿用至今）
-  { id: 'edge-yellow', label: { en: 'Fansub Yellow', zh: '字幕组黄边' }, font: 'sans', fg: '#ffd60a', bg: null, size: 24, edge: '#000000', bold: true, italic: false, shadow: false, annMode: 'side', sample: 'He passed the quiz.' },
+  { id: 'edge-yellow', label: { en: 'Fansub Yellow', zh: '字幕组黄边' }, font: 'sans', fg: '#ffd60a', bg: null, fontSizePct: 4.5, edge: '#000000', bold: true, italic: false, shadow: false, annMode: 'side', sample: 'He passed the quiz.' },
   // 8. CapCut 优雅斜体：Arial 斜体白字 + 软阴影（剪映模板主流）
-  { id: 'fancy', label: { en: 'CapCut Italic', zh: '优雅斜体' }, font: 'arial', fg: '#ffffff', bg: null, size: 26, edge: null, bold: false, italic: true, shadow: '0 2px 6px rgba(0,0,0,.8)', annMode: 'side', sample: 'He passed the quiz.' },
+  { id: 'fancy', label: { en: 'CapCut Italic', zh: '优雅斜体' }, font: 'arial', fg: '#ffffff', bg: null, fontSizePct: 5, edge: null, bold: false, italic: true, shadow: '0 2px 6px rgba(0,0,0,.8)', annMode: 'side', sample: 'He passed the quiz.' },
   // 9. 电影衬线：Georgia 白字黑描边（院线字幕质感）
-  { id: 'movie', label: { en: 'Cinema Serif', zh: '电影衬线' }, font: 'georgia', fg: '#ffffff', bg: null, size: 24, edge: '#000000', bold: false, italic: false, shadow: false, annMode: 'side', sample: 'He passed the quiz.' },
+  { id: 'movie', label: { en: 'Cinema Serif', zh: '电影衬线' }, font: 'georgia', fg: '#ffffff', bg: null, fontSizePct: 4.5, edge: '#000000', bold: false, italic: false, shadow: false, annMode: 'side', sample: 'He passed the quiz.' },
   // 10. 立体弹幕：Impact 白字硬阴影（弹幕/游戏区 UP 主常用立体字）
-  { id: 'pop3d', label: { en: '3D Pop', zh: '立体弹幕字' }, font: 'impact', fg: '#ffffff', bg: null, size: 28, edge: null, bold: false, italic: false, shadow: '2px 2px 0 #000,4px 4px 0 rgba(0,0,0,.8)', weight: 800, annMode: 'side', sample: 'He passed the quiz.' }
+  { id: 'pop3d', label: { en: '3D Pop', zh: '立体弹幕字' }, font: 'impact', fg: '#ffffff', bg: null, fontSizePct: 5, edge: null, bold: false, italic: false, shadow: '2px 2px 0 #000,4px 4px 0 rgba(0,0,0,.8)', weight: 800, annMode: 'side', sample: 'He passed the quiz.' }
 ];
 
 // === 字幕字体表（282次：从 subtitle-overlay.js 模块常量收敛到共享层并扩列） ===
@@ -401,13 +433,15 @@ export function subFxDecl(fx) {
 }
 
 // === 用户自定义字幕正文样式（282次新增：Custom Style 大加号 → storage.subtitleUserStyles） ===
-// 条目结构：{ id:'user-<timestamp>', label:{en,zh}, bg, fg, fontSize, fontFamily, fx }
+// 条目结构：{ id:'user-<timestamp>', label:{en,zh}, bg, fg, sizePct, fontFamily, fx }
+// 293次：字号改百分比；refH=换算用视频高（guide 代码框/卡片预览传 540 设计高，
+//   overlay 用户规则过滤 font-size 后走 --beaver-sub-fs 实时变量，不用此式）。
 // 保存值=大加号按下时的 Custom 四参 + fx；渲染声明与 guide 预览、overlay 真实渲染同源。
-export function buildUserStyleDecl(st) {
+export function buildUserStyleDecl(st, refH) {
   const out = [];
   if (st.bg) out.push('background:' + st.bg);
   out.push('color:' + (st.fg || '#ffffff'));
-  out.push('font-size:' + (parseInt(st.fontSize, 10) || 24) + 'px');
+  out.push('font-size:' + sizePctToPx(subFontSizePct(st), refH) + 'px');
   out.push('font-family:' + subFontFamily(st.fontFamily));
   const fx = subFxDecl(st.fx);
   if (fx) out.push(fx);

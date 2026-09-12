@@ -68,24 +68,31 @@ function _hintSuppressed() {
     .then((s) => s.hint === true)
     .catch(() => false);
 }
-// 272次：Query（右键查询+搜索栏）可用性——停用规则「搜索栏」项 + 全局开关 queryEnabled。
+// 272次：Query（右键查询+查询栏）可用性——停用规则 query 项 + 全局开关。
 // 与网页提示解耦：提示关/停不影响查询，查询关/停不影响提示。
+// 286次：Query 拆分为右键查询（contextLookupEnabled）与查询栏（queryBarEnabled）；
+//   停用规则 query 项仍同时门控两者（规则语义不变）；旧 queryEnabled 仅作新键未设置时的回退。
 function _querySuppressed() {
   if (!_hintDeactLib) return Promise.resolve(false);
   return _hintDeactLib.suppressionFor(location)
     .then((s) => s.query === true)
     .catch(() => false);
 }
-function _queryEnabled() {
+function _storeFlag(key) {
   return new Promise((resolve) => {
     try {
-      chrome.storage.local.get({ queryEnabled: true }, (r) => resolve(r.queryEnabled !== false));
+      chrome.storage.local.get({ [key]: undefined, queryEnabled: true }, (r) =>
+        resolve((typeof r[key] === 'undefined' ? r.queryEnabled : r[key]) !== false));
     } catch (_) { resolve(true); }
   });
 }
-async function _queryAvailable() {
+async function _contextLookupAvailable() {
   if (await _querySuppressed()) return false;
-  return _queryEnabled();
+  return _storeFlag('contextLookupEnabled');
+}
+async function _queryBarAvailable() {
+  if (await _querySuppressed()) return false;
+  return _storeFlag('queryBarEnabled');
 }
 let _booted = false;
 
@@ -524,14 +531,14 @@ async function _hintBoot() {
     }, true);
 
     // 右键菜单查词消息
-    // 272次：①SHOW_CONTEXT_PANEL 由 Query 可用性（全局开关+停用规则「搜索栏」项）门控，
-    //   不再由网页提示负责——提示停了查询仍可用；②新增 OPEN_QUERY_BAR——右键菜单
-    //   无选中文本时弹搜索栏输入（转发 window 事件给文本侧栏 UI）。
+    // 272次：SHOW_CONTEXT_PANEL 由 Query 可用性门控，不再由网页提示负责——提示停了查询仍可用；
+    //   OPEN_QUERY_BAR——右键菜单无选中文本时弹查询栏输入（转发 window 事件给文本侧栏 UI）。
+    // 286次：两者分键门控——有选中文本走右键查询开关，无选中走查询栏开关。
     chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       if (msg.type === 'SHOW_CONTEXT_PANEL' && msg.text) {
-        _queryAvailable().then((ok) => {
+        _contextLookupAvailable().then((ok) => {
           if (!ok) {
-            console.log('[VocabRadar][text-hint] 右键查询被 Query 开关/停用规则关闭，忽略');
+            console.log('[VocabRadar][text-hint] 右键查询被开关/停用规则关闭，忽略');
             return;
           }
           // w4：panel.js 已改动态转发，catch 打日志防加载失败被静默吞掉
@@ -540,7 +547,7 @@ async function _hintBoot() {
         });
       }
       if (msg.type === 'OPEN_QUERY_BAR') {
-        _queryAvailable().then((ok) => {
+        _queryBarAvailable().then((ok) => {
           if (!ok) return;
           try { window.dispatchEvent(new CustomEvent('beaver-open-query-bar')); } catch (_) { /* ignore */ }
         });
@@ -596,7 +603,7 @@ function _hintInstallUnsuppressWatch() {
 function _hintGetSettings() {
   const DEFAULTS = {
     textHintEnabled: true,
-    // 272次：Query 独立开关（本模块消费右键查询/搜索栏门控）
+    // 272次：Query 独立开关（旧键，286次拆分为右键查询/查询栏后仅作回退，见 _storeFlag）
     queryEnabled: true,
     // 反思（2026-08-14 第五十四次修正）：恢复默认 5000，撤销第五十二次误改的 0
     rankThreshold: 5000,
@@ -622,8 +629,8 @@ function _hintGetSettings() {
     annotationStyle: 'none',
     // 280次：侧邻注释模板（annBrackets 布尔退役；
     //   classic script 不便 import styles.js，默认值/迁移字面量与 lib/styles.js 保持一致）
-    // 281次：默认改 {word}{meaning}（直接相连无空格，与 styles.js DEFAULT_ANN_TEMPLATE 同步）
-    annTemplate: '{word}{meaning}'
+    // 284次：默认组合 {target} {annotation}（空格分隔，与 styles.js DEFAULT_ANN_TEMPLATE 同步）
+    annTemplate: '{target} {annotation}'
   };
   return new Promise((resolve) => {
     const attempt = (retriesLeft) => {
@@ -646,9 +653,9 @@ function _hintGetSettings() {
           // 280次：旧 annBrackets 布尔一次性迁移——annTemplate 从未设置且旧键存在时，
           //   按旧值派生模板（true/缺省=默认模板，false=素释义）；不回写 storage，
           //   读取时派生即可（引导页保存 annTemplate 后旧键不再参与）。
-          // 281次：默认模板随 DEFAULT_ANN_TEMPLATE 同步为 {word}{meaning}。
+          // 284次：默认模板随 DEFAULT_ANN_TEMPLATE 同步为 {target} {annotation}。
           if (typeof all.annTemplate === 'undefined' && typeof all.annBrackets !== 'undefined') {
-            merged.annTemplate = (all.annBrackets === false) ? '{meaning}' : '{word}{meaning}';
+            merged.annTemplate = (all.annBrackets === false) ? '{annotation}' : '{target} {annotation}';
             delete merged.annBrackets;
           }
           resolve(merged);

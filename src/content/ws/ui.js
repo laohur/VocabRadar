@@ -1,7 +1,9 @@
 // VocabRadar 全站网页侧栏 —— 界面交互模块（ui）
 // 职责：侧栏 DOM 构建与 CSS 注入、事件与语言面板绑定、展开/收起、拖拽/缩放及位置尺寸持久化、
 //       标签切换、朗读/复制/详略/词单等交互、弹层关闭与覆盖层样式、重注入观察器、
-//       悬浮球与视频侧栏的存在性同步。
+//       query bar 与视频侧栏的存在性同步。
+// 当前作用：query bar = 图标边框 + 输入框（无悬浮球）；默认折叠态输入框透明无占位符
+//   （占位符经 ::placeholder transparent 隐藏），:focus-within 展开后显示占位符。
 // 说明：由 web-sidebar-impl.js 机械拆分而来，代码逐字保留，未改动任何逻辑。
 //       跨模块共享状态一律来自 ./core.js，写入走 core 导出的 set_xxx 接缝，绝不另存副本。
 
@@ -15,7 +17,7 @@ import { SUBTITLE_TEXT_STYLES, findStyle } from '../../lib/styles.js';
 // 272次：query 标签复用右键搜索卡片（唯一定义 th/panel.js：同 CSS/同结构/同渲染核心；
 // ES module 按 URL 单实例，与 text-hint bundle 共享同一 thState/模块状态）
 import { buildPanelCss, buildCardInnerHTML, renderQueryCard, bindLemmaChipClick } from '../th/panel.js';
-// 272次：Query 可用性 = 全局开关 queryEnabled + 停用规则「搜索栏」项（与网页提示解耦）
+// 272次：query bar 可用性 = 查询栏开关 queryBarEnabled（旧 queryEnabled 回退）+ 停用规则 query 项（与网页提示解耦）
 import { suppressionFor } from '../../lib/deactivate.js';
 import { reviveSidebarIfPossible, startVideoController } from '../video-controller.js';
 import { _activeTab, _allAnnotations, _cachedLearnLang, _detailMode, _pageSentences, _panelRect, _preExpandPos, _root, _wordOnlyMode, clampPosToViewport, clampRectToViewport, formatTime, getInjectionRoot, log, saveState, set_activeTab, set_detailMode, set_noAnnotation, set_panelRect, set_preExpandPos, set_wordOnlyMode, toast, ts } from './core.js';
@@ -35,18 +37,9 @@ export function buildSidebar() {
   const root = document.createElement('div');
   root.className = 'beaver-web-sidebar collapsed';
   root.id = 'beaver-web-sidebar';
+  // query bar = 图标边框 + 输入框；折叠态输入框透明、无占位符视觉（CSS 隐藏），
+  // 展开（:focus-within）后显示占位符。模板字符串内不写 HTML 注释（会随包发布）。
   root.innerHTML = `
-    <!-- 折叠球：悬浮球，扩展图标，点击展开 -->
-    <!-- 反思（2026-08-12 第四十六次）：img 元素在多浏览器中有原生拖拽行为，
-         导致 mousedown 被拦截、悬浮球拖不动。改用 div+CSS背景图彻底消除原生拖拽。 -->
-    <!-- 第一百七十一次（用户裁定"悬浮球不补充圆边，而是裁剪原图"）：
-         图标由「32px 居中 + 绿色圆底留白」改为铺满 48px 圆（background-size:cover），
-         溢出部分由 border-radius:50% + overflow:hidden 裁掉，不再出现绿色圆环。 -->
-    <!-- 272次：悬浮球改为搜索栏；275次（用户"移除三角，颜色用淡主题色"）——
-         只剩左品牌图标（点击展开侧栏/右键召唤视频侧栏）+ 短搜索框（聚焦变长，
-         Enter=输入完成→query 标签）；条底色用淡主题色；276次曾裁定"折叠态不显示
-         占位符"，278次用户改口径：折叠搜索栏输入前也显示占位符 query word for
-         translations...（ws.queryPh，en/zh 同文）；Query 关闭时只剩图标 -->
     <div class="beaver-web-collapse-tab" id="beaver-web-collapse-tab">
       <span class="beaver-qbar-icon" id="beaver-qbar-icon" title="${t('ws.expand')}">${brandIconSVG()}</span>
       <input class="beaver-qbar-input" id="beaver-qbar-input" type="text" spellcheck="false" placeholder="${t('ws.queryPh')}">
@@ -180,8 +173,8 @@ function markExpandGuard() {
 }
 
 export function bindEvents() {
-  // 272次：搜索栏两件套（275次移除三角）——
-  //   左图标点击=展开侧栏（沿用原悬浮球点击，含拖拽误触保护）；
+  // query bar 两件套（图标边框 + 输入框，无悬浮球）——
+  //   左图标点击=展开侧栏（含拖拽误触保护）；
   //   输入框 Enter=输入完成→展开到 query 标签并查询（query 标签内另有 🔍 按钮）。
   _root.querySelector('#beaver-qbar-icon').addEventListener('click', (e) => {
     e.stopPropagation();
@@ -481,10 +474,12 @@ function bindLanguagePanel() {
   });
 }
 
-// === 注入关键 CSS（同步，确保搜索栏立即可见）===
-// 反思（2026-08-07）：用户反馈"悬浮球依旧没有"。
-//   <link> 异步加载 CSS，加载前悬浮球无样式不可见。
+// === 注入关键 CSS（同步，确保 query bar 立即可见）===
+// query bar = 图标边框 + 输入框（无悬浮球）。
+// 反思（2026-08-07）：<link> 异步加载 CSS，加载前 query bar 无样式不可见。
 //   修正：用 <style> 同步注入 collapsed 态关键样式，不依赖 <link>。
+// 当前口径：默认折叠态输入框透明、无占位符视觉（::placeholder transparent）；
+//   点击/聚焦 :focus-within 展开后显示占位符（主流做法：CodePen 展开式搜索框 + MDN ::placeholder）。
 // 272次：折叠态由 48px 圆球改为搜索栏；274次（用户"搜索栏太张扬，本来就是为了
 //   轻量加的"）降噪——去绿底改中性半透明白、默认宽度收到 icon+一单词输入框+三角
 //   （约 150px，:focus-within 展到 300px）、三角去底色；.query-off（Query 关）48px 圆。
@@ -505,6 +500,12 @@ function bindLanguagePanel() {
 //      = min(calc(100vw − 396px), 8px)（web-sidebar.css .expanded 右 16px 反推），
 //      折叠条 left 锚定同值（宽视口=100vw−396px；窄视口≤404px 收边 8px），
 //      折叠↔展开切换时左上角坐标不动；折叠条向右生长（left 定位 + width 过渡）。
+// 284次纠正：旧注释"278次用户改口径：折叠也显示占位符"系误记（用户从未说过），已删除；
+//   模板字符串内 HTML 注释一并清除（esbuild/terser 不剥字符串内注释，会随上传包发布）。
+// 285次（用户"折叠看不到输入框"）：输入框透明底+无边框在绿底上隐形——改自带底色
+//   rgba(255,255,255,.72)+淡描边（折叠即见框），:focus-within 后白底实态；
+//   占位符仍折叠隐藏、展开显现（口径不变）。
+// 287次（用户"输入框不要浓边框色"）：描边 38%→16%、聚焦 60%→28%，只留浅痕。
 export function injectCriticalCSS() {
   if (document.getElementById('beaver-web-critical-css')) return;
   const style = document.createElement('style');
@@ -513,7 +514,8 @@ style.textContent = `
 #beaver-web-sidebar{position:fixed !important;z-index:2147483646 !important;font-family:-apple-system,"Segoe UI","Microsoft YaHei",sans-serif !important;font-size:16px !important;box-sizing:border-box !important;margin:0 !important;padding:0 !important;border:none !important;}
 #beaver-web-sidebar.collapsed{width:104px !important;height:40px !important;left:min(calc(100vw - 396px), 8px) !important;top:20px !important;right:auto !important;bottom:auto !important;border-radius:20px !important;background:rgba(198,233,208,0.50) !important;border:none !important;box-shadow:none !important;cursor:default !important;overflow:hidden !important;display:flex !important;align-items:center !important;transition:width .18s ease,background .18s ease,box-shadow .18s ease !important;}
 #beaver-web-sidebar.collapsed:focus-within{width:300px !important;background:rgba(198,233,208,0.90) !important;border:none !important;box-shadow:0 1px 4px rgba(28,77,50,0.18) !important;}
-#beaver-web-sidebar.collapsed .beaver-qbar-input{flex:1 1 auto !important;min-width:0 !important;height:28px !important;background:transparent !important;border:none !important;outline:none !important;border-radius:14px !important;padding:0 8px !important;font-size:13px !important;color:var(--beaver-text,#1a1f1a) !important;user-select:text !important;-webkit-user-select:text !important;}
+#beaver-web-sidebar.collapsed .beaver-qbar-input{flex:1 1 auto !important;min-width:0 !important;height:28px !important;background:rgba(255,255,255,.72) !important;border:1px solid rgba(28,77,50,.16) !important;outline:none !important;border-radius:14px !important;padding:0 8px !important;font-size:13px !important;color:var(--beaver-text,#1a1f1a) !important;user-select:text !important;-webkit-user-select:text !important;}
+#beaver-web-sidebar.collapsed:focus-within .beaver-qbar-input{background:#ffffff !important;border-color:rgba(28,77,50,.28) !important;}
 #beaver-web-sidebar.collapsed .beaver-qbar-input::placeholder{color:transparent !important;transition:color .15s ease !important;}
 #beaver-web-sidebar.collapsed:focus-within .beaver-qbar-input::placeholder{color:#5f7a6b !important;}
 #beaver-web-sidebar.collapsed .beaver-web-panel{display:none !important;}
@@ -1151,15 +1153,20 @@ function expandToQuery(text) {
   try { if (input) input.focus(); } catch (_) { /* ignore */ }
 }
 
-// === 272次：搜索栏可用性——Query 全局开关（queryEnabled）+ 停用规则「搜索栏」项 ===
+// === 272次：query bar 可用性——Query 全局开关 + 停用规则「query bar」项 ===
 // 不可用时折叠条只剩品牌图标（.query-off，CSS 收回 48px 圆球形态），图标点击仍可展开侧栏。
-// 与网页提示解耦：提示关/停不影响搜索栏；Query 关/停也不影响提示。
+// 与网页提示解耦：提示关/停不影响 query bar；query bar 关/停也不影响提示。
+// 286次：Query 拆分为右键查询（contextLookupEnabled）与查询栏（queryBarEnabled），
+//   本处只消费查询栏；旧 queryEnabled 仅作未升级用户的回退（新键未设置时沿用旧值）。
 async function applyQueryAvailability() {
   if (!_root || !document.contains(_root)) return;
   let off = false;
   try {
     const enabled = await new Promise((resolve) => {
-      try { chrome.storage.local.get({ queryEnabled: true }, (r) => resolve(r.queryEnabled !== false)); } catch (_) { resolve(true); }
+      try {
+        chrome.storage.local.get({ queryBarEnabled: undefined, queryEnabled: true }, (r) =>
+          resolve((typeof r.queryBarEnabled === 'undefined' ? r.queryEnabled : r.queryBarEnabled) !== false));
+      } catch (_) { resolve(true); }
     });
     const sup = await suppressionFor(location);
     off = !enabled || sup.query === true;
@@ -1168,7 +1175,7 @@ async function applyQueryAvailability() {
     console.warn('[VocabRadar][web-sidebar] Query 可用性读取失败，按可用处理:', e);
   }
   _root.classList.toggle('query-off', off);
-  log('Query 可用性:', off ? '不可用（搜索栏隐藏为图标）' : '可用');
+  log('query bar 可用性:', off ? '不可用（查询栏隐藏为图标）' : '可用');
 }
 
 // 272次：Query 可用性实时刷新（全局开关/停用规则变化；模块级只注册一次）
@@ -1181,7 +1188,7 @@ function ensureQueryAvailabilityWatcher() {
   try {
     chrome.storage.onChanged.addListener((changes, area) => {
       if (area !== 'local') return;
-      if ('queryEnabled' in changes || 'deactivateRules' in changes) {
+      if ('queryBarEnabled' in changes || 'queryEnabled' in changes || 'deactivateRules' in changes) {
         applyQueryAvailability();
         refreshVsRuleSup();
       }
@@ -1510,6 +1517,11 @@ function getVideoSidebarPresence() {
 
 export function syncBallWithVideoSidebar() {
   if (!_root) return;
+  // 286次（用户"引导页中查询栏闪现一下就没了"）：引导页 ASR 栏为演示内联挂载了真实
+  //   视频侧栏（guide-common.js startGuideVideoSidebar），getVideoSidebarPresence 恒为
+  //   active → 700ms 轮询把 query bar 置 display:none。扩展自身页面双侧栏故意共存，
+  //   不做互斥仲裁，直接返回（此前别处的隐藏写法也从不对扩展页生效）。
+  if (location.protocol === 'chrome-extension:' || location.protocol === 'moz-extension:') return;
   // 278次：URL 变化=新页面——复位空窗计时与 sticky，重新走正常 12s 宽限
   if (location.href !== _syncLastUrl) {
     _syncLastUrl = location.href;

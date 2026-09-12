@@ -18,7 +18,7 @@ import { DEACTIVATE_KEY, normalizeRule, normalizePattern, getDeactivateRules } f
 
 const $ = (id) => document.getElementById(id);
 
-// chip 定义：data-feature → 文案键（顺序=用户口径：所有、搜索栏(272次)、网页提示、文本侧栏、视频侧栏、视频叠加字幕）
+// chip 定义：data-feature → 文案键（顺序=用户口径：所有、query bar(272次)、网页提示、文本侧栏、视频侧栏、视频叠加字幕）
 const CHIPS = [
   ['all', 'deactivateAll'],
   ['query', 'deactivateQuery'],

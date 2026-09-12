@@ -279,20 +279,39 @@ input::placeholder { color: var(--g-muted); opacity: 1; }
 /* 第二百二十三次（用户："文本样式留白过多应该缩短，每行多列一个"）：字幕文字样式网格 3→4 列 */
 /* 第二百二十六次（用户："文本样式逼仄，底框应当短些高点，同样尺寸"）：样式卡底框改为统一
    窄高尺寸——不再撑满整列（逼仄感来源），窄而高的灰底框居中、样例文字居中，全部卡片同尺寸 */
-/* 281次：字幕样式网格 5 列——10 个内置样式恰好两排（none 居首、个性化卡殿后共 12 卡） */
-#subtitleStyleGrid { grid-template-columns: repeat(5, 1fr); gap: 8px; }
+/* 281次：字幕样式网格 5 列——10 个内置样式恰好两排（290次个性化卡搬出网格）。
+   294次（用户"网格改 2 列，卡片保持换行全显"）改 2 列；296次（一排横滚方案作废，
+   用户"每一行两列，不是全部一排"，回滚至此）。 */
+#subtitleStyleGrid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px; }
 #subtitleStyleGrid .style-card { padding: 5px; gap: 4px; }
 #subtitleStyleGrid .style-card .demo {
   width: 78%;
-  height: 44px;
-  min-height: 44px;
+  /* 292次：换行全显后高度自适应（min 高兜底，行高随样例），不再定高裁剪 */
+  height: auto;
+  min-height: 54px;
   margin: 0 auto;
   font-size: 12px;
 }
+/* 290次：样例文字输入行（样式网格之下） */
+.sub-sample-row { display: flex; gap: 8px; align-items: center; margin-top: 8px; }
+.sub-sample-label { flex: 0 0 auto; font-size: 13px; font-weight: 600; color: var(--g-primary); }
+.sub-sample-row input {
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 6px 10px;
+  border: 1px solid var(--g-border);
+  border-radius: var(--g-radius);
+  font-size: 13px;
+  color: var(--g-text);
+}
+.sub-sample-row input:focus { border-color: var(--g-primary); outline: none; }
+/* 290次：代码右侧个性化样例卡（固定宽，原地刷新；点击选中 custom） */
+.sub-side-card { flex: 0 0 150px; }
+.sub-side-card .demo { min-height: 52px; }
 @media (max-width: 720px) {
   .style-grid { grid-template-columns: repeat(2, 1fr); }
-  /* 窄屏回退 2 列需显式覆盖（#subtitleStyleGrid 的 5 列特异性高于 .style-grid） */
-  #subtitleStyleGrid { grid-template-columns: repeat(2, 1fr); }
+  /* 294次：窄屏改 1 列（换行全显卡在窄列下过高）；296次一排方案回滚，恢复此条 */
+  #subtitleStyleGrid { grid-template-columns: repeat(1, 1fr); }
 }
 
 /* === 281次：Word Annotation 左右两列（左列四栏上下平铺可点选，右列=池顶说明+候选池） ===
@@ -556,6 +575,28 @@ input::placeholder { color: var(--g-muted); opacity: 1; }
   flex: 0 0 auto;
 }
 .sub-add-btn:hover { background: var(--g-primary); color: #ffffff; }
+/* 289次：CSS 代码行——左代码框（flex 占满）+ 右大加号（圆形，垂直居中） */
+.sub-css-row { display: flex; gap: 10px; align-items: stretch; margin-top: 8px; flex-wrap: wrap; }
+.sub-css-row textarea {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 120px;
+  resize: vertical;
+  padding: 8px 10px;
+  border: 1px solid var(--g-border);
+  border-radius: var(--g-radius);
+  font-family: ui-monospace, Consolas, monospace;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--g-text);
+  background: #fbfdf9;
+  white-space: pre;
+}
+.sub-css-row .sub-add-btn { margin-left: 0; align-self: center; width: 44px; height: 44px; font-size: 28px; }
+/* 291次：卡片防越界——flex 子项默认 min-width:auto 会顶出容器，全部压 0；
+   行内 span 吃不下 max-width/省略号，flow 分支改块级（见 buildSubMiniCss）。 */
+.style-card .demo, .sub-stage .sub-demo, #subCustomSideDemo { min-width: 0; max-width: 100%; }
+#subCustomSideDemo { overflow: hidden; }
 /* 282次：用户自建样式卡右上角删除钮（.style-card 已设 position:relative） */
 .sub-card-del {
   position: absolute;
