@@ -1192,9 +1192,13 @@ function renderHintTiming(esc, ms) {
  * 打开/复用「正文提取耗时」诊断悬浮窗，并立即测算一次
  *
  * 用 Shadow DOM 承载，免受宿主页面 CSS 影响；面板自带「重新测算」与「关闭」。
+ * 第二百七十一次：新增 opts.actions 动作注入——调用方可往顶栏「重新测算」与
+ * 「关闭」之间插自定义按钮（现用于视频侧栏把 ⬇️ 下载音频挪进诊断窗）。
+ * 每次打开重建动作区（host 复用，旧容器先拆防叠加）；文本侧栏等无参调用不注入。
+ * @param {{actions?: Array<{label:string, title?:string, onClick:Function}>}} opts
  * @returns {Promise<void>}
  */
-export async function openMainTextDiag() {
+export async function openMainTextDiag(opts = {}) {
   let host = document.getElementById(DIAG_HOST_ID);
   let shadow;
   if (host && host.shadowRoot) {
@@ -1310,6 +1314,31 @@ export async function openMainTextDiag() {
       div.classList.toggle('pvfull', expandNow);
       btn.textContent = expandNow ? '收起' : '展开全文';
     });
+  }
+  // 第二百七十一次：动作按钮区（每次打开重建；插在「重新测算」与「关闭」之间）
+  const oldAct = shadow.querySelector('.diag-xact');
+  if (oldAct) oldAct.remove();
+  if (Array.isArray(opts.actions) && opts.actions.length) {
+    const act = document.createElement('span');
+    act.className = 'diag-xact';
+    act.style.cssText = 'display:flex;gap:6px;align-items:center;';
+    for (const a of opts.actions) {
+      const b = document.createElement('button');
+      b.textContent = String(a.label || '动作');
+      if (a.title) b.title = String(a.title);
+      b.addEventListener('click', (ev) => {
+        ev.stopPropagation();
+        try {
+          if (typeof a.onClick === 'function') a.onClick();
+        } catch (err) {
+          // 不遮蔽：动作自身抛错必须出声（诊断窗内可见 + 控制台留痕）
+          console.error('[VocabRadar][main-text] 诊断窗动作执行失败:', err);
+        }
+      });
+      act.appendChild(b);
+    }
+    const hdEl = shadow.querySelector('.hd');
+    hdEl.insertBefore(act, hdEl.querySelector('.close'));
   }
   await runDiagInto(shadow);
 }

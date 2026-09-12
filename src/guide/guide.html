@@ -76,6 +76,12 @@
               <input id="annotateRepeat" type="checkbox">
               <span data-key="chkAnnotateRepeat">注释重复生词</span>
             </label>
+            <!-- 第二百七十二次：Query 独立开关（queryEnabled）——右键查询与搜索栏（悬浮搜索条）
+                 的总开关，不再由网页提示负责（提示关了查询仍可用）；停用规则同步新增搜索栏项 -->
+            <label class="chk">
+              <input id="queryEnabled" type="checkbox">
+              <span data-key="chkQuery">Query（右键查询与搜索栏）</span>
+            </label>
           </div>
         </div>
       </div>
@@ -242,70 +248,90 @@
         </div>
       </div>
 
-      <!-- 网页生词提示 -->
+      <!-- 281次：Word Annotation 单组重做——左列四个功能卡上下平铺（Web Hints / Text Sidebar /
+           Video Sidebar / Subtitle Hints on Video 新增第四栏），点卡=选中（高亮），选中栏内
+           实时内联显示当前指派样式的卡样例（用户裁定"选中之后，直接把卡片复制过去"）。
+           右列共享样式候选池：池顶文本说明（随选中栏切换）+ 网格（一次建卡不重建，点击只
+           切高亮/复制）——去掉 280 次的每卡 Web/Text/Video 三指派钮（用户否决）。
+           Subtitle hints on video 控制视频叠加字幕的注释行外观（storage.videoOverlayAnnStyle）。
+           底部注释模板输入（annTemplate，{word} {meaning} 均为变量）。HTML 兜底文案用英文
+           （272 次裁定）。 -->
       <div class="group" data-collapsible>
         <div class="group-head">
           <button class="group-toggle" type="button">▸</button>
-          <span class="group-name" data-key="groupTextHint">网页生词提示</span>
-          <label class="group-switch" title="">
-            <input id="textHintEnabled" type="checkbox">
-            <span data-key="switchOn">开启</span>
-          </label>
+          <span class="group-name" data-key="groupWordAnnotation">Word Annotation</span>
         </div>
         <div class="group-body" style="display:none;">
-          <p class="style-desc" data-key="textStyleDesc">全站生词高亮配色。</p>
-          <!-- 反思（2026-08-15 第六十次修正）：侧邻复选框移在样式网格上方（用户要求"在上，不在样式选完之后"）。 -->
-          <label class="chk">
-            <input id="hintSideAnnotation" type="checkbox">
-            <span data-key="chkSideAnnotation">生词旁侧邻提示</span>
-          </label>
-          <div class="style-grid" id="textStyleGrid"></div>
-        </div>
-      </div>
-
-      <!-- 文本侧栏 -->
-      <div class="group" data-collapsible>
-        <div class="group-head">
-          <button class="group-toggle" type="button">▸</button>
-          <span class="group-name" data-key="groupWebSidebar">文本侧栏</span>
-          <label class="group-switch">
-            <input id="webSidebarEnabled" type="checkbox">
-            <span data-key="switchOn">开启</span>
-          </label>
-        </div>
-        <div class="group-body" style="display:none;">
-          <p class="style-desc" data-key="annStyleDesc">文本侧栏句子中 生词(释义) 注释样式。</p>
-          <div class="radio-row">
-            <span class="radio-label" data-key="annLayout">注释布局</span>
-            <label class="g-radio"><input type="radio" name="webSidebarAnnMode" value="side" checked><span data-key="annModeSide">侧邻</span></label>
-            <label class="g-radio"><input type="radio" name="webSidebarAnnMode" value="detail"><span data-key="annModeDetail">详细</span></label>
+          <p class="style-desc" data-key="wordAnnDesc">Click a feature on the left to select it, then click a style card on the right — the card is assigned to that feature and copied into it. Subtitle hints on video controls the annotation line of overlay subtitles.</p>
+          <div class="pool-cols">
+            <div class="pool-left">
+              <div class="pool-item" data-target="textStyle">
+                <div class="pool-item-name" data-key="poolItemWebHint">Web Hints</div>
+                <div class="pool-item-ctl">
+                  <label class="group-switch">
+                    <input id="textHintEnabled" type="checkbox">
+                    <span data-key="switchOn">On</span>
+                  </label>
+                  <label class="chk">
+                    <input id="hintSideAnnotation" type="checkbox">
+                    <span data-key="chkSideAnnotation">Side hint</span>
+                  </label>
+                </div>
+                <div class="pool-item-demo"></div>
+              </div>
+              <div class="pool-item" data-target="annotationStyle">
+                <div class="pool-item-name" data-key="poolItemWebSidebar">Text Sidebar</div>
+                <div class="pool-item-ctl">
+                  <label class="group-switch">
+                    <input id="webSidebarEnabled" type="checkbox">
+                    <span data-key="switchOn">On</span>
+                  </label>
+                </div>
+                <div class="pool-item-demo"></div>
+              </div>
+              <div class="pool-item" data-target="videoAnnotationStyle">
+                <div class="pool-item-name" data-key="poolItemSidebar">Video Sidebar</div>
+                <div class="pool-item-ctl">
+                  <label class="group-switch">
+                    <input id="sidebarEnabled" type="checkbox">
+                    <span data-key="switchOn">On</span>
+                  </label>
+                </div>
+                <div class="pool-item-demo"></div>
+              </div>
+              <div class="pool-item" data-target="videoOverlayAnnStyle">
+                <div class="pool-item-name" data-key="poolItemSubAnn">Subtitle Hints on Video</div>
+                <div class="pool-item-demo"></div>
+              </div>
+            </div>
+            <div class="pool-right">
+              <!-- 282次（用户原话"最上是文本说明 不重渲染，不重渲染候选列完之后，
+                   文本说明 触发渲染，之后是触发渲染候选"）：池右列按指派后行为分两段——
+                   段1说明（不重渲染）+ 52 样式卡网格 + 段2说明（触发渲染）+ 模板行。
+                   段1说明=左栏用途+指派即时生效（poolNote*，随选中栏切换）；
+                   段2说明=模板行修改会触发样例重渲染（唯一重渲染者）。
+                   283次：段2说明加 id=poolNoteRerender——模板按栏分键后，JS 在切换
+                   左栏时把段2文案里的栏名同步更新为当前选中栏（两段说明永远可见）。 -->
+              <div class="pool-note" id="poolNoteNoRerender"></div>
+              <div class="style-grid" id="poolStyleGrid"></div>
+              <div class="pool-note pool-note-2" id="poolNoteRerender" data-key="poolNoteRerender">Annotation template — changing it re-renders the samples.</div>
+              <div class="ann-tpl-row">
+                <label for="annTemplate" data-key="fieldAnnTemplate">Annotation template</label>
+                <input id="annTemplate" type="text" placeholder="{word}{meaning}">
+                <span class="ann-tpl-hint" data-key="annTemplateHint">{word} {meaning} are variables</span>
+              </div>
+            </div>
           </div>
-          <div class="style-grid" id="annStyleGrid"></div>
         </div>
       </div>
 
-      <!-- 视频侧栏 -->
-      <div class="group" data-collapsible>
-        <div class="group-head">
-          <button class="group-toggle" type="button">▸</button>
-          <span class="group-name" data-key="groupSidebar">视频侧栏</span>
-          <label class="group-switch">
-            <input id="sidebarEnabled" type="checkbox">
-            <span data-key="switchOn">开启</span>
-          </label>
-        </div>
-        <div class="group-body" style="display:none;">
-          <p class="style-desc" data-key="vannStyleDesc">视频侧栏句子中 生词(释义) 注释样式。</p>
-          <div class="radio-row">
-            <span class="radio-label" data-key="annLayout">注释布局</span>
-            <label class="g-radio"><input type="radio" name="videoSidebarAnnMode" value="side" checked><span data-key="annModeSide">侧邻</span></label>
-            <label class="g-radio"><input type="radio" name="videoSidebarAnnMode" value="detail"><span data-key="annModeDetail">详细</span></label>
-          </div>
-          <div class="style-grid" id="vannStyleGrid"></div>
-        </div>
-      </div>
-
-      <!-- 视频叠加字幕 -->
+      <!-- 视频叠加字幕（281次重做）：正文样式只管字幕正文（内置 + 个性化 + 用户自建），
+           注释行外观由 Word Annotation 组第四栏 Subtitle hints on video 控制。
+           282次：个性化样式 = 底色/字色/字号/字体/特效五控件（字体 12 项、特效下拉
+           无/阴影/发光/描边/立体），行尾大加号把当前参数保存为新正文样式
+           （storage.subtitleUserStyles，样卡右上角可删除）；位置单选行；下方预览窗
+           （横屏 16:9 / 竖屏 9:16 切换，1080p 真实像素等比缩放），
+           正文/位置/注释任一变化立即刷新预览。 -->
       <div class="group" data-collapsible>
         <div class="group-head">
           <button class="group-toggle" type="button">▸</button>
@@ -316,20 +342,46 @@
           </label>
         </div>
         <div class="group-body" style="display:none;">
-          <p class="style-desc" data-key="subStyleDesc">字幕的外观与位置是两维独立选择，选中后立即应用到视频字幕。</p>
-          <div class="radio-row">
-            <span class="radio-label" data-key="annLayout">注释布局</span>
-            <label class="g-radio"><input type="radio" name="videoOverlayAnnMode" value="side" checked><span data-key="annModeSide">侧邻</span></label>
-            <label class="g-radio"><input type="radio" name="videoOverlayAnnMode" value="detail"><span data-key="annModeDetail">详细</span></label>
-          </div>
-          <!-- 反思（2026-08-16 第七十一次）：⑤ 用户裁定顺序——文字样式 → 效果预览 → 位置。
-               预览保持原生长宽比（横屏 16:9 / 竖屏 9:16），位置样式独立选择。 -->
-          <div class="sub-sec-label" data-key="subTextStyle">文字样式</div>
+          <p class="style-desc" data-key="subStyleDesc">Text styles apply to subtitle text only; the annotation line follows “Subtitle hints on video” in Word Annotation. Any change (style / custom / position) updates the preview immediately.</p>
+          <div class="sub-sec-label" data-key="subTextStyle">Subtitle Text Style</div>
           <div class="style-grid" id="subtitleStyleGrid"></div>
-          <div class="sub-sec-label" data-key="subPreview">效果预览</div>
+          <div class="sub-sec-label" data-key="subCustomStyle">Custom Style</div>
+          <!-- 282次：字体/特效下拉由 JS 按 SUB_FONT_OPTIONS（12 项）/SUB_FX_OPTIONS（5 项）
+               填充，与 overlay 渲染同源；行尾大加号 = 把当前参数存为新正文样式 -->
+          <div class="sub-custom-row" id="subCustomRow">
+            <!-- 283次：Custom 默认配置改为"能用的样式"（用户"默认底色为透明，不小的字体"）
+                 ——底色默认透明（新增 Transparent 勾选，勾选时禁用取色器）、字号默认 28 -->
+            <label class="sub-custom-item"><span data-key="subCustomBg">Background</span><input id="subCustomBg" type="color" value="#000000"></label>
+            <label class="sub-custom-item"><input id="subCustomBgTransparent" type="checkbox"><span data-key="subCustomTransparent">Transparent</span></label>
+            <label class="sub-custom-item"><span data-key="subCustomFg">Text color</span><input id="subCustomFg" type="color" value="#ffffff"></label>
+            <label class="sub-custom-item"><span data-key="subCustomSize">Font size</span><input id="subCustomSize" type="number" min="12" max="60" step="1" value="28"></label>
+            <label class="sub-custom-item"><span data-key="subCustomFont">Font</span><select id="subCustomFont"></select></label>
+            <label class="sub-custom-item"><span data-key="subCustomFx">Effect</span><select id="subCustomFx"></select></label>
+            <button id="subCustomAdd" class="sub-add-btn" type="button" title="Save current custom as a new style">+</button>
+          </div>
+          <div class="sub-sec-label" data-key="subPosition">Position</div>
+          <div class="sub-pos-radios" id="subPosRadios"></div>
+          <div class="sub-sec-label" data-key="subPreview">Preview</div>
           <div class="sub-preview-row" id="subPreviewRow"></div>
-          <div class="sub-sec-label" data-key="subPosition">位置样式（距底部）</div>
-          <div class="style-grid" id="subPositionGrid"></div>
+        </div>
+      </div>
+
+      <!-- 停用站点（Deactivate）（第二百七十次新增）：默认折叠。逐条记录=左侧地址输入
+           （支持 * 通配，可含端口与路径前缀），右侧点选要停用的功能
+           （所有/搜索栏/网页提示/文本侧栏/视频侧栏/视频叠加字幕）；「所有」全停时扩展
+           在该站尽量不活动。HTML 兜底文案用英文（272 次：fillByDataKey 按界面语言覆盖，
+           兜底不再写中文——避免英文界面闪现中文；匹配/存储唯一来源 src/lib/deactivate.js）。 -->
+      <div class="group" id="group-deactivate" data-collapsible>
+        <div class="group-head">
+          <button class="group-toggle" type="button">▸</button>
+          <span class="group-name" data-key="groupDeactivate">Deactivate</span>
+        </div>
+        <div class="group-body" style="display:none;">
+          <p class="style-desc" data-key="deactivateDesc">Deactivate features per site: left = address (wildcard * allowed, e.g. example.com, *.example.com:8080, example.com/videos/*), right = click the features to deactivate there. With "All" checked the extension stays as inactive as possible on that site.</p>
+          <div class="deactivate-rows" id="deactivateList"></div>
+          <div class="deactivate-add-row">
+            <button class="func-btn" id="deactivateAdd" data-key="deactivateAdd">＋ Add rule</button>
+          </div>
         </div>
       </div>
     </section>

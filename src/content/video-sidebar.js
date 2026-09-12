@@ -23,6 +23,9 @@
 //   启动 ASR 时保存当前字幕，清空面板；停止 ASR 时恢复原字幕。
 
 import { getAnnotations, rankToStage, resetDiag } from '../lib/annotator.js';
+// 280次：统一池样式表生成器（52 条共享样式，参数化选择器注入本容器）
+// （280 修正：import 路径写错层级 ../../→../，esbuild 预打包与运行时均解析不到）
+import { buildAnnPoolCss } from '../lib/styles.js';
 // 第二百零四次：⋯ 下拉菜单新增「诊断窗口」项——正文提取诊断窗与文本侧栏同名同功能
 import { openMainTextDiag } from '../lib/main-text.js';
 import { getPhonetic } from '../lib/phonetics.js';
@@ -54,6 +57,10 @@ export function isASRActive() {
 // 反思（2026-08-06）：重新启用视频内字幕 overlay（之前被移除导致全屏无字幕）。
 //   sidebar 负责启动/同步字幕到 overlay，ASR 新增字幕也实时同步。
 import { startOverlay, stopOverlay, setSubtitles as overlaySetSubtitles, addSubtitle as overlayAddSubtitle, setOverlayEnabled as overlaySetEnabled, setRankThreshold as overlaySetRank } from './subtitle-overlay.js';
+// 第二百七十次：停用规则（Deactivate）——「视频叠加字幕」规则对 overlay 生效与否的
+// 唯一否决点（init 读值/按钮切换/跨标签同步三处消费 _overlayRuleSup）；
+// 匹配/存储逻辑唯一来源 lib/deactivate.js；⋯ 菜单「停用本站」用 upsertDeactivateRule。
+import { suppressionFor, upsertDeactivateRule } from '../lib/deactivate.js';
 // 第二百二十五次：删除本门面未使用的导入（pickCleanShortTrans/isBalancedParens 曾导入零调用）
 // 2026-08-28 拆分第二刀：按功能拆出 vs/* 子模块，本文件保留为门面（facade）。
 // 受控循环 import 说明：vs/playback-gate、vs/asr-stage、vs/record-workflow、vs/ocr
@@ -83,11 +90,17 @@ import {
   rerender, rerenderPanelOnly, rerenderSlotsFromCache, onWordListToggle,
   onCopy, onCommentClick, highlightCurrent, appendASRSubtitle,
   resetRenderState, setNoAnnotation, setDetailMode, getDetailMode,
-  // 第一百七十一次：copy 右侧导出为文件、评论左侧发起对话（实现在子模块，门面仅接线）
-  onExportFile, onChatClickVs,
+  // 274次：底部「导出文件」按钮改 learn——onExportFile 退役；learn 草稿用
+  //   buildSubtitleBody（字幕正文）与 getAllAnnotations（生词本只读快照）
+  onChatClickVs, buildSubtitleBody, getAllAnnotations,
   // 2026-09-04：生词表原形折叠开关（实现在子模块，门面仅接线）
   toggleLemmaGroup
 } from './vs/subtitle-renderer.js';
+// 274次：query 标签复用右键搜索卡片（唯一定义 th/panel.js，ESM 按 URL 单实例共享）
+import { buildPanelCss, buildCardInnerHTML, renderQueryCard, bindLemmaChipClick } from './th/panel.js';
+// 274次：learn 草稿——复用 ws/draft-export 的缓存 upsert（vocabradarDraftScrolls
+// 与网站同一幂等流）与 djb2Hash/getSiteUrl（本地构建跳本地、商店安装跳线上）
+import { saveDraftToCache, djb2Hash, getSiteUrl } from './ws/draft-export.js';
 
 // === 模块状态 ===
 let _root = null;             // 视频提示根元素
@@ -101,11 +114,19 @@ let _rankThreshold = 5000;    // 词频阈值（2026-08-14 第五十四次修正
 let _annotateOov = false;
 // 注释重复生词（2026-08-15 第六十二次：默认不选，同一字幕文本内重复词仅注释首次）
 let _annotateRepeat = false;
+// 280次：侧邻注释模板（annBrackets 布尔退役；vs/subtitle-renderer 消费）
+// 281次：默认改 {word}{meaning}（直接相连无空格，与 styles.js DEFAULT_ANN_TEMPLATE 同步）
+let _annTemplate = '{word}{meaning}';
 // 视频叠加字幕开关（2026-08-14 第五十四次修正）：startOverlay 曾硬编码 enabled:true，
 //   覆盖 storage overlayEnabled 导致"取消叠加字幕后仍显示"。改为缓存存储值供启动时使用。
 // 反思（2026-08-21 第九十次）：用户要求"视频叠加字幕应当默认不选"——默认值改 false，
 //   读取判据同步改为严格 === true（未设置=不选，不再 !==false 宽松判真）。
 let _overlayEnabled = false;
+// 第二百七十次：「视频叠加字幕」停用规则否决位——true 时无论 storage.overlayEnabled
+//   为何，overlay 一律不生效（init 读值/按钮切换/跨标签同步三处 AND 本位）。
+//   值在 startSidebar 入口刷新一次（每视频启动时点最新），并由 storage.onChanged
+//   的 deactivateRules 分支实时更新。
+let _overlayRuleSup = false;
 // 第二百二十五次：删除死变量 _langPair（初始化后从未使用，《命名清查》裁定）
 let _activeTab = 'subtitle';  // 当前 tab
 let _syncEnabled = true;      // 同步滚动高亮
@@ -160,6 +181,11 @@ export function getSubtitlesRef() { return _subtitles; }
 export function getRankThreshold() { return _rankThreshold; }
 export function getAnnotateOov() { return _annotateOov; }
 export function getAnnotateRepeat() { return _annotateRepeat; }
+// 280次：侧邻注释模板 getter（vs/subtitle-renderer 渲染用，原 getAnnBrackets）
+export function getAnnTemplate() { return _annTemplate; }
+// 280次：storage 监听分支调用，热更新后需 rerenderSlotsFromCache() 重绘（原 setAnnBrackets）
+// 281次：回落默认同步 {word}{meaning}
+export function setAnnTemplate(v) { _annTemplate = (typeof v === 'string' && v.trim()) ? v : '{word}{meaning}'; }
 export function getCfg() { return _cfg; }
 export function getActiveTab() { return _activeTab; }
 
@@ -260,9 +286,11 @@ async function loadSettings() {
       // 注释重复生词（2026-08-15 第六十二次：默认不选，仅注释首次出现）
       annotateRepeat: false,
       // 反思（2026-08-13 第五十次）：引导页侧栏注释样式默认 none
+      // 280次：videoAnnotationStyle 复活——三功能独立选样式（多对多），与共享池同 id 集
       annotationStyle: 'none',
-      // 反思（2026-08-13 第五十一次）：视频侧栏注释样式独立于文本侧栏
-      videoAnnotationStyle: 'none'
+      videoAnnotationStyle: 'none',
+      // 280次：侧邻注释模板（annBrackets 布尔退役；281次默认同步 {word}{meaning}）
+      annTemplate: '{word}{meaning}'
     }, resolve);
   });
 }
@@ -294,7 +322,8 @@ function buildSidebar() {
     <div class="beaver-tabs">
       <div class="beaver-tab active" data-tab="subtitle" data-i18n="tab.subtitle">🎬 Subtitles</div>
       <div class="beaver-tab" data-tab="words" data-i18n="tab.words">📖 Word List</div>
-      <div class="beaver-tab" data-tab="mp" data-i18n="tab.learn">📱 Learn</div>
+      <!-- 274次：learn 标签（原 mp 练习页）改 query——与文本侧栏同构（输入行+右键搜索卡片） -->
+      <div class="beaver-tab" data-tab="query" data-i18n="tab.query">🔍 Query</div>
     </div>
     <!-- 反思（2026-08-13 第四十七次）：标签页按钮分组——
          字母页(subtitle)：注释/详情/字幕样式；词汇页(words)：词表按钮 -->
@@ -311,9 +340,17 @@ function buildSidebar() {
     </div>
     <div class="beaver-panel" id="beaver-subtitle-panel"></div>
     <div class="beaver-panel hidden" id="beaver-word-panel"></div>
-    <div class="beaver-panel hidden" id="beaver-mp-panel">
-      <img alt="VocabRadar小程序二维码">
-      <div class="beaver-mp-tip" data-i18n="learn.tip">微信扫码使用「VocabRadar」小程序<br>随时随地背单词</div>
+    <!-- 274次：query 标签面板（原 mp 练习页移除，学习跳转并入底部 learn 按钮）——
+         输入行 + 结果区（Shadow DOM 承载右键搜索卡片，复用 th/panel.js 唯一定义） -->
+    <div class="beaver-panel hidden" id="beaver-query-panel">
+      <div class="beaver-qrow">
+        <input class="beaver-qinput" id="beaver-vs-query-input" type="text" spellcheck="false"
+               placeholder="${t('ws.queryPh')}">
+        <button class="beaver-qrun" id="beaver-vs-query-run" title="${t('tab.query')}">🔍</button>
+      </div>
+      <div class="beaver-query-result" id="beaver-vs-query-result">
+        <div class="beaver-loading-tip" data-i18n="ws.queryTip">Type above and press Enter.</div>
+      </div>
     </div>
     <div class="beaver-asr-progress" id="beaver-asr-progress" style="display:none;">
       <div class="beaver-asr-progress-info">
@@ -329,13 +366,16 @@ function buildSidebar() {
         <select id="beaver-track-select" class="beaver-track-select" title="Track"></select>
         <button class="beaver-asr-toggle-btn" id="beaver-asr-toggle" data-i18n="asr.realtime">🎤 ASR(Live)</button>
         <button id="beaver-copy" data-i18n="btn.copy">📋 Copy</button>
-        <!-- 第一百七十一次：copy 右侧新增导出为文件（id 用 -export-file，因 #beaver-export 已被词单占用） -->
-        <button id="beaver-export-file" data-i18n="btn.export">💾 Export</button>
+        <!-- 274次：export 改 learn（🎯 用户裁定图标）——导入视频草稿（字幕正文+生词）
+             到扩展缓存并跳转网站「我的卷轴」，参照文本侧栏底部 learn 按钮同语义；
+             跳转按本地/线上构建自动判定（getSiteUrl）。原导出文件功能移除 -->
+        <button id="beaver-learn-btn" data-i18n="btn.learn" title="Import draft & open My Scrolls">🎯 <span data-i18n="btn.learn">Learn</span></button>
       </div>
       <div class="beaver-footer-row">
+        <!-- 第二百七十一次：⬇️ 下载音频按钮移除（用户裁定"挪到诊断窗口中"）——
+             入口迁至 ⋯ 菜单「正文提取诊断」窗顶栏动作区（openMainTextDiag actions 注入，
+             见 bindEvents 的 #beaver-diag-item 绑定）；功能本体 vs/record-workflow.js 不动 -->
         <button class="beaver-icon-btn" id="beaver-ocr" data-i18n="btn.ocr" data-i18n-title="btn.ocrTitle" title="OCR current frame">📷</button>
-        <!-- 第九十六次：弹幕按钮移除，改为下载音频按钮（保存当前视频原格式音轨） -->
-        <button class="beaver-icon-btn" id="beaver-dlaudio" data-i18n="btn.downloadAudio" data-i18n-title="btn.downloadAudioTitle" title="Download audio">⬇️</button>
         <!-- 第一百七十一次：评论按钮左侧新增对话按钮 -->
         <button id="beaver-chat" data-i18n="btn.chat">💬 Chat</button>
         <button id="beaver-comment" data-i18n="btn.comment">📝 Comment</button>
@@ -345,6 +385,7 @@ function buildSidebar() {
       <label><input type="checkbox" id="beaver-sync" checked> <span data-i18n="btn.sync">Sync display</span></label>
       <!-- 第二百零四次（用户："⋯改为下拉，点击选项后再跳转"）：⋯ 恢复下拉展开，
            引导页/诊断窗口降级为菜单项（171 次的"点 ⋯ 直接跳引导页"撤销） -->
+      <button class="beaver-settings-item" id="beaver-deactivate-item">⏸ <span data-i18n="ws.deactivate">Deactivate on this site</span></button>
       <button class="beaver-settings-item" id="beaver-guide-item">📖 <span data-i18n="ws.openGuide">Open guide page</span></button>
       <button class="beaver-settings-item" id="beaver-diag-item">⏱ <span data-i18n="ws.mainTextDiag">Main-text extraction diag</span></button>
       <!-- 第一百三十二次：↺ 重置位置与尺寸——拖动/调尺寸被接管（_userPlaced）后
@@ -441,7 +482,7 @@ function applyI18n() {
  * @param {{mount?: HTMLElement}} options startSidebar 透传的启动选项
  */
 function bindEvents(options = {}) {
-  // tab 切换：字幕 / 生词表 / 练习
+  // tab 切换：字幕 / 生词表 / query
   _root.querySelectorAll('.beaver-tab').forEach((tab) => {
     tab.addEventListener('click', (e) => {
       e.stopPropagation();
@@ -450,19 +491,13 @@ function bindEvents(options = {}) {
       _activeTab = tab.dataset.tab;
       _root.querySelector('#beaver-subtitle-panel').classList.toggle('hidden', _activeTab !== 'subtitle');
       _root.querySelector('#beaver-word-panel').classList.toggle('hidden', _activeTab !== 'words');
-      _root.querySelector('#beaver-mp-panel').classList.toggle('hidden', _activeTab !== 'mp');
+      // 274次：mp 练习页改 query 标签（同文本侧栏：右键搜索卡片）
+      _root.querySelector('#beaver-query-panel').classList.toggle('hidden', _activeTab !== 'query');
       // 反思（2026-08-13 第四十七次）：标签页按钮分组——
-      //   字母页(subtitle)：注释/详情/字幕样式；词汇页(words)：词表按钮；练习页(mp)：无工具栏
+      //   字母页(subtitle)：注释/详情/字幕样式；词汇页(words)：词表按钮；query 页：无工具栏
       _root.querySelectorAll('[data-tab-toolbar]').forEach((tb) => {
         tb.classList.toggle('hidden', tb.dataset.tabToolbar !== _activeTab);
       });
-      // 练习 tab：懒加载二维码
-      if (_activeTab === 'mp') {
-        const img = _root.querySelector('#beaver-mp-panel img');
-        if (!img.src) {
-          img.src = chrome.runtime.getURL('src/data/mp-qr.jpg');
-        }
-      }
     });
   });
 
@@ -532,11 +567,46 @@ function bindEvents(options = {}) {
       log('⋯菜单 打开引导页失败：' + String(err && err.message || err));
     }
   });
+  // 菜单项：停用本站（第二百七十次；第二百七十二次默认改单停「网页提示」——用户裁定
+  //   "设定抑制默认是抑制网页提示，不是所有"）：写当前域 hint 停用规则，规则写入即经
+  //   storage.onChanged 撤本页高亮/侧注（视频页上 text-hint 同样在跑）；视频侧栏自身
+  //   与其余三项不受影响，随后跳引导页停用栏（地址=当前域名）供改范围与勾选四项。
+  _root.querySelector('#beaver-deactivate-item').addEventListener('click', async (e) => {
+    e.stopPropagation();
+    closeAllPopups();
+    const pat = location.hostname;
+    try {
+      await upsertDeactivateRule(pat, { hint: true });
+      log('⋯菜单 → 停用本站网页提示（' + pat + '）规则已写入');
+    } catch (err) {
+      log('⋯菜单 写停用规则失败：' + String((err && err.message) || err));
+    }
+    try {
+      chrome.runtime.sendMessage({ type: 'OPEN_GUIDE', section: 'deactivate', pattern: pat });
+      log('⋯菜单 → 打开引导页停用栏（' + pat + '）');
+    } catch (err) {
+      log('⋯菜单 打开引导页失败：' + String((err && err.message) || err));
+    }
+  });
   // 菜单项：正文提取诊断窗（与文本侧栏 ⋯ 菜单同名同功能）
+  // 第二百七十一次：诊断窗顶栏注入「⬇️ 音频」动作——下载音频按钮自侧栏底部挪入
+  //   （用户裁定）。动作闭包调 vs/record-workflow 的 onDownloadAudioClick（同页
+  //   上下文，getActiveVideo 取当前视频），进度条/报错仍走原链路；文本侧栏打开
+  //   诊断窗不注入（无视频语境）。
   _root.querySelector('#beaver-diag-item').addEventListener('click', (e) => {
     e.stopPropagation();
     closeAllPopups();
-    openMainTextDiag().catch((err) => {
+    openMainTextDiag({
+      actions: [{
+        label: '⬇️ ' + t('btn.downloadAudio'),
+        title: t('btn.downloadAudioTitle') || 'Download audio',
+        onClick: () => {
+          try { onDownloadAudioClick(); } catch (err) {
+            log('诊断窗下载音频异常：' + String((err && err.message) || err));
+          }
+        }
+      }]
+    }).catch((err) => {
       log('⋯菜单 诊断打开失败：' + String(err && err.message || err));
     });
   });
@@ -553,20 +623,31 @@ function bindEvents(options = {}) {
   });
 
   // 底部按钮：点击即触发
-  // 第九十六次：弹幕按钮移除，新增下载音频按钮
+  // 第九十六次：弹幕按钮移除。第二百七十一次：下载音频按钮移除——挪入诊断窗动作区，
+  //   此处不再查询 #beaver-dlaudio（模板与点击诊断数组同步移除）。
   const btnCopy = _root.querySelector('#beaver-copy');
   const btnOcr = _root.querySelector('#beaver-ocr');
-  const btnDlAudio = _root.querySelector('#beaver-dlaudio');
   const btnComment = _root.querySelector('#beaver-comment');
-  // 第一百七十一次：导出为文件（copy 右侧）与对话（评论左侧）
-  const btnExportFile = _root.querySelector('#beaver-export-file');
+  // 274次：底部 learn 按钮（🎯）——导入视频草稿并跳转网站「我的卷轴」，
+  //   替换原「导出文件」（onExportFile 移除，参照文本侧栏 272 次同语义改造）
+  const btnLearn = _root.querySelector('#beaver-learn-btn');
   const btnChat = _root.querySelector('#beaver-chat');
   btnCopy.addEventListener('click', onCopy);
   btnOcr.addEventListener('click', onOcrClick);
-  btnDlAudio.addEventListener('click', onDownloadAudioClick);
   btnComment.addEventListener('click', onCommentClick);
-  if (btnExportFile) btnExportFile.addEventListener('click', onExportFile);
+  if (btnLearn) btnLearn.addEventListener('click', onLearnClickVs);
   if (btnChat) btnChat.addEventListener('click', onChatClickVs);
+
+  // 274次：query 标签——查询按钮与 Enter（与文本侧栏 query 标签同构）
+  const _vsQRun = _root.querySelector('#beaver-vs-query-run');
+  const _vsQInput = _root.querySelector('#beaver-vs-query-input');
+  if (_vsQRun) _vsQRun.addEventListener('click', () => {
+    runVideoQuery(_vsQInput ? String(_vsQInput.value || '').trim() : '');
+  });
+  if (_vsQInput) _vsQInput.addEventListener('keydown', (e) => {
+    if (e.key !== 'Enter') return;
+    runVideoQuery(String(_vsQInput.value || '').trim());
+  });
 
   // 语言设置浮层：🌐按钮展开/收起三种语言下拉菜单
   // 反思（2026-08-02 修正）：用户要求"视频提示应该用符号，展开三种选择"
@@ -711,20 +792,25 @@ function bindEvents(options = {}) {
   };
   overlayToggleBtn.addEventListener('click', (e) => {
     e.stopPropagation();
-    // 反思（2026-08-21 第九十次）：默认不选——未设置视为关闭（严格 === true）
-    chrome.storage.local.get({ overlayEnabled: false }, (res) => {
-      const next = res.overlayEnabled === true;
+    // 反思（2026-08-21 第九十次）：默认不选——277次（用户"视频叠加字幕默认选中"）改默认开：
+    //   未设置视为开启（!== false），与引导页默认一致，勾选态不再不同步
+    chrome.storage.local.get({ overlayEnabled: true }, (res) => {
+      const next = res.overlayEnabled !== false;
       const toggled = !next;
-      _overlayEnabled = toggled;
-      overlaySetEnabled(toggled);
-      applyOverlayToggleBtn(toggled);
+      // 第二百七十次：停用规则否决——全局偏好照写 storage，但本页生效值被
+      //   「视频叠加字幕」停用规则压制（按钮态按生效值显示，忠实反映现状）
+      const effective = toggled && !_overlayRuleSup;
+      _overlayEnabled = effective;
+      overlaySetEnabled(effective);
+      applyOverlayToggleBtn(effective);
       try { chrome.storage.local.set({ overlayEnabled: toggled }); } catch (_) { /* ignore */ }
-      log('视频叠加字幕:', toggled ? '开启' : '关闭');
+      log('视频叠加字幕:', toggled ? '开启' : '关闭',
+        _overlayRuleSup ? '（被停用规则压制，本页不生效）' : '');
     });
   });
-  // 恢复上次叠加字幕开关
+  // 恢复上次叠加字幕开关（第二百七十次：生效值 AND 停用规则否决位）
   chrome.storage.local.get('overlayEnabled', (res) => {
-    const on = res.overlayEnabled === true;
+    const on = res.overlayEnabled !== false && !_overlayRuleSup;
     _overlayEnabled = on;
     overlaySetEnabled(on);
     applyOverlayToggleBtn(on);
@@ -748,7 +834,8 @@ function bindEvents(options = {}) {
   });
 
   // 点击诊断：capture 阶段记录点击是否到达按钮，排查"点不动"
-  [_root, btnCopy, btnOcr, btnDlAudio, btnComment].forEach((el, i) => {
+  // （第二百七十一次：btnDlAudio 随下载按钮挪入诊断窗，数组同步移除）
+  [_root, btnCopy, btnOcr, btnComment].forEach((el, i) => {
     el.addEventListener('click', (e) => {
       log('click 捕获到:', el.id || el.className, 'target=', e.target.id || e.target.className, 'isTrusted=', e.isTrusted);
     }, true);
@@ -792,13 +879,31 @@ try {
       _videoLearnLang = changes.learnLanguage.newValue || 'en';
     }
     // 反思（2026-08-13 第五十二次）：视频叠加字幕开关跨标签同步（引导页/其它标签切换时更新按钮态）
-    // 反思（2026-08-21 第九十次）：默认不选——严格 === true
+    // 反思（2026-08-21 第九十次）：默认不选——277次改默认开（!== false），与引导页一致
+    // 第二百七十次：生效值 AND 停用规则否决位（规则命中时 storage 开关值仅作偏好保存）
     if (area === 'local' && changes.overlayEnabled) {
-      const on = changes.overlayEnabled.newValue === true;
+      const on = changes.overlayEnabled.newValue !== false && !_overlayRuleSup;
       _overlayEnabled = on;
       overlaySetEnabled(on);
       const btn = _root.querySelector('#beaver-overlay-toggle');
       if (btn) btn.classList.toggle('active', on);
+    }
+    // 第二百七十次：停用规则变化——「视频叠加字幕」否决位实时刷新并按 storage
+    // 现值重推导生效值（侧栏整体的停/启由 vc/controller.js 的重编排负责）
+    if (area === 'local' && changes.deactivateRules) {
+      suppressionFor(location).then((sup) => {
+        const was = _overlayRuleSup;
+        _overlayRuleSup = sup.overlay === true;
+        if (was === _overlayRuleSup) return;
+        chrome.storage.local.get('overlayEnabled', (res) => {
+          const on = res.overlayEnabled === true && !_overlayRuleSup;
+          _overlayEnabled = on;
+          overlaySetEnabled(on);
+          const btn = _root.querySelector('#beaver-overlay-toggle');
+          if (btn) btn.classList.toggle('active', on);
+          log('停用规则变化（视频叠加字幕', _overlayRuleSup ? '命中→不生效' : '解除→按开关生效', '）');
+        });
+      }).catch(() => { /* ignore */ });
     }
   });
 } catch (_) { /* ignore */ }
@@ -1073,6 +1178,12 @@ export function getActiveVideo() {
 }
 
 export async function startSidebar(video, options = {}) {
+  // 第二百七十次：启动时点刷新「视频叠加字幕」停用规则否决位（storage.onChanged
+  // 亦实时更新，此处兜底覆盖"规则先写、模块后启"的时序）。
+  try {
+    const _dsup = await suppressionFor(location);
+    _overlayRuleSup = _dsup.overlay === true;
+  } catch (_) { /* ignore */ }
   // 第一百三十四次：YouTube 页即预热 youtubei 单例（vendor import+create 与播放器
   // 加载并行）——消除"首取轨道空、手动切轨才成功"的冷启动竞争。fire-and-forget。
   if (/youtube\.com/i.test(location.hostname)) {
@@ -1283,12 +1394,16 @@ export async function startSidebar(video, options = {}) {
     _rankThreshold = settings.rankThreshold;
     _annotateOov = settings.annotateOov === true;
     _annotateRepeat = settings.annotateRepeat === true;
+    // 280次：侧邻注释模板初始化（annBrackets 布尔退役，默认 {word}({meaning})）
+    // 283次：模板分键——视频侧栏读 videoAnnTemplate（videoAnnotationStyle 栏专用键）
+    setAnnTemplate(settings.videoAnnTemplate);
     // 反思（2026-08-05 修正）：用户反馈"浏览器工具栏设定的样式并没有影响视频侧栏字幕区"。
     //   根因：sidebar 仅在 _cfgReady 写入 --beaver-first-bg/--beaver-later-bg，
     //   未写入 --beaver-first-fg/--beaver-ann-bg/--beaver-ann-fg，且无 storage 监听器，
     //   popup 改色后 sidebar 不更新。修正：完整写入 4 组配色变量 + 监听 storage 变化。
     applyColorSettings(settings);
-    // 反思（2026-08-13 第五十一次）：视频侧栏注释样式独立于文本侧栏（videoAnnotationStyle）
+    // 280次：videoAnnotationStyle 复活——三功能独立选样式（多对多），与共享池同 id 集；
+    //   （279 次曾并入 annotationStyle，本轮引导页重组后文本侧栏/视频侧栏各自独立选择）
     applyAnnStyle(settings.videoAnnotationStyle);
     // 从 storage 读取注释模式（引导页 radio 或 Detail 按钮写入）
     const annMode = settings.videoSidebarAnnMode || (settings.subtitleDetailMode ? 'detail' : 'side');
@@ -1304,16 +1419,23 @@ export async function startSidebar(video, options = {}) {
 
   // 反思（2026-08-05 新增）：监听 popup 配色变化，实时同步到视频侧栏 CSS 变量。
   //   用户在浏览器工具栏 popup 改色后，sidebar 无需刷新即可生效。
-  // 反思（2026-08-13 第五十次）：同时监听 videoAnnotationStyle（引导页视频侧栏注释样式）。
+  // 280次：监听 videoAnnotationStyle（三功能独立）与注释模板 annTemplate（替代 annBrackets）。
+  // 283次：模板分键——本模块只响应 videoAnnTemplate（videoAnnotationStyle 栏专用键）。
   if (chrome.storage?.onChanged) {
     chrome.storage.onChanged.addListener((changes, area) => {
       if (area !== 'local') return;
       const colorKeys = ['hintFirstBg', 'hintFirstFg', 'hintLaterBg', 'hintLaterFg', 'hintAnnotationBg', 'hintAnnotationFg', 'videoSidebarAnnMode'];
-      if (!colorKeys.some((k) => k in changes) && !('videoAnnotationStyle' in changes)) return;
+      if (!colorKeys.some((k) => k in changes) && !('videoAnnotationStyle' in changes) && !('videoAnnTemplate' in changes)) return;
       // 读取完整设置后应用（避免部分更新遗漏）
       loadSettings().then((s) => {
         applyColorSettings(s);
         applyAnnStyle(s.videoAnnotationStyle);
+        // 280次：注释模板热更新——前后缀变化需重绘（渲染时按模板分段拼装）
+        // 283次：模板分键——annTemplate → videoAnnTemplate
+        if ('videoAnnTemplate' in changes) {
+          setAnnTemplate(s.videoAnnTemplate);
+          rerenderSlotsFromCache();
+        }
         // 注释模式同步（引导页 radio 或 Detail 按钮写入）
         if ('videoSidebarAnnMode' in changes) {
           const mode = s.videoSidebarAnnMode || 'side';
@@ -1352,18 +1474,38 @@ function applyColorSettings(settings) {
 }
 
 /**
- * 应用视频侧栏注释样式预设（引导页选择，无+11种）
- * 反思（2026-08-13 第五十一次）：视频侧栏注释样式独立于文本侧栏，
- *   root 加/换 beaver-vann-style-{id} 类（sidebar.css 定义各类实际样式）。
+ * 应用视频侧栏注释样式预设（引导页选择，52 条统一共享池样式）
+ * 280次：videoAnnotationStyle 复活——三功能独立选样式（多对多），与共享池同 id 集；
+ *   root 加/换 beaver-ann-style-{id} 类（实际声明由注入的统一池样式表提供，
+ *   buildAnnPoolCss 按 POOL_STYLES 生成，取代 sidebar.css 手写 16 条）。
  * @param {string} styleId 'none' 或其他样式 id
  */
 function applyAnnStyle(styleId) {
   if (!_root) return;
   const id = (typeof styleId === 'string' && styleId !== 'none') ? styleId : '';
   for (const cls of Array.from(_root.classList)) {
-    if (cls.startsWith('beaver-vann-style-')) _root.classList.remove(cls);
+    if (cls.startsWith('beaver-ann-style-')) _root.classList.remove(cls);
   }
-  if (id) _root.classList.add('beaver-vann-style-' + id);
+  if (id) _root.classList.add('beaver-ann-style-' + id);
+}
+
+// 280次：注入统一池样式表（52 条共享样式声明，逐容器参数化选择器）。
+//   挂 document.head（不依赖 _root 时点），选择器以 #beaver-sidebar 为根；
+//   取代 sidebar.css 手写 16 条（文本侧栏 web-sidebar-impl.js 亦同源注入）。
+injectAnnPoolCss();
+
+/** 注入统一池样式表（幂等；style id 带 -vs 后缀，与文本侧栏 -ws 区分，二者可能共存一页） */
+function injectAnnPoolCss() {
+  if (document.getElementById('beaver-ann-pool-css-vs')) return;
+  const el = document.createElement('style');
+  el.id = 'beaver-ann-pool-css-vs';
+  el.textContent = buildAnnPoolCss({
+    root: '#beaver-sidebar',
+    word: '.beaver-sub-text .beaver-word',
+    annInline: '.beaver-ann-inline',
+    annWord: '.beaver-ann-line .beaver-ann-word'
+  });
+  document.head.appendChild(el);
 }
 
 // === 字幕到达后填充视频提示 ===
@@ -1862,6 +2004,81 @@ export function hideSidebar() {
 export function showSidebar() {
   if (_root) _root.style.display = '';
   _hiddenByUserSetting = false;
+}
+
+// === 274次：query 标签 + learn 草稿（与文本侧栏同构） ===
+
+/**
+ * query 标签查询：结果卡复用右键搜索唯一定义（th/panel.js），Shadow DOM 承载
+ * 防卡片 CSS 泄漏宿主页；与文本侧栏 runSidebarQuery 同构。
+ * @param {string} text 查询文本（空则回空态提示）
+ */
+async function runVideoQuery(text) {
+  const box = _root.querySelector('#beaver-vs-query-result');
+  if (!box) return;
+  const trimmed = String(text || '').trim();
+  const input = _root.querySelector('#beaver-vs-query-input');
+  if (input && trimmed) input.value = trimmed;
+  if (!trimmed) {
+    box.innerHTML = '<div class="beaver-query-tip">' + t('ws.queryTip') + '</div>';
+    return;
+  }
+  box.innerHTML = '';
+  const host = document.createElement('div');
+  box.appendChild(host);
+  const shadow = host.attachShadow({ mode: 'open' });
+  shadow.innerHTML = '<style>' + buildPanelCss() + '</style>'
+    + '<div class="beaver-query-card" style="padding:10px 12px;background:#fbfdf9;border-radius:8px;">'
+    + buildCardInnerHTML() + '</div>';
+  bindLemmaChipClick(shadow);
+  try {
+    await renderQueryCard(shadow, trimmed);
+  } catch (e) {
+    console.error('[VocabRadar][video-sidebar] query 标签查询失败:', e);
+  }
+}
+
+/**
+ * learn 按钮（🎯）：视频侧栏草稿导入——字幕正文（buildSubtitleBody）+ 生词
+ * （getAllAnnotations，trim+小写去重）组装草稿，id 前缀 ext-v- 与网页草稿区分
+ * （同视频换集/换页各自成稿），复用 ws/draft-export 的缓存 upsert（网站按
+ * id+version 幂等）；成功后跳转站点「我的卷轴」（getSiteUrl：本地构建跳本地、
+ * 商店安装跳线上）。无正文 toast 提示不静默，失败 toast 原因。
+ */
+async function onLearnClickVs() {
+  try {
+    const body = await buildSubtitleBody();
+    const text = String(body || '').trim();
+    if (!text) { toast(t('learn.noContent')); return; }
+    const title = (document.title || '').trim() || location.hostname;
+    const words = [];
+    const seen = new Set();
+    for (const a of getAllAnnotations()) {
+      const w = (a && typeof a.word === 'string') ? a.word.trim() : '';
+      if (!w) continue;
+      const k = w.toLowerCase();
+      if (seen.has(k)) continue;
+      seen.add(k);
+      words.push(w);
+    }
+    const draft = {
+      id: 'ext-v-' + djb2Hash(currentVideoKey() + '|' + title),
+      title: title,
+      lang: _videoLearnLang || 'en',
+      text: text,
+      words: words,
+      source: { type: 'extension-video', url: location.href },
+      version: 1,
+      createdAt: Date.now()
+    };
+    await saveDraftToCache(draft);
+    log('learn 草稿已入缓存 id=' + draft.id + ' words=' + words.length);
+    toast(t('learn.importOk'));
+    window.open(getSiteUrl() + '/#/my-scrolls', '_blank');
+  } catch (e) {
+    console.error('[VocabRadar][video-sidebar] learn 草稿导入失败:', e);
+    toast(t('learn.importFail'));
+  }
 }
 
 // === 自动启动 ASR（已废弃，保留函数供未来需要时恢复）===

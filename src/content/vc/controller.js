@@ -22,6 +22,9 @@ import { startOverlay, stopOverlay, setOverlayEnabled, setRankThreshold } from '
 import { startSidebar, updateSubtitles, showNoSubtitle, setTracks, destroySidebar, loadASRCacheIfAny, loadASRCacheWithCoverage, selectASRTrackAndContinue, currentVideoKey, isASRActive } from '../video-sidebar.js';
 import { vcState } from './state.js';
 import { waitForVideo, waitForVideoReady, observeVideoChange } from './video-detect.js';
+// 第二百七十次：停用规则（Deactivate）抑制表——匹配/存储唯一来源 lib/deactivate.js，
+//   本模块按「视频侧栏/视频叠加字幕」两位组合编排启动内容。
+import { suppressionFor } from '../../lib/deactivate.js';
 
 // 反思（2026-07-06 二次修复）：storage.onChanged 监听器注册位置 bug
 // 旧版将监听器注册在字幕处理之后（行158），如果字幕为空/失败走 autoStartASR 提前 return，
@@ -42,6 +45,13 @@ const PLATFORM = {
 // 不匹配则丢弃（过期字幕）。triggerReload 触发的新请求 ID 更大，旧请求被作废。
 let _requestId = 0;
 
+// 第二百七十次：抑制组合键（视频侧栏/叠加字幕两位布尔串）——startVideoController
+// 每次启动刷新；deactivateRules 变化时与新组合比较，不同即清场重编排。
+let _lastSupKey = '';
+function _supKey(sup) {
+  return (sup.videoSidebar ? '1' : '0') + (sup.overlay ? '1' : '0');
+}
+
 /** 读取设置 */
 function getSettings() {
   return new Promise((resolve) => {
@@ -49,7 +59,8 @@ function getSettings() {
       rankThreshold: 5000,   // 2026-08-14 第五十四次修正：恢复默认 5000
       learnLanguage: 'en',   // 所学语言（字幕轨道默认首选）
       meaningLanguage: 'zh',   // 释义语言
-      sidebarEnabled: true    // #88: 侧栏开关，默认显示
+      sidebarEnabled: true,  // #88: 侧栏开关，默认显示
+      annotateRepeat: false  // 第二百七十次：overlay-only 模式直启 overlay 时透传注释重复生词开关
     }, resolve);
   });
 }
@@ -129,6 +140,21 @@ export function reviveSidebarIfPossible(platform) {
 export async function startVideoController(platform) {
   if (vcState.started) return;
 
+  // 第二百七十次：先读本页停用规则抑制组合——「视频侧栏」+「视频叠加字幕」全停
+  // 即尽量不活动：清场（拆侧栏/停 overlay）后返回，仅保留 observeVideoChange
+  // （幂等 history hook），SPA 换集回来时重跑本函数重新按规则编排。
+  const sup = await suppressionFor(location);
+  _lastSupKey = _supKey(sup);
+  if (sup.videoSidebar && sup.overlay) {
+    console.log('[VocabRadar][video-controller] 停用规则：视频侧栏+叠加字幕全停，本页视频链路不启动:',
+      location.href, '规则=', sup.matchedPats.join(','));
+    removeExistingSidebar();
+    try { stopOverlay(); } catch (_) { /* ignore */ }
+    vcState.started = false;
+    observeVideoChange();
+    return;
+  }
+
   // 反思（2026-07-07 二次修复）：用户反馈"有的视频中没出现侧栏"。
   // 根因：从非视频页（B站首页/搜索/频道）SPA 导航到视频页时，首次 startVideoController
   //   因 isSupportedPage 返回 false 直接 return，history hook 未注册。SPA 导航到视频页后
@@ -182,6 +208,24 @@ export async function startVideoController(platform) {
             else hideSidebar();
           }).catch(() => { /* ignore */ });
         }
+        // 第二百七十次：停用规则变化——抑制组合与当前编排不一致时清场重编排：
+        //   destroySidebar 内含停 ASR/停 overlay/拆 observer，随后
+        //   startVideoController 按新抑制表重建（全停则入口分支直接返回）。
+        //   组合未变（同两位）则忽略——四大功能开关各自既有监听不受影响。
+        if (changes.deactivateRules) {
+          suppressionFor(location).then((sup2) => {
+            const key2 = _supKey(sup2);
+            if (key2 === _lastSupKey) return;
+            _lastSupKey = key2;
+            console.log('[VocabRadar][video-controller] 停用规则组合变化，重新编排视频链路:', key2);
+            try { destroySidebar(); } catch (_) { /* ignore */ }
+            try { stopOverlay(); } catch (_) { /* ignore */ }
+            vcState.started = false;
+            startVideoController(vcState.currentPlatform || 'generic').catch((e) => {
+              console.warn('[VocabRadar][video-controller] 规则变化重编排失败:', e);
+            });
+          }).catch(() => { /* ignore */ });
+        }
       });
       console.log('[VocabRadar][video-controller] storage.onChanged 监听器已注册');
     }
@@ -191,13 +235,33 @@ export async function startVideoController(platform) {
     //   侧栏始终创建并显示，用户可用 ✕ 按钮手动关闭。
     // 反思（2026-07-10 #88）：根据 sidebarEnabled 决定初始可见性。
     //   sidebarEnabled=false 时 hidden=true，侧栏创建但 display:none。
+    // 第二百七十次：「视频侧栏」被停用规则命中时不建侧栏——若「视频叠加字幕」
+    //   允许（能走到这里必然允许，全停在函数入口已返回），后续走 overlay-only
+    //   分支把字幕直接喂给 subtitle-overlay（见字幕结果处理处）。
     const sidebarHidden = settings.sidebarEnabled === false;
-    startSidebar(video, { hidden: sidebarHidden }).catch((e) => console.error('[VocabRadar][video-controller] sidebar 骨架启动失败:', e));
+    // 278次（用户报"视频侧栏依旧不可见"）：根因实锤——272次引入停用规则时条件写反。
+    //   deactivate.js 语义：sup.videoSidebar=true = 「视频侧栏」被停用。旧代码却在
+    //   被停时才建侧栏、未停时反而跳过；277次 V2 迁移把所有规则 videoSidebar 清成 false
+    //   后 sup.videoSidebar 恒 false → 所有视频页都走"未停用"错误分支=永不注入侧栏。
+    //   修正：未停用（!sup.videoSidebar）才建侧栏；被停用才走 overlay-only（下方各分支）。
+    if (!sup.videoSidebar) {
+      startSidebar(video, { hidden: sidebarHidden }).catch((e) => console.error('[VocabRadar][video-controller] sidebar 骨架启动失败:', e));
+    } else {
+      // 停用规则命中：不建侧栏，字幕结果处理处按 overlay-only 分支直接喂叠加字幕
+      console.log('[VocabRadar][video-controller] 停用规则：视频侧栏被停用，仅叠加字幕模式（规则=', sup.matchedPats.join(','), '）');
+    }
 
     // 反思（2026-07-08 #44）：generic 平台（TikTok/抖音/小红书/X/FB/IG/流媒体）无公开字幕API，
     //   跳过字幕获取，直接走无字幕分支（先尝试 ASR 缓存，无缓存才显示"无字幕"提示）。
     //   用户确认范围「侧栏+ASR无字幕获取」。
     if (platform === PLATFORM.GENERIC) {
+      // 第二百七十次：侧栏被停时 generic 无字幕来源（公开字幕 API 缺失，ASR 采集在侧栏内），
+      //   overlay-only 模式无从取字幕，视频链路到此为止（无界面）。
+      // 278次：条件随 242 行一起纠正——被停用（sup.videoSidebar=true）才到此分支
+      if (sup.videoSidebar) {
+        console.log('[VocabRadar][video-controller] generic+侧栏被停用：无字幕来源，不启动叠加字幕');
+        return;
+      }
       try {
         await waitForVideoReady(video);
       } catch (e) {
@@ -238,6 +302,12 @@ export async function startVideoController(platform) {
         console.log('[VocabRadar][video-controller] 过期请求(换集)，丢弃字幕获取失败');
         return;
       }
+      // 第二百七十次：overlay-only（侧栏被停）——无侧栏可显示错误/ASR 兜底，直接放弃
+      // 278次：条件纠正——被停用才走 overlay-only 放弃
+      if (sup.videoSidebar) {
+        console.log('[VocabRadar][video-controller] overlay-only：字幕获取失败，无叠加内容');
+        return;
+      }
       // 反思（2026-07-06 三次修复）：用户反馈"语音识别为啥一直选中，哪怕是刷新网页"。
       // 旧版无字幕时自动启动 ASR（autoStartASR），导致每次刷新都自动选中语音识别按钮。
       // 修正：不再自动启动 ASR，显示"无字幕"提示，用户可手动点击 🎤 按钮启动。
@@ -257,10 +327,38 @@ export async function startVideoController(platform) {
 
     if (!result) {
       console.warn('[VocabRadar][video-controller] 该视频无字幕');
+      // 第二百七十次：overlay-only（侧栏被停）——无字幕即无叠加内容，不触侧栏 ASR 兜底
+      // 278次：条件纠正——被停用才走 overlay-only 放弃
+      if (sup.videoSidebar) {
+        console.log('[VocabRadar][video-controller] overlay-only：该视频无字幕，无叠加内容');
+        return;
+      }
       // 反思（2026-07-06 三次修复）：不再自动启动 ASR，避免每次刷新都自动选中语音识别
       // 反思（2026-07-08 #41）：先尝试加载 ASR 缓存
       if (!await loadASRCacheIfAny()) {
         showNoSubtitle();
+      }
+      return;
+    }
+
+    // 第二百七十次：overlay-only 模式（视频侧栏被停、叠加字幕允许）——
+    //   字幕不进侧栏（无侧栏即无 ASR 兜底/轨道选择），直接喂 subtitle-overlay 渲染后返回。
+    // 278次：条件纠正——被停用（sup.videoSidebar=true）才走 overlay-only 直启
+    if (sup.videoSidebar) {
+      const subs = Array.isArray(result) ? result : (result.subtitles || []);
+      if (!subs.length) {
+        console.log('[VocabRadar][video-controller] overlay-only：字幕为空，无叠加内容');
+        return;
+      }
+      try {
+        startOverlay(video, subs, {
+          rankThreshold: settings.rankThreshold,
+          enabled: true,
+          annotateRepeat: settings.annotateRepeat === true
+        });
+        console.log('[VocabRadar][video-controller] overlay-only：叠加字幕已启动（', subs.length, '条）');
+      } catch (e) {
+        console.error('[VocabRadar][video-controller] overlay-only 启动失败:', e);
       }
       return;
     }

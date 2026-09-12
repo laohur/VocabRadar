@@ -155,24 +155,26 @@
  * 反思（2026-08-09 第十次）：用户要求"悬浮球默认在右上角"。
  *   旧版 top:75vh（3/4高度），用户明确要求改为右上角（top:20px）。
  *   与 injectCriticalCSS 中的同步关键样式 top:20px 一致。
- * 反思（2026-08-12）：collapsed 关键属性加 !important 防止被网站覆盖。 */
-#beaver-web-sidebar.collapsed {
+ * 反思（2026-08-12）：collapsed 关键属性加 !important 防止被网站覆盖。
+ * 272次：折叠态由 48px 圆球改为搜索栏；274次降噪、275次（用户"移除三角，颜色用
+ *   淡主题色"）——只剩 图标+一单词输入框（104px），:focus-within 展到 280px，
+ *   底色用淡主题色（--beaver-primary-light）。 */
+/* 282次（用户"你现在错得离谱，重新画"）：.collapsed 全部视觉（容器底色/边框/
+   阴影/宽度/输入框/占位符）收敛到 ui.js injectCriticalCSS 独占——异步 <link>
+   与同步 <style> 特异性平级时 link 后加载胜出，关键层的透明底+半透明边框一直
+   被本文件旧规则（淡绿实底+阴影）覆盖，四轮改动不生效。本文件删除全部
+   .collapsed 视觉规则，防止双层再打架；仅保留 query-off 收圆（无视觉冲突）。 */
+#beaver-web-sidebar.collapsed.query-off {
   width: 48px !important;
   height: 48px !important;
-  right: 16px !important;
-  top: 20px !important;
-  bottom: auto !important;
-  left: auto !important;
   border-radius: 50% !important;
-  background: var(--beaver-primary) !important;
-  box-shadow: 0 4px 12px rgba(26, 31, 26, 0.25) !important;
-  transition: transform 0.2s ease, box-shadow 0.2s ease !important;
   cursor: pointer !important;
 }
-
-#beaver-web-sidebar.collapsed:hover {
-  transform: scale(1.1);
-  box-shadow: 0 6px 16px rgba(26, 31, 26, 0.35);
+#beaver-web-sidebar.collapsed.query-off .beaver-qbar-input {
+  display: none !important;
+}
+#beaver-web-sidebar.collapsed.query-off .beaver-web-collapse-tab {
+  justify-content: center !important;
 }
 
 #beaver-web-sidebar.collapsed .beaver-web-panel {
@@ -233,28 +235,89 @@
   display: none;
 }
 
-/* === 悬浮球：48px 圆形 ===
- * 第一百七十一次（用户裁定"悬浮球不补充圆边，而是裁剪原图"）：
- *   图标铺满整球并由 border-radius:50%+overflow:hidden 裁切，
- *   故不再需要绿色圆底留白（background 由 .collapsed 规则给出，图标已完全覆盖）。
- */
+/* === 折叠态把手：搜索栏（272次，原 48px 悬浮球）===
+ * collapsed 态由 100%×100% 规则铺满容器，本规则只给方向与缺省尺寸；
+ * 三件套（图标/输入框/三角）样式见下方 .beaver-qbar-*。 */
 #beaver-web-sidebar .beaver-web-collapse-tab {
-  width: 48px;
-  height: 48px;
   display: none;  /* collapsed 态显示 */
-  flex-direction: column;
+  flex-direction: row;
   align-items: center;
-  justify-content: center;
-  cursor: pointer;
-  border-radius: 50%;
+  gap: 6px;
+  padding: 0 6px;
+  cursor: default;
+  border-radius: 21px;
   overflow: hidden;
 }
 
-#beaver-web-sidebar .beaver-web-collapse-icon {
-  display: block;
-  width: 100%;
-  height: 100%;
+/* 272次：搜索栏左端品牌图标——点击展开侧栏 / 右键召唤视频侧栏 / 拖拽把手。
+   274/275次：淡主题色底上用主绿描边 */
+#beaver-web-sidebar .beaver-qbar-icon {
+  flex: 0 0 auto;
+  width: 30px;
+  height: 30px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--beaver-primary-dark, #1c4d32);
+  cursor: pointer;
   border-radius: 50%;
+}
+#beaver-web-sidebar .beaver-qbar-icon:hover {
+  filter: brightness(0.85);
+}
+#beaver-web-sidebar .beaver-qbar-icon .beaver-brand-icon {
+  width: 20px;
+  height: 20px;
+  display: block;
+}
+/* 282次：中段搜索框 .beaver-qbar-input 的全部样式（透明底/无边框/占位符显隐）
+   已上移 ui.js injectCriticalCSS 钉死（!important），本文件删除，防双层打架。
+   282次：query 标签——输入行 */
+#beaver-web-sidebar .beaver-web-qrow {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 10px 4px;
+}
+/* 278次（用户"查询输入框跟周围颜色几乎无区分度"）：#c2c9bf 浅描边在近白面板
+   （--beaver-bg #fbfdf9）上消失——改中性深描边，focus 主绿不变。
+   280次：与中段短搜索框同交互——非激活=透明底+半透明描边+占位符隐藏；
+   激活（聚焦）=白底实态+主绿描边+占位符显现。 */
+#beaver-web-sidebar .beaver-web-qinput {
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 32px;
+  border: 1px solid rgba(26, 31, 26, 0.30);
+  border-radius: 8px;
+  padding: 0 10px;
+  font-size: 13px;
+  color: var(--beaver-text, #1a1f1a);
+  background: transparent;
+}
+#beaver-web-sidebar .beaver-web-qinput:focus {
+  outline: none;
+  border-color: var(--beaver-primary, #2e6b43);
+  background: #ffffff;
+}
+#beaver-web-sidebar .beaver-web-qinput::placeholder {
+  color: transparent;
+}
+#beaver-web-sidebar .beaver-web-qinput:focus::placeholder {
+  color: #9aa79f;
+}
+#beaver-web-sidebar .beaver-web-qrun {
+  flex: 0 0 auto;
+  width: 34px;
+  height: 32px;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--beaver-primary, #2e6b43);
+  font-size: 14px;
+  cursor: pointer;
+}
+#beaver-web-sidebar .beaver-web-qrun:hover {
+  background: var(--beaver-btn-bg-hover, #e9eee7);
 }
 
 /* === 展开面板：flex 纵向布局 ===
@@ -1364,71 +1427,11 @@
   display: block;
 }
 
-/* === 文本侧栏注释样式预设（引导页选择，annotationStyle 驱动，样式定义与 src/lib/styles.js ANN_STYLES 一致） ===
- * 反思（2026-08-13 第五十一次）：文本侧栏注释样式差异化（粗体/斜体/下划线/阴影/字号），
- *   不再只是颜色互换。作用于：句子生词高亮(.beaver-web-word)、句内联注释(.beaver-web-ann-inline)、
- *   详细注释词头(.beaver-web-ann-word)。全部 !important 覆盖基础配色。
- *   root 类名 beaver-ann-style-{id} 由 web-sidebar-impl.js 读取 storage.annotationStyle 动态切换。 */
-#beaver-web-sidebar.beaver-ann-style-mint .beaver-web-sub-text .beaver-web-word,
-#beaver-web-sidebar.beaver-ann-style-mint .beaver-web-sub-text .beaver-web-word.later { background: #a8e6cf !important; color: #0d2014 !important; border-radius: 999px !important; font-weight: 600 !important; }
-#beaver-web-sidebar.beaver-ann-style-mint .beaver-web-ann-inline,
-#beaver-web-sidebar.beaver-ann-style-mint .beaver-web-ann-line .beaver-web-ann-word { background: #0d2014 !important; color: #ffffff !important; border-radius: 999px !important; }
-#beaver-web-sidebar.beaver-ann-style-gold .beaver-web-sub-text .beaver-web-word,
-#beaver-web-sidebar.beaver-ann-style-gold .beaver-web-sub-text .beaver-web-word.later { background: #ffd54f !important; color: #332700 !important; border-radius: 2px !important; font-weight: 600 !important; }
-#beaver-web-sidebar.beaver-ann-style-gold .beaver-web-ann-inline,
-#beaver-web-sidebar.beaver-ann-style-gold .beaver-web-ann-line .beaver-web-ann-word { background: #fff8e1 !important; color: #8a6d00 !important; border-radius: 2px !important; font-size: 15px !important; }
-#beaver-web-sidebar.beaver-ann-style-marker .beaver-web-sub-text .beaver-web-word,
-#beaver-web-sidebar.beaver-ann-style-marker .beaver-web-sub-text .beaver-web-word.later { background: rgba(255,213,79,.45) !important; color: #332700 !important; border-radius: 0 !important; font-weight: 600 !important; }
-#beaver-web-sidebar.beaver-ann-style-marker .beaver-web-ann-inline,
-#beaver-web-sidebar.beaver-ann-style-marker .beaver-web-ann-line .beaver-web-ann-word { background: transparent !important; color: #b28704 !important; border-radius: 0 !important; }
-#beaver-web-sidebar.beaver-ann-style-red-underline .beaver-web-sub-text .beaver-web-word,
-#beaver-web-sidebar.beaver-ann-style-red-underline .beaver-web-sub-text .beaver-web-word.later { background: transparent !important; color: #d81b60 !important; border-radius: 0 !important; text-decoration: underline !important; }
-#beaver-web-sidebar.beaver-ann-style-red-underline .beaver-web-ann-inline,
-#beaver-web-sidebar.beaver-ann-style-red-underline .beaver-web-ann-line .beaver-web-ann-word { background: transparent !important; color: #d81b60 !important; border-radius: 0 !important; }
-#beaver-web-sidebar.beaver-ann-style-plain .beaver-web-sub-text .beaver-web-word,
-#beaver-web-sidebar.beaver-ann-style-plain .beaver-web-sub-text .beaver-web-word.later { background: transparent !important; color: #1565c0 !important; border-radius: 0 !important; }
-#beaver-web-sidebar.beaver-ann-style-plain .beaver-web-ann-inline,
-#beaver-web-sidebar.beaver-ann-style-plain .beaver-web-ann-line .beaver-web-ann-word { background: transparent !important; color: #1565c0 !important; border-radius: 0 !important; }
-#beaver-web-sidebar.beaver-ann-style-capsule .beaver-web-sub-text .beaver-web-word,
-#beaver-web-sidebar.beaver-ann-style-capsule .beaver-web-sub-text .beaver-web-word.later { background: #64b5f6 !important; color: #0d1b33 !important; border-radius: 999px !important; font-weight: 600 !important; }
-#beaver-web-sidebar.beaver-ann-style-capsule .beaver-web-ann-inline,
-#beaver-web-sidebar.beaver-ann-style-capsule .beaver-web-ann-line .beaver-web-ann-word { background: #0d1b33 !important; color: #64b5f6 !important; border-radius: 999px !important; }
-#beaver-web-sidebar.beaver-ann-style-shadow-pop .beaver-web-sub-text .beaver-web-word,
-#beaver-web-sidebar.beaver-ann-style-shadow-pop .beaver-web-sub-text .beaver-web-word.later { background: #6d4c41 !important; color: #fff8f0 !important; border-radius: 3px !important; font-weight: 600 !important; box-shadow: 0 2px 3px rgba(0,0,0,.45), 0 5px 8px rgba(0,0,0,.25) !important; }
-#beaver-web-sidebar.beaver-ann-style-shadow-pop .beaver-web-ann-inline,
-#beaver-web-sidebar.beaver-ann-style-shadow-pop .beaver-web-ann-line .beaver-web-ann-word { background: #fff8f0 !important; color: #6d4c41 !important; border-radius: 3px !important; }
-#beaver-web-sidebar.beaver-ann-style-ink .beaver-web-sub-text .beaver-web-word,
-#beaver-web-sidebar.beaver-ann-style-ink .beaver-web-sub-text .beaver-web-word.later { background: #263238 !important; color: #eceff1 !important; border-radius: 2px !important; font-weight: 600 !important; }
-#beaver-web-sidebar.beaver-ann-style-ink .beaver-web-ann-inline,
-#beaver-web-sidebar.beaver-ann-style-ink .beaver-web-ann-line .beaver-web-ann-word { background: #eceff1 !important; color: #263238 !important; border-radius: 2px !important; font-size: 12px !important; }
-#beaver-web-sidebar.beaver-ann-style-big .beaver-web-sub-text .beaver-web-word,
-#beaver-web-sidebar.beaver-ann-style-big .beaver-web-sub-text .beaver-web-word.later { background: transparent !important; color: #00695c !important; border-radius: 0 !important; font-weight: 600 !important; font-size: 19px !important; }
-#beaver-web-sidebar.beaver-ann-style-big .beaver-web-ann-inline,
-#beaver-web-sidebar.beaver-ann-style-big .beaver-web-ann-line .beaver-web-ann-word { background: transparent !important; color: #00695c !important; border-radius: 0 !important; font-size: 17px !important; }
-#beaver-web-sidebar.beaver-ann-style-night .beaver-web-sub-text .beaver-web-word,
-#beaver-web-sidebar.beaver-ann-style-night .beaver-web-sub-text .beaver-web-word.later { background: #37474f !important; color: #ffcc80 !important; border-radius: 2px !important; font-weight: 600 !important; }
-#beaver-web-sidebar.beaver-ann-style-night .beaver-web-ann-inline,
-#beaver-web-sidebar.beaver-ann-style-night .beaver-web-ann-line .beaver-web-ann-word { background: #ffcc80 !important; color: #37474f !important; border-radius: 2px !important; }
-#beaver-web-sidebar.beaver-ann-style-serif-italic .beaver-web-sub-text .beaver-web-word,
-#beaver-web-sidebar.beaver-ann-style-serif-italic .beaver-web-sub-text .beaver-web-word.later { background: transparent !important; color: #4a148c !important; border-radius: 0 !important; font-style: italic !important; }
-#beaver-web-sidebar.beaver-ann-style-serif-italic .beaver-web-ann-inline,
-#beaver-web-sidebar.beaver-ann-style-serif-italic .beaver-web-ann-line .beaver-web-ann-word { background: transparent !important; color: #6a1b9a !important; border-radius: 0 !important; font-style: italic !important; }
-#beaver-web-sidebar.beaver-ann-style-outline .beaver-web-sub-text .beaver-web-word,
-#beaver-web-sidebar.beaver-ann-style-outline .beaver-web-sub-text .beaver-web-word.later { background: transparent !important; color: #1a237e !important; border-radius: 0 !important; font-weight: 600 !important; text-shadow: 0 1px 0 #fff, 0 -1px 0 #fff, 1px 0 0 #fff, -1px 0 0 #fff, 0 2px 3px rgba(0,0,0,.5) !important; }
-#beaver-web-sidebar.beaver-ann-style-outline .beaver-web-ann-inline,
-#beaver-web-sidebar.beaver-ann-style-outline .beaver-web-ann-line .beaver-web-ann-word { background: transparent !important; color: #1a237e !important; border-radius: 0 !important; }
-#beaver-web-sidebar.beaver-ann-style-rose .beaver-web-sub-text .beaver-web-word,
-#beaver-web-sidebar.beaver-ann-style-rose .beaver-web-sub-text .beaver-web-word.later { background: #f48fb1 !important; color: #3d0019 !important; border-radius: 999px !important; font-style: italic !important; font-weight: 600 !important; }
-#beaver-web-sidebar.beaver-ann-style-rose .beaver-web-ann-inline,
-#beaver-web-sidebar.beaver-ann-style-rose .beaver-web-ann-line .beaver-web-ann-word { background: transparent !important; color: #c2185b !important; border-radius: 999px !important; }
-#beaver-web-sidebar.beaver-ann-style-sky .beaver-web-sub-text .beaver-web-word,
-#beaver-web-sidebar.beaver-ann-style-sky .beaver-web-sub-text .beaver-web-word.later { background: #80deea !important; color: #003038 !important; border-radius: 999px !important; font-style: italic !important; }
-#beaver-web-sidebar.beaver-ann-style-sky .beaver-web-ann-inline,
-#beaver-web-sidebar.beaver-ann-style-sky .beaver-web-ann-line .beaver-web-ann-word { background: #003038 !important; color: #80deea !important; border-radius: 999px !important; }
-#beaver-web-sidebar.beaver-ann-style-lime .beaver-web-sub-text .beaver-web-word,
-#beaver-web-sidebar.beaver-ann-style-lime .beaver-web-sub-text .beaver-web-word.later { background: #d4e157 !important; color: #222b00 !important; border-radius: 0 !important; font-weight: 600 !important; text-decoration: underline !important; }
-#beaver-web-sidebar.beaver-ann-style-lime .beaver-web-ann-inline,
-#beaver-web-sidebar.beaver-ann-style-lime .beaver-web-ann-line .beaver-web-ann-word { background: #222b00 !important; color: #d4e157 !important; border-radius: 0 !important; font-size: 15px !important; }
+/* === 文本侧栏注释样式预设（280次：手写 16 条退役） ===
+ * 统一池 52 条声明改由 web-sidebar-impl.js 注入 buildAnnPoolCss 生成的样式表
+ * （style#beaver-ann-pool-css-ws，根 #beaver-web-sidebar，同选择器同 !important 语义）。
+ * root 类名 beaver-ann-style-{id} 仍由 applyAnnStyle 读 storage.annotationStyle 切换；
+ * 网页提示（页面侧）不注入此表，其颜色经 pickColors 从池条目派生 CSS 变量。 */
 
 /* G3（2026-09-08）：learn 面板按钮行（§6.2，二维码上方）——导入当前侧栏内容为草稿卷轴 */
 #beaver-web-sidebar .beaver-web-draft-row {

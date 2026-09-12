@@ -9,8 +9,14 @@ import { LANG_NAMES, LANG_NAMES_EN, TRANSLATE_LANGS, UI_LANGS, setLang, t } from
 // 第二百四十三次：expand 是侧栏扫描回填翻译（ws/scanner.js schedulePendingTranslate）的手势源头，
 //   展开点击（click 手势）同步链上 prime 内置翻译，扫描回填的 translate 即可复用实例。
 import { primeTranslator } from '../../lib/translator.js';
-import { buildTopbarHTML, ensureTopbarCss } from '../../lib/sidebar-topbar.js';
+// 272次：顶行构建器同源的品牌小图标（搜索栏左端）
+import { brandIconSVG, buildTopbarHTML, ensureTopbarCss } from '../../lib/sidebar-topbar.js';
 import { SUBTITLE_TEXT_STYLES, findStyle } from '../../lib/styles.js';
+// 272次：query 标签复用右键搜索卡片（唯一定义 th/panel.js：同 CSS/同结构/同渲染核心；
+// ES module 按 URL 单实例，与 text-hint bundle 共享同一 thState/模块状态）
+import { buildPanelCss, buildCardInnerHTML, renderQueryCard, bindLemmaChipClick } from '../th/panel.js';
+// 272次：Query 可用性 = 全局开关 queryEnabled + 停用规则「搜索栏」项（与网页提示解耦）
+import { suppressionFor } from '../../lib/deactivate.js';
 import { reviveSidebarIfPossible, startVideoController } from '../video-controller.js';
 import { _activeTab, _allAnnotations, _cachedLearnLang, _detailMode, _pageSentences, _panelRect, _preExpandPos, _root, _wordOnlyMode, clampPosToViewport, clampRectToViewport, formatTime, getInjectionRoot, log, saveState, set_activeTab, set_detailMode, set_noAnnotation, set_panelRect, set_preExpandPos, set_wordOnlyMode, toast, ts } from './core.js';
 import { rerenderAllSlots, schedulePageScan, toggleLemmaGroup } from './scanner.js';
@@ -19,7 +25,10 @@ import { openChatPanel } from '../../lib/chat.js';
 // 第一百八十五次：给 AI 的正文提取（Readability 优先）与耗时诊断，唯一实现在 lib/main-text.js
 import { getAiMainText, openMainTextDiag } from '../../lib/main-text.js';
 // G3（2026-09-08）：learn 面板草稿导入（§6.2）——组装+落缓存唯一实现在 ./draft-export.js
-import { importCurrentSidebarDraft, SITE_URL } from './draft-export.js';
+import { importCurrentSidebarDraft, getSiteUrl } from './draft-export.js';
+// 第二百七十次：⋯ 菜单「停用本站」——写当前域「网页提示」停用规则（272 次默认由
+//   四项全停改单停提示；匹配/存储唯一实现 lib/deactivate.js）
+import { upsertDeactivateRule } from '../../lib/deactivate.js';
 
 // === 构建 DOM 骨架 ===
 export function buildSidebar() {
@@ -33,8 +42,14 @@ export function buildSidebar() {
     <!-- 第一百七十一次（用户裁定"悬浮球不补充圆边，而是裁剪原图"）：
          图标由「32px 居中 + 绿色圆底留白」改为铺满 48px 圆（background-size:cover），
          溢出部分由 border-radius:50% + overflow:hidden 裁掉，不再出现绿色圆环。 -->
-    <div class="beaver-web-collapse-tab" id="beaver-web-collapse-tab" title="${t('ws.expand')}">
-      <div class="beaver-web-collapse-icon" style="width:100%;height:100%;background:url('${chrome.runtime.getURL('src/data/icons/icon128.png')}') center/cover no-repeat;-webkit-user-drag:none;user-select:none;"></div>
+    <!-- 272次：悬浮球改为搜索栏；275次（用户"移除三角，颜色用淡主题色"）——
+         只剩左品牌图标（点击展开侧栏/右键召唤视频侧栏）+ 短搜索框（聚焦变长，
+         Enter=输入完成→query 标签）；条底色用淡主题色；276次曾裁定"折叠态不显示
+         占位符"，278次用户改口径：折叠搜索栏输入前也显示占位符 query word for
+         translations...（ws.queryPh，en/zh 同文）；Query 关闭时只剩图标 -->
+    <div class="beaver-web-collapse-tab" id="beaver-web-collapse-tab">
+      <span class="beaver-qbar-icon" id="beaver-qbar-icon" title="${t('ws.expand')}">${brandIconSVG()}</span>
+      <input class="beaver-qbar-input" id="beaver-qbar-input" type="text" spellcheck="false" placeholder="${t('ws.queryPh')}">
     </div>
     <!-- 展开面板 -->
     <div class="beaver-web-panel" id="beaver-web-panel">
@@ -69,6 +84,8 @@ export function buildSidebar() {
            171 次的"点 ⋯ 直接跳引导页"撤销——⋯ 恢复下拉展开，菜单项＝引导页/诊断窗口/重置/关闭；
            工具栏的 ⏱ 诊断入口按钮移除，其功能并入本菜单（openMainTextDiag 绑定随之迁来）。 -->
       <div class="beaver-web-lang-panel beaver-web-settings-pop" id="beaver-web-settings-pop">
+        <!-- 第二百七十次：⋯ 菜单「停用本站」——写当前域全停规则并跳引导页停用栏微调 -->
+        <button class="beaver-web-settings-item" id="beaver-web-deactivate-item">⏸ ${t('ws.deactivate')}</button>
         <button class="beaver-web-settings-item" id="beaver-web-guide-item">📖 ${t('ws.openGuide')}</button>
         <button class="beaver-web-settings-item" id="beaver-web-diag-item">⏱ ${t('ws.mainTextDiag')}</button>
         <button class="beaver-web-settings-item" id="beaver-web-reset">↺ ${t('ws.resetLayout')}</button>
@@ -77,9 +94,9 @@ export function buildSidebar() {
       <div class="beaver-web-tabs">
         <div class="beaver-web-tab active" data-tab="sentences">${t('ws.tabSentences')}</div>
         <div class="beaver-web-tab" data-tab="words">${t('ws.tabWords')}</div>
-        <!-- 第一百三十五次：补练习页——上轮用户反馈"三个标签只显示前两个"即指此 -->
-        <!-- 第一百八十五次：练习统一叫 learn（原 train/practice，2026-09-07 T9 改名） -->
-        <div class="beaver-web-tab" data-tab="learn">${t('tab.learn')}</div>
+        <!-- 272次：learn 标签改为 query——页面如同右键搜索（卡片复用 th/panel.js 唯一实现）；
+             原练习页（草稿导入按钮行+小程序码）整体移除，功能并入底部 learn 按钮 -->
+        <div class="beaver-web-tab" data-tab="query">${t('tab.query')}</div>
       </div>
       <!-- 句标签工具栏：第二百三十九次加回注释总开关（用户："在detail之前 也加Annotation标签按钮"）——
            active=网页提示（text-hint 高亮/侧邻注释）+ 侧栏句子注释标记；
@@ -105,17 +122,18 @@ export function buildSidebar() {
           <div class="beaver-web-empty-tip">${t('ws.noWords')}</div>
         </div>
       </div>
-      <!-- 第一百三十五次：练习页（与视频侧栏 mp 页同源内容：小程序二维码，懒加载） -->
-      <div class="beaver-web-tab-panel hidden" data-tab="learn" id="beaver-web-tab-learn">
-        <!-- 2026-09-08 修复：G3 曾在此处直接绑定 #beaver-web-draft-import/#beaver-web-draft-open
-             但模板缺失两按钮，querySelector 返回 null 抛 TypeError 致其后绑定全部中断。
-             同时清理原内层容器被删后残留的悬空 </div>。 -->
-        <div class="beaver-web-draft-row">
-          <button class="beaver-web-draft-btn" id="beaver-web-draft-import" data-i18n="learn.importDraft">📚 Import to My Scrolls</button>
-          <button class="beaver-web-draft-btn" id="beaver-web-draft-open" data-i18n="learn.importAndOpen">↗ Import and Open</button>
+      <!-- 272次：query 标签面板——输入行 + 结果卡（Shadow DOM 承载右键搜索卡片，样式不漏宿主页）；
+           275次：搜索框 Enter 与右键菜单（无选中）落到这里。276次：占位符 query... 只在
+           展开后的本输入框显示（折叠搜索条不显示）；🔍 查询按钮按裁定不加背景色 -->
+      <div class="beaver-web-tab-panel hidden" data-tab="query" id="beaver-web-tab-query">
+        <div class="beaver-web-qrow">
+          <input class="beaver-web-qinput" id="beaver-web-query-input" type="text" spellcheck="false"
+                 placeholder="${t('ws.queryPh')}">
+          <button class="beaver-web-qrun" id="beaver-web-query-run" title="${t('tab.query')}">🔍</button>
         </div>
-        <img class="beaver-web-mp-img" id="beaver-web-mp-img" alt="VocabRadar">
-        <div class="beaver-web-mp-tip" data-i18n="learn.tip">微信扫码使用「VocabRadar」小程序<br>随时随地背单词</div>
+        <div class="beaver-web-panel-scroll" id="beaver-web-query-result">
+          <div class="beaver-web-empty-tip">${t('ws.queryTip')}</div>
+        </div>
       </div>
       <!-- 底部工具栏：复制按钮
            反思（2026-08-16 第六十八次）："注释按钮移走"——原句子工具栏的注释开关
@@ -126,8 +144,10 @@ export function buildSidebar() {
            与视频侧栏 Annotation 按钮同语义），并联动 text-hint 网页提示启停。 -->
       <div class="beaver-web-footer">
         <button class="beaver-web-action-btn" id="beaver-web-copy" title="${t('ws.copy')}">📋 ${t('ws.copy')}</button>
-        <!-- 第一百七十一次：copy 右侧新增导出（存为文件），最右侧为对话按钮 -->
-        <button class="beaver-web-action-btn" id="beaver-web-export-file" title="${t('ws.exportFile')}">💾 ${t('ws.exportFile')}</button>
+        <!-- 272次：export 改 learn——导入卷轴草稿并跳转网站「我的卷轴」（原 learn 标签
+             「Import and Open」行为）；274次：图标 📱→🎯（用户裁定），跳转按本地/线上
+             构建自动判定（getSiteUrl）；原导出文件功能移除 -->
+        <button class="beaver-web-action-btn" id="beaver-web-learn-btn" title="${t('btn.learn')}">🎯 ${t('btn.learn')}</button>
         <button class="beaver-web-action-btn" id="beaver-web-chat" title="${t('btn.chat')}">💬</button>
         <!-- 第二百零四次（用户："原来诊断窗口入口按钮移除"）：⏱ 诊断入口按钮移除，
              功能并入 ⋯ 下拉菜单（#beaver-web-diag-item） -->
@@ -160,17 +180,28 @@ function markExpandGuard() {
 }
 
 export function bindEvents() {
-  // 折叠球点击 → 展开（但先检查是否是拖拽）
-  _root.querySelector('#beaver-web-collapse-tab').addEventListener('click', (e) => {
+  // 272次：搜索栏两件套（275次移除三角）——
+  //   左图标点击=展开侧栏（沿用原悬浮球点击，含拖拽误触保护）；
+  //   输入框 Enter=输入完成→展开到 query 标签并查询（query 标签内另有 🔍 按钮）。
+  _root.querySelector('#beaver-qbar-icon').addEventListener('click', (e) => {
+    e.stopPropagation();
     // 拖动后不触发展开
     if (_dragMoved) { _dragMoved = false; return; }
     expand();
   });
 
-  // 悬浮球右键 → 召唤视频侧栏（2026-08-20 第八十六次补充③）
-  // 反思：右键菜单（contextmenu）在拖拽场景下也应保留；仅拦截折叠球本体上的右键，
-  //   不拦截整个文档（文档级 contextmenu 由 text-hint.js capture 阶段记录坐标，互不影响）。
-  _root.querySelector('#beaver-web-collapse-tab').addEventListener('contextmenu', (e) => {
+  // 输入完成（Enter）→ query 标签
+  const qbarInput = _root.querySelector('#beaver-qbar-input');
+  qbarInput.addEventListener('keydown', (e) => {
+    if (e.key !== 'Enter') return;
+    expandToQuery(String(qbarInput.value || '').trim());
+  });
+
+  // 图标右键 → 召唤视频侧栏（2026-08-20 第八十六次补充③；272次收窄到图标本体，
+  //   输入框右键保留浏览器原生文本菜单）
+  // 反思：右键菜单（contextmenu）在拖拽场景下也应保留；不拦截整个文档
+  //   （文档级 contextmenu 由 text-hint.js capture 阶段记录坐标，互不影响）。
+  _root.querySelector('#beaver-qbar-icon').addEventListener('contextmenu', (e) => {
     e.preventDefault();
     e.stopPropagation();
     summonVideoSidebar();
@@ -247,6 +278,26 @@ export function bindEvents() {
       log('⋯菜单 打开引导页失败：' + String(err && err.message || err));
     }
   });
+  // 菜单项：停用本站（第二百七十次；第二百七十二次默认改单停「网页提示」——用户裁定
+  //   "设定抑制默认是抑制网页提示，不是所有"）：写当前域 hint 停用规则，规则写入即经
+  //   storage.onChanged 撤本页高亮/侧注；文本侧栏自身与其余三项不受影响，随后跳引导页
+  //   停用栏（地址=当前域名）供改通配范围与勾选四大选项。
+  _root.querySelector('#beaver-web-deactivate-item').addEventListener('click', async () => {
+    closeAllPopups();
+    const pat = location.hostname;
+    try {
+      await upsertDeactivateRule(pat, { hint: true });
+      log('⋯菜单 → 停用本站网页提示（' + pat + '）规则已写入');
+    } catch (err) {
+      log('⋯菜单 写停用规则失败：' + String((err && err.message) || err));
+    }
+    try {
+      chrome.runtime.sendMessage({ type: 'OPEN_GUIDE', section: 'deactivate', pattern: pat });
+      log('⋯菜单 → 打开引导页停用栏（' + pat + '）');
+    } catch (err) {
+      log('⋯菜单 打开引导页失败：' + String((err && err.message) || err));
+    }
+  });
   // 菜单项：正文提取诊断窗（原工具栏 ⏱ 按钮的功能，入口按钮已移除）
   _root.querySelector('#beaver-web-diag-item').addEventListener('click', () => {
     closeAllPopups();
@@ -270,15 +321,30 @@ export function bindEvents() {
   makeDraggable();
 makeResizable();
 
+  // 272次：搜索栏可用性（Query 开关/停用规则）初始化 + 实时刷新 + 右键菜单跳转监听
+  ensureQueryAvailabilityWatcher();
+  applyQueryAvailability();
+
   // 标签页切换
   _root.querySelectorAll('.beaver-web-tab').forEach((tab) => {
     tab.addEventListener('click', () => switchTab(tab.dataset.tab));
   });
 
-  // 工具栏（第二百三十九次：加回注释总开关 Annotation，与详情/词表按钮并列）
+  // 工具栏（第二百三十九次：加回注释总开关，与详情/词表按钮并列）
   _root.querySelector('#beaver-web-annotation').addEventListener('click', onAnnotationClick);
   _root.querySelector('#beaver-web-detail').addEventListener('click', onDetailClick);
   _root.querySelector('#beaver-web-export').addEventListener('click', onWordListToggle);
+
+  // 272次：query 标签——查询按钮（输入行内），Enter 在输入框 keydown 里另行处理
+  _root.querySelector('#beaver-web-query-run').addEventListener('click', () => {
+    const input = _root.querySelector('#beaver-web-query-input');
+    runSidebarQuery(input ? String(input.value || '').trim() : '');
+  });
+  const _qTabInput = _root.querySelector('#beaver-web-query-input');
+  if (_qTabInput) _qTabInput.addEventListener('keydown', (e) => {
+    if (e.key !== 'Enter') return;
+    runSidebarQuery(String(_qTabInput.value || '').trim());
+  });
 
   // 第二百三十九次：Annotation 按钮初始态对齐 text-hint 全局开关（与 scanner.js 口径
   //   一致：仅显式 false 才算关）。全局关提示的用户按钮置 inactive 且侧栏走纯正文，
@@ -309,13 +375,11 @@ makeResizable();
 
   // 复制按钮：复制当前标签页的全部句子文本
   _root.querySelector('#beaver-web-copy').addEventListener('click', onCopyClick);
-  // 第一百七十一次：导出文件 / 对话按钮
-  //   注意 #beaver-web-export 已被顶部"词单"按钮占用，导出文件另用 -export-file 后缀
-  _root.querySelector('#beaver-web-export-file').addEventListener('click', onExportFileClick);
+  // 272次：底部 learn 按钮——导入卷轴草稿并跳转网站「我的卷轴」（原 learn 标签
+  //   「Import and Open」行为 + 📱 手机图标）；原导出文件按钮移除
+  _root.querySelector('#beaver-web-learn-btn').addEventListener('click', onDraftImportAndOpenClick);
   _root.querySelector('#beaver-web-chat').addEventListener('click', onChatClick);
-  // G3（2026-09-08）：learn 面板按钮行（§6.2）——左=写扩展缓存+提示；右=同左并打开网站
-  _root.querySelector('#beaver-web-draft-import').addEventListener('click', onDraftImportClick);
-  _root.querySelector('#beaver-web-draft-open').addEventListener('click', onDraftImportAndOpenClick);
+  // G3（2026-09-08）：learn 面板按钮行已随 learn 标签整体移除（272次并入底部 learn 按钮）
   // 第二百零四次：⏱ 正文提取耗时诊断按钮移除——入口并入 ⋯ 下拉菜单
   //   （#beaver-web-diag-item，openMainTextDiag 绑定迁至该处）
 
@@ -417,20 +481,46 @@ function bindLanguagePanel() {
   });
 }
 
-// === 注入关键 CSS（同步，确保悬浮球立即可见）===
+// === 注入关键 CSS（同步，确保搜索栏立即可见）===
 // 反思（2026-08-07）：用户反馈"悬浮球依旧没有"。
 //   <link> 异步加载 CSS，加载前悬浮球无样式不可见。
 //   修正：用 <style> 同步注入 collapsed 态关键样式，不依赖 <link>。
+// 272次：折叠态由 48px 圆球改为搜索栏；274次（用户"搜索栏太张扬，本来就是为了
+//   轻量加的"）降噪——去绿底改中性半透明白、默认宽度收到 icon+一单词输入框+三角
+//   （约 150px，:focus-within 展到 300px）、三角去底色；.query-off（Query 关）48px 圆。
+// 282次（用户"你现在错得离谱，重新画"）：根因终于查清——本层与 web-sidebar.css
+//   的 .collapsed 规则特异性同为 (1,1,0) 且都带 !important，异步 <link> 后加载
+//   胜出，本层非激活视觉（透明底+半透明边框）一直被 web-sidebar.css 的淡绿实底
+//   覆盖，此前四轮改动全部白做。修正：视觉全部收敛到本层独占（同步注入必胜）——
+//   非激活=104px 透明底+半透明边框 rgba(28,77,50,0.30)+无阴影+占位符隐藏；
+//   激活（:focus-within）=延长 300px+白底+边框近不透明 rgba(28,77,50,0.9)+
+//   占位符显现；输入框自身样式也钉进本层（透明底/无边框/无描边），
+//   web-sidebar.css 删除全部 .collapsed 与 .beaver-qbar-input 冲突块。
+// 283次（用户"改为半透明，无绿边，中间输入框透明；查询栏跟文本侧栏转换尽量位置
+//   不动，左上角算位置"）：三处修正——
+//   1. 半透明底（用户澄清"主题色，马卡龙绿，浅色，半透明"）：折叠 rgba(198,233,208,0.50)、
+//      激活 rgba(198,233,208,0.90)，输入框保持透明（绿底透出即输入区）；
+//   2. 无绿边：border 全部去除（282 的半透明绿边即用户所说"绿边"）；
+//   3. 左上角锚定：展开侧栏左缘 = 100vw − 16 − min(380, 100vw−24)
+//      = min(calc(100vw − 396px), 8px)（web-sidebar.css .expanded 右 16px 反推），
+//      折叠条 left 锚定同值（宽视口=100vw−396px；窄视口≤404px 收边 8px），
+//      折叠↔展开切换时左上角坐标不动；折叠条向右生长（left 定位 + width 过渡）。
 export function injectCriticalCSS() {
   if (document.getElementById('beaver-web-critical-css')) return;
   const style = document.createElement('style');
   style.id = 'beaver-web-critical-css';
 style.textContent = `
 #beaver-web-sidebar{position:fixed !important;z-index:2147483646 !important;font-family:-apple-system,"Segoe UI","Microsoft YaHei",sans-serif !important;font-size:16px !important;box-sizing:border-box !important;margin:0 !important;padding:0 !important;border:none !important;}
-#beaver-web-sidebar.collapsed{width:48px !important;height:48px !important;right:16px !important;top:20px !important;left:auto !important;bottom:auto !important;border-radius:50% !important;background:#2e6b43 !important;box-shadow:0 4px 12px rgba(26,31,26,0.25) !important;cursor:pointer !important;overflow:hidden !important;display:flex !important;align-items:center !important;justify-content:center !important;}
+#beaver-web-sidebar.collapsed{width:104px !important;height:40px !important;left:min(calc(100vw - 396px), 8px) !important;top:20px !important;right:auto !important;bottom:auto !important;border-radius:20px !important;background:rgba(198,233,208,0.50) !important;border:none !important;box-shadow:none !important;cursor:default !important;overflow:hidden !important;display:flex !important;align-items:center !important;transition:width .18s ease,background .18s ease,box-shadow .18s ease !important;}
+#beaver-web-sidebar.collapsed:focus-within{width:300px !important;background:rgba(198,233,208,0.90) !important;border:none !important;box-shadow:0 1px 4px rgba(28,77,50,0.18) !important;}
+#beaver-web-sidebar.collapsed .beaver-qbar-input{flex:1 1 auto !important;min-width:0 !important;height:28px !important;background:transparent !important;border:none !important;outline:none !important;border-radius:14px !important;padding:0 8px !important;font-size:13px !important;color:var(--beaver-text,#1a1f1a) !important;user-select:text !important;-webkit-user-select:text !important;}
+#beaver-web-sidebar.collapsed .beaver-qbar-input::placeholder{color:transparent !important;transition:color .15s ease !important;}
+#beaver-web-sidebar.collapsed:focus-within .beaver-qbar-input::placeholder{color:#5f7a6b !important;}
 #beaver-web-sidebar.collapsed .beaver-web-panel{display:none !important;}
-#beaver-web-sidebar.collapsed .beaver-web-collapse-tab{display:flex !important;width:100% !important;height:100% !important;align-items:center !important;justify-content:center !important;}
-#beaver-web-sidebar.collapsed .beaver-web-collapse-icon{display:block !important;width:100% !important;height:100% !important;border-radius:50% !important;}
+#beaver-web-sidebar.collapsed .beaver-web-collapse-tab{display:flex !important;width:100% !important;height:100% !important;align-items:center !important;gap:4px !important;padding:0 5px !important;}
+#beaver-web-sidebar.collapsed.query-off{width:48px !important;height:48px !important;border-radius:50% !important;cursor:pointer !important;}
+#beaver-web-sidebar.collapsed.query-off .beaver-qbar-input{display:none !important;}
+#beaver-web-sidebar.collapsed.query-off .beaver-web-collapse-tab{justify-content:center !important;}
 `;
   // 反思（2026-08-12 第四十四次）：head 可能不存在（frameset 等特殊页面），
   //   回退到 document.documentElement
@@ -542,7 +632,11 @@ export function expand(anchor) {
   primeTranslator();
   // 第一百二十一次：统一侧栏路由——页面存在视频侧栏且有 <video> 时，点球直接展开视频形态；
   // 文本形态改由视频侧栏头部 📄 按钮进入（或无视频时默认）。
-  _absentSince = 0; // 第一百三十六次：用户手动展开即清零"正片页缺席"闸门计时器，避免12s后球被误收起
+  // 278次：用户手动展开=兜底已达成——置 sticky（_absentConcluded），同一 URL 上看门狗
+  //   不再重进 12s 宽限把刚展开的文本侧栏藏回去。旧版只清零计时器，下一次 700ms tick
+  //   重新进入宽限 → 展开面板被整体 display:none（"搜索框一点刚换成文本侧栏就消失"）
+  _absentSince = 0;
+  _absentConcluded = true;
   try {
     const vsb = document.querySelector('#beaver-sidebar');
     const hasVideo = !!document.querySelector('video');
@@ -642,7 +736,8 @@ export function collapse() {
   let ballTarget = _preExpandPos;
   if (wasDragged) {
     const r = _root.getBoundingClientRect();
-    ballTarget = clampPosToViewport(Math.round(r.right) - 48, Math.round(r.top));
+    // 272次：就地收拢锚点=把手宽（275次去三角后 104px 搜索栏）
+    ballTarget = clampPosToViewport(Math.round(r.right) - 104, Math.round(r.top));
   }
   // 反思（2026-08-13）：恢复 expand 前的球位置，不基于侧栏 rect 计算。
   //   球位置固定（保存位置或默认右上角），不随侧栏移动。
@@ -735,6 +830,8 @@ function makeDraggable() {
     if (e.pointerType === 'mouse' && e.button !== 0) return; // 鼠标仅左键
     // 排除标题栏内的按钮点击
     if (e.target.closest('button')) return;
+    // 272次：折叠态=搜索栏——输入框上起手不拖拽（保留光标定位与文本选择）
+    if (e.target.closest('input')) return;
     _dragging = true;
     _dragMoved = false;
     _activePointerId = e.pointerId;
@@ -1006,34 +1103,114 @@ function switchTab(tab) {
   if (_wordOnlyMode && tab !== 'words') {
     exitWordOnlyMode();
   }
-  // 第一百三十五次：练习页二维码懒加载（与视频侧栏同策略：首切才取，免无谓 IO）
-  if (tab === 'learn') {
-    const mpImg = _root.querySelector('#beaver-web-mp-img');
-    if (mpImg && !mpImg.src) {
-      try { mpImg.src = chrome.runtime.getURL('src/data/mp-qr.jpg'); } catch (e) { /* ignore */ }
-    }
-    // G3（2026-09-08）：无正文时按钮行灰态（§6.2「禁用并提示，不静默」——
-    // 不设 disabled，点击仍 toast 提示，与 Creator jumpStep 灰态同型）
-    const hasText = _pageSentences.length > 0;
-    ['#beaver-web-draft-import', '#beaver-web-draft-open'].forEach((sel) => {
-      const b = _root.querySelector(sel);
-      if (b) b.classList.toggle('is-empty', !hasText);
-    });
-  }
+  // 272次：learn 标签已改 query（结果卡随查询即用即渲，无需懒加载钩子）
   // 切到句标签时触发扫描
   if (tab === 'sentences') {
     schedulePageScan();
   }
 }
 
-// === G3（2026-09-08）：learn 面板草稿导入（§6.2） ===
-// doImportDraft：组装+落缓存+三态提示（成功/无内容/失败，R1 不静默）；
-// 期间两按钮禁用防重复点击，结束后恢复
-async function doImportDraft() {
-  const btns = ['#beaver-web-draft-import', '#beaver-web-draft-open']
-    .map((sel) => _root.querySelector(sel));
+// === 272次：query 标签——查询执行 ===
+// 结果卡复用右键搜索的唯一定义（th/panel.js：buildPanelCss/buildCardInnerHTML/
+// renderQueryCard/bindLemmaChipClick），承载在 Shadow DOM 内——卡片 CSS 不漏宿主页。
+// @param {string} text 查询文本（空则回空态提示）
+async function runSidebarQuery(text) {
+  const box = _root.querySelector('#beaver-web-query-result');
+  if (!box) return;
+  const trimmed = String(text || '').trim();
+  const input = _root.querySelector('#beaver-web-query-input');
+  if (input && trimmed) input.value = trimmed;
+  if (!trimmed) {
+    box.innerHTML = '<div class="beaver-web-empty-tip">' + t('ws.queryTip') + '</div>';
+    return;
+  }
+  box.innerHTML = '';
+  const host = document.createElement('div');
+  box.appendChild(host);
+  const shadow = host.attachShadow({ mode: 'open' });
+  shadow.innerHTML = '<style>' + buildPanelCss() + '</style>'
+    + '<div class="beaver-query-card" style="padding:10px 12px;background:#fbfdf9;border-radius:8px;">'
+    + buildCardInnerHTML() + '</div>';
+  bindLemmaChipClick(shadow);
   try {
-    btns.forEach((b) => { if (b) b.disabled = true; });
+    // 内嵌卡片：无定位回调、恒可写（后两参缺省即 no-op/恒 true）
+    await renderQueryCard(shadow, trimmed);
+  } catch (e) {
+    console.error('[VocabRadar][web-sidebar] query 标签查询失败:', e);
+  }
+}
+
+// === 272次：搜索栏输入完成/点三角 → 展开为文本侧栏并落到 query 标签（有词即查） ===
+function expandToQuery(text) {
+  // expand(true)：跳过"视频侧栏在场即展开视频形态"的路由——搜索明确要文本形态
+  expand(true);
+  switchTab('query');
+  const input = _root.querySelector('#beaver-web-query-input');
+  if (input && text) input.value = text;
+  runSidebarQuery(text);
+  try { if (input) input.focus(); } catch (_) { /* ignore */ }
+}
+
+// === 272次：搜索栏可用性——Query 全局开关（queryEnabled）+ 停用规则「搜索栏」项 ===
+// 不可用时折叠条只剩品牌图标（.query-off，CSS 收回 48px 圆球形态），图标点击仍可展开侧栏。
+// 与网页提示解耦：提示关/停不影响搜索栏；Query 关/停也不影响提示。
+async function applyQueryAvailability() {
+  if (!_root || !document.contains(_root)) return;
+  let off = false;
+  try {
+    const enabled = await new Promise((resolve) => {
+      try { chrome.storage.local.get({ queryEnabled: true }, (r) => resolve(r.queryEnabled !== false)); } catch (_) { resolve(true); }
+    });
+    const sup = await suppressionFor(location);
+    off = !enabled || sup.query === true;
+  } catch (e) {
+    off = false; // 读取异常按可用处理（不遮蔽）
+    console.warn('[VocabRadar][web-sidebar] Query 可用性读取失败，按可用处理:', e);
+  }
+  _root.classList.toggle('query-off', off);
+  log('Query 可用性:', off ? '不可用（搜索栏隐藏为图标）' : '可用');
+}
+
+// 272次：Query 可用性实时刷新（全局开关/停用规则变化；模块级只注册一次）
+let _queryAvailListenerInstalled = false;
+function ensureQueryAvailabilityWatcher() {
+  if (_queryAvailListenerInstalled) return;
+  _queryAvailListenerInstalled = true;
+  // 274次：初装即刷一次视频侧栏停用规则缓存（看门狗同步判定用）
+  refreshVsRuleSup();
+  try {
+    chrome.storage.onChanged.addListener((changes, area) => {
+      if (area !== 'local') return;
+      if ('queryEnabled' in changes || 'deactivateRules' in changes) {
+        applyQueryAvailability();
+        refreshVsRuleSup();
+      }
+    });
+  } catch (e) { /* ignore */ }
+  // 右键菜单（无选中文本）→ SW OPEN_QUERY_BAR → text-hint 转发本事件 → 跳到搜索框输入
+  window.addEventListener('beaver-open-query-bar', () => {
+    try {
+      if (!_root || !document.contains(_root)) return;
+      if (_root.classList.contains('closed')) return;
+      if (_root.classList.contains('collapsed')) {
+        const input = _root.querySelector('#beaver-qbar-input');
+        if (input) { input.focus(); return; }
+      }
+      expand(true);
+      switchTab('query');
+      const qi = _root.querySelector('#beaver-web-query-input');
+      if (qi) qi.focus();
+    } catch (e) { /* ignore */ }
+  });
+}
+
+// === G3（2026-09-08）：learn 面板草稿导入（§6.2） ===
+// 272次：doImportDraft——组装+落缓存+三态提示（成功/无内容/失败，R1 不静默）；
+// 期间 learn 按钮禁用防重复点击，结束后恢复（原 learn 标签两按钮已并入底部 learn 按钮）
+async function doImportDraft() {
+  const btn = _root.querySelector('#beaver-web-learn-btn');
+  try {
+    if (btn) btn.disabled = true;
     const r = await importCurrentSidebarDraft();
     if (!r.ok) { toast(t('learn.noContent')); return { ok: false }; }
     toast(t('learn.importOk'));
@@ -1043,19 +1220,15 @@ async function doImportDraft() {
     toast(t('learn.importFail'));
     return { ok: false };
   } finally {
-    btns.forEach((b) => { if (b) b.disabled = false; });
+    if (btn) btn.disabled = false;
   }
 }
 
-// 左按钮：仅导入（不跳转）
-async function onDraftImportClick() {
-  await doImportDraft();
-}
-
-// 右按钮：同左，导入成功才打开网站「我的卷轴」（hash 路由）
+// 272次：底部 learn 按钮——导入成功才打开网站「我的卷轴」（hash 路由）。
+// 274次：跳转规则=getSiteUrl()（本地构建跳本地、商店安装跳线上）；图标 📱→🎯
 async function onDraftImportAndOpenClick() {
   const r = await doImportDraft();
-  if (r.ok) window.open(SITE_URL + '/#/my-scrolls', '_blank');
+  if (r.ok) window.open(getSiteUrl() + '/#/my-scrolls', '_blank');
 }
 // === 工具栏 ===
 // 第二百三十九次：注释总开关（与视频侧栏 Annotation 按钮同语义，active=显示注释）。
@@ -1242,40 +1415,9 @@ function buildSidebarText() {
   return { text: lines.join('\n'), sentences };
 }
 
-/**
- * 第一百七十一次：导出为 .txt 文件
- * manifest 未申请 downloads 权限，故走 Blob + URL.createObjectURL + a[download]，
- * 这是内容脚本内无需额外权限的标准做法。
- */
-function onExportFileClick() {
-  const built = buildSidebarText();
-  if (!built.text) {
-    toast(t('ws.noContent'));
-    return;
-  }
-  try {
-    // 文件名用页面标题（去掉文件系统非法字符）+ 时间戳，避免同名覆盖
-    const base = String(document.title || 'VocabRadar').replace(/[\\/:*?"<>|]/g, '_').slice(0, 60).trim() || 'VocabRadar';
-    const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
-    const blob = new Blob([built.text], { type: 'text/plain;charset=utf-8' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = base + '_' + stamp + '.txt';
-    a.style.display = 'none';
-    getInjectionRoot().appendChild(a);
-    a.click();
-    // 延迟回收：立刻 revoke 会让部分浏览器的下载中断
-    setTimeout(() => {
-      try { a.remove(); } catch (_) { /* ignore */ }
-      try { URL.revokeObjectURL(url); } catch (_) { /* ignore */ }
-    }, 4000);
-    toast(t('ws.exported') + ` (${built.sentences.length} ${t('ws.segments')})`);
-  } catch (e) {
-    // 不遮蔽错误：把原始异常带给用户
-    toast(t('ws.exportFail') + String((e && e.message) || e), { error: true });
-  }
-}
+/* 272次：onExportFileClick（导出为 .txt 文件）已删除——底部「导出文件」按钮
+ * 改为 learn（导入卷轴草稿并跳转网站）；buildSidebarText 仍服务复制按钮与
+ * getAiMainText 兜底，保留。如需恢复导出功能参考 git 历史。 */
 
 /**
  * 第一百七十一次：文本侧栏底部对话按钮 —— 就当前页面正文发起对话
@@ -1322,6 +1464,27 @@ let _ballSyncTimer = null;
 
 // 第一百三十五次：正片页空窗期起始时刻（0=不处于空窗），供 12s 兜底闸门判定
 let _absentSince = 0;
+// 278次：空窗兜底 sticky——本 URL 上 12s 宽限到期完成过一次兜底（或用户手动展开）后置位。
+//   旧版 expand() 只清零 _absentSince，下一次 700ms tick 重新进入 12s 宽限 → shouldHideRoot
+//   再次为 true → 刚展开的文本侧栏被整体 display:none（用户报"搜索框一点刚换成文本侧栏
+//   就消失"的直接根因）。置位后同一 URL 不再重进宽限；URL 变化或侧栏重新在场时复位。
+let _absentConcluded = false;
+let _syncLastUrl = '';
+// 274次：告警限频——正片页缺席超过 12s 后旧版每个同步周期都 warn（用户实测刷屏）
+let _lastAbsentWarn = 0;
+// 274次：「视频侧栏」停用规则缓存——true 时正片页无侧栏=规则停用的预期行为，
+// 看门狗不得兜底恢复（对抗规则）也不得刷日志。276次：不再完全静默——压住时按
+// 60s 限频打一条带规则地址的说明（用户报"视频侧栏不可见"时日志直接给出原因）。
+// 值由 refreshVsRuleSup 异步刷新（初装+deactivateRules 变化，见 ensureQueryAvailabilityWatcher）。
+let _vsRuleSup = false;
+let _vsRuleSupPats = [];
+async function refreshVsRuleSup() {
+  try {
+    const sup = await suppressionFor(location);
+    _vsRuleSup = sup.videoSidebar === true;
+    _vsRuleSupPats = Array.isArray(sup.matchedPats) ? sup.matchedPats : [];
+  } catch (_) { _vsRuleSup = false; _vsRuleSupPats = []; }
+}
 
 // 第一百三十四次（用户反馈"目前在视频网站中显示的是悬浮球"）：视频正片页在侧栏
 // 注入完成前存在空窗期，球会先闪出来——按 URL 预判：B站/watch/shorts 正片页，
@@ -1347,6 +1510,12 @@ function getVideoSidebarPresence() {
 
 export function syncBallWithVideoSidebar() {
   if (!_root) return;
+  // 278次：URL 变化=新页面——复位空窗计时与 sticky，重新走正常 12s 宽限
+  if (location.href !== _syncLastUrl) {
+    _syncLastUrl = location.href;
+    _absentSince = 0;
+    _absentConcluded = false;
+  }
   const presence = getVideoSidebarPresence();
   // active=视频侧栏在场；absent 且正片页=侧栏即将注入的空窗期——两者都藏球。
   // closed（✕ 显式关闭）是唯一放行球的出口；formSwitched 时文本面板在场不额外处理。
@@ -1355,17 +1524,38 @@ export function syncBallWithVideoSidebar() {
   const ABSENT_GRACE_MS = 12000;
   let shouldHideRoot = (presence === 'active');
   let hideReason = (presence === 'active') ? '视频侧栏在场' : '';
+  // 274次：规则停用优先——「视频侧栏」被停时正片页无侧栏是预期，不进空窗判定
+  // （放行搜索栏、复位计时）；276次：不再完全静默，60s 限频打一条带规则地址的说明，
+  // 用户报"视频侧栏不可见"时日志直接给出原因与修改入口。
   if (!shouldHideRoot && presence === 'absent' && isVideoWatchPage()) {
-    if (!_absentSince) _absentSince = Date.now();
-    if (Date.now() - _absentSince < ABSENT_GRACE_MS) {
-      shouldHideRoot = true;
-      hideReason = '视频正片页待注入';
+    if (_vsRuleSup) {
+      _absentSince = 0;
+      if (Date.now() - _lastAbsentWarn > 60000) {
+        _lastAbsentWarn = Date.now();
+        console.warn('[VocabRadar][web-sidebar] 视频侧栏被停用规则关闭（规则='
+          + (_vsRuleSupPats.join(',') || '(未知)') + '），本页不注入——如需恢复请到引导页'
+          + '「设定栏 → Deactivate（停用）」把该行的"视频侧栏"点掉或删除该行');
+      }
     } else {
-      console.warn('[VocabRadar][web-sidebar] 视频侧栏超过12s未出现在正片页(注入可能失败)，悬浮球兜底恢复。'
-        + '诊断: window.__beaverVsDiag() ；请贴控制台 [VocabRadar] 全部日志');
+      if (!_absentSince) _absentSince = Date.now();
+      // 278次：sticky 兜底——本 URL 已兜底恢复过（_absentConcluded）就不再重进宽限，
+      //   球保持可见（宁可多显示也不把用户刚展开的面板藏回去）
+      if (!_absentConcluded && Date.now() - _absentSince < ABSENT_GRACE_MS) {
+        shouldHideRoot = true;
+        hideReason = '视频正片页待注入';
+      } else if (!_absentConcluded) {
+        _absentConcluded = true;
+      }
+      if (Date.now() - _lastAbsentWarn > 60000) {
+        _lastAbsentWarn = Date.now();
+        console.warn('[VocabRadar][web-sidebar] 视频侧栏超过12s未出现在正片页(注入可能失败)，悬浮球兜底恢复。'
+          + '诊断: window.__beaverVsDiag() ；请贴控制台 [VocabRadar] 全部日志（60s 限频）');
+      }
     }
   } else {
     _absentSince = 0;
+    // 278次：侧栏重新在场/被✕显式关闭 → sticky 复位（下次真缺席重新走完整宽限）
+    if (presence === 'active' || presence === 'closed') _absentConcluded = false;
   }
   if (shouldHideRoot && _root.classList.contains('expanded')) {
     // 视频形态在场：先把文本面板收成球再整体退场（下次回归时符合"默认折叠"约定）

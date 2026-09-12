@@ -38,8 +38,10 @@ import { addSubtitle as overlayAddSubtitle } from '../subtitle-overlay.js';
 import { openChatPanel } from '../../lib/chat.js';
 import {
   getRoot, getSubtitlesRef, getActiveVideo, getRankThreshold, getAnnotateOov,
-  getAnnotateRepeat, getCfg, getActiveTab, showNoSubtitle, clearLoading, toast
+  getAnnotateRepeat, getAnnTemplate, getCfg, getActiveTab, showNoSubtitle, clearLoading, toast
 } from '../video-sidebar.js';
+// 280次：注释模板拆分（{word} 丢弃，取前后字面量包释义）
+import { splitAnnTemplate } from '../../lib/styles.js';
 
 // === 渲染状态（拆分自门面"模块状态"区，机械搬移） ===
 let _subEntries = [];         // 当前窗口内的字幕条目 [{sub, annotations, el, subIdx}]
@@ -60,6 +62,14 @@ function setAllAnnotations(arr) {
     const k = wordDedupKey(a && a.word);
     if (k) _wordKeys.add(k);
   }
+}
+
+/**
+ * 生词本只读快照（274次：视频侧栏 learn 草稿组装用）。
+ * 返回内部数组引用——外部只许读不许改写，写入一律走 setAllAnnotations（唯一替换入口）。
+ */
+export function getAllAnnotations() {
+  return _allAnnotations;
 }
 
 /** 登记词键（true = 首次，可入表；false = 别处已收，丢弃） */
@@ -286,7 +296,9 @@ function highlightWords(text, annotations, inlineAnnotations = false) {
     if (inlineAnnotations) {
       const shortTrans = pickCleanShortTrans(a.translations);
       if (shortTrans) {
-        replacement += `<span class="beaver-ann-inline">(${escapeHtml(shortTrans)})</span>`;
+        // 280次：注释按模板拼装（{word} 变量丢弃——词已在高亮 span 中，取前后字面量包释义）
+        const { pre, post } = splitAnnTemplate(getAnnTemplate());
+        replacement += `<span class="beaver-ann-inline">${escapeHtml(pre)}${escapeHtml(shortTrans)}${escapeHtml(post)}</span>`;
       }
     }
     placeholders.push(replacement);
@@ -1127,7 +1139,8 @@ export async function onCopy() {
  *   复制/导出的行为完全不变。
  * @returns {Promise<string>} 字幕正文文本
  */
-async function buildSubtitleBody() {
+// 274次：导出——视频侧栏 learn 草稿（文本=字幕正文）与 chat 共用同一正文源
+export async function buildSubtitleBody() {
   let body = '';
   // 整个字幕面板：每条字幕 + 其下所有注释（含无译文词，释义列显示"-"）
   for (let i = 0; i < getSubtitlesRef().length; i++) {

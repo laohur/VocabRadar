@@ -60,6 +60,8 @@ import {
   waitForBody, isContextValid, injectStyles, applyColorVars, pickColors,
   thMark, thAdd, getHintTiming
 } from './core.js';
+// 280次：annBrackets 布尔退役改 annTemplate 模板——渲染走 renderAnnText
+import { renderAnnText, DEFAULT_ANN_TEMPLATE } from '../../lib/styles.js';
 
 // 模块级：扫描门闸看门狗定时器（见 scheduleScan#run 的 release）
 // 反思（2026-08-30 第一百八十三次）：scanRunning 只靠 onDone 复位，异常路径会永久卡死全部扫描
@@ -87,6 +89,9 @@ export async function startHint(settings) {
       ? settings.rankThreshold : 5000;
     thState.annotateOov = settings.annotateOov === true;  // 默认 false（注释表外词默认不选）
     thState.annotateRepeat = settings.annotateRepeat === true;  // 默认 false（不注释重复生词）
+    // 280次：侧邻注释模板（annBrackets 布尔退役，默认 {word}({meaning})）
+    thState.annTemplate = (typeof settings.annTemplate === 'string' && settings.annTemplate.trim())
+      ? settings.annTemplate : DEFAULT_ANN_TEMPLATE;
     thState.colors = pickColors(settings);
     thState.enabled = true;
     // 第一百八十七次：panelHideDelay 的 config.json 读取**改为非阻塞**。
@@ -197,6 +202,13 @@ export function stopHint() {
   thState.scanPendingRoot = null;
   // 第一百八十三次：一并清掉看门狗定时器，避免停用后仍打出"强制解闸"错误日志。
   if (_scanWatchdog) { clearTimeout(_scanWatchdog); _scanWatchdog = null; }
+  // 第二百六十九次（用户报"扩展关闭侧栏后，网页依旧提示"）：补拆高亮——
+  //   文档字符串一直承诺"清除所有高亮"，实现却漏了 unwrapAll：本函数只断观察器、
+  //   停扫描门闸，已注入的 .beaver-word 高亮全部残留（✕ 关侧栏 / 注释开关关 /
+  //   对账停用三条路径全部中招）。与 clearHighlights 同款 unwrapAll + resetScan
+  //   （总线清空，侧栏同步清列表）；重启路径 startHint 会整页重扫重新包裹，无残留风险。
+  unwrapAll();
+  resetScan();
   // w4：UI 模块未加载 = 无浮层/面板可藏，跳过；已加载才转发隐藏
   if (_uiMods) _uiMods.then((m) => m.tt.hideTooltip()).catch(() => {});
   if (_uiMods) _uiMods.then((m) => m.pp.hidePanel()).catch(() => {});
@@ -295,6 +307,22 @@ export function setAnnotateOov(v) {
  */
 export function setAnnotateRepeat(v) {
   thState.annotateRepeat = !!v;
+  thState.wordCache.clear();
+  thState.seenWords.clear();
+  if (thState.enabled) {
+    clearProcessedAttr();
+    resetScan();
+    scheduleScan(document.body || document.documentElement);
+  }
+}
+
+/**
+ * 修改"侧邻注释模板"（280次：annBrackets 布尔退役改 annTemplate 字符串模板）
+ * 变化后需重新扫描才能对已包裹节点生效（模板拼在 processTextNode 追加时）
+ * @param {string} v
+ */
+export function setAnnTemplate(v) {
+  thState.annTemplate = (typeof v === 'string' && v.trim()) ? v : DEFAULT_ANN_TEMPLATE;
   thState.wordCache.clear();
   thState.seenWords.clear();
   if (thState.enabled) {
@@ -1024,7 +1052,9 @@ export function appendSideAnnotation(span, translations) {
     annSpan.className = SIDE_ANN_CLASS;
     span.parentNode.insertBefore(annSpan, span.nextSibling);
   }
-  annSpan.textContent = '(' + transText + ')';
+  // 280次：注释文本由 annTemplate 模板渲染（{meaning} 前后字面量拼释义，
+  //   {word} token 丢弃——生词 span 已独立存在，不重复输出）
+  annSpan.textContent = renderAnnText(thState.annTemplate, transText);
   thMark('hint:firstAnn');   // 埋点：首条侧注释可见时刻
 }
 

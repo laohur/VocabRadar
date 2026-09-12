@@ -15,7 +15,10 @@
   --g-bg: #f4f7f5;
   --g-card: #ffffff;
   --g-text: #1a1f1a;
-  --g-muted: #5f6f63;
+  /* 281次（用户怒斥"正文的字要能看得清……谁给你胆子给正文变灰的"）：#5f6f63 在
+     浅底上对比度不足，关键正文（三栏名称/模板标签/卡片名/开关行）已直接改用
+     --g-text；本变量仅剩纯辅助小字，同步加深防止复发。 */
+  --g-muted: #4a5a50;
   --g-border: #dbe4dd;
   --g-radius: 10px;
   --g-shadow: 0 2px 8px rgba(20, 40, 25, 0.08);
@@ -83,7 +86,7 @@ body {
   border: 1px solid var(--g-border);
   border-bottom: none;
   background: var(--g-card);
-  color: var(--g-muted);
+  color: var(--g-text); /* 281次：页签文字是正文，不再灰 */
   font-size: 16px;
   padding: 10px 28px;
   border-radius: 8px 8px 0 0;
@@ -142,7 +145,7 @@ body {
   align-items: center;
   gap: 6px;
   font-size: 13px;
-  color: var(--g-muted);
+  color: var(--g-text); /* 281次：开关行文字是正文，不再灰 */
   cursor: pointer;
   margin: 0;
 }
@@ -272,14 +275,12 @@ input::placeholder { color: var(--g-muted); opacity: 1; }
   grid-template-columns: repeat(3, 1fr);
   gap: 12px;
 }
-/* 第二百一十九次（用户："样式都短，尤其是前三栏，每行可以多排列"）：前三样式网格加密 */
-#textStyleGrid,
-#annStyleGrid,
-#vannStyleGrid { grid-template-columns: repeat(5, 1fr); }
+/* 280 次：#textStyleGrid/#annStyleGrid 规则删除——两网格随旧双列布局退役，样式统一走共享池 */
 /* 第二百二十三次（用户："文本样式留白过多应该缩短，每行多列一个"）：字幕文字样式网格 3→4 列 */
 /* 第二百二十六次（用户："文本样式逼仄，底框应当短些高点，同样尺寸"）：样式卡底框改为统一
    窄高尺寸——不再撑满整列（逼仄感来源），窄而高的灰底框居中、样例文字居中，全部卡片同尺寸 */
-#subtitleStyleGrid { grid-template-columns: repeat(4, 1fr); gap: 8px; }
+/* 281次：字幕样式网格 5 列——10 个内置样式恰好两排（none 居首、个性化卡殿后共 12 卡） */
+#subtitleStyleGrid { grid-template-columns: repeat(5, 1fr); gap: 8px; }
 #subtitleStyleGrid .style-card { padding: 5px; gap: 4px; }
 #subtitleStyleGrid .style-card .demo {
   width: 78%;
@@ -290,8 +291,103 @@ input::placeholder { color: var(--g-muted); opacity: 1; }
 }
 @media (max-width: 720px) {
   .style-grid { grid-template-columns: repeat(2, 1fr); }
-  /* 窄屏回退 2 列需显式覆盖（#subtitleStyleGrid 的 4 列特异性高于 .style-grid） */
+  /* 窄屏回退 2 列需显式覆盖（#subtitleStyleGrid 的 5 列特异性高于 .style-grid） */
   #subtitleStyleGrid { grid-template-columns: repeat(2, 1fr); }
+}
+
+/* === 281次：Word Annotation 左右两列（左列四栏上下平铺可点选，右列=池顶说明+候选池） ===
+   282次（用户"单词注释左侧的三栏给你讲过要平铺，你全挤在一块"，281批原话
+   "三栏上下平铺，不要挤在一起"）：281 次只做了上下排列但间距/尺寸全是紧凑值
+   （gap 10px、padding 8px、demo 26px），视觉仍是一坨。修正为磁贴式舒展平铺：
+   间距 16px、卡内边距 12px、demo 44px、四栏统一 min-height 等高，栏间留白明显。 */
+.pool-cols { display: flex; gap: 20px; align-items: stretch; }
+/* 左列：四栏上下平铺（磁贴等高、间距拉开），点卡=选中（.selected 高亮） */
+.pool-left { flex: 0 0 264px; display: flex; flex-direction: column; gap: 16px; }
+/* 283次（用户"三栏给你讲过要平铺，你全挤在一块。你虽然放大了，还是都拥挤在上方"）：
+   根因——.pool-item 只有 min-height 没有拉伸因子，四栏各自 108px 挤在左列顶部，
+   底部整段空白。修正：加 flex:1 1 auto，四栏等分左列剩余高度真正平铺
+   （.pool-cols 的 align-items:stretch 让左列先撑满与右列等高，min-height 退化为下限）。 */
+.pool-item {
+  flex: 1 1 auto;
+  border: 1px solid var(--g-border);
+  border-radius: var(--g-radius);
+  padding: 12px 14px;
+  min-height: 108px;
+  box-sizing: border-box;
+  cursor: pointer;   /* 整卡可点（选中该栏） */
+  transition: border-color 0.15s, box-shadow 0.15s, background 0.15s;
+}
+.pool-item:hover { border-color: var(--g-accent); }
+/* 选中态：主色描边 + 浅底，一眼可辨当前指派目标栏 */
+.pool-item.selected {
+  border-color: var(--g-primary);
+  box-shadow: 0 0 0 1px var(--g-primary);
+  background: #f2f8f4;
+}
+.pool-item-name { font-size: 14px; font-weight: 600; color: var(--g-text); margin-bottom: 8px; } /* 281次：三栏名称是正文，黑字+加粗；282次 14px 更醒目 */
+/* 281次：栏内开关行（Web Hints 的两个开关 + 各栏启用开关），点击同时会选中该栏 */
+.pool-item-ctl { display: flex; gap: 12px; align-items: center; margin-bottom: 8px; }
+/* 281次：栏内联复制卡容器——选中栏实时显示当前指派样式的卡样例（cloneNode 自池卡）；
+   282次：min-height 26→44px，样例卡不再憋屈 */
+.pool-item-demo { min-height: 44px; display: flex; align-items: center; justify-content: flex-start; overflow: hidden; }
+.pool-item-demo:empty::before { content: '—'; color: var(--g-muted); font-size: 12px; }
+/* 复制卡内的样式名标签（池卡 card-label 的内联版） */
+.pool-inline-label { font-size: 11px; color: var(--g-text); margin-left: 6px; white-space: nowrap; }
+/* 281次：池顶文本说明（随左栏选中项切换）——正文色，不再灰。
+   283次（用户"你的说明哪里去了，叫你两段哪里去了"）：裸 13px 文本淹没在 5 列候选
+   网格之间，视觉上等于消失。强化为醒目说明条：浅绿底 + 主色左竖线 + ①②序号徽标，
+   两段一望可知（段2=重渲染说明，跟随当前栏动态更新栏名）。 */
+.pool-note {
+  font-size: 13px;
+  color: var(--g-text);
+  margin-bottom: 8px;
+  line-height: 1.5;
+  background: #f2f8f4;
+  border-left: 3px solid var(--g-primary);
+  border-radius: 6px;
+  padding: 8px 12px;
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+}
+.pool-note::before { content: '①'; flex: 0 0 auto; font-weight: 700; color: var(--g-primary); }
+.pool-note-2::before { content: '②'; }
+.pool-note-2 { margin-top: 10px; }
+/* 右宽：占满剩余空间；282次：池卡紧凑化（用户"还那么宽还不改正"裁定=候选卡太大）
+   —— 3 列放宽到 5 列、gap 8px、卡内 padding/demo/字号同步收紧，52 卡两段说明之间
+   不再占三倍纵向空间；仅作用域 .pool-right，不影响字幕样式网格（#subtitleStyleGrid）。
+   283次（用户"叫你紧凑些，不是叫你缩小字号，你去掉无用空白"）：紧凑手段=压空白不压字
+   —— 5 列保留、gap 6px、卡 padding 4px、demo 留白收到 24px/2px 4px；字号恢复基准
+   （label 12 / demo 13 / ann-demo 12，282 的缩字号做法作废）。 */
+.pool-right { flex: 1 1 auto; min-width: 320px; }
+.pool-right .style-grid { grid-template-columns: repeat(5, 1fr); gap: 6px; }
+.pool-right .style-card { padding: 4px; gap: 4px; }
+.pool-right .style-card .card-label { font-size: 12px; }
+.pool-right .style-card .demo { min-height: 24px; padding: 2px 4px; font-size: 13px; }
+.pool-right .demo .word-demo { padding: 0 4px; }
+.pool-right .demo .ann-demo { font-size: 12px; margin-left: 2px; }
+/* 280 次：注释模板行（{word}({meaning}) 默认，{word}/{meaning} 为变量） */
+.ann-tpl-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 10px;
+}
+.ann-tpl-row label { font-size: 13px; color: var(--g-text); white-space: nowrap; } /* 281次：模板标签是正文，不再灰 */
+.ann-tpl-row input {
+  flex: 0 1 220px;
+  padding: 4px 8px;
+  border: 1px solid var(--g-border);
+  border-radius: var(--g-radius);
+  font-size: 13px;
+}
+.ann-tpl-hint { font-size: 12px; color: var(--g-text); } /* 281次：模板说明是正文，不再灰 */
+@media (max-width: 720px) {
+  .pool-cols { flex-direction: column; }
+  .pool-left { flex: none; }
+  .pool-right { min-width: 0; }
+  /* 282次：窄屏池网格 5 列回退 3 列（.pool-right 前缀特异性高于裸 .style-grid，需显式覆盖） */
+  .pool-right .style-grid { grid-template-columns: repeat(3, 1fr); }
 }
 
 /* === 样例卡通用 === */
@@ -305,12 +401,14 @@ input::placeholder { color: var(--g-muted); opacity: 1; }
   background: #fbfdfc;
   cursor: pointer;
   transition: border-color 0.15s, box-shadow 0.15s;
+  /* 282次：相对定位锚——用户样式卡右上角删除钮（.sub-card-del）需要 */
+  position: relative;
 }
 .style-card:hover { border-color: var(--g-accent); }
 .style-card.active { border-color: var(--g-primary); box-shadow: 0 0 0 1px var(--g-primary); }
 .style-card .card-label {
   font-size: 12px;
-  color: var(--g-muted);
+  color: var(--g-text); /* 281次：样式卡名称是正文，不再灰 */
   text-align: center;
 }
 .style-card .demo {
@@ -375,87 +473,126 @@ input::placeholder { color: var(--g-muted); opacity: 1; }
   line-height: 1.5;
   word-break: break-all;
 }
+/* 281次：预览单窗；282次：加横竖切换按钮行，窗体改固定尺寸（横 480×270 / 竖 270×480） */
 .sub-preview-row {
   display: flex;
-  gap: 24px;
-  justify-content: center;
-  flex-wrap: wrap;
-}
-.sub-preview-col {
-  display: flex;
   flex-direction: column;
-  gap: 6px;
-  flex: 0 0 auto;
+  align-items: center;
+  gap: 8px;
+}
+/* 282次：横屏 16:9 / 竖屏 9:16 切换按钮（本地态，不写 storage） */
+.sub-orient-btns { display: flex; gap: 8px; }
+.sub-orient-btn {
+  padding: 3px 12px;
+  border: 1px solid var(--g-border);
+  border-radius: 14px;
+  background: transparent;
+  font-size: 12px;
+  color: var(--g-muted);
+  cursor: pointer;
+}
+.sub-orient-btn.active {
+  background: var(--g-primary);
+  border-color: var(--g-primary);
+  color: #ffffff;
 }
 /* 反思（2026-08-19 第七十九次修正）：预览窗口底色改"中心灰色光晕"（用户明确）
-   radial-gradient 中心 #888 → 外缘 #4a4a4a，非旧版线性渐变。
-   反思（2026-08-20 第八十六次）：横屏/竖屏窗口大小一致（同面积、长宽互换）——
-   横屏 16:9 → 480×270、竖屏 9:16 → 270×480（旧版竖屏 152×270 面积远小于横屏，
-   用户要求"二者大小一致，只是长宽互换"）。 */
+   radial-gradient 中心 #888 → 外缘 #4a4a4a。
+   282次：1080p 虚拟舞台——外层固定 480×270（竖 270×480），内层按 1080p 真实像素
+   1920×1080（竖 1080×1920）渲染字幕再 scale(0.25)：字号用样式 size 真实 px
+   （'none' 取 40px=真实 1080p clamp 上限），字体显示比例与真实 1080p 视频一致。
+   283次（用户"预览的横屏半宽，竖屏半高，按照正文页面的宽度算"）：窗体改百分比——
+   横屏=正文宽 50%（aspect-ratio 16:9 定高）；竖屏高=正文宽一半，按 9:16 反推
+   宽=正文宽 28.125%（=50%×9/16）。1080p 内层不再写死 scale(0.25)，由 guide.js
+   ResizeObserver 按 stage 实测宽/1920（竖 /1080）动态缩放，页面伸缩比例恒真。 */
 .sub-preview-stage {
   position: relative;
+  width: 50%;
+  aspect-ratio: 16 / 9;
   background: radial-gradient(ellipse at center, #888 0%, #666 60%, #4a4a4a 100%);
   border-radius: 10px;
   overflow: hidden;
-  /* 灰色光晕效果 */
   box-shadow: 0 0 12px rgba(136, 136, 136, 0.45), 0 4px 8px rgba(0, 0, 0, 0.08);
+}
+.sub-preview-stage.portrait { width: 28.125%; aspect-ratio: 9 / 16; }
+.sub-preview-1080 {
+  position: relative;
+  width: 1920px;
+  height: 1080px;
+  transform: scale(0.25);
+  transform-origin: top left;
+}
+.sub-preview-1080.portrait { width: 1080px; height: 1920px; }
+/* 内部实际视频区域——铺满 1080p 舞台，字幕按位置 ratio 绝对定位 */
+.sub-preview-mini {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  white-space: nowrap;
+}
+/* 281次：个性化样式行（底色/字色/字号/字体四控件一行铺开） */
+.sub-custom-row {
   display: flex;
+  gap: 14px;
   align-items: center;
-  justify-content: center;
+  flex-wrap: wrap;
 }
-.sub-preview-stage.land {
-  width: 480px;
-  height: 270px;
+.sub-custom-item { display: inline-flex; gap: 6px; align-items: center; font-size: 13px; color: var(--g-text); }
+.sub-custom-item input[type="color"] { width: 34px; height: 24px; padding: 0; border: 1px solid var(--g-border); border-radius: 4px; background: transparent; cursor: pointer; }
+.sub-custom-item input[type="number"] { width: 64px; padding: 3px 6px; border: 1px solid var(--g-border); border-radius: var(--g-radius); font-size: 13px; }
+.sub-custom-item select { padding: 3px 6px; border: 1px solid var(--g-border); border-radius: var(--g-radius); font-size: 13px; }
+/* 282次：Custom 行尾大加号——把当前参数保存为新正文样式（最右侧） */
+.sub-add-btn {
+  margin-left: auto;
+  width: 30px;
+  height: 30px;
+  border: 1px solid var(--g-primary);
+  border-radius: 50%;
+  background: transparent;
+  color: var(--g-primary);
+  font-size: 20px;
+  line-height: 1;
+  cursor: pointer;
+  flex: 0 0 auto;
 }
-.sub-preview-stage.port {
-  width: 270px;
-  height: 480px;
-}
-/* 内部实际视频区域——按窗口尺寸固定，居中在容器中 */
-.sub-preview-stage.land .sub-preview-mini {
-  position: relative;
-  width: 480px;
-  height: 270px;
-}
-.sub-preview-stage.port .sub-preview-mini {
-  position: relative;
-  width: 270px;
-  height: 480px;
-}
-.sub-preview-caption {
-  text-align: center;
-  font-size: 12px;
-  color: var(--g-muted);
-}
-.sub-preview-mini { white-space: nowrap; }
-/* 反思（2026-08-19 第七十八次）：竖屏预览需允许换行（detail 模式释义换行） */
-.sub-preview-stage.port .sub-preview-mini { white-space: normal; }
-
-/* 位置样式卡：迷你视频区 + 距底部 ratio 处的白线 */
-/* 反思（2026-08-18 第七十三次修正）：与字幕样卡同步缩小（52px 高），示意即可 */
-/* 反思（2026-08-19 第七十九次）：底色统一灰色 #f0f0f0（用户："文字、位置样式底色是灰色"） */
-/* 反思（2026-08-19 第八十次）：底色改灰色 #888（浅色 #f0f0f0 不醒目；权重 .sub-pos-stage.demo
-   压过 .style-card .demo）。白线 #2e6b43 表示 ratio 中心线位置。 */
-.sub-pos-stage.demo {
-  position: relative;
-  height: 52px;
-  width: 92px;
-  margin: 0 auto;
-  padding: 0;
-  background: #888;
-  border-radius: 6px;
-  overflow: hidden;
-  box-shadow: 0 0 6px rgba(136, 136, 136, 0.35);
-}
-.sub-pos-line {
+.sub-add-btn:hover { background: var(--g-primary); color: #ffffff; }
+/* 282次：用户自建样式卡右上角删除钮（.style-card 已设 position:relative） */
+.sub-card-del {
   position: absolute;
-  left: 14%;
-  right: 14%;
-  height: 3px;
-  background: #2e6b43;
-  opacity: 0.85;
-  border-radius: 2px;
+  top: 3px;
+  right: 5px;
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  background: rgba(0, 0, 0, 0.08);
+  color: var(--g-muted);
+  font-size: 12px;
+  line-height: 16px;
+  text-align: center;
+  cursor: pointer;
 }
+.sub-card-del:hover { background: #c0392b; color: #ffffff; }
+/* 283次：用户样式卡名称可编辑（label div → input.card-label-input，用户"新增样式
+   名称可编辑"）——静态外观与 card-label 无异（透明底/无边框/居中），hover 露淡边、
+   focus 露主色边提示可编辑；点击不冒泡（guide.js 里 stopPropagation 防误触发选卡）。 */
+.style-card .card-label-input {
+  width: 100%;
+  font-size: 12px;
+  color: var(--g-text);
+  text-align: center;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  padding: 1px 2px;
+  box-sizing: border-box;
+}
+.style-card .card-label-input:hover { border-color: var(--g-border); }
+.style-card .card-label-input:focus { border-color: var(--g-primary); background: #ffffff; outline: none; }
+/* 281次：位置单选行（radio 一行铺开，替代旧位置网格） */
+.sub-pos-radios { display: flex; gap: 14px; align-items: center; flex-wrap: wrap; }
+.sub-pos-radio { display: inline-flex; gap: 4px; align-items: center; font-size: 13px; color: var(--g-text); cursor: pointer; white-space: nowrap; }
 
 /* 展示注释结果汇总块 */
 .g-ann-summary[hidden] { display: none; }
@@ -490,7 +627,7 @@ input::placeholder { color: var(--g-muted); opacity: 1; }
   padding: 4px 0;
 }
 .g-source-or { color: var(--g-muted); font-size: 13px; }
-.g-radio-label { font-size: 13px; color: var(--g-muted); }
+.g-radio-label { font-size: 13px; color: var(--g-text); } /* 281次：单选标签是正文，不再灰 */
 .g-radio {
   display: inline-flex;
   align-items: center;
@@ -1029,4 +1166,70 @@ input::placeholder { color: var(--g-muted); opacity: 1; }
 .g-parser-center {
   margin: auto;
   text-align: center;
+}
+
+/* ===== Deactivate 停用栏（第二百七十次）：逐条规则行，左地址输入、右功能点选 =====
+   配色沿用 sidebar.css 的 --beaver-* 设计令牌（guide.html 已引入），不另起体系 */
+.deactivate-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.deactivate-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.deactivate-pat {
+  flex: 1 1 240px;
+  min-width: 180px;
+  padding: 6px 10px;
+  font-size: 13px;
+  color: var(--beaver-text, #1a1f1a);
+  border: 1px solid var(--beaver-outline, #c9d4c9);
+  border-radius: var(--beaver-radius-sm, 8px);
+  background: #ffffff;
+}
+.deactivate-pat:focus {
+  outline: none;
+  border-color: var(--beaver-primary, #2e6b43);
+}
+/* 功能 chip：亮=该站停用该功能；「所有」为四项快捷键 */
+.deactivate-chip {
+  border: 1px solid var(--beaver-outline, #c9d4c9);
+  border-radius: 999px;
+  padding: 4px 10px;
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--beaver-text-soft, #424942);
+  background: #ffffff;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 0.15s, color 0.15s;
+}
+.deactivate-chip:hover {
+  background: var(--beaver-btn-bg-hover, #e9eee7);
+}
+.deactivate-chip.active {
+  background: var(--beaver-primary, #2e6b43);
+  border-color: var(--beaver-primary, #2e6b43);
+  color: #ffffff;
+}
+.deactivate-del {
+  border: none;
+  background: transparent;
+  color: var(--beaver-text-soft, #424942);
+  font-size: 14px;
+  line-height: 1.4;
+  padding: 4px 8px;
+  cursor: pointer;
+  border-radius: var(--beaver-radius-sm, 8px);
+}
+.deactivate-del:hover {
+  background: var(--beaver-btn-bg-hover, #e9eee7);
+  color: #b23a2e;
+}
+.deactivate-add-row {
+  margin-top: 10px;
 }

@@ -52,6 +52,38 @@ function hasMeaningfulVideo() {
   // 反思（2026-08-17 第七十二次补充）：删除词典预热——词典仅由 text-hint startHint
   //   按需 await loadDictionary() 加载一次（singleton），generic.js 不再重复触发。
 
+  // 第二百七十次：停用规则（Deactivate）gate——与 bilibili.js/youtube.js 同构：
+  //   命中「视频侧栏」+「视频叠加字幕」双停规则时不启动视频检测与 controller
+  //   加载（尽量不活动），仅留解除观察监听，任一功能解除后重新走视频检测。
+  //   只停其一不在此拦截（细分编排由 vc/controller.js 按抑制表执行）。
+  try {
+    let deact = null;
+    try {
+      deact = await import(chrome.runtime.getURL('src/lib/deactivate.js'));
+    } catch (e) {
+      // 不遮蔽：规则库加载失败按"未停用"处理并出声
+      console.warn('[VocabRadar][content-generic] 停用规则库加载失败，按未停用处理:', e);
+    }
+    const sup = deact
+      ? await deact.suppressionFor(location)
+      : { videoSidebar: false, overlay: false };
+    if (sup.videoSidebar && sup.overlay) {
+      console.log('[VocabRadar][content-generic] 命中停用规则（视频侧栏+叠加字幕全停），不启动视频链路（规则解除后自动恢复）');
+      chrome.storage.onChanged.addListener((changes, area) => {
+        if (area !== 'local' || !('deactivateRules' in changes)) return;
+        deact.suppressionFor(location).then((s2) => {
+          if (!(s2.videoSidebar && s2.overlay)) {
+            console.log('[VocabRadar][content-generic] 停用规则解除，重新开始视频检测');
+            checkAndStart(1000, false);
+          }
+        });
+      });
+      return;
+    }
+  } catch (e) {
+    console.warn('[VocabRadar][content-generic] 停用规则检查异常，按未停用继续:', e);
+  }
+
   // 反思（2026-08-12）：增强视频检测条件 + 延长检测延迟
   //   初始延迟 5 秒，二次延迟 10 秒，给 SPA 充分渲染时间
   const checkAndStart = (delay, isFinal) => {

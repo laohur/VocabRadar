@@ -17,7 +17,9 @@ import { getPhonetic } from '../../lib/phonetics.js';
 import { lemmaFamily } from '../../lib/lemmatizer.js';
 import { translate } from '../../lib/translator.js';
 import { getBlocks, getLastEmitAt, subscribe } from '../page-scan-bus.js';
-import { _activeTab, _allAnnotations, _annotateOov, _annotateRepeat, _annotationsCache, _cachedLearnLang, _collectedSubs, _detailMode, _firstSentMap, _noAnnotation, _pageSentenceEls, _pageSentences, _rankThreshold, _root, _scanScheduled, _seenSentences, _seenWords, addSentenceKey, addWordKey, cssEscape, escapeHtml, escapeReg, formatTime, getBlockText, hasSentenceKey, hasWordKey, log, normSentKey, set_allAnnotations, set_annotationsCache, set_collectedSubs, set_firstSentMap, set_pageSentenceEls, set_pageSentences, set_scanScheduled, set_seenSentences, set_seenWords, splitSentences } from './core.js';
+import { _activeTab, _allAnnotations, _annotateOov, _annotateRepeat, _annTemplate, _annotationsCache, _cachedLearnLang, _collectedSubs, _detailMode, _firstSentMap, _noAnnotation, _pageSentenceEls, _pageSentences, _rankThreshold, _root, _scanScheduled, _seenSentences, _seenWords, addSentenceKey, addWordKey, cssEscape, escapeHtml, escapeReg, formatTime, getBlockText, hasSentenceKey, hasWordKey, log, normSentKey, set_allAnnotations, set_annotationsCache, set_collectedSubs, set_firstSentMap, set_pageSentenceEls, set_pageSentences, set_scanScheduled, set_seenSentences, set_seenWords, splitSentences } from './core.js';
+// 280次：annBrackets 布尔退役改 annTemplate 模板——渲染走模板拆分（pre+释义+post）
+import { splitAnnTemplate } from '../../lib/styles.js';
 
 // === 扫描常量（与 text-hint-impl.js 同源）===
 // 反思（2026-08-09）：用户反馈"文本侧栏句子比网页文本提示多了很多，很多垃圾。二者应当用一个筛选"。
@@ -1193,7 +1195,9 @@ function highlightWords(text, annotations, inlineAnnotations = false) {
     if (inlineAnnotations && (_annotateRepeat || a.isFirst !== false)) {
       const shortTrans = pickCleanShortTrans(a.translations);
       if (shortTrans) {
-        replacement += `<span class="beaver-web-ann-inline">(${escapeHtml(shortTrans)})</span>`;
+        // 280次：注释文本由 _annTemplate 模板渲染（pre+释义+post，HTML 转义各段）
+        const { pre, post } = splitAnnTemplate(_annTemplate);
+        replacement += `<span class="beaver-web-ann-inline">${escapeHtml(pre)}${escapeHtml(shortTrans)}${escapeHtml(post)}</span>`;
       }
     }
     placeholders.push(replacement);

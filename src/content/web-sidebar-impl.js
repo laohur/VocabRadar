@@ -32,6 +32,8 @@ import { TRANSLATE_LANGS, UI_LANGS, LANG_NAMES, t, initLang, setLang, getLang, o
 // 反思（2026-08-15 第六十四次）：字幕样式类名由元数据生成，避免硬编码白名单漏项
 //   （旧版漏掉 bottom-up-white/big-bottom 等 → 选中样式不生效 → 默认半透明黑底）。
 import { SUBTITLE_TEXT_STYLES, findStyle } from '../lib/styles.js';
+// 280次：统一池样式表生成器（52 条共享样式，参数化选择器注入本容器）
+import { buildAnnPoolCss } from '../lib/styles.js';
 // 反思（2026-08-16 第六十六次）：释义清洗 + 干净短义项选取（去除"原形(释义)的屈折说明"夹杂）
 import { pickCleanShortTrans, isBalancedParens } from '../lib/dict-clean.js';
 // 第一百二十四次：顶行统一构建器——视频/文本侧栏共用同一代码文件（用户裁定）
@@ -48,7 +50,8 @@ import { subscribe, getBlocks, getLastEmitAt } from './page-scan-bus.js';
 import { startVideoController, reviveSidebarIfPossible } from './video-controller.js';
 
 // === 拆分后的实现模块 ===
-import { _allAnnotations, _annotateOov, _annotateRepeat, _annotationsCache, _collectedSubs, _detailMode, _pageSentenceEls, _pageSentences, _panelRect, _preExpandPos, _rankThreshold, _root, _scanScheduled, _seenSentences, _seenWords, _wordOnlyMode, applyAnnStyle, applyColors, clampPosToViewport, clampRectToViewport, getInjectionRoot, log, set_allAnnotations, set_annotateOov, set_annotateRepeat, set_annotationsCache, set_collectedSubs, set_detailMode, set_firstSentMap, set_pageSentenceEls, set_pageSentences, set_panelRect, set_preExpandPos, set_rankThreshold, set_root, set_scanScheduled, set_seenSentences, set_seenWords, set_wordOnlyMode, ts } from './ws/core.js';
+// 280次：_annBrackets/_annBrackets setter 退役改 _annTemplate/set_annTemplate（注释模板）
+import { _allAnnotations, _annotateOov, _annotateRepeat, _annTemplate, _annotationsCache, _collectedSubs, _detailMode, _pageSentenceEls, _pageSentences, _panelRect, _preExpandPos, _rankThreshold, _root, _scanScheduled, _seenSentences, _seenWords, _wordOnlyMode, applyAnnStyle, applyColors, clampPosToViewport, clampRectToViewport, getInjectionRoot, log, set_allAnnotations, set_annotateOov, set_annotateRepeat, set_annTemplate, set_annotationsCache, set_collectedSubs, set_detailMode, set_firstSentMap, set_pageSentenceEls, set_pageSentences, set_panelRect, set_preExpandPos, set_rankThreshold, set_root, set_scanScheduled, set_seenSentences, set_seenWords, set_wordOnlyMode, ts } from './ws/core.js';
 import { clearPageSentences, ensureScanBusSubscribed, schedulePageScan, startScrollListener, stopScrollListener } from './ws/scanner.js';
 import { bindEvents, buildSidebar, collapse, ensureBallSync, expand, injectCSS, injectCriticalCSS, setupReinjectObserver, syncBallWithVideoSidebar } from './ws/ui.js';
 
@@ -57,6 +60,21 @@ let _settings = null;              // 当前设置
 // 侧栏注释样式热更新入口（web-sidebar.js storage 监听调用）
 export function updateAnnStyle(styleId) {
   applyAnnStyle(styleId);
+}
+
+// 280次：注入统一池样式表（幂等；选择器同 web-sidebar.css 手写版：句子生词
+// .beaver-web-word、行内注释 .beaver-web-ann-inline、详细注释词头 .beaver-web-ann-word）
+function injectAnnPoolCss() {
+  if (document.getElementById('beaver-ann-pool-css-ws')) return;
+  const el = document.createElement('style');
+  el.id = 'beaver-ann-pool-css-ws';
+  el.textContent = buildAnnPoolCss({
+    root: '#beaver-web-sidebar',
+    word: '.beaver-web-sub-text .beaver-web-word',
+    annInline: '.beaver-web-ann-inline',
+    annWord: '.beaver-web-ann-line .beaver-web-ann-word'
+  });
+  document.head.appendChild(el);
 }
 
 // === 启停接口 ===
@@ -82,6 +100,9 @@ export async function startWebSidebar(settings) {
   set_annotateOov((_settings.annotateOov != null) ? _settings.annotateOov : false);
   // 注释重复生词（2026-08-15 第六十二次：默认不选，同一段文本内重复词仅注释首次）
   set_annotateRepeat((_settings.annotateRepeat != null) ? _settings.annotateRepeat : false);
+  // 280次：侧邻注释模板初始化（annBrackets 布尔退役；281次默认同步 {word}{meaning}）
+  // 283次：模板分键——文本侧栏读 webAnnTemplate（annotationStyle 栏专用键）
+  set_annTemplate(_settings.webAnnTemplate);
   // 从 storage 读取注释模式（引导页 radio 或 Detail 按钮写入）
   const annMode = _settings.webSidebarAnnMode || 'side';
   set_detailMode((annMode === 'detail'));
@@ -93,6 +114,9 @@ export async function startWebSidebar(settings) {
   set_root(buildSidebar());
   // 反思（2026-08-13 第五十次）：应用引导页选择的侧栏注释样式（root class）
   applyAnnStyle(_settings.annotationStyle);
+  // 280次：注入统一池样式表（52 条共享样式，选择器以 #beaver-web-sidebar 为根；
+  //   取代 web-sidebar.css 手写 16 条。style id 带 -ws 后缀与视频侧栏 -vs 区分）
+  injectAnnPoolCss();
   // 反思（2026-08-10）：构建后立即加 collapsed class，确保首次 ballRect 为 48x48。
   _root.classList.add('collapsed');
   // 反思（2026-08-07 修正）：用同步 <style> 注入关键 CSS，不依赖 <link> onload。
@@ -276,6 +300,23 @@ export function setRankThreshold(n) {
   schedulePageScan();
 }
 
+// 280次：侧邻注释模板 setter——清缓存重扫，与 setAnnotateRepeat 同构（原 setAnnBrackets）
+export function setAnnTemplate(v) {
+  set_annTemplate(v);
+  _annotationsCache.clear();
+  set_firstSentMap(new Map());
+  set_collectedSubs(new WeakSet());
+  set_seenWords(new Set());
+  set_seenSentences(new Set());
+  set_allAnnotations([]);
+  clearPageSentences();
+  if (_root) {
+    const wp = _root.querySelector('#beaver-web-word-panel');
+    if (wp) wp.innerHTML = `<div class="beaver-web-empty-tip">${t('ws.noWords')}</div>`;
+  }
+  schedulePageScan();
+}
+
 export function setAnnotateOov(b) {
   set_annotateOov(!!b);
   // 反思（2026-08-14 第五十四次修正）：原 setLocalTranslateEnabled 只改标志不重扫，
@@ -338,6 +379,7 @@ export function getDiagState() {
     rankThreshold: _rankThreshold,
     annotateOov: _annotateOov,
     annotateRepeat: _annotateRepeat,
+    annTemplate: _annTemplate,
     collected: _allAnnotations ? _allAnnotations.length : 0,
     seenWords: _seenWords ? _seenWords.size : 0,
     annotationCache: _annotationsCache ? _annotationsCache.size : 0,

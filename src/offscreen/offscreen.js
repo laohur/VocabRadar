@@ -166,6 +166,49 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     sendResponse({ ok: true });
     return true;
   }
+  if (msg.type === 'OFFSCREEN_ASR_WEBM') {
+    // P/Q 批（2026-09-11）：网站卷轴听说回退——浏览器 Web Speech 不可用时，网页把跟读
+    // 录音（audio/webm dataURL）发来走本地 whisper 模型推理。解码+重采样 16k 在本端
+    // （offscreen 有 AudioContext；SW 没有），识别复用 getWhisper pipeline，
+    // 结果同步 sendResponse 回 SW（网页侧单请求单响应，不走 ASR_SEGMENT 推送链）。
+    // 协议见 VocabRadar/web/docs/桥接扩展.md §2.2 asr 行。
+    (async () => {
+      try {
+        const webmB64 = String(msg.webmB64 || '');
+        if (!webmB64) throw new Error('webmB64 missing');
+        const bin = atob(webmB64);
+        const u8 = new Uint8Array(bin.length);
+        for (let i = 0; i < bin.length; i++) u8[i] = bin.charCodeAt(i);
+        const ab = new AudioContext();
+        const decoded = await ab.decodeAudioData(u8.buffer);
+        // 重采样到 16k 单声道（whisper 输入口径，对齐 SAMPLE_RATE）
+        const target = SAMPLE_RATE;
+        const off = new OfflineAudioContext(1, Math.ceil(decoded.duration * target), target);
+        const srcNode = off.createBufferSource();
+        srcNode.buffer = decoded;
+        srcNode.connect(off.destination);
+        srcNode.start();
+        const rendered = await off.startRendering();
+        const float32 = rendered.getChannelData(0);
+        const whisper = await getWhisper();
+        if (!whisper) throw new Error('whisper not ready');
+        let asrLang = null;
+        try {
+          const stored = await chrome.storage.local.get({ learnLanguage: 'en' });
+          if (stored.learnLanguage && stored.learnLanguage !== 'auto') asrLang = stored.learnLanguage;
+        } catch (_) { }
+        const opts = { task: 'transcribe', chunk_length_s: 30, stride_length_s: 5 };
+        if (asrLang) opts.language = asrLang;
+        const output = await whisper(float32, opts);
+        const text = (output && output.text) ? output.text.trim() : '';
+        ab.close();
+        sendResponse({ ok: true, text: text });
+      } catch (e) {
+        try { sendResponse({ ok: false, error: String(e.message || e) }); } catch (_) { }
+      }
+    })();
+    return true;
+  }
   if (msg.type === 'OFFSCREEN_ASR_RECOGNIZE') {
     // 接收 content script 采集的音频段，送 whisper 识别
     // 反思（2026-07-04）：旧版 ArrayBuffer 经 SW 中继丢失（samples=0），曾改普通 Array。
@@ -240,6 +283,23 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     });
     return true;
   }
+  // === B2（2026-09-10）：文档解析（网站 Creator G4 通道 B 的 document kind） ===
+  // SW 转发文件字节（b64，runtime message JSON 序列化约束）到这里，
+  // 用 parse-doc.js（与 guide/parser.js 同源）提取纯文本。
+  // 动态 import：unpdf/mammoth 仅在首次文档解析时加载，ASR/OCR 旧路径零影响。
+  if (msg.type === 'OFFSCREEN_PARSE_DOC') {
+    const _docStart = Date.now();
+    console.log('[VocabRadar][offscreen][' + _ts() + '] OFFSCREEN_PARSE_DOC 收到请求, kind=' + msg.docKind + ', name=' + (msg.name || '') + ', b64 长度=' + (msg.b64 || '').length);
+    parseDocFile(msg).then((text) => {
+      const _docCost = ((Date.now() - _docStart) / 1000).toFixed(2);
+      console.log('[VocabRadar][offscreen][' + _ts() + '] 文档解析完成, 耗时=' + _docCost + 's, 文本长度=' + (text || '').length);
+      sendResponse({ ok: true, text: text || '' });
+    }).catch((e) => {
+      console.warn('[VocabRadar][offscreen][' + _ts() + '] 文档解析失败:', e);
+      sendResponse({ ok: false, error: String(e.message || e) });
+    });
+    return true;
+  }
   return false;
 });
 
@@ -252,6 +312,20 @@ async function extractFromHtml(html, baseUrl) {
     throw new Error('extracted text is empty (page may require login or have no article body)');
   }
   return { ok: true, text: r.text, title: r.title || '' };
+}
+
+// === B2：文档解析入口（parse-doc.js 的调用壳） ===
+// b64 → Uint8Array → parseDocBuffer；空文本按失败回报（明示，同 extractFromHtml 纪律）。
+async function parseDocFile(msg) {
+  const bin = atob(msg.b64 || '');
+  const u8 = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) u8[i] = bin.charCodeAt(i);
+  const { parseDocBuffer } = await import('./parse-doc.js');
+  const text = await parseDocBuffer(u8, msg.docKind, msg.name || '');
+  if (!text || !text.trim()) {
+    throw new Error('extracted text is empty (scanned pdf or unsupported file?)');
+  }
+  return text;
 }
 
 // === OCR 识别（Tesseract.js）===

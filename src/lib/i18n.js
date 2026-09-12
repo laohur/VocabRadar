@@ -112,6 +112,13 @@ const DICT = {
     'tab.subtitle': '🎬 Subtitles',
     'tab.words': '📖 Vocabulary',
     'tab.learn': '📱 Learn',
+    // 272次：query 标签（learn 改名）+ 搜索栏文案 + 底部 learn 按钮
+    // 275次：占位符按用户裁定固定为 query...（不随语言分叉）
+    // 276次：标签文字去掉放大镜（用户"标签query移走放大镜"）
+    'tab.query': 'Query',
+    'ws.queryPh': 'query word for translations...',
+    'ws.queryTip': 'Type above and press Enter (or 🔍); results render like the right-click lookup.',
+    'btn.learn': 'Learn',
     'tool.rank': 'Rank',
     'tool.annotation': 'Annotation',
     'tool.detail': 'Detail',
@@ -290,6 +297,8 @@ const DICT = {
     'ws.mainTextDiag': 'Main-text extraction diag',
     'ws.resetLayout': 'Reset position & size',
     'ws.close': 'Close (refresh to restore)',
+    // 第二百七十次：⋯ 菜单「停用本站」——写当前域全停规则并跳引导页停用栏
+    'ws.deactivate': 'Deactivate on this site',
     'ws.langSettings': 'Language Settings',
     'ws.learnLang': 'Target Language',
     'ws.meaningLang': 'Definition language',
@@ -497,6 +506,13 @@ const DICT = {
     'tab.subtitle': '🎬字幕',
     'tab.words': '📖词汇',
     'tab.learn': '📱学习',
+    // 272次：query 标签（learn 改名）+ 搜索栏文案 + 底部 learn 按钮
+    // 275次：占位符按用户裁定固定为 query...（不随语言分叉）
+    // 276次：标签文字去掉放大镜（用户"标签query移走放大镜"）
+    'tab.query': '查询',
+    'ws.queryPh': 'query word for translations...',
+    'ws.queryTip': '输入后按 Enter（或点 🔍）查询；结果与右键搜索一致。',
+    'btn.learn': '学习',
     'tool.rank': '词频',
     'tool.annotation': '注释',
     'tool.detail': '详略',
@@ -674,6 +690,8 @@ const DICT = {
     'ws.mainTextDiag': '正文提取诊断',
     'ws.resetLayout': '重置位置与尺寸',
     'ws.close': '关闭（刷新恢复）',
+    // 第二百七十次：⋯ 菜单「停用本站」——写当前域全停规则并跳引导页停用栏
+    'ws.deactivate': '停用本站（Deactivate）',
     'ws.langSettings': '语言设置',
     'ws.learnLang': '目标语言',
     'ws.meaningLang': '释义语言',

@@ -52,6 +52,7 @@ export function ocrVideoFrame(clientX, clientY) {
 }
 
 // 生命周期、设置入口与诊断（来源：th/scan.js）
+// 280次：setAnnTemplate——侧邻注释模板 setter（模板变化需清缓存重扫，原 setAnnBrackets）
 export {
   startHint,
   stopHint,
@@ -60,5 +61,6 @@ export {
   setRankThreshold,
   setAnnotateOov,
   setAnnotateRepeat,
+  setAnnTemplate,
   getDiagState
 } from './th/scan.js';

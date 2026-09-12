@@ -18,7 +18,10 @@
 //   _dictRescanArmed、scanSubtree 的批次游标）——它们不跨模块，保持原样即可。
 import { t } from '../../lib/i18n.js';
 // 反思（2026-08-13 第五十一次）：文本样式差异化（粗细/斜体/下划线/阴影等）
-import { TEXT_STYLES } from '../../lib/styles.js';
+// 279次：侧邻注释样式候选池共享——pickColors 读取池条目 annBg/annFg
+// 280次：TEXT/ANN 合并为统一池 POOL_STYLES（别名不变）；wordDecl 用于页面类生成；
+//   annBrackets 布尔退役改 annTemplate 模板（DEFAULT_ANN_TEMPLATE 为默认值）
+import { TEXT_STYLES, ANN_STYLES, findStyle, wordDecl, DEFAULT_ANN_TEMPLATE } from '../../lib/styles.js';
 
 // 反思（2026-08-12 第四十一次）：i18n 格式化词阶显示
 //   rankToStage 返回中文（如 "3阶"/"表外"），此处用 i18n 重新格式化
@@ -119,6 +122,10 @@ export const thState = {
   annotateOov: false,
   // 反思（2026-08-15 第六十二次）：false=同文本节点内重复词只注释首次；true=每次出现都注释。
   annotateRepeat: false,
+  // 280次：侧邻注释模板——annBrackets 布尔退役改 annTemplate 字符串模板
+  //   （{word}/{meaning} 变量，默认 {word}({meaning})），消费方用 renderAnnText 渲染。
+  //   旧 storage 值由 text-hint.js 启动迁移（migrateAnnBrackets）。
+  annTemplate: DEFAULT_ANN_TEMPLATE,
   scanScheduled: false,
   // 反思（2026-08-28 第一百六十九次）：scanScheduled 只防"调度重入"，run() 一开头
   //   就置回 false，因此 scanSubtree 分批执行期间（requestIdleCallback 逐批推进，
@@ -349,9 +356,12 @@ export function applyTextStyleClass(id) {
 //   修正：注释配色自动派生自单词配色（annBg=firstFg, annFg=firstBg），不再读 hintAnnotationBg/Fg。
 //   这样注释始终是单词的前后景互换，与 sidebar.js applyColorSettings 逻辑一致。
 /** 判断颜色是否为不透明实底（透明/带 alpha 的 rgba 视为非实底，用于防御派生配色与描边） */
+// 280次：补 gradient 识别——统一池引入渐变底（如马克笔半高 linear-gradient(transparent 55%...)），
+//   渐变底视觉上非实底（下半透明），派生注释配色应走透明底分支，且首现 1px 描边应清除。
 export function isOpaqueBg(color) {
   if (!color) return false;
   if (/^transparent$/i.test(color)) return false;
+  if (/gradient\(/i.test(color)) return false;
   if (/^rgba\(/i.test(color)) {
     const m = color.match(/[\d.]+\)$/);
     const alpha = m ? parseFloat(m[0]) : 1;
@@ -363,8 +373,12 @@ export function isOpaqueBg(color) {
 export function pickColors(s) {
   // 反思（2026-08-18 第七十三次修正）：默认配色——用户明确"网页提示默认配色是
   //   单词绿底白字，注释是白底绿字"。旧版 #0d2014（近黑）/#a8e6cf（青）被视为黑色。
-  const wordBg = s.hintFirstBg || '#2e6b43';
-  const wordFg = s.hintFirstFg || '#ffffff';
+  // 280次：统一池接入——textStyle 命中池条目时，生词底/字色取条目 wordBg/wordFg
+  //   （渐变/透明底字符串同样经 --beaver-first-bg 变量生效，页面用 background shorthand）；
+  //   优先级：popup 显式 hintFirstBg/Fg > 池条目 > 默认绿白。
+  const txtSt = findStyle(TEXT_STYLES, s.textStyle);
+  const wordBg = s.hintFirstBg || (txtSt && txtSt.wordBg) || '#2e6b43';
+  const wordFg = s.hintFirstFg || (txtSt && txtSt.wordFg) || '#ffffff';
   // 反思（2026-08-15 第六十四次）：透明/半透明底色样式（下划线/荧光/描边等，wordBg=transparent
   //   或带 alpha 的 rgba）派生侧邻注释时，annFg=wordBg 会得到透明字色 → 注释文字不可见。
   // 反思（2026-08-15 第六十五次修正）：上一版把注释底设为 wordFg（如荧光笔 #332700 深色）
@@ -376,9 +390,13 @@ export function pickColors(s) {
   //   修正：显式设置优先；未设置时仍走派生（实底→前后景互换，透明底→透明+同色系）。
   const explicitAnnBg = s.hintAnnotationBg;
   const explicitAnnFg = s.hintAnnotationFg;
+  // 279次：注释样式候选池共享——annotationStyle 命中池条目（ANN_STYLES）时，
+  //   侧邻注释色取条目 annBg/annFg；优先级：显式 hintAnnotationBg/Fg > 池条目 >
+  //   默认派生（'none' 无 annBg/annFg 字段，自然落到派生分支，行为与旧版一致）。
+  const annSt = findStyle(ANN_STYLES, s.annotationStyle);
   const opaque = isOpaqueBg(wordBg);
-  const annBg = explicitAnnBg || (opaque ? wordFg : 'transparent');
-  const annFg = explicitAnnFg || (opaque ? wordBg : wordFg);
+  const annBg = explicitAnnBg || (annSt && annSt.annBg) || (opaque ? wordFg : 'transparent');
+  const annFg = explicitAnnFg || (annSt && annSt.annFg) || (opaque ? wordBg : wordFg);
   return {
     firstEnabled: true,          // 首次出现总是高亮（不再有开关）
     firstBg: wordBg,             // 生词底色（亮色高亮，吸睛）
@@ -505,20 +523,34 @@ export function injectStyles() {
     }
     /* 反思（2026-08-13 第五十一次）：文本样式差异化。
      * 颜色由 applyColorVars 的 CSS 变量控制；以下类补充字体属性差异。
-     * 反思（2026-08-15 第六十三次）：新增 fontSize 支持（大字样式）。 */
+     * 反思（2026-08-15 第六十三次）：新增 fontSize 支持（大字样式）。
+     * 280次：统一池——字体/边框/描边/着重号/动画等全部字段改由 wordDecl 生成
+     *   （colors:false：底色字色仍走 --beaver-first-* 变量，渐变经变量生效）；
+     *   isOpaqueBg 已识别渐变底，透明/渐变底同样清除首现 1px 描边。 */
     ${TEXT_STYLES.filter((s) => s.id !== 'none').map((s) => {
-      const rules = [];
-      if (s.bold) rules.push('font-weight:600 !important');
-      if (s.italic) rules.push('font-style:italic !important');
-      if (s.underline) rules.push('text-decoration:underline !important');
-      if (s.shadow) rules.push('text-shadow:' + s.shadow + ' !important');
-      if (s.radius) rules.push('border-radius:' + s.radius + ' !important');
-      if (s.fontSize) rules.push('font-size:' + s.fontSize + ' !important');
+      const rules = wordDecl(s, { important: true, colors: false });
       // 反思（2026-08-15 第六十四次）：透明/半透明底色样式清除首现 1px 深色描边，
       //   避免透明底上浮现深色框（用户反馈"透明当作黑色"）。特定选择器覆盖 FIRST_CLASS 描边。
       if (!isOpaqueBg(s.wordBg)) rules.push('box-shadow:none !important');
       return 'html.beaver-text-style-' + s.id + ' .' + HIGHLIGHT_CLASS + '{' + rules.join(';') + ';}';
     }).join('\n')}
+    /* 280次：隐藏态清理——统一池新增的描边/着重号/边框/动画/背景图等字段
+     *   会让 .beaver-word-later / .beaver-word-hidden 隐藏词露出轮廓，
+     *   特异性 (0,3,0) 高于上方生成规则，维持"零重扫隐藏"语义 */
+    .${HIDE_LATER_CLASS} .${LATER_CLASS}, .${HIDE_WORD_CLASS} {
+      -webkit-text-stroke: 0 !important;
+      text-emphasis: none !important;
+      animation: none !important;
+      text-decoration: none !important;
+      text-shadow: none !important;
+      border: none !important;
+      background-image: none !important;
+    }
+    /* 280次：blink 动画帧（统一池条目 blink；只动 background-color，覆盖变量底色） */
+    @keyframes beaver-ann-blink {
+      0%, 100% { background-color: #fde68a; }
+      50% { background-color: transparent; }
+    }
   `;
   document.documentElement.appendChild(s);
 }

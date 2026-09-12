@@ -8,9 +8,11 @@
 //   asr.js/ocr.js，公共基础设施见 asr-common.js——2026-08-20 第八十六次按用户要求拆分），
 //   说明栏=使用说明；默认落在设定栏。样例文字为有意义的 "He passed the quiz(测验)."。
 //   本页统一承载设置：
-//     - 文本样式 → 写 storage.textStyle + hintFirstBg/hintFirstFg（生词配色，注释自动派生）
-//     - 文本侧栏注释样式 → 写 storage.annotationStyle
-//     - 视频侧栏注释样式 → 写 storage.videoAnnotationStyle
+//     - 272次：Word Annotation 单组（280 次重排）——左列三功能卡（网页提示/文本侧栏/视频侧栏开关），
+//       右列共享样式候选池 POOL_STYLES；每张池卡带 Web/Text/Video 三个指派钮（多对多）：
+//       Web → 写 storage.textStyle + hintFirstBg/hintFirstFg（注释色自动派生），
+//       Text → storage.annotationStyle，Video → storage.videoAnnotationStyle（280 次复活）
+//     - annTemplate 注释模板（280 次：annBrackets 退役，{word}/{meaning} 变量，默认 {word}({meaning})）
 //     - 字幕样式 → 写 storage.subtitleStyle（文字外观）+ subtitlePosition（距底部位置，overlay 实时应用）
 //       + 横屏 16:9 / 竖屏 9:16 双预览（第六十九次重构：样式=文字样式×位置样式 两维）
 //     - 各功能开关 / 源/目标语言 / 词频阈值 / 注释表外词开关 / ASR 模型 → 写 storage 对应键
@@ -31,14 +33,31 @@
 //   ②字幕文字样式卡底框改统一窄高尺寸；③字段行水平对齐（.chk 去底部内边距）；
 //   ④两个提示词与背景正文上限合并为一行；⑤ASR/OCR 改为"每行=引擎单选+细项"两行式
 //   （行1 本地+Whisper 下拉，行2 API+地址/模型/Key；行1 细项=语言复选，行2 细项=格式+地址/模型/Key）。
+// 第二百八十一次（用户反馈）：①共享池交互重做——左列四栏上下平铺可点选（Web Hints/文本侧栏/
+//   视频侧栏/新增第四栏 Subtitle hints on video），点栏选中（.selected 高亮+池顶说明切换），
+//   点池卡=指派给选中栏并把卡样例 cloneNode 复制进栏内（用户："选中之后，直接把卡片复制过去"）；
+//   池卡三指派钮（Web/Text/Video chip）删除；网格一次建卡不重建，指派/切栏只改类名。
+//   ②字幕组重做——正文样式网格改 none+10 内置+个性化卡共 12 卡 5 列；个性化=底色/字色/字号/
+//   字体四控件（storage.subtitleCustom，改任一切 'custom'）；位置改单选行（radio）；
+//   预览改单窗 16:9（容器水平居中，字幕按位置 ratio 渲染）；注释行样式由第四栏
+//   storage.videoOverlayAnnStyle 控制；正文/位置/注释任一变化立即刷新预览。
+// 第二百八十二次（用户反馈）：①字幕正文样式组增强——Custom 增加特效下拉（无/阴影/
+//   发光/描边/立体，共享层 SUB_FX_OPTIONS）、字体下拉扩到 12 项（SUB_FONT_OPTIONS），
+//   行尾大加号把当前参数存为新正文样式（storage.subtitleUserStyles，样卡右上角可删除，
+//   overlay 端动态生成 style-user-* 规则）；样式卡样例一律只渲染正文。
+//   ②预览重做——横屏 16:9 / 竖屏 9:16 切换（本地态不写 storage）；视频按 1080p 真实
+//   像素虚拟舞台渲染再整体 scale(0.25)（横 480×270 / 竖 270×480），字体显示比例与
+//   真实 1080p 视频一致；正文/位置/注释样式任一变化都触发立即预览。
 
 import {
   initLang, setLang, t,
   LANG_NAMES, LANG_NAMES_EN, UI_LANGS, TRANSLATE_LANGS
 } from '../lib/i18n.js';
 import {
-  TEXT_STYLES, ANN_STYLES, VANN_STYLES,
-  SUBTITLE_TEXT_STYLES, SUBTITLE_POSITIONS, findStyle, styleLabel, BUILD_STAMP
+  POOL_STYLES, VANN_TO_ANN_MIGRATION, wordDecl, annDecl,
+  DEFAULT_ANN_TEMPLATE, splitAnnTemplate,
+  SUBTITLE_TEXT_STYLES, SUBTITLE_POSITIONS, findStyle, styleLabel, BUILD_STAMP,
+  SUB_FONT_OPTIONS, SUB_FX_OPTIONS, subFontFamily, subFxDecl
 } from '../lib/styles.js';
 // 第二百五十三次：asr-common.js 名实不符改名 guide-common.js（import 同步）
 import { initAsrCommon, disposeAsrCommon } from './guide-common.js';
@@ -46,6 +65,8 @@ import { initAsr, disposeAsr } from './asr.js';
 import { initOcr, disposeOcr } from './ocr.js';
 // 第二百五十三次：Parser 文档解析界面（本阶段界面，解析逻辑待接线）
 import { initParser, disposeParser } from './parser.js';
+// 第二百七十次：Deactivate 停用栏（逐条规则行渲染/编辑/深链，见该文件头注释）
+import { initDeactivate, disposeDeactivate } from './deactivate.js';
 // 第一百七十次：对话大模型来源预置表（与后台共用同一份，避免地址/模型名两处不一致）
 // 第一百七十四次：新增 LLM_FORMAT_GROUPS —— 下拉按「免费直连 / OpenAI 格式 / Anthropic 格式」三类分组
 import {
@@ -144,10 +165,33 @@ const MSG = {
     en: 'Chat prompt for sidebars ({lang} = definition language; body text is sent as context)',
     zh: '侧栏提示词（{lang} = 释义语言；正文作为上下文另行发送）'
   },
-  groupTextHint: { en: 'Word Hints on Pages', zh: '网页生词提示' },
-  groupWebSidebar: { en: 'Text Sidebar', zh: '文本侧栏' },
-  groupSidebar: { en: 'Video Sidebar', zh: '视频侧栏' },
+  // 第二百七十一次：栏目名统一——用户裁定 "Word Hints on Pages" 一律改叫 "Web Hints"（zh 网页提示），
+  //   与停用栏 deactivateHint 文案（en 'Web hints'/zh '网页提示'）对齐，同一功能一个名字
+  // 280 次：groupTextHint/groupWebSidebar/groupSidebar 三键随旧组头删除（左列功能卡用 poolItem* 键）
   groupOverlay: { en: 'Video Overlay Subtitles', zh: '视频叠加字幕' },
+  // 第二百七十次：Deactivate 停用栏（组头/说明/行内 chip/添加与删除）
+  groupDeactivate: { en: 'Deactivate (per-site)', zh: 'Deactivate（停用）' },
+  deactivateDesc: {
+    en: 'Deactivate features per site: left = address (wildcard * allowed, e.g. example.com, *.example.com:8080, example.com/videos/*), right = click the features to deactivate there. With "All" checked the extension stays as inactive as possible on that site.',
+    zh: '按站点停用扩展功能：左侧填地址（可用 * 通配，如 example.com、*.example.com:8080、example.com/videos/*），右侧点选在该站停用的功能；勾「所有」时扩展在该站尽量不活动。'
+  },
+  deactivatePatPh: {
+    en: 'example.com | *.example.com:8080 | example.com/videos/*',
+    zh: 'example.com 或 *.example.com:8080 或 example.com/videos/*'
+  },
+  deactivatePatTitle: {
+    en: 'Address pattern: host[:port][/path], * = any characters; without * the host also matches its subdomains; path matches by prefix segments',
+    zh: '地址规则：域名[:端口][/路径前缀]，* 匹配任意字符；不带 * 时同时命中该域名及其子域；路径按段前缀匹配'
+  },
+  deactivateAdd: { en: '＋ Add rule', zh: '＋ 添加规则' },
+  // 272 次：搜索栏（query）选项——排在「所有」之后，管右键查询与悬浮搜索条
+  deactivateQuery: { en: 'Search bar', zh: '搜索栏' },
+  deactivateAll: { en: 'All', zh: '所有' },
+  deactivateHint: { en: 'Web hints', zh: '网页提示' },
+  deactivateTextSidebar: { en: 'Text sidebar', zh: '文本侧栏' },
+  deactivateVideoSidebar: { en: 'Video sidebar', zh: '视频侧栏' },
+  deactivateOverlay: { en: 'Overlay subtitles', zh: '视频叠加字幕' },
+  deactivateDel: { en: 'Remove this rule', zh: '删除此条' },
   fieldUiLang: { en: 'Interface Language', zh: '界面语言' },
   fieldSource: { en: 'Target language (to learn)', zh: '目标语言' },   // 第二百二十二次：名实相符（此键=要学习的目标语言）
   fieldTarget: { en: 'Definition language', zh: '释义语言' },   // 第二百二十二次：名实相符
@@ -201,20 +245,62 @@ const MSG = {
   // MSG 词条 fieldAsrFirstChunk/asrFirstChunkDesc 一并删除
   chkRareWords: { en: 'Annotate out-of-vocabulary words', zh: '注释表外词' },
   chkAnnotateRepeat: { en: 'Annotate repeated words', zh: '注释重复生词' },
+  // 272 次：Query 独立开关（全局参数组复选框）——右键查询与搜索栏的总开关
+  chkQuery: { en: 'Query (right-click lookup & search bar)', zh: '查询（右键查询与搜索栏）' },
   chkSideAnnotation: { en: 'Side hint', zh: '生词旁侧邻提示' },   // 第二百一十九次：用户裁定缩短
-  annLayout: { en: 'Annotation Layout', zh: '注释布局' },
-  annModeSide: { en: 'Side', zh: '侧邻' },
-  annModeDetail: { en: 'Detail', zh: '详细' },
+  // 280 次：annLayout/annModeSide/annModeDetail 三键随引导页 radio 删除（布局控制在各自侧栏与叠加字幕内）
   switchOn: { en: 'On', zh: '开启' },
-  textStyleDesc: { en: 'New-word highlight colors across pages; annotation color is auto-inverted. Click a card to apply.', zh: '全站生词高亮配色（注释色自动为前后景互换）。点击样例卡即生效。' },
-  annStyleDesc: { en: 'Style of word(meaning) annotations in the text sidebar.', zh: '文本侧栏句子中 生词(释义) 注释样式。' },
-  vannStyleDesc: { en: 'Style of word(meaning) annotations in the video sidebar.', zh: '视频侧栏句子中 生词(释义) 注释样式。' },
-  subStyleDesc: { en: 'Subtitle appearance and position are two separate choices. Pick a text style (color / font / size / edge / annotation layout), then pick a position from the video bottom; the two panels show horizontal & vertical previews, and the chosen style applies to on-video subtitles in real time.', zh: '字幕的外观与位置是两维独立选择。先选文字样式（颜色/字体/字号/边缘/注释布局），再选距视频底部的位置；下方横屏/竖屏双预览实时展示，选中后立即应用到视频字幕。' },
+  // 280 次：textStyleDesc/annStyleDesc/vannStyleDesc/groupStylePool/stylePoolDesc/poolWordStyles/
+  //   poolAnnStyles/chkAnnBrackets 随旧布局退役；新增 Word Annotation 组文案
+  groupWordAnnotation: { en: 'Word Annotation', zh: '生词标注' },
+  // 281次：wordAnnDesc 随池重做改写（选中左栏→点池卡指派并复制显示）；chipWeb/chipText/
+  //   chipVideo/poolAssignTitle 四键随三指派钮删除；新增第四栏名与四条池顶说明
+  wordAnnDesc: {
+    en: 'Click a feature on the left to select it, then click a style card on the right — the card is assigned to that feature and copied into it. Subtitle hints on video controls the annotation line of overlay subtitles.',
+    zh: '点击左栏功能选中它，再点击右侧样式卡——该样式即指派给选中功能并复制显示在左栏内。「视频中字幕的注释」控制叠加字幕注释行的外观。'
+  },
+  fieldAnnTemplate: { en: 'Annotation template', zh: '注释模板' },
+  annTemplateHint: { en: '{word} {meaning} are variables', zh: '{word} {meaning} 为变量' },
+  // 282次：池右列两段说明——段1=样式卡指派即时生效不重渲染（拼在 poolNoteXxx 之后）；
+  //   段2=模板行是唯一触发渲染者（poolNoteRerender，静态 data-key 填充）
+  // 283次：段2改动态——模板分键后只作用于当前选中栏，说明随左栏选中项拼接栏名
+  //   （annTplScopePrefix/annTplScopeSuffix 由 renderPoolNote 动态写入 poolNoteRerender），
+  //   静态键 poolNoteRerender 保留作 fillByDataKey 兜底（JS 未跑完前的占位文案）。
+  poolNoteNoRerenderSuffix: { en: 'Assigning a card takes effect instantly — no re-render.', zh: '样式卡指派即时生效，不重渲染。' },
+  poolNoteRerender: { en: 'Annotation template — changing it re-renders the samples.', zh: '注释模板——修改它会触发重渲染候选样例。' },
+  // 283次：段2动态拼接件——en: 'Annotation template for Web Hints — changing it …'；
+  //   zh: '注释模板（网页提示）——修改会触发重渲染该栏候选样例。'（中文无空格直连）
+  annTplScopePrefix: { en: 'Annotation template for', zh: '注释模板（' },
+  annTplScopeSuffix: { en: '— changing it re-renders this row’s samples.', zh: '）——修改会触发重渲染该栏候选样例。' },
+  poolItemWebHint: { en: 'Web Hints', zh: '网页提示' },
+  poolItemWebSidebar: { en: 'Text Sidebar', zh: '文本侧栏' },
+  poolItemSidebar: { en: 'Video Sidebar', zh: '视频侧栏' },
+  // 281次：左列第四栏——视频叠加字幕的注释行样式（正文样式在下方视频叠加字幕组内选）
+  poolItemSubAnn: { en: 'Subtitle Hints on Video', zh: '视频中字幕的注释' },
+  // 281次：池顶文本说明（随左栏选中项切换；"最上是文本说明"）
+  poolNoteTextStyle: { en: 'Style for words highlighted in web pages (Web Hints).', zh: '网页提示里正文生词的高亮样式。' },
+  poolNoteAnnotationStyle: { en: 'Style for annotations in the text sidebar.', zh: '文本侧栏中的注释样式。' },
+  poolNoteVideoAnnotationStyle: { en: 'Style for annotations in the video sidebar.', zh: '视频侧栏中的注释样式。' },
+  poolNoteVideoOverlayAnnStyle: { en: 'Style for the annotation line on overlay subtitles (subtitle text style is picked below in Video Overlay Subtitles).', zh: '视频叠加字幕中注释行的样式（字幕正文样式在下方「视频叠加字幕」组内选择）。' },
+  // 281次：字幕组重做——正文样式只管正文，注释由第四栏控制；位置改单选；新增个性化四控件
+  subStyleDesc: { en: 'Text styles apply to subtitle text only; the annotation line follows “Subtitle hints on video” in Word Annotation. Any change (style / custom / position) updates the preview immediately.', zh: '正文样式只管字幕正文；注释行外观由「生词标注 → 视频中字幕的注释」控制。样式/个性化/位置任一变化都会立即刷新预览。' },
   subPreview: { en: 'Preview', zh: '效果预览' },
-  subTextStyle: { en: 'Text Style', zh: '文字样式' },
-  subPosition: { en: 'Position (from video bottom)', zh: '位置样式（距底部）' },
-  subLandPreview: { en: 'Landscape', zh: '横屏' },
-  subPortPreview: { en: 'Portrait', zh: '竖屏' },
+  subTextStyle: { en: 'Subtitle Text Style', zh: '字幕正文样式' },
+  subPosition: { en: 'Position', zh: '位置' },
+  subCustomStyle: { en: 'Custom Style', zh: '个性化样式' },
+  subCustomBg: { en: 'Background', zh: '底色' },
+  // 283次：底色透明勾选（勾选后取色器禁用、写入 'transparent'）；用户卡名称可编辑提示
+  subCustomTransparent: { en: 'Transparent', zh: '透明' },
+  subRenameStyle: { en: 'Click to rename', zh: '点击可重命名' },
+  subCustomFg: { en: 'Text color', zh: '字色' },
+  subCustomSize: { en: 'Font size', zh: '字号' },
+  subCustomFont: { en: 'Font', zh: '字体' },
+  // 282次：特效下拉 / 大加号 / 用户卡删除钮 / 预览横竖切换
+  subCustomFx: { en: 'Effect', zh: '特效' },
+  subAddStyle: { en: 'Save current custom settings as a new text style', zh: '把当前个性化参数保存为新正文样式' },
+  subDelStyle: { en: 'Delete this style', zh: '删除该样式' },
+  subOrientLandscape: { en: 'Landscape 16:9', zh: '横屏 16:9' },
+  subOrientPortrait: { en: 'Portrait 9:16', zh: '竖屏 9:16' },
   annResultsTitle: { en: 'Annotated Words', zh: '展示注释结果' },
   asrTitle: { en: 'Speech Recognition (ASR)', zh: '语音识别（ASR）' },
   asrDesc: { en: 'Recognize speech in videos/recordings without subtitles; output sentences with word meanings.', zh: '识别无字幕视频/录音的语音，实时输出句子并标注生词释义。' },
@@ -240,7 +326,9 @@ const MSG = {
   ocrResultTip: { en: 'Recognized text will appear here.', zh: '识别出的文字将显示在这里。' },
   helpTitle: { en: 'User Guide', zh: '使用说明' },
   wordDemo: { en: 'word', zh: '单词' },
-  transDemo: { en: '(meaning)', zh: '（释义）' },
+  // 282次：样例释义去括号（用户"候选项的释义不要加()"）——括号此前硬编码在键值里，
+  //   池卡样例按 annTemplate 拆分拼接，模板 {word}{meaning} 下直接输出裸释义
+  transDemo: { en: 'meaning', zh: '释义' },
   subWord: { en: 'word', zh: '单词' },
   subTrans: { en: 'meaning', zh: '释义' }
 };
@@ -248,10 +336,10 @@ const MSG = {
 // 使用说明（说明栏），分节渲染
 const HELP = [
   {
-    title: { en: 'Word hints on pages', zh: '网页生词提示' },
+    title: { en: 'Web Hints', zh: '网页提示' },
     items: [
       { en: 'After enabling, hover over a word to see its meaning, and click to hear pronunciation.', zh: '开启后，网页上悬停生词即可查看释义，点击可发音。' },
-      { en: 'Highlight style is set in Settings → Word Hints on Pages.', zh: '高亮样式在「设定栏 → 网页生词提示」中设置。' },
+      { en: 'Highlight style is set in Settings → Web Hints.', zh: '高亮样式在「设定栏 → 网页提示」中设置。' },
       { en: 'Frequency threshold filters how rare a word must be to get a meaning.', zh: '词频阈值用于过滤：只有足够生僻的词才会被标注。' }
     ]
   },
@@ -329,10 +417,7 @@ function log(...args) {
 
 // === 渲染函数 ===
 
-function _setRadio(name, value) {
-  const el = document.querySelector(`input[name="${name}"][value="${value}"]`);
-  if (el) el.checked = true;
-}
+// 280 次：_setRadio 辅助函数删除——注释布局 radio 全部移出引导页，页面已无任何 radio 组需回填
 
 function renderLangSelect(selectEl, langs, selected, names) {
   // 第二百二十八次：names 可选——释义语言下拉传 LANG_NAMES_EN 统一英文名（用户裁定），
@@ -346,6 +431,190 @@ function renderLangSelect(selectEl, langs, selected, names) {
     opt.selected = (code === selected);
     selectEl.appendChild(opt);
   }
+}
+
+// 280 次：候选池当前选择缓存（四键指派状态 + 注释模板；renderAll 回填）。
+//   281次：新增第四键 videoOverlayAnnStyle（视频中字幕的注释行样式）。
+//   textStyle/annotationStyle/videoAnnotationStyle/videoOverlayAnnStyle 均指向 POOL_STYLES 的样式 id（'none'=默认配色）。
+// 283次：注释模板分键——annTemplate 只归 textStyle 栏（text-hint.js 消费），其余三栏各用
+//   独立键（webAnnTemplate=文本侧栏、videoAnnTemplate=视频侧栏、videoOverlayAnnTemplate=
+//   叠加字幕注释行），"Annotation template 只会影响当前选中的注释栏目"。
+const ANN_TPL_KEYS = {
+  textStyle: 'annTemplate',
+  annotationStyle: 'webAnnTemplate',
+  videoAnnotationStyle: 'videoAnnTemplate',
+  videoOverlayAnnStyle: 'videoOverlayAnnTemplate'
+};
+const _poolSel = {
+  textStyle: 'none', annotationStyle: 'none', videoAnnotationStyle: 'none', videoOverlayAnnStyle: 'none',
+  annTemplate: DEFAULT_ANN_TEMPLATE,
+  webAnnTemplate: DEFAULT_ANN_TEMPLATE, videoAnnTemplate: DEFAULT_ANN_TEMPLATE, videoOverlayAnnTemplate: DEFAULT_ANN_TEMPLATE
+};
+// 281次：左列当前选中栏（点击 .pool-item 切换；池卡点击指派给该栏）
+let _poolTarget = 'textStyle';
+// 281次：个性化字幕样式缓存（storage.subtitleCustom，renderAll 回填）。
+//   282次：加 fx 特效字段（与 Custom 特效下拉/大加号保存的用户样式共用参数集）
+// 283次：默认改为"能直接用"的样式（用户裁定：底色透明、字号不小、投影特效）——
+//   透明底白字 + 阴影在任意视频上可读，不再默认黑条压画面。
+let _subCustom = { bg: 'transparent', fg: '#ffffff', fontSize: 28, fontFamily: 'sans', fx: 'shadow' };
+// 282次：用户自建正文样式缓存（storage.subtitleUserStyles，条目 {id,label,bg,fg,fontSize,fontFamily,fx}）
+let _userStyles = [];
+// 282次：预览方向（'landscape'/'portrait'）——本地态不写 storage，仅影响预览窗形状
+let _subPreviewOrient = 'landscape';
+// 283次：预览 1080p 舞台缩放监听（ResizeObserver）——stage 宽随正文页宽变化时
+//   重算 scale（模块级持有，renderSubPreview 重建 stage 后重挂；disconnect 防泄漏）
+let _subPreviewRO = null;
+// 280 次：视频叠加字幕注释布局缓存（radio 从引导页删除后，renderSubPreview 改读此缓存；
+//   renderAll 时从 storage 赋值，非 'detail' 一律按 'side' 渲染预览）
+let _overlayAnnMode = 'side';
+
+// 281次：共享样式候选池网格（去 280 次的三指派钮）——每张池卡 = 样例（wordDecl/annDecl
+//   生成器输出，与真实渲染同源）+ 名称；active 高亮按左列选中栏的当前指派（_poolSel[_poolTarget]）。
+//   网格一次建卡不重建（用户要求"不重渲染"），指派/切栏只更新 active 类。
+function renderPoolGrid() {
+  const grid = $('poolStyleGrid');
+  grid.innerHTML = '';
+  for (const item of POOL_STYLES) {
+    if (item.id === 'none') continue;
+    const card = document.createElement('div');
+    card.className = 'style-card' + (_poolSel[_poolTarget] === item.id ? ' active' : '');
+    card.dataset.style = item.id;
+    card.appendChild(poolCardDemo(item));
+    const label = document.createElement('div');
+    label.className = 'card-label';
+    label.textContent = styleLabel(item, _lang);
+    card.appendChild(label);
+    grid.appendChild(card);
+  }
+}
+
+// 281次：池顶文本说明（"最上是文本说明"）——随左栏选中项切换，说明该栏样式的用途。
+//   282次：按用户"最上是文本说明 不重渲染"重排——本说明=用途+「指派即时生效不重渲染」
+//   后缀，位于池卡网格上方（段1）；模板行上方另有一段「触发渲染」说明（段2，静态键）。
+//   说明行不重建 DOM，只换文字。
+// 283次：段2（poolNoteRerender）改动态——模板已分键只作用于当前选中栏，说明拼当前栏名
+//   （"注释模板（网页提示）——修改会触发重渲染该栏候选样例。"）。调用时机：
+//   ①renderAll 池段（候选列建卡完成后）②applyTexts 的 fillByDataKey 之后
+//   （语言切换会用 data-key 静态文案覆盖此行，必须重跑动态拼接还原栏名）。
+function renderPoolNote() {
+  const note = $('poolNoteNoRerender');
+  if (!note) return;
+  const KEY = {
+    textStyle: 'poolNoteTextStyle',
+    annotationStyle: 'poolNoteAnnotationStyle',
+    videoAnnotationStyle: 'poolNoteVideoAnnotationStyle',
+    videoOverlayAnnStyle: 'poolNoteVideoOverlayAnnStyle'
+  };
+  note.textContent = m(KEY[_poolTarget] || KEY.textStyle) + ' ' + m('poolNoteNoRerenderSuffix');
+  const rerender = $('poolNoteRerender');
+  if (rerender) {
+    const ITEM = {
+      textStyle: 'poolItemWebHint',
+      annotationStyle: 'poolItemWebSidebar',
+      videoAnnotationStyle: 'poolItemSidebar',
+      videoOverlayAnnStyle: 'poolItemSubAnn'
+    };
+    // 中文直连括号内栏名（无空格），英文以空格分词
+    const sep = (_lang === 'zh') ? '' : ' ';
+    rerender.textContent = m('annTplScopePrefix') + sep + m(ITEM[_poolTarget] || ITEM.textStyle) + sep + m('annTplScopeSuffix');
+  }
+}
+
+// 281次：左栏内联复制卡（用户裁定"选中之后，直接把卡片复制过去"）——把池卡（样例+名称）
+//   原样复制进左栏选中项的 .pool-item-demo（未指派/回落 none 时清空显示占位）。
+//   复制实现：从池网格中找同 id 卡，cloneNode 其 demo 与 label（"直接把卡片复制过去"）。
+function renderPoolSideDemos() {
+  const grid = $('poolStyleGrid');
+  document.querySelectorAll('.pool-left .pool-item').forEach((item) => {
+    const box = item.querySelector('.pool-item-demo');
+    if (!box) return;
+    box.innerHTML = '';
+    const id = _poolSel[item.dataset.target];
+    if (!id || id === 'none') return;
+    const src = grid ? grid.querySelector('.style-card[data-style="' + id + '"]') : null;
+    if (!src) return;
+    box.appendChild(src.querySelector('.demo').cloneNode(true));
+    const lab = document.createElement('div');
+    lab.className = 'pool-inline-label';
+    lab.textContent = src.querySelector('.card-label').textContent;
+    box.appendChild(lab);
+  });
+}
+
+// 281次：左栏选中态——点击 .pool-item 切换 _poolTarget（高亮 + 池说明 + 池卡 active 跟随）。
+//   项内开关/复选的点击同时会选中该栏（操作哪个栏哪个栏高亮，符合直觉且无副作用）。
+function bindPoolLeft() {
+  const left = document.querySelector('.pool-left');
+  if (!left || left.dataset.bound) return;
+  left.dataset.bound = '1';
+  left.addEventListener('click', (e) => {
+    const item = e.target.closest('.pool-item');
+    if (!item || !item.dataset.target) return;
+    if (_poolTarget === item.dataset.target) return;
+    _poolTarget = item.dataset.target;
+    document.querySelectorAll('.pool-left .pool-item').forEach((it) => {
+      it.classList.toggle('selected', it.dataset.target === _poolTarget);
+    });
+    renderPoolNote();
+    // 283次：切栏回填模板输入框——模板分键后每栏独立，输入框始终显示当前选中栏的模板
+    const tplInput = $('annTemplate');
+    if (tplInput) tplInput.value = _poolSel[ANN_TPL_KEYS[_poolTarget]] || DEFAULT_ANN_TEMPLATE;
+    // 池卡 active 跟随新选中栏的当前指派（不重建网格）
+    const grid = $('poolStyleGrid');
+    grid.querySelectorAll('.style-card').forEach((c) => {
+      c.classList.toggle('active', c.dataset.style === _poolSel[_poolTarget]);
+    });
+  });
+}
+
+// 281次：池卡样例——wordDecl/annDecl 生成器输出作 cssText（与真实渲染同源，覆盖渐变/描边/
+//   空心/着重号/SVG 波浪等全部新字段）；注释文本按 annTemplate 拆出 {meaning} 前后字面量。
+function poolCardDemo(item) {
+  const demo = document.createElement('div');
+  demo.className = 'demo';
+  const w = document.createElement('span');
+  w.className = 'word-demo';
+  w.textContent = m('wordDemo');
+  w.style.cssText = wordDecl(item).join(';');
+  demo.appendChild(w);
+  // 283次：样例注释文本按当前选中栏的模板拆分（模板分键，不再固定读 textStyle 栏的 annTemplate）
+  const { pre, post } = splitAnnTemplate(_poolSel[ANN_TPL_KEYS[_poolTarget]] || DEFAULT_ANN_TEMPLATE);
+  const a = document.createElement('span');
+  a.className = 'ann-demo';
+  a.textContent = pre + m('transDemo') + post;
+  a.style.cssText = annDecl(item).join(';');
+  demo.appendChild(a);
+  return demo;
+}
+
+// 281次：池卡点击指派——点池卡=指派给左栏选中栏（再点同卡取消，回落 'none'）。
+//   Web（textStyle）联动写 hintFirstBg/hintFirstFg（池条目 wordBg/wordFg 或默认绿白配色）。
+//   更新策略（用户要求"不重渲染"）：只切该卡 active 类 + 刷新左栏复制卡，不重建网格。
+function bindPoolGrid() {
+  const grid = $('poolStyleGrid');
+  if (grid.dataset.bound) return;   // renderAll 可多次触发，防重复绑定（同 bindStyleGrid 口径）
+  grid.dataset.bound = '1';
+  grid.addEventListener('click', (e) => {
+    const card = e.target.closest('.style-card');
+    if (!card) return;
+    const feat = _poolTarget;
+    const next = (_poolSel[feat] === card.dataset.style) ? 'none' : card.dataset.style;
+    _poolSel[feat] = next;
+    if (feat === 'textStyle') {
+      const st = next === 'none' ? null : findStyle(POOL_STYLES, next);
+      chrome.storage.local.set({
+        textStyle: next,
+        hintFirstBg: (st && st.wordBg) || '#2e6b43',
+        hintFirstFg: (st && st.wordFg) || '#ffffff'
+      }, () => log('textStyle=', next));
+    } else {
+      chrome.storage.local.set({ [feat]: next }, () => log(feat + '=', next));
+    }
+    grid.querySelectorAll('.style-card').forEach((c) => {
+      c.classList.toggle('active', c.dataset.style === _poolSel[feat]);
+    });
+    renderPoolSideDemos();
+  });
 }
 
 // 样例网格（三列四行）
@@ -365,69 +634,8 @@ function renderStyleGrid(container, items, activeId, renderCard) {
   }
 }
 
-// 文本样式卡：生词高亮 + (释义) 侧邻注释
-function textCard(item) {
-  const demo = document.createElement('div');
-  demo.className = 'demo';
-  const w = document.createElement('span');
-  w.className = 'word-demo';
-  w.textContent = m('wordDemo');
-  const a = document.createElement('span');
-  a.className = 'ann-demo';
-  a.textContent = m('transDemo');
-  // none 卡显示默认配色（绿底白字 #2e6b43/#ffffff），与页面实际渲染一致
-  const wordBg = item.wordBg || '#2e6b43';
-  const wordFg = item.wordFg || '#ffffff';
-  w.style.background = wordBg;
-  w.style.color = wordFg;
-  w.style.borderRadius = item.radius || '3px';
-  if (item.bold) w.style.fontWeight = '600';
-  if (item.italic) w.style.fontStyle = 'italic';
-  if (item.underline) w.style.textDecoration = 'underline';
-  if (item.shadow) w.style.boxShadow = item.shadow;
-  if (item.fontSize) w.style.fontSize = item.fontSize;
-  const opaqueBg = wordBg && !/^rgba\(/.test(wordBg) && !/^transparent$/i.test(wordBg);
-  a.style.background = opaqueBg ? wordFg : 'transparent';
-  a.style.color = opaqueBg ? wordBg : wordFg;
-  a.style.borderRadius = item.radius || '3px';
-  demo.appendChild(w);
-  demo.appendChild(a);
-  return demo;
-}
-
-// 侧栏注释样式卡：生词(释义) 样例（文本/视频侧栏共用渲染）
-function annCard(item) {
-  const demo = document.createElement('div');
-  demo.className = 'demo';
-  const w = document.createElement('span');
-  w.className = 'word-demo';
-  w.textContent = m('wordDemo');
-  const a = document.createElement('span');
-  a.className = 'ann-demo';
-  a.textContent = m('transDemo');
-  // 反思（2026-08-20 第八十三次）：none 卡（无 wordBg/annBg 字段）之前完全不套配色→空白卡，
-  //   与实际渲染（默认单词绿底白字 + 注释白底绿字 #2e6b43/#ffffff ↔ #ffffff/#2e6b43）不符。
-  //   镜像 textCard 的默认处理：wordBg/wordFg 缺失取默认，注释块按前后景互换派生。
-  const wordBg = item.wordBg || '#2e6b43';
-  const wordFg = item.wordFg || '#ffffff';
-  w.style.background = wordBg;
-  w.style.color = wordFg;
-  w.style.borderRadius = item.radius || '3px';
-  if (item.bold) w.style.fontWeight = '600';
-  if (item.italic) w.style.fontStyle = 'italic';
-  if (item.underline) w.style.textDecoration = 'underline';
-  if (item.shadow) w.style.boxShadow = item.shadow;
-  // 反思（2026-08-15 第六十三次）：大字样式（wordFontSize/fontSize）在样卡中同样生效
-  if (item.wordFontSize) w.style.fontSize = item.wordFontSize;
-  const opaqueBg = wordBg && !/^rgba\(/.test(wordBg) && !/^transparent$/i.test(wordBg);
-  a.style.background = item.annBg || (opaqueBg ? wordFg : 'transparent');
-  a.style.color = item.annFg || (opaqueBg ? wordBg : wordFg);
-  a.style.borderRadius = item.radius || '3px';
-  if (item.fontSize) a.style.fontSize = item.fontSize;
-  demo.appendChild(w);
-  demo.appendChild(a);
-  return demo;
-}
+// 280 次：textCard/annCard 两卡渲染器随旧双网格退役——池卡统一由 poolCardDemo（wordDecl/annDecl
+//   生成器输出）渲染，三种指派关系共用同一张样例卡。
 
 // 字幕样式卡：迷你 16:9 视频区 + 按文字样式（在当前位置 ratio 上）渲染的 word(释义) 字幕
 const GUIDE_FONTS = {
@@ -445,16 +653,22 @@ function buildSubBoxCss(item, s) {
   // 第一百二十七次：默认外观（size=null）预览字号与真实 overlay 基线一致（24px，
   // 真实端随视频高度 4.5% 自适应；引导页小窗按 s 缩放）
   parts.push('font-size:' + Math.round((item.size || (item.id === 'none' ? 24 : 16)) * s) + 'px');
-  parts.push('font-family:' + (GUIDE_FONTS[item.font] || GUIDE_FONTS.sans));
+  // 282次：用户样式字体 id（arial/impact 等）不在 GUIDE_FONTS 时回落共享层 SUB_FONTS
+  parts.push('font-family:' + (GUIDE_FONTS[item.font] || subFontFamily(item.font)));
   if (item.id === 'none') {
     parts.push('background:rgba(0,0,0,0.75)');
   } else if (item.bg) {
     parts.push('background:' + item.bg);
   }
-  if (item.bold) parts.push('font-weight:600');
+  // 281次：weight 字段优先（特粗 800，如 edge-white-bold），否则 bold→600（与 overlay 渲染一致）
+  if (item.weight) parts.push('font-weight:' + item.weight);
+  else if (item.bold) parts.push('font-weight:600');
   if (item.italic) parts.push('font-style:italic');
   if (item.shadow) parts.push('text-shadow:' + (typeof item.shadow === 'string' ? item.shadow : '0 0 4px rgba(0,0,0,.9)'));
   if (item.edge) parts.push('-webkit-text-stroke:1px ' + item.edge);
+  // 282次：fx 特效（custom/用户样式卡）——组合样式在预览与样卡中一并体现
+  const fxd = subFxDecl(item.fx);
+  if (fxd) parts.push(fxd);
   parts.push('padding:2px 6px;border-radius:3px');
   return parts.join(';');
 }
@@ -493,7 +707,9 @@ function escapeHtml(s) {
   })[c]);
 }
 
-function subSampleHtml(item, ratio, annMode, scale, wrap, flow, plain) {
+// 281次：新增 annStyle 参数——字幕注释行样式改由第四栏池条目（Subtitle hints on video）
+//   控制（annDecl 输出与真实 overlay 渲染同源）；缺省/'none' 时沿用旧配色逻辑。
+function subSampleHtml(item, ratio, annMode, scale, wrap, flow, plain, annStyle) {
   const sample = item.sample || 'He passed the quiz(测验).';
   // 反思（2026-08-19 第八十一次）：样例解析修正——旧正则以 `(?:\(...\))?` 将括号组设为可选，
   //   且 `(.*?)` 惰性匹配到第一个单词即停：样例 "He passed the quiz(测验)." 解析出的生词是
@@ -520,7 +736,9 @@ function subSampleHtml(item, ratio, annMode, scale, wrap, flow, plain) {
     }
   }
   const s = (typeof scale === 'number' && scale > 0) ? scale : 1;
-  // 释义字色：有底色样式（含默认深条）用白字；透明底样式直显样式前景色
+  // 281次：注释样式由第四栏池条目控制（annDecl 生成器输出 cssText）；未指派（缺省/'none'）
+  //   时沿用旧逻辑：有底色样式（含默认深条）注释用白字，透明底直显样式前景色。
+  const annCss = (annStyle && annStyle.id !== 'none') ? annDecl(annStyle).join(';') : '';
   const annFg = item.bg ? '#ffffff' : (item.fg || '#ffffff');
   const wordCss = 'background:#2e6b43;color:#ffffff;border-radius:2px;padding:0 3px;font-weight:600';
   // 注释模式：预览优先用 radio 选中的模式（用户要求"侧邻注释跟详细注释预览中有变化"），
@@ -545,18 +763,28 @@ function subSampleHtml(item, ratio, annMode, scale, wrap, flow, plain) {
       ? 'white-space:normal;max-width:100%;word-break:break-word;line-height:1.35'
       : 'white-space:nowrap;max-width:100%;overflow:hidden;text-overflow:ellipsis') + ';' + buildSubBoxCss(item, s);
     const subBox = '<span style="' + subCss + '">' + beforeHtml + wordHtml + afterHtml + '</span>';
-    const annBlock = '<div style="margin-top:4px;line-height:1.3;text-align:left;white-space:' + (wrap ? 'normal' : 'nowrap') + ';font-size:' + Math.round((item.size || 16) * s * 0.9) + 'px">'
-      + '<span style="color:' + annFg + ';font-weight:600">' + escapeHtml(word) + '</span> '
-      + '<span style="color:' + annFg + '">' + escapeHtml(trans) + '</span></div>';
+    // 281次：注释行样式由第四栏池条目控制（annCss=annDecl 输出）；annDecl 不含字体/字重，
+    //   字体在块级给 sans 基准、词头保持 font-weight:600（与真实 overlay 注释行一致）。
+    const annWordCss = annCss || ('color:' + annFg + ';font-weight:600');
+    const annTransCss = annCss || ('color:' + annFg);
+    const annBlock = '<div style="margin-top:4px;line-height:1.3;text-align:left;white-space:' + (wrap ? 'normal' : 'nowrap') + ';font-size:' + Math.round((item.size || 16) * s * 0.9) + 'px;font-family:' + GUIDE_FONTS.sans + '">'
+      + '<span style="' + annWordCss + '">' + escapeHtml(word) + '</span> '
+      + '<span style="' + annTransCss + '">' + escapeHtml(trans) + '</span></div>';
     if (flow) return subBox + annBlock;
     // 预览：外容器绝对定位居中（盒子中心落在 ratio 中心线），字幕行盒 + 注释块竖排
     return '<span style="position:absolute;left:50%;bottom:' + (ratio * 100) + '%;transform:translate(-50%, 50%);display:flex;flex-direction:column;align-items:center;max-width:94%">'
       + subBox + annBlock + '</span>';
   }
-  // 侧邻注释模式（或样式卡 plain）：字幕行内生词高亮 + (释义) 行内。
-  //   plain 卡不显示行内释义——样式卡只展示文字样式，注释布局由下方双预览（radio 驱动）负责。
+  // 侧邻注释模式（或样式卡 plain）：字幕行内生词高亮 + 注释行内。
+  //   281次：注释文本按 annTemplate 模板拆出 {meaning} 前后字面量（不再硬编码圆括号），
+  //   样式同样由第四栏池条目（annCss）控制。
+  //   plain 卡不显示行内释义——样式卡只展示文字样式，注释布局由下方预览负责。
+  //   283次：模板分键——字幕注释行读 videoOverlayAnnTemplate（本函数非 plain 调用
+  //   只来自 renderSubPreview；plain 样卡不走此分支）。
+  const tplParts = splitAnnTemplate(_poolSel.videoOverlayAnnTemplate || DEFAULT_ANN_TEMPLATE);
+  const annSpanCss = annCss || ('color:' + annFg);
   const inner = beforeHtml + wordHtml
-    + (!plain && trans ? '<span style="color:' + annFg + '">(' + escapeHtml(trans) + ')</span>' : '')
+    + (!plain && trans ? '<span style="' + annSpanCss + '">' + tplParts.pre + escapeHtml(trans) + tplParts.post + '</span>' : '')
     + afterHtml;
   return '<span style="' + buildSubMiniCss(item, ratio, scale, wrap, flow) + '">' + inner + '</span>';
 }
@@ -580,54 +808,295 @@ function subCard(item) {
   return demo;
 }
 
-// 位置样式卡：迷你 16:9 视频区 + 一条位于 ratio 处的白线
-function posCard(item) {
-  const demo = document.createElement('div');
-  demo.className = 'demo sub-pos-stage';
-  const line = document.createElement('div');
-  line.className = 'sub-pos-line';
-  line.style.bottom = (item.ratio * 100) + '%';
-  demo.appendChild(line);
-  return demo;
+// 281次：位置样式卡随独立位置网格一并删除（位置改单选行，预览窗内直接体现位置）。
+
+// 281次：个性化样式合成对象——subtitleCustom 参数 → 字幕样式结构（id 'custom'），
+//   供样式卡与预览渲染共用（与内置条目同构：font/fg/bg/size 均来自 storage.subtitleCustom）。
+//   282次：加 fx 特效字段；样例去 '(测验)' 注释（正文样式卡只渲染正文）。
+function buildCustomStyleObj() {
+  return {
+    id: 'custom',
+    label: { en: 'Custom', zh: '个性化' },
+    font: _subCustom.fontFamily,
+    fg: _subCustom.fg,
+    bg: _subCustom.bg,
+    size: _subCustom.fontSize,
+    fx: _subCustom.fx,
+    edge: null, bold: false, italic: false, shadow: false, annMode: 'side',
+    sample: 'He passed the quiz.'
+  };
 }
 
-// 重新渲染文字样式网格（位置切换后样卡的位置线需跟随刷新；容器监听已委托，无需重绑）
+// 282次：用户样式条目 → 渲染对象（与内置条目同构，样式卡/预览共用）。
+//   字号保底 24（buildSubBoxCss 对 size 缺省按 16 渲染，用户样式不应落默认小字）。
+function userStyleObj(st) {
+  return {
+    id: st.id,
+    label: st.label || { en: 'User style', zh: '自建样式' },
+    font: st.fontFamily || 'sans',
+    fg: st.fg || '#ffffff',
+    bg: st.bg || null,
+    size: parseInt(st.fontSize, 10) || 24,
+    fx: st.fx || 'none',
+    edge: null, bold: false, italic: false, shadow: false, annMode: 'side',
+    sample: 'He passed the quiz.'
+  };
+}
+
+// 文字样式网格重渲染：none + 10 内置（renderStyleGrid）+ 末尾个性化卡（281次追加）
+//   + 用户自建样式卡（282次，右上角删除钮）。active 高亮按 _subStyleId。
 function renderSubTextGrid() {
-  renderStyleGrid($('subtitleStyleGrid'), SUBTITLE_TEXT_STYLES, _subStyleId, subCard);
+  const grid = $('subtitleStyleGrid');
+  renderStyleGrid(grid, SUBTITLE_TEXT_STYLES, _subStyleId, subCard);
+  const customObj = buildCustomStyleObj();
+  const card = document.createElement('div');
+  card.className = 'style-card' + (_subStyleId === 'custom' ? ' active' : '');
+  card.dataset.id = 'custom';
+  card.dataset.style = 'custom';
+  card.appendChild(subCard(customObj));
+  const label = document.createElement('div');
+  label.className = 'card-label';
+  label.textContent = styleLabel(customObj, _lang);
+  card.appendChild(label);
+  grid.appendChild(card);
+  // 282次：用户自建正文样式卡（storage.subtitleUserStyles；点击选中=bindStyleGrid 通用逻辑，
+  //   删除钮 stopPropagation 不触发选中）
+  for (const st of _userStyles) {
+    const obj = userStyleObj(st);
+    const ucard = document.createElement('div');
+    ucard.className = 'style-card' + (_subStyleId === st.id ? ' active' : '');
+    ucard.dataset.id = st.id;
+    ucard.dataset.style = st.id;
+    ucard.appendChild(subCard(obj));
+    const del = document.createElement('button');
+    del.className = 'sub-card-del';
+    del.type = 'button';
+    del.textContent = '×';
+    del.title = m('subDelStyle');
+    del.addEventListener('click', (e) => {
+      e.stopPropagation();
+      deleteUserStyle(st.id);
+    });
+    ucard.appendChild(del);
+    // 283次：名称可编辑——label div 改 input（点击/键盘 stopPropagation 防 bindStyleGrid
+    //   容器委托把输入动作当选卡）；change 写回 st.label（en/zh 同值）并 storage 持久化，
+    //   不重渲染网格（保输入焦点；预览与左栏不显示用户卡名称）
+    const ulabel = document.createElement('input');
+    ulabel.type = 'text';
+    ulabel.className = 'card-label-input';
+    ulabel.value = styleLabel(obj, _lang);
+    ulabel.title = m('subRenameStyle');
+    ulabel.addEventListener('click', (e) => e.stopPropagation());
+    ulabel.addEventListener('keydown', (e) => e.stopPropagation());
+    ulabel.addEventListener('change', () => {
+      const v = ulabel.value.trim();
+      if (!v) { ulabel.value = styleLabel(obj, _lang); return; }
+      st.label = { en: v, zh: v };
+      chrome.storage.local.set({ subtitleUserStyles: _userStyles }, () => log('userStyle rename=', st.id));
+    });
+    ucard.appendChild(ulabel);
+    grid.appendChild(ucard);
+  }
 }
 
-// 横屏(16:9) + 竖屏(9:16) 双预览：以当前文字样式 + 位置 ratio 各渲染一遍
-// 反思（2026-08-16 第六十九次）：竖屏适配不再靠样式 orient 字段，双预览同时展示，
-//   所见即所得（字幕横排、位置按视频矩形比例）。
-// 反思（2026-08-18 第七十三次修正）：预览跟随 videoOverlayAnnMode radio——侧邻/详细
-//   切换时预览同步变化（用户要求"侧邻注释跟详细注释预览中有变化才是"）。
+// 282次：预览重做（用户"少了竖屏""预览的视频大小按照1080p缩放的，注意字体显示比例"）——
+//   ①横屏 16:9 / 竖屏 9:16 切换按钮（_subPreviewOrient 本地态，不写 storage）。
+//   ②1080p 虚拟舞台：内层按真实 1080p 像素（1920×1080 / 1080×1920）渲染字幕——
+//   字号用样式 size 的真实 px（'none' 时真实 overlay 为 clamp(18, 高×4.5%, 40)，
+//   1080p 恰取上限 40px），外层横 480×270 / 竖 270×480 整体 transform:scale(0.25)——
+//   字体显示比例与真实 1080p 视频完全一致（旧版 scale=0.8 是 480px 小窗比例，失真）。
+//   ③正文样式按 _subStyleId（custom/用户样式→合成对象）；注释行按第四栏池条目
+//   （_poolSel.videoOverlayAnnStyle）——正文/位置/注释任一变化调用本函数立即刷新。
 function renderSubPreview() {
   const row = $('subPreviewRow');
   if (!row) return;
-  const style = findStyle(SUBTITLE_TEXT_STYLES, _subStyleId) || SUBTITLE_TEXT_STYLES[0];
+  let style = (_subStyleId === 'custom') ? buildCustomStyleObj()
+    : findStyle(SUBTITLE_TEXT_STYLES, _subStyleId);
+  if (!style) {
+    const us = _userStyles.find((s) => s.id === _subStyleId);
+    style = us ? userStyleObj(us) : SUBTITLE_TEXT_STYLES[0];
+  }
   const pos = findStyle(SUBTITLE_POSITIONS, _subPosId) || SUBTITLE_POSITIONS[0];
-  // 读取当前选中的注释模式 radio（侧邻 side / 详细 detail）
-  const checked = document.querySelector('input[name="videoOverlayAnnMode"]:checked');
-  const annMode = checked ? checked.value : 'side';
+  const annStyle = findStyle(POOL_STYLES, _poolSel.videoOverlayAnnStyle);
+  // 注释布局缓存（侧邻 side / 详细 detail，renderAll 从 storage.videoOverlayAnnMode 回填）
+  const annMode = _overlayAnnMode;
   row.innerHTML = '';
-  for (const orient of ['land', 'port']) {
-    const stage = document.createElement('div');
-    stage.className = 'sub-preview-stage ' + orient;
-    const mini = document.createElement('div');
-    mini.className = 'sub-preview-mini';
-    // 反思（2026-08-20 第八十六次）：横屏/竖屏窗口大小一致（同面积、长宽互换，
-    //   横屏 480×270 / 竖屏 270×480），字幕字号统一 0.8 缩放、视觉一致。
-    //   （旧版竖屏 152×270 面积远小于横屏，用户要求"二者大小一致，只是长宽互换"。）
-    mini.innerHTML = subSampleHtml(style, pos.ratio, annMode, 0.8, orient === 'port', false);
-    stage.appendChild(mini);
-    const cap = document.createElement('div');
-    cap.className = 'sub-preview-caption';
-    cap.textContent = m(orient === 'land' ? 'subLandPreview' : 'subPortPreview');
-    const wrap = document.createElement('div');
-    wrap.className = 'sub-preview-col';
-    wrap.appendChild(stage);
-    wrap.appendChild(cap);
-    row.appendChild(wrap);
+  // 横竖切换按钮行
+  const orient = document.createElement('div');
+  orient.className = 'sub-orient-btns';
+  for (const o of [
+    { id: 'landscape', key: 'subOrientLandscape' },
+    { id: 'portrait', key: 'subOrientPortrait' }
+  ]) {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'sub-orient-btn' + (_subPreviewOrient === o.id ? ' active' : '');
+    b.textContent = m(o.key);
+    b.addEventListener('click', () => {
+      if (_subPreviewOrient === o.id) return;
+      _subPreviewOrient = o.id;
+      renderSubPreview();
+    });
+    orient.appendChild(b);
+  }
+  row.appendChild(orient);
+  const portrait = (_subPreviewOrient === 'portrait');
+  const stage = document.createElement('div');
+  stage.className = 'sub-preview-stage' + (portrait ? ' portrait' : '');
+  // 内层 1080p 舞台（真实像素）+ scale(0.25) 缩放（CSS 见 guide.css）
+  const stage1080 = document.createElement('div');
+  stage1080.className = 'sub-preview-1080' + (portrait ? ' portrait' : '');
+  const mini = document.createElement('div');
+  mini.className = 'sub-preview-mini';
+  // 'none' 显式给 40px（=真实 overlay 1080p 的 clamp 上限），否则 buildSubBoxCss 落 24
+  const effStyle = (style.id === 'none') ? Object.assign({}, style, { size: 40 }) : style;
+  mini.innerHTML = subSampleHtml(effStyle, pos.ratio, annMode, 1, false, false, false, annStyle);
+  stage1080.appendChild(mini);
+  stage.appendChild(stage1080);
+  row.appendChild(stage);
+  // 283次：缩放动态化——stage 宽按正文页宽百分比（横 50%/竖 28.125%，r10 CSS），窗口
+  //   宽度变化后固定 scale(0.25) 失真（"预览的横屏半宽，竖屏半高，按照正文页面的宽度算"），
+  //   实测 stage.clientWidth/1920 重算（竖屏分母 1080）；guard w>0 防 display:none 时测 0。
+  //   ResizeObserver 模块级持有，stage 每次重建后重挂（先 disconnect 防泄漏）。
+  const den = portrait ? 1080 : 1920;
+  const fit = () => {
+    const w = stage.clientWidth;
+    if (w > 0) stage1080.style.transform = 'scale(' + (w / den) + ')';
+  };
+  fit();
+  if (typeof ResizeObserver !== 'undefined') {
+    if (_subPreviewRO) _subPreviewRO.disconnect();
+    _subPreviewRO = new ResizeObserver(fit);
+    _subPreviewRO.observe(stage);
+  }
+}
+
+// 281次：位置单选行（radio 组替代旧位置网格；change 即写 storage.subtitlePosition + 刷预览）
+function renderSubPosRadios() {
+  const box = $('subPosRadios');
+  if (!box) return;
+  box.innerHTML = '';
+  for (const p of SUBTITLE_POSITIONS) {
+    const lab = document.createElement('label');
+    lab.className = 'sub-pos-radio';
+    const r = document.createElement('input');
+    r.type = 'radio';
+    r.name = 'subPos';
+    r.value = p.id;
+    r.checked = (p.id === _subPosId);
+    r.addEventListener('change', () => {
+      if (!r.checked) return;
+      _subPosId = p.id;
+      chrome.storage.local.set({ subtitlePosition: p.id }, () => log('subtitlePosition=', p.id));
+      renderSubPreview();
+    });
+    const txt = document.createElement('span');
+    txt.textContent = styleLabel(p, _lang);
+    lab.appendChild(r);
+    lab.appendChild(txt);
+    box.appendChild(lab);
+  }
+}
+
+// 282次：字体/特效下拉动态填充——选项来自共享层 SUB_FONT_OPTIONS（12 项）/
+//   SUB_FX_OPTIONS（5 项），与 overlay 渲染同源；填充后按当前参数回填选中值。
+//   renderAll 每轮调用（幂等重建，语言切换时选项文案随之更新）。
+function fillSubCustomSelects() {
+  const font = $('subCustomFont'), fx = $('subCustomFx');
+  if (!font || !fx) return;
+  font.innerHTML = '';
+  for (const o of SUB_FONT_OPTIONS) {
+    const opt = document.createElement('option');
+    opt.value = o.id;
+    opt.textContent = styleLabel(o, _lang);
+    font.appendChild(opt);
+  }
+  fx.innerHTML = '';
+  for (const o of SUB_FX_OPTIONS) {
+    const opt = document.createElement('option');
+    opt.value = o.id;
+    opt.textContent = styleLabel(o, _lang);
+    fx.appendChild(opt);
+  }
+  font.value = _subCustom.fontFamily;
+  fx.value = _subCustom.fx;
+}
+
+// 282次：大加号——把当前 Custom 参数（底色/字色/字号/字体/特效）保存为新正文样式
+//   （storage.subtitleUserStyles 追加一条，id='user-<时间戳>'），保存后自动选中新样式；
+//   可连续点击保存多套（用户"最右侧来个大加号，可以新增字幕正文样式"）。
+function bindSubCustomAdd() {
+  const btn = $('subCustomAdd');
+  if (!btn) return;
+  btn.title = m('subAddStyle');
+  if (btn.dataset.bound) return;
+  btn.dataset.bound = '1';
+  btn.addEventListener('click', () => {
+    const entry = {
+      id: 'user-' + Date.now(),
+      label: { en: 'Style ' + (_userStyles.length + 1), zh: '样式 ' + (_userStyles.length + 1) },
+      bg: _subCustom.bg,
+      fg: _subCustom.fg,
+      fontSize: _subCustom.fontSize,
+      fontFamily: _subCustom.fontFamily,
+      fx: _subCustom.fx
+    };
+    _userStyles = _userStyles.concat([entry]);
+    _subStyleId = entry.id;
+    chrome.storage.local.set({ subtitleUserStyles: _userStyles, subtitleStyle: entry.id },
+      () => log('subtitleUserStyles+', entry.id));
+    renderSubTextGrid();
+    renderSubPreview();
+  });
+}
+
+// 282次：删除用户自建样式——从 subtitleUserStyles 移除；若正选中该样式则回落 'none'。
+function deleteUserStyle(id) {
+  _userStyles = _userStyles.filter((s) => s.id !== id);
+  const patch = { subtitleUserStyles: _userStyles };
+  if (_subStyleId === id) {
+    _subStyleId = 'none';
+    patch.subtitleStyle = 'none';
+  }
+  chrome.storage.local.set(patch, () => log('subtitleUserStyles-', id));
+  renderSubTextGrid();
+  renderSubPreview();
+}
+
+// 281次：个性化控件（底色/字色/字号/字体 + 282次特效）——改任一即切 'custom' 卡并写
+//   storage.subtitleCustom + subtitleStyle='custom'，随后刷新样式网格与预览。
+//   283次：底色透明勾选（subCustomBgTransparent）——勾选时 bg 写 'transparent' 并禁用
+//   取色器（视觉明确），取消恢复取色值；字号缺省对齐新默认 28。
+function bindSubCustom() {
+  const bg = $('subCustomBg'), fg = $('subCustomFg'), size = $('subCustomSize'),
+    font = $('subCustomFont'), fx = $('subCustomFx'), tr = $('subCustomBgTransparent');
+  if (!bg || !fg || !size || !font || !fx || bg.dataset.bound) return;
+  bg.dataset.bound = '1';
+  const apply = () => {
+    _subCustom = {
+      bg: (tr && tr.checked) ? 'transparent' : (bg.value || '#000000'),
+      fg: fg.value || '#ffffff',
+      fontSize: Math.min(60, Math.max(12, parseInt(size.value, 10) || 28)),
+      fontFamily: font.value || 'sans',
+      fx: fx.value || 'none'
+    };
+    _subStyleId = 'custom';
+    chrome.storage.local.set({ subtitleStyle: 'custom', subtitleCustom: _subCustom },
+      () => log('subtitleCustom=', JSON.stringify(_subCustom)));
+    renderSubTextGrid();
+    renderSubPreview();
+  };
+  bg.addEventListener('change', apply);
+  fg.addEventListener('change', apply);
+  size.addEventListener('change', apply);
+  font.addEventListener('change', apply);
+  fx.addEventListener('change', apply);
+  if (tr) {
+    // 283次：勾选切换——透明时取色器置灰（disabled），apply 统一写 storage
+    tr.addEventListener('change', () => {
+      bg.disabled = tr.checked;
+      apply();
+    });
   }
 }
 
@@ -701,17 +1170,8 @@ function bindStyleGrid(container, storageKey, applyPreview) {
     card.classList.add('active');
     const patch = {};
     patch[storageKey] = id;
-    // 文本样式需联动生词配色（none → 恢复默认绿底白字 #2e6b43/#ffffff）
-    if (storageKey === 'textStyle') {
-      const st = TEXT_STYLES.find((t) => t.id === id);
-      if (st && st.wordBg) {
-        patch.hintFirstBg = st.wordBg;
-        patch.hintFirstFg = st.wordFg;
-      } else {
-        patch.hintFirstBg = '#2e6b43';
-        patch.hintFirstFg = '#ffffff';
-      }
-    }
+    // 280 次：textStyle 联动分支删除——网格现仅用于字幕样式/位置（textStyle 指派走池卡 chip），
+    //   且 TEXT_STYLES 常量已并入共享池，此分支引用失效。
     chrome.storage.local.set(patch, () => {
       if (applyPreview) applyPreview(id);
       log('已选择 ' + storageKey + ' =', id);
@@ -735,8 +1195,7 @@ async function getConfigDefaults() {
 
 async function loadSettings() {
   const cfgDefaults = await getConfigDefaults();
-  const defaults = Object.assign({
-    uiLanguage: 'zh',
+  const defaults = Object.assign({    uiLanguage: 'zh',
     learnLanguage: 'en',
     meaningLanguage: 'zh',
     rankThreshold: 5000,
@@ -749,6 +1208,8 @@ async function loadSettings() {
     annotateRepeat: false,
     hintSideAnnotation: false,
     textHintEnabled: true,
+    // 272 次：Query 独立开关（右键查询+搜索栏），默认开；不再由网页提示负责
+    queryEnabled: true,
     // 第一百七十次：与唯一来源 src/data/config.json 的 asrModelSize 保持一致（原写 base.en，
     //   与 config.json 的 base 不符，未设置过的用户会看到与实际生效值不同的选项）
     asrModelSize: 'base',
@@ -775,22 +1236,46 @@ async function loadSettings() {
     // 第一百零二次：asrFirstChunkSec 默认值条目移除（唯一来源 src/data/config.json）
     textStyle: 'none',
     annotationStyle: 'none',
+    // 280 次：videoAnnotationStyle 复活（池内三指派之一）；annBrackets 布尔退役 → annTemplate 模板
     videoAnnotationStyle: 'none',
+    annTemplate: DEFAULT_ANN_TEMPLATE,
+    // 283次：注释模板分键——其余三栏各自的模板缺省（与 annTemplate 同默认值）
+    webAnnTemplate: DEFAULT_ANN_TEMPLATE,
+    videoAnnTemplate: DEFAULT_ANN_TEMPLATE,
+    videoOverlayAnnTemplate: DEFAULT_ANN_TEMPLATE,
     subtitleStyle: 'none',
     subtitlePosition: 'b20',   // 第二百一十九次：默认位置改为下 1/5（用户裁定）
+    // 281次：个性化字幕四参默认（subtitleStyle='custom' 时生效）+ 第四栏注释行样式键
+    //   283次：默认改"能直接用"——透明底/不小字号 28/投影特效（用户裁定），与 overlay 端缺省对齐
+    subtitleCustom: { bg: 'transparent', fg: '#ffffff', fontSize: 28, fontFamily: 'sans', fx: 'shadow' },
+    videoOverlayAnnStyle: 'none',
     webSidebarEnabled: true,
     sidebarEnabled: true,
-    // 反思（2026-08-21 第九十次）：用户要求"视频叠加字幕应当默认不选"——默认 false
-    overlayEnabled: false,
+    // 反思（2026-08-21 第九十次）：用户曾要求"视频叠加字幕应当默认不选"——
+    // 277次（用户"引导页 视频叠加字幕默认选中"）改默认开（storage 未设置即勾选）
+    overlayEnabled: true,
     webSidebarAnnMode: 'side',
     videoSidebarAnnMode: 'side',
     videoOverlayAnnMode: 'side',
     hintFirstBg: '#2e6b43',
     hintFirstFg: '#ffffff'
   }, cfgDefaults);
-  chrome.storage.local.get(defaults, (res) => {
-    _lang = (res.uiLanguage === 'zh') ? 'zh' : 'en';
-    renderAll(res);
+  // 272 次：等待 storage 读取完成再返回——init 里改 await loadSettings()，
+  //   保证 _lang 在后续动态行渲染（deactivate 停用栏 chip 等）前已按界面语言就绪
+  //   （旧版不等待，deactivate 行首渲染竞态到 zh 默认值 = 英文界面下闪中文混杂）。
+  return new Promise((resolve) => {
+    chrome.storage.local.get(defaults, (res) => {
+      _lang = (res.uiLanguage === 'zh') ? 'zh' : 'en';
+      renderAll(res);
+      // 283次：首次使用写回个性化默认——get(defaults) 不落盘，content 端（overlay）只读
+      //   storage 拿不到 defaults，不写回则新装用户视频端看不到透明底默认样式
+      chrome.storage.local.get(null, (all) => {
+        if (!('subtitleCustom' in all)) {
+          chrome.storage.local.set({ subtitleCustom: _subCustom }, () => log('subtitleCustom 首次写回'));
+        }
+      });
+      resolve(res);
+    });
   });
 }
 
@@ -843,14 +1328,16 @@ function renderAll(res) {
   $('annotateRepeat').checked = !!res.annotateRepeat;
   $('hintSideAnnotation').checked = !!res.hintSideAnnotation;
   $('textHintEnabled').checked = res.textHintEnabled !== false;
+  // 272 次：Query 独立开关回填（缺省=开）
+  $('queryEnabled').checked = res.queryEnabled !== false;
   $('webSidebarEnabled').checked = res.webSidebarEnabled !== false;
   $('sidebarEnabled').checked = res.sidebarEnabled !== false;
-  // 反思（2026-08-21 第九十次）：视频叠加字幕默认不选——严格 === true（未设置=不选）
-  $('overlayEnabled').checked = res.overlayEnabled === true;
-  // 注释模式单选初始化
-  _setRadio('webSidebarAnnMode', res.webSidebarAnnMode || 'side');
-  _setRadio('videoSidebarAnnMode', res.videoSidebarAnnMode || 'side');
-  _setRadio('videoOverlayAnnMode', res.videoOverlayAnnMode || 'side');
+  // 277次（用户"引导页 视频叠加字幕默认选中"）：默认开——未设置视为勾选（!== false），
+  //   与视频侧栏读取口径一致，勾选态不再不同步
+  $('overlayEnabled').checked = res.overlayEnabled !== false;
+  // 280 次：注释布局 radio 移出引导页（控制在各自侧栏与叠加字幕内）——overlay 布局值入
+  //   _overlayAnnMode 缓存供 renderSubPreview 用；侧栏两键仍由各自功能页消费，不再回填
+  _overlayAnnMode = res.videoOverlayAnnMode === 'detail' ? 'detail' : 'side';
   // Whisper 模型下拉回填（第二百二十六次：由单选铺开改回下拉；storage 残留 offscreen 不支持的值时回落 base）
   $('asrModelSize').value = res.asrModelSize || 'base';
   if (!$('asrModelSize').value) {
@@ -872,51 +1359,90 @@ function renderAll(res) {
   $('chatContextMaxBytes').value = res.chatContextMaxBytes || 10000;
   applyLlmProviderHints(res.llmProvider);
 
-  // 文本样式网格：若当前生词配色与选中样式不符（用户曾在弹窗手改），不标 active
-  let textActive = res.textStyle || 'none';
-  // 反思（2026-08-16 第六十八次）：stale-id 清洗——storage 里可能是旧版已删除的样式 id
-  //   （如字幕样式 right-vertical/center-vertical），renderStyleGrid 找不到匹配卡 → "一个都没选中"。
-  //   统一：四个样式网格的 id 若不在对应列表，回退 'none' 并回写 storage（下轮渲染恒有选中卡）。
-  if (!TEXT_STYLES.some((t) => t.id === textActive)) {
-    textActive = 'none';
-    chrome.storage.local.set({ textStyle: 'none' });
-  } else {
-    const st = TEXT_STYLES.find((t) => t.id === textActive);
-    if (st && st.wordBg && (st.wordBg !== res.hintFirstBg || st.wordFg !== res.hintFirstFg)) {
-      textActive = 'custom';
+  // 281次：共享池四键回填（textStyle/annotationStyle/videoAnnotationStyle/videoOverlayAnnStyle）——
+  //   sanitizeStyleId 洗脏值（池外 id 回落 'none' 并回写）；videoAnnotationStyle 特殊：
+  //   旧残留若不在池内，经 VANN_TO_ANN_MIGRATION 映射后写回自身（280 次复活语义：
+  //   池内同名保留，池外经映射表回落，不再并入 annotationStyle、不再 remove 键）。
+  //   第四键 videoOverlayAnnStyle：视频中字幕的注释行样式（无迁移，残留即回落）。
+  for (const key of ['textStyle', 'annotationStyle', 'videoAnnotationStyle', 'videoOverlayAnnStyle']) {
+    let val = sanitizeStyleId(POOL_STYLES, res[key] || 'none');
+    if (key === 'videoAnnotationStyle' && res[key] && !POOL_STYLES.some((s) => s.id === res[key])) {
+      val = VANN_TO_ANN_MIGRATION[res[key]] || 'none';
+      chrome.storage.local.set({ videoAnnotationStyle: val });
+    } else if (val !== (res[key] || 'none')) {
+      chrome.storage.local.set({ [key]: val });
     }
+    _poolSel[key] = val;
   }
-  renderStyleGrid($('textStyleGrid'), TEXT_STYLES, textActive, textCard);
-  bindStyleGrid($('textStyleGrid'), 'textStyle', null);
+  // 280 次：注释模板回填（空/非字符串回落默认并回写）
+  _poolSel.annTemplate = (typeof res.annTemplate === 'string' && res.annTemplate.trim())
+    ? res.annTemplate : DEFAULT_ANN_TEMPLATE;
+  // 282次：280 批旧默认残留迁移——'{word}({meaning})' 会让候选样例与真实注释多出一层
+  //   括号（用户"候选项的释义不要加()"），统一迁到新默认 '{word}{meaning}'（下分支回写）。
+  if (_poolSel.annTemplate === '{word}({meaning})') {
+    _poolSel.annTemplate = DEFAULT_ANN_TEMPLATE;
+  }
+  if (_poolSel.annTemplate !== res.annTemplate) chrome.storage.local.set({ annTemplate: _poolSel.annTemplate });
+  // 283次：模板分键——其余三栏各自的注释模板（独立 storage 键；空/非字符串回落默认）。
+  //   输入框始终显示当前选中栏的模板（跨标签页 renderAll 与切栏 bindPoolLeft 同口径）。
+  for (const k of ['webAnnTemplate', 'videoAnnTemplate', 'videoOverlayAnnTemplate']) {
+    _poolSel[k] = (typeof res[k] === 'string' && res[k].trim()) ? res[k] : DEFAULT_ANN_TEMPLATE;
+  }
+  $('annTemplate').value = _poolSel[ANN_TPL_KEYS[_poolTarget]] || DEFAULT_ANN_TEMPLATE;
+  // 281次：候选池（右列网格一次建卡 + 池顶说明随选中栏切换 + 左栏选中态与内联复制卡）。
+  //   初始选中栏固定第一项 Web Hints（_poolTarget 默认），补 .selected 高亮。
+  renderPoolGrid();
+  bindPoolGrid();
+  bindPoolLeft();
+  document.querySelectorAll('.pool-left .pool-item').forEach((it) => {
+    it.classList.toggle('selected', it.dataset.target === _poolTarget);
+  });
+  renderPoolNote();
+  renderPoolSideDemos();
 
-  const annActive = sanitizeStyleId(ANN_STYLES, res.annotationStyle);
-  if (annActive !== (res.annotationStyle || 'none')) chrome.storage.local.set({ annotationStyle: annActive });
-  renderStyleGrid($('annStyleGrid'), ANN_STYLES, annActive, annCard);
-  bindStyleGrid($('annStyleGrid'), 'annotationStyle', null);
-
-  const vannActive = sanitizeStyleId(VANN_STYLES, res.videoAnnotationStyle);
-  if (vannActive !== (res.videoAnnotationStyle || 'none')) chrome.storage.local.set({ videoAnnotationStyle: vannActive });
-  renderStyleGrid($('vannStyleGrid'), VANN_STYLES, vannActive, annCard);
-  bindStyleGrid($('vannStyleGrid'), 'videoAnnotationStyle', null);
-
-  // 字幕：文字样式 + 位置样式 两维独立选择（第六十九次重构）
-  const subActive = sanitizeStyleId(SUBTITLE_TEXT_STYLES, res.subtitleStyle);
+  // 281次：字幕段回填——正文样式允许 'custom'（个性化）；282次：用户自建样式
+  //   （user-* 前缀且存在于 subtitleUserStyles）同样放行，残留已删 id 回落清洗链。
+  //   位置改单选行（renderSubPosRadios）；个性化五控件回填并绑定（bindSubCustom）；
+  //   预览立即渲染。旧位置网格/位置卡已删。
+  _userStyles = Array.isArray(res.subtitleUserStyles)
+    ? res.subtitleUserStyles.filter((s) => s && typeof s.id === 'string' && s.id.indexOf('user-') === 0)
+    : [];
+  const subActive = (res.subtitleStyle === 'custom') ? 'custom'
+    : (_userStyles.some((s) => s.id === res.subtitleStyle) ? res.subtitleStyle
+      : sanitizeStyleId(SUBTITLE_TEXT_STYLES, res.subtitleStyle));
   if (subActive !== (res.subtitleStyle || 'none')) chrome.storage.local.set({ subtitleStyle: subActive });
   const posActive = sanitizePositionId(res.subtitlePosition);
   if (posActive !== (res.subtitlePosition || 'b20')) chrome.storage.local.set({ subtitlePosition: posActive });
   _subStyleId = subActive;
   _subPosId = posActive;
-  renderStyleGrid($('subtitleStyleGrid'), SUBTITLE_TEXT_STYLES, subActive, subCard);
+  // 281次：个性化参数回填（storage.subtitleCustom；缺省/非法值回落默认对象）。
+  //   282次：加 fx；fontFamily 白名单放宽为 SUB_FONT_OPTIONS 全部 12 项（旧版仅三项）。
+  //   283次：bg 'transparent'（透明勾选态）原样保留；字号缺省对齐新默认 28；勾选态
+  //   回填 checkbox 并禁用取色器（color input 不接受非 #rrggbb 值，透明时给占位黑色）。
+  const sc = res.subtitleCustom || {};
+  _subCustom = {
+    bg: sc.bg || 'transparent',
+    fg: sc.fg || '#ffffff',
+    fontSize: Math.min(60, Math.max(12, parseInt(sc.fontSize, 10) || 28)),
+    fontFamily: SUB_FONT_OPTIONS.some((o) => o.id === sc.fontFamily) ? sc.fontFamily : 'sans',
+    fx: SUB_FX_OPTIONS.some((o) => o.id === sc.fx) ? sc.fx : 'none'
+  };
+  const bgTransparent = (_subCustom.bg === 'transparent');
+  const trCb = $('subCustomBgTransparent');
+  if (trCb) trCb.checked = bgTransparent;
+  $('subCustomBg').value = bgTransparent ? '#000000' : _subCustom.bg;
+  $('subCustomBg').disabled = bgTransparent;
+  $('subCustomFg').value = _subCustom.fg;
+  $('subCustomSize').value = _subCustom.fontSize;
+  fillSubCustomSelects();
+  renderSubTextGrid();
   bindStyleGrid($('subtitleStyleGrid'), 'subtitleStyle', (id) => {
     _subStyleId = id;
     renderSubPreview();
   });
-  renderStyleGrid($('subPositionGrid'), SUBTITLE_POSITIONS, posActive, posCard);
-  bindStyleGrid($('subPositionGrid'), 'subtitlePosition', (id) => {
-    _subPosId = id;
-    renderSubPreview();
-    renderSubTextGrid();
-  });
+  renderSubPosRadios();
+  bindSubCustom();
+  bindSubCustomAdd();
   renderSubPreview();
 
   // 界面文案
@@ -1053,18 +1579,23 @@ function applyTexts() {
   document.title = 'VocabRadar · Guide';
   document.documentElement.lang = _lang;
   fillByDataKey();
+  // 283次：fillByDataKey 会把 poolNoteRerender 覆盖回静态兜底文案（段2），须在其后
+  //   重跑动态拼接（拼当前栏名）；此时池状态已就绪，幂等无副作用
+  renderPoolNote();
   renderHelp();
   // 反思（2026-08-16 第七十次）：头部显示构建版本——与视频页 overlay 启动日志的
   //   BUILD_STAMP 对照，可判定"改了默认样式/没选中"是不是旧构建残留。
   const verEl = $('guideVer');
-  if (verEl) verEl.textContent = 'v' + BUILD_STAMP;
+  // 272次：BUILD_STAMP 已含 'v' 前缀（构建注入 v{yyyyMMdd.HHmm}），不再外加 'v'
+  if (verEl) verEl.textContent = BUILD_STAMP;
 }
 
 // === 初始化 ===
 
 async function init() {
   await initLang().catch(() => {});
-  loadSettings();
+  // 272 次：改 await——_lang 就绪后 initDeactivate 才渲染动态行（修语言混杂竞态）
+  await loadSettings();
 
   // 三子标签切换
   document.querySelectorAll('.guide-tab').forEach((tab) => {
@@ -1145,8 +1676,27 @@ async function init() {
   $('hintSideAnnotation').addEventListener('change', (e) => {
     chrome.storage.local.set({ hintSideAnnotation: e.target.checked }, () => log('侧邻提示=', e.target.checked));
   });
+  // 280 次：候选池——注释模板输入（{word}/{meaning} 变量；空值回落默认 {word}({meaning})），
+  //   更新 _poolSel 后刷新池卡样例（poolCardDemo 按 pre+释义+post 拆分渲染）
+  // 283次：模板分键——写入当前选中栏对应的 storage 键（ANN_TPL_KEYS 映射），
+  //   只影响该栏候选样例与真实渲染（"Annotation template 只会影响当前选中的注释栏目"）
+  $('annTemplate').addEventListener('change', (e) => {
+    let tpl = e.target.value;
+    if (!tpl || !tpl.trim()) {
+      tpl = DEFAULT_ANN_TEMPLATE;
+      e.target.value = tpl;
+    }
+    const key = ANN_TPL_KEYS[_poolTarget] || 'annTemplate';
+    _poolSel[key] = tpl;
+    chrome.storage.local.set({ [key]: tpl }, () => log('注释模板[' + key + ']=', tpl));
+    renderPoolGrid();
+  });
   $('textHintEnabled').addEventListener('change', (e) => {
-    chrome.storage.local.set({ textHintEnabled: e.target.checked }, () => log('网页生词提示=', e.target.checked));
+    chrome.storage.local.set({ textHintEnabled: e.target.checked }, () => log('网页提示=', e.target.checked));
+  });
+  // 272 次：Query 独立开关保存（右键查询+搜索栏；与网页提示解耦）
+  $('queryEnabled').addEventListener('change', (e) => {
+    chrome.storage.local.set({ queryEnabled: e.target.checked }, () => log('Query=', e.target.checked));
   });
   $('webSidebarEnabled').addEventListener('change', (e) => {
     chrome.storage.local.set({ webSidebarEnabled: e.target.checked }, () => log('文本侧栏=', e.target.checked));
@@ -1157,18 +1707,9 @@ async function init() {
   $('overlayEnabled').addEventListener('change', (e) => {
     chrome.storage.local.set({ overlayEnabled: e.target.checked }, () => log('视频叠加字幕=', e.target.checked));
   });
-  // 注释模式单选
-  ['webSidebarAnnMode', 'videoSidebarAnnMode', 'videoOverlayAnnMode'].forEach((name) => {
-    document.querySelectorAll(`input[name="${name}"]`).forEach((radio) => {
-      radio.addEventListener('change', () => {
-        if (radio.checked) {
-          chrome.storage.local.set({ [name]: radio.value }, () => log(`${name}=`, radio.value));
-          // 视频叠加字幕注释模式变化 → 双预览同步重渲染（侧邻/详细差异可见）
-          if (name === 'videoOverlayAnnMode') renderSubPreview();
-        }
-      });
-    });
-  });
+  // 280 次：注释布局三组 radio 监听删除——radio 移出引导页，布局控制在各自侧栏与叠加字幕内；
+  //   storage 键（webSidebarAnnMode/videoSidebarAnnMode/videoOverlayAnnMode）与 defaults 保留
+  //   （侧栏/overlay 功能自身 UI 仍消费）。
   // （第二百二十四次：Whisper 模型由下拉改单选，监听移至下方「引擎单选」区块统一处理）
 
   // 模型行（第一百七十次）：来源切换时清空自定义地址/模型，改用新来源的预置值
@@ -1287,8 +1828,11 @@ async function init() {
   initAsr();
   initOcr();
   initParser();
+  // 第二百七十次：Deactivate 停用栏（须在折叠组通用绑定与标签切换绑定之后初始化，
+  //   深链 ?deactivate= 需复用两者的既有监听）
+  initDeactivate({ m, lang: () => _lang });
   window.addEventListener('pagehide', () => {
-    disposeAsrCommon(); disposeAsr(); disposeOcr(); disposeParser();
+    disposeAsrCommon(); disposeAsr(); disposeOcr(); disposeParser(); disposeDeactivate();
   });
 
   // 其他标签页改了设置（如字幕样式）→ 本页监听同步
@@ -1302,14 +1846,21 @@ async function init() {
       //   其他标签页写入的若为已删样式 id，旧逻辑无卡可选中；重渲染走 stale-id 清洗回退。
       // 反思（2026-08-16 第六十九次）：位置样式（subtitlePosition）变化同样整栏重渲染。
       chrome.storage.local.get(null, (res) => renderAll(res));
-    } else if (changes.textStyle || changes.annotationStyle || changes.videoAnnotationStyle) {
+    } else if (changes.textStyle || changes.annotationStyle || changes.videoAnnotationStyle || changes.annTemplate
+      || changes.webAnnTemplate || changes.videoAnnTemplate || changes.videoOverlayAnnTemplate
+      || changes.videoOverlayAnnStyle || changes.subtitleCustom || changes.subtitleUserStyles) {
+      // 280 次：候选池四键跨标签页同步（池三指派键 + 注释模板；annBrackets 退役）。
+      //   282次：补第四栏注释样式键与字幕个性化/用户样式键——缺了会"别的标签页改了
+      //   样式本页预览不动"（用户"都会触发立即预览，现在没动"的根因之一）。
+      //   283次：补三栏独立模板键（分键后每个键变化都需重渲染池卡样例与输入框回填）。
       chrome.storage.local.get(null, (res) => renderAll(res));
     } else if (changes.llmProvider || changes.llmBaseUrl || changes.llmModel
                || changes.llmApiKey || changes.chatWordPrompt || changes.chatSidebarPrompt || changes.asrModelSize
                || changes.asrEngine || changes.ocrEngine || changes.asrLlmModel || changes.asrLlmBaseUrl
                || changes.asrLlmApiKey || changes.ocrLlmProvider || changes.ocrLlmBaseUrl || changes.ocrLlmModel
                || changes.ocrLlmApiKey || changes.ocrLanguages || changes.translationChannels
-               || changes.llmTranslatePrompt || changes.learnLanguage || changes.meaningLanguage) {
+               || changes.llmTranslatePrompt || changes.learnLanguage || changes.meaningLanguage
+               || changes.queryEnabled) {
       // 第一百七十三次：补齐「模型」栏的跨标签页同步。第一百七十次新增 llm*/chatPrompt/
       //   asrModelSize 六个键时漏了本监听器 —— 在另一标签页改了模型配置，本页输入框
       //   仍显示旧值，用户以为没保存又改一遍，两页互相覆盖。

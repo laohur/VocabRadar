@@ -6,6 +6,11 @@
 //   - 监听 storage 变化，启停侧栏或热更新配色/阈值
 //   - 始终启动（默认折叠态），用户点击折叠条展开
 //   - 视频页面不启动文本侧栏（由 video-controller 启动视频侧栏）
+//
+// 第二百七十次：停用规则（Deactivate）gate——命中「文本侧栏」停用规则时本页尽量
+//   不活动：不加载模块图、不挂 history hook，仅留轻量解除观察监听；规则解除后走
+//   完整 _wsBoot()。规则运行中启停由 boot 内主监听的 deactivateRules 分支实时处理。
+//   匹配/存储逻辑唯一来源 src/lib/deactivate.js（非打包入口文件，构建时原样进 dist）。
 
 // 反思（2026-08-07）：用户反馈"Identifier '_impl' has already been declared"。
 //   根因：text-hint.js 也用 let _impl，classic script 共享全局作用域，变量名冲突。
@@ -20,8 +25,30 @@ let _wsImpl = null;
 
 let _lastUrl = location.href;
 
-(async () => {
-  console.log(`[VocabRadar][web-sidebar] content script 已加载 @ ${location.href}`);
+// === 第二百七十次：停用规则 gate（与 text-hint.js 同构） ===
+let _wsDeactLib = null;
+function _wsLoadDeactLib() {
+  return import(chrome.runtime.getURL('src/lib/deactivate.js'))
+    .then((m) => { _wsDeactLib = m; return true; })
+    .catch((e) => {
+      // 不遮蔽：规则库加载失败按"未停用"处理并出声
+      console.warn('[VocabRadar][web-sidebar] 停用规则库加载失败，按未停用处理:', e);
+      return false;
+    });
+}
+/** 当前页是否命中「文本侧栏」停用规则（规则库缺失时恒 false） */
+function _sidebarSuppressed() {
+  if (!_wsDeactLib) return Promise.resolve(false);
+  return _wsDeactLib.suppressionFor(location)
+    .then((s) => s.textSidebar === true)
+    .catch(() => false);
+}
+let _wsBooted = false;
+
+/** boot：启动主体（第二百七十次自 IIFE 抽出；逻辑原样 + 规则实时启停分支） */
+async function _wsBoot() {
+  if (_wsBooted) return;
+  _wsBooted = true;
   try {
     _wsImpl = await import(chrome.runtime.getURL('src/content/web-sidebar-impl.js'));
 
@@ -30,7 +57,7 @@ let _lastUrl = location.href;
       ? _wsImpl.getDiagState()
       : null;
 
-    const settings = await getSettings();
+    const settings = await _wsGetSettings();
     // 反思（2026-08-12）：用户要求"视频网站也要显示悬浮球"。
     //   旧版视频页面不启动文本侧栏，现改为始终启动（与视频侧栏共存）。
     if (settings.webSidebarEnabled) {
@@ -45,10 +72,29 @@ let _lastUrl = location.href;
     // 设置变化监听
     chrome.storage.onChanged.addListener((changes) => {
       if (!_wsImpl) return;
+      // 第二百七十次：停用规则变化——命中「文本侧栏」立即停（同主开关关闭语义）；
+      // 解除时按主开关现值恢复（文本侧栏无 reconcile 自愈，启停两向都在此处理）
+      if ('deactivateRules' in changes) {
+        _sidebarSuppressed().then((sup) => {
+          if (sup) {
+            try { _wsImpl.stopWebSidebar(); } catch (e) { console.warn('[VocabRadar][web-sidebar] 规则停用失败:', e); }
+            console.log('[VocabRadar][web-sidebar] 停用规则命中（文本侧栏），侧栏已停止');
+          } else {
+            _wsGetSettings().then((s) => {
+              if (s.webSidebarEnabled) {
+                Promise.resolve(_wsImpl.startWebSidebar(s)).catch((e) => {
+                  console.error('[VocabRadar][web-sidebar] 规则解除后重启异常:', e);
+                });
+              }
+            });
+          }
+        });
+        return;
+      }
       // 主开关
       if ('webSidebarEnabled' in changes) {
         if (changes.webSidebarEnabled.newValue) {
-          getSettings().then((s) => _wsImpl.startWebSidebar(s));
+          _wsGetSettings().then((s) => _wsImpl.startWebSidebar(s));
         } else {
           _wsImpl.stopWebSidebar();
         }
@@ -60,7 +106,7 @@ let _lastUrl = location.href;
       }
       // 语言变化 → 更新选择器
       if ('learnLanguage' in changes || 'meaningLanguage' in changes) {
-        getSettings().then((s) => _wsImpl.updateLanguages(s));
+        _wsGetSettings().then((s) => _wsImpl.updateLanguages(s));
       }
       // 注释表外词开关变化 → 重扫（2026-08-07）
       if ('annotateOov' in changes) {
@@ -70,13 +116,18 @@ let _lastUrl = location.href;
       if ('annotateRepeat' in changes) {
         _wsImpl.setAnnotateRepeat(changes.annotateRepeat.newValue);
       }
+      // 280次：侧邻注释模板变化 → 清缓存重扫（与 annotateRepeat 同构，原 annBrackets）
+      // 283次：模板分键——文本侧栏（annotationStyle 栏）只消费 webAnnTemplate
+      if ('webAnnTemplate' in changes) {
+        _wsImpl.setAnnTemplate(changes.webAnnTemplate.newValue);
+      }
       // 配色字段变化 → 热更新样式（无需重扫）
       const colorKeys = [
         'hintFirstBg', 'hintFirstFg',
         'hintLaterBg', 'hintLaterFg'
       ];
       if (colorKeys.some((k) => k in changes)) {
-        getSettings().then((s) => _wsImpl.updateColors(s));
+        _wsGetSettings().then((s) => _wsImpl.updateColors(s));
       }
       // 侧栏注释样式变化（引导页选择）→ 热更新 root class
       if ('annotationStyle' in changes) {
@@ -113,10 +164,43 @@ let _lastUrl = location.href;
   } catch (e) {
     console.error('[VocabRadar][web-sidebar] 加载失败', e);
   }
+}
+
+(async () => {
+  console.log(`[VocabRadar][web-sidebar] content script 已加载 @ ${location.href}`);
+  try {
+    await _wsLoadDeactLib();
+    if (await _sidebarSuppressed()) {
+      console.log('[VocabRadar][web-sidebar] 命中停用规则（文本侧栏），本页不加载侧栏模块（规则解除后自动恢复）');
+      _wsInstallUnsuppressWatch();
+      return;
+    }
+    await _wsBoot();
+  } catch (e) {
+    console.error('[VocabRadar][web-sidebar] 加载失败', e);
+  }
 })();
 
+/** gate 期间的解除观察（第二百七十次）：规则解除即 boot；boot 幂等（_wsBooted），
+ *  boot 后本监听残留无害——运行中的规则启停由 boot 内主监听接管 */
+function _wsInstallUnsuppressWatch() {
+  try {
+    chrome.storage.onChanged.addListener((changes, area) => {
+      if (area !== 'local' || !('deactivateRules' in changes)) return;
+      _sidebarSuppressed().then((sup) => {
+        if (!sup && !_wsBooted) {
+          console.log('[VocabRadar][web-sidebar] 停用规则解除，启动文本侧栏');
+          _wsBoot();
+        }
+      });
+    });
+  } catch (e) {
+    console.warn('[VocabRadar][web-sidebar] 停用规则解除监听注册失败:', e);
+  }
+}
+
 /** 读取完整设置（含默认值） */
-function getSettings() {
+function _wsGetSettings() {
   return new Promise((resolve) => {
     chrome.storage.local.get({
       learnLanguage: 'en',
@@ -125,6 +209,9 @@ function getSettings() {
       rankThreshold: 5000,
       annotateOov: false,
       annotateRepeat: false,
+      // 280次：侧邻注释模板默认（annBrackets 布尔退役）
+      // 281次：默认改 {word}{meaning}（直接相连无空格，与 styles.js 同步）
+      annTemplate: '{word}{meaning}',
       // 反思（2026-08-18 第七十三次修正）：默认配色——用户明确"单词绿底白字，注释白底绿字"
       hintFirstBg: '#2e6b43',
       hintFirstFg: '#ffffff',

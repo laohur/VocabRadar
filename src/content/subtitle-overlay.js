@@ -19,6 +19,23 @@
 //   - 跨字幕去重（_seen）
 //   - 反思（2026-07-06 v4）：renderSubtitle 是 async，位置更新移入末尾
 //     避免 offsetHeight=0 导致位置错位
+//
+// 282次：字幕正文样式全线增强——
+//   1. 用户样式（guide 页大加号保存，storage.subtitleUserStyles）由 syncUserStyleRules
+//      用独立 <style> 动态重建 style-user-* 规则，声明与 guide 预览同源（styles.js）
+//   2. 个性化 custom 规则补 fx 特效三变量（text-shadow/描边/paint-order），
+//      setSubtitleCustom 按 subFxDecl 拆分写入
+//   3. 字体/特效/用户样式声明收敛共享层 styles.js（本地 SUB_FONTS 已删），
+//      setSubtitleStyle 改 'style-' 前缀扫描清理并放行 user-* 前缀
+//
+// 283次：三处改动——
+//   1. 注释模板分键（用户"Annotation template 只会影响当前选中的注释栏"）：本模块
+//      只消费 videoOverlayAnnTemplate（第四栏字幕注释专用），不再读全局 annTemplate；
+//   2. 首尾生词过滤（用户"注释样式作用于首尾两个单词"=字幕的首尾两个单词选为生词
+//      注释）：side/detail 两模式的生词高亮与注释列表都只保留位于句首/句尾 token
+//      位置的生词，中段生词不高亮不注释（collectEdgeMatches 统一管线）；
+//   3. 个性化样式缺省值对齐（用户"个性化样式默认配置给个能用的样式"）：custom 规则
+//      CSS 变量缺省底色 transparent、字号 28px，与 guide 页 Custom 默认值同源。
 
 import { getAnnotations } from '../lib/annotator.js';
 // 反思（2026-08-13 第五十一次）：字幕样式数据驱动（差异化属性定义在 styles.js SUBTITLE_TEXT_STYLES），
@@ -26,7 +43,10 @@ import { getAnnotations } from '../lib/annotator.js';
 // 反思（2026-08-16 第六十九次）：文字样式与位置样式解耦——文字外观由 SUBTITLE_TEXT_STYLES，
 //   位置（距视频底部比例）由 SUBTITLE_POSITIONS 独立选择（storage.subtitlePosition），
 //   位置由 updateOverlayPosition 按 ratio 内联计算，样式类不再含位置。
-import { SUBTITLE_TEXT_STYLES, SUBTITLE_POSITIONS, findStyle, BUILD_STAMP } from '../lib/styles.js';
+// 282次：SUB_FONTS/subFontFamily/subFxDecl/buildUserStyleDecl 收敛到共享层 styles.js——
+//   字体栈、特效声明、用户样式声明与 guide 页预览同源（预览=真实渲染），删除本文件
+//   本地 SUB_FONTS 常量（旧三栈与共享层重复，字体扩列后必然脱节）。
+import { SUBTITLE_TEXT_STYLES, SUBTITLE_POSITIONS, POOL_STYLES, SUB_FONTS, findStyle, annDecl, splitAnnTemplate, DEFAULT_ANN_TEMPLATE, BUILD_STAMP, subFontFamily, subFxDecl, buildUserStyleDecl } from '../lib/styles.js';
 
 let _overlay = null;
 let _video = null;
@@ -37,13 +57,18 @@ let _enabled = true;
 let _rankThreshold = 5000;   // 2026-08-14 第五十四次修正：恢复默认 5000
 // 注释重复生词（2026-08-15 第六十二次：默认不选，后续出现不包裹不注释）
 let _annotateRepeat = false;
+// 280次：侧邻注释模板（annBrackets 布尔退役，默认 {word}({meaning})，{word}/{meaning} 均为变量）
+// 283次：模板分键——本模块读 videoOverlayAnnTemplate（第四栏字幕注释专用键）
+let _annTemplate = DEFAULT_ANN_TEMPLATE;
 let _lastKey = '';               // 避免重复渲染
 let _scrollHandler = null;       // scroll/resize 监听器
 let _mode = 'side';              // 'side'（侧邻注释）或 'detail'（详细注释）
-let _styleId = 'none';           // 当前字幕文字样式 id（annMode 决定注释布局）
+let _styleId = 'none';           // 当前字幕文字样式 id（'custom'=个性化；注释布局由 _mode 决定）
 let _posId = 'b20';              // 当前字幕位置样式 id（距视频底部比例）
 let _storageListener = null;     // storage 变化监听器（同步详略模式）
 let _fullscreenHandler = null;   // fullscreenchange 监听器（全屏时移动 overlay）
+let _userStyleSheet = null;      // 282次：用户样式动态 <style> 元素（style-user-* 规则重建用）
+let _userStylesCache = [];       // 282次：最近一次同步的用户样式列表（激活样式被删时回落判定）
 
 /** 创建 overlay 元素（position:fixed，位置由 updateOverlayPosition 动态计算） */
 function createOverlay() {
@@ -165,44 +190,95 @@ ${buildSubtitleStyleCss()}
 
 /**
  * 反思（2026-08-13 第五十一次）：按 SUBTITLE_TEXT_STYLES 元数据生成 style-{id} 差异化 CSS。
- * 字体/颜色/字号/背景/描边/粗体/斜体/阴影全部来自元数据，与引导页双预览一致。
- * 反思（2026-08-16 第六十六次）：删除竖排逻辑（pos 'right' / vertical 字段）。
  * 反思（2026-08-16 第六十九次）：删除位置（pos 字段）——位置改由 updateOverlayPosition
  *   按 SUBTITLE_POSITIONS 的 ratio 内联计算，样式类只管外观。
- * 背景透明（bg=null）的样式，其注释块（side-ann / ann-word / ann-trans）同步强制透明，
- * 避免"透明背景 + 深色注释块"在视频上变成黑块（用户反复强调"不要把透明当作黑色"）。
+ * 281次：职责分离——正文样式类（style-{id}）只管字幕正文外观；注释行外观由第四栏池
+ *   样式类（annstyle-{id}）统一控制，删除旧"bg 透明时注释块强制透明"联动规则
+ *  （用户裁定：注释样式由 subtitle hints on video 栏指派，不再跟随正文样式）。
+ *   个性化字幕（style-custom）外观走 CSS 变量（setSubtitleCustom 写入内联值）。
  * @returns {string} CSS 规则文本
  */
 function buildSubtitleStyleCss() {
-  const FONT_MAP = {
-    sans: '-apple-system, "Segoe UI", "Microsoft YaHei", sans-serif',
-    serif: '"Georgia", "Times New Roman", "SimSun", serif',
-    mono: '"Consolas", "Courier New", monospace'
-  };
-  return SUBTITLE_TEXT_STYLES.map((s) => {
+  // 正文样式规则（none + 内置）：字体/颜色/字号/背景/描边/粗细全部来自元数据
+  const textRules = SUBTITLE_TEXT_STYLES.map((s) => {
     const parts = [];
     parts.push('background:' + (s.bg || 'transparent'));
     parts.push('color:' + s.fg);
     // 第一百二十七次：size=null（默认外观）不写死字号，回落基础层的
     // var(--beaver-sub-fs)——随视频高度 4.5% 自适应（clamp 18-40px）
     if (s.size) parts.push('font-size:' + s.size + 'px');
-    parts.push('font-family:' + (FONT_MAP[s.font] || FONT_MAP.sans));
+    parts.push('font-family:' + (SUB_FONTS[s.font] || SUB_FONTS.sans));
     parts.push('border-radius:4px');
     parts.push('max-width:90%');
-    if (s.bold) parts.push('font-weight:600');
+    // 281次：weight 优先于 bold（edge-white-bold 用 800）
+    if (s.weight) parts.push('font-weight:' + s.weight);
+    else if (s.bold) parts.push('font-weight:600');
     if (s.italic) parts.push('font-style:italic');
     if (s.edge) parts.push('-webkit-text-stroke:1px ' + s.edge);
     // 反思（2026-08-15 第六十四次）：shadow 字段支持字符串（自定义 text-shadow），true 用默认黑投影
     if (s.shadow) parts.push('text-shadow:' + (typeof s.shadow === 'string' ? s.shadow : '0 0 6px rgba(0,0,0,.9)'));
-    // 背景透明（无底）样式：注释块强制透明 + 前景色，防止视频上出现黑块
-    let css = '#beaver-subtitle-overlay.style-' + s.id + '{' + parts.join(';') + ';}';
-    if (!s.bg) {
-      css += '#beaver-subtitle-overlay.style-' + s.id + ' .beaver-side-ann{background:transparent;color:' + s.fg + ';}';
-      css += '#beaver-subtitle-overlay.style-' + s.id + ' .beaver-overlay-ann-word{background:transparent;color:' + s.fg + ';}';
-      css += '#beaver-subtitle-overlay.style-' + s.id + ' .beaver-overlay-ann-trans{background:transparent;color:' + s.fg + ';}';
-    }
-    return css;
+    return '#beaver-subtitle-overlay.style-' + s.id + '{' + parts.join(';') + ';}';
   }).join('\n');
+
+  // 281次：个性化字幕规则（guide 页控件：底色/字色/字号/字体），变量缺省值与默认一致。
+  // 282次：补 fx 特效三变量（text-shadow/描边/paint-order），setSubtitleCustom 按
+  //   subFxDecl(c.fx) 拆分写入；缺省值须合法——'none' 对 -webkit-text-stroke 非法，
+  //   描边缺省用 '0 transparent'，投影缺省 'none'，paint-order 缺省 'normal'。
+  // 283次：缺省值对齐 guide 页 Custom 默认（用户"默认底色为透明，不小的字体"）——
+  //   bg 缺省 transparent、fs 缺省 28px（guide.js _subCustom 同源；旧 storage 残留
+  //   已由 guide 首次写回兜底，此处变量缺省只为无 guide 数据时的兜底渲染）。
+  const customRule = '#beaver-subtitle-overlay.style-custom{' +
+    'background:var(--beaver-custom-bg,transparent);' +
+    'color:var(--beaver-custom-fg,#ffffff);' +
+    'font-size:var(--beaver-custom-fs,28px);' +
+    'font-family:var(--beaver-custom-ff,' + SUB_FONTS.sans + ');' +
+    'text-shadow:var(--beaver-custom-tsh,none);' +
+    '-webkit-text-stroke:var(--beaver-custom-stroke,0 transparent);' +
+    'paint-order:var(--beaver-custom-po,normal);' +
+    'border-radius:4px;max-width:90%;}';
+
+  // 281次：注释行样式规则（第四栏池 annstyle-{id}）——annDecl 输出过滤 font-size
+  //  （池条目 12-15px 是侧栏语境，字幕注释行统一 0.9em 基准），词头加粗 600 与基础层一致
+  const annRules = POOL_STYLES
+    .filter((s) => s.id && s.id !== 'none')
+    .map((s) => {
+      const decl = annDecl(s).filter((d) => !d.startsWith('font-size')).join(';');
+      if (!decl) return '';
+      const sel = '#beaver-subtitle-overlay.annstyle-' + s.id;
+      return sel + ' .beaver-overlay-subtitle .beaver-side-ann,' +
+        sel + ' .beaver-overlay-ann-word,' +
+        sel + ' .beaver-overlay-ann-trans{' + decl + ';}' +
+        sel + ' .beaver-overlay-ann-word{font-weight:600;}';
+    })
+    .filter(Boolean)
+    .join('\n');
+
+  return textRules + '\n' + customRule + '\n' + annRules;
+}
+
+/**
+ * 282次：重建用户字幕正文样式规则（guide 页大加号保存的样式，storage.subtitleUserStyles）
+ * 反思：用户样式条目动态增删，静态清单（SUBTITLE_STYLE_CLASSES）必然滞后，
+ *   改用独立 <style> 元素整表重写——声明由共享层 buildUserStyleDecl 生成，
+ *   与 guide 预览（subCard/buildSubBoxCss）同源，预览=真实渲染。
+ * 同步缓存 _userStylesCache 供 storage 监听判定「激活样式被删除」。
+ * @param {Array<{id:string,bg?:string,fg?:string,fontSize?:number,fontFamily?:string,fx?:string}>} list
+ */
+function syncUserStyleRules(list) {
+  _userStylesCache = Array.isArray(list) ? list.filter((st) => st && typeof st.id === 'string' && st.id.indexOf('user-') === 0) : [];
+  if (!document.head) return;
+  if (!_userStyleSheet) {
+    _userStyleSheet = document.createElement('style');
+    _userStyleSheet.id = 'beaver-subtitle-user-styles';
+    document.head.appendChild(_userStyleSheet);
+  }
+  const css = _userStylesCache.map((st) => {
+    const decl = buildUserStyleDecl(st);
+    decl.push('border-radius:4px');
+    decl.push('max-width:90%');
+    return '#beaver-subtitle-overlay.style-' + st.id + '{' + decl.join(';') + ';}';
+  }).join('\n');
+  _userStyleSheet.textContent = css;
 }
 
 /**
@@ -321,19 +397,18 @@ function pickShortTrans(translations) {
 }
 
 /**
- * 构建侧邻注释 HTML：生词高亮 + (释义) 行内
+ * 283次：首尾生词筛选管线（side/detail 两模式共用）——
+ * 用户裁定"注释样式作用于首尾两个单词"= 字幕的首尾两个单词选为生词注释：
+ * 只有位于句首/句尾 token 位置的生词才高亮/注释，中段生词不再处理。
+ * 管线：过滤重复生词 → \bword\b 定位 → 排序去重叠 → 与首/尾 token 边界完全一致者保留。
+ * token 提取正则：[A-Za-z][A-Za-z'’-]*（g 标志全局匹配；撇号/连字覆盖缩略与所有格，如 don't、teacher's）。
+ * （283次自查：JSDoc 内不能出现「星号+斜杠」相邻序列——正则原样粘贴会让块注释提前闭合，
+ *   后续中文说明被当作代码导致 esbuild/terser 构建失败，故此处以文字描述正则。）
  * @param {string} text 字幕文本
  * @param {Array} anns 注解数组
- * @returns {string} HTML 字符串
+ * @returns {Array<{start:number,end:number,word:string,ann:object}>} 首尾生词匹配
  */
-function buildSideAnnotationHtml(text, anns) {
-  if (!anns || anns.length === 0) return escapeHtml(text);
-  // 生词查找表
-  const annMap = new Map();
-  for (const a of anns) {
-    annMap.set(a.word.toLowerCase(), a);
-  }
-  // 找到所有生词在文本中的位置
+function collectEdgeMatches(text, anns) {
   const matches = [];
   for (const a of anns) {
     // 反思（2026-08-15 第六十二次）：注释重复生词默认不选——
@@ -355,6 +430,27 @@ function buildSideAnnotationHtml(text, anns) {
       lastEnd = m.end;
     }
   }
+  // 首尾过滤：句首/句尾 token 的边界区间（单 token 时首尾同一区间，去重）
+  const tokens = [...text.matchAll(/[A-Za-z][A-Za-z'’-]*/g)];
+  if (!tokens.length) return [];
+  const firstTok = tokens[0];
+  const lastTok = tokens[tokens.length - 1];
+  const edges = [[firstTok.index, firstTok.index + firstTok[0].length]];
+  if (lastTok !== firstTok) edges.push([lastTok.index, lastTok.index + lastTok[0].length]);
+  return valid.filter((m) => edges.some(([s, e]) => m.start === s && m.end === e));
+}
+
+/**
+ * 构建侧邻注释 HTML：生词高亮 + (释义) 行内
+ * 283次：生词集合先经 collectEdgeMatches 首尾过滤——只有句首/句尾生词参与渲染
+ * @param {string} text 字幕文本
+ * @param {Array} anns 注解数组
+ * @returns {string} HTML 字符串
+ */
+function buildSideAnnotationHtml(text, anns) {
+  if (!anns || anns.length === 0) return escapeHtml(text);
+  // 283次：首尾生词筛选（collectEdgeMatches，见上）——中段生词不高亮不注释
+  const valid = collectEdgeMatches(text, anns);
   // 构建 HTML
   let html = '';
   let pos = 0;
@@ -369,7 +465,10 @@ function buildSideAnnotationHtml(text, anns) {
       usedWords.add(lower);
       const trans = pickShortTrans(ann.translations);
       if (trans) {
-        html += '<span class="beaver-side-ann">(' + escapeHtml(trans) + ')</span>';
+        // 280次：注释文本按模板拼装（{word}/{meaning} 变量，模板前后缀为字面量；
+        //   侧邻只渲染释义段，{word} 变量丢弃——词本身已在高亮 span 中）
+        const { pre, post } = splitAnnTemplate(_annTemplate);
+        html += '<span class="beaver-side-ann">' + escapeHtml(pre) + escapeHtml(trans) + escapeHtml(post) + '</span>';
       }
     }
     pos = m.end;
@@ -385,13 +484,17 @@ function buildSideAnnotationHtml(text, anns) {
  * @returns {{subtitleHtml:string, annotationHtml:string}}
  */
 function buildDetailAnnotationHtml(text, anns) {
-  // 字幕正文：仅高亮生词，不加行内注释
+  // 字幕正文：仅高亮生词，不加行内注释（buildSideAnnotationHtml 内已做首尾过滤）
   const subtitleHtml = buildSideAnnotationHtml(text, anns.map(a => ({ ...a, translations: [] })));
+  // 283次（用户"注释样式作用于首尾两个单词"）：注释列表同样只保留首尾生词——
+  //   与字幕高亮走同一 collectEdgeMatches 管线，保证列表与高亮词完全一致
+  const edgeWords = new Set(collectEdgeMatches(text, anns).map((m) => m.word.toLowerCase()));
   // 注释列表：每个生词一行（词头+释义）
   let annotationHtml = '';
   const usedWords = new Set();
   for (const a of anns) {
     const lower = (a.word || '').toLowerCase();
+    if (!edgeWords.has(lower)) continue;
     if (usedWords.has(lower)) continue;
     usedWords.add(lower);
     const trans = (a.translations || []).filter(Boolean).join(' | ');
@@ -432,10 +535,9 @@ async function renderSubtitle(subtitle) {
   const subtitleEl = _overlay.querySelector('.beaver-overlay-subtitle');
   const annEl = _overlay.querySelector('.beaver-overlay-annotations');
 
-  // 反思（2026-08-13 第五十一次）：字幕样式含"侧邻注释/新行注释"（annMode）。
-  //   样式非 none 时以样式决定注释布局；样式 none 时回退到详略开关(_mode)。
-  const styleMeta = findStyle(SUBTITLE_TEXT_STYLES, _styleId);
-  const annMode = (styleMeta && styleMeta.annMode) || (_mode === 'detail' ? 'detail' : 'side');
+  // 281次：注释布局只由详略开关(_mode)决定——旧逻辑"正文字样式的 annMode 优先"在新
+  //   10 条内置样式（annMode 全为 'side'）下会压过用户切换的详细注释（缺陷预防修正）。
+  const annMode = _mode === 'detail' ? 'detail' : 'side';
 
   if (annMode === 'detail') {
     // 详细注释模式：字幕仅高亮 + 下方注释列表
@@ -483,7 +585,7 @@ function onTimeUpdate() {
     if (key) updateOverlayPosition();
     return;
   }
-  console.log('[VocabRadar][overlay] t=' + t.toFixed(1) + 's 命中: ' + (sub ? '"' + sub.text.slice(0, 30) + '" [' + sub.start + '-' + sub.end + ']' : '无'));
+  // 274次：每秒 timeupdate 的"命中"调试日志删除（用户："打印全部字幕干啥"——刷屏无益）
   _lastKey = key;
   renderSubtitle(sub).catch((e) => console.warn('[VocabRadar][overlay] renderSubtitle 失败:', e));
 }
@@ -505,15 +607,21 @@ export function startOverlay(video, subtitles, options = {}) {
   _mode = options.mode === 'detail' ? 'detail' : 'side';
   // 注释重复生词（2026-08-15 第六十二次：默认不选）
   _annotateRepeat = options.annotateRepeat === true;
+  // 280次：注释模板兜底（真实值下方从 storage 异步读取覆盖）
+  // 283次：分键后本模块只读 videoOverlayAnnTemplate（第四栏字幕注释专用）
+  _annTemplate = DEFAULT_ANN_TEMPLATE;
 
   // 从 storage 读取详略模式（与视频提示同步）
   // 反思（2026-08-05）：视频内字幕的注释模式与视频提示的详略模式共用一个 storage key
   //   sidebar.js 切换详略时写入 subtitleDetailMode，本模块监听变化自动切换
   if (chrome.storage?.local) {
-    chrome.storage.local.get({ subtitleDetailMode: false, videoOverlayAnnMode: 'side' }, (res) => {
+    // 280次：初始读取注释模板（与详略模式同批读取，原 annBrackets）
+    // 283次：模板分键——annTemplate → videoOverlayAnnTemplate
+    chrome.storage.local.get({ subtitleDetailMode: false, videoOverlayAnnMode: 'side', videoOverlayAnnTemplate: DEFAULT_ANN_TEMPLATE }, (res) => {
       // 优先使用独立的 videoOverlayAnnMode，向后兼容 subtitleDetailMode
       const mode = res.videoOverlayAnnMode || (res.subtitleDetailMode ? 'detail' : 'side');
       _mode = mode;
+      if (typeof res.videoOverlayAnnTemplate === 'string' && res.videoOverlayAnnTemplate.trim()) _annTemplate = res.videoOverlayAnnTemplate;
     });
     // 监听 storage 变化，实时同步模式
     _storageListener = (changes, area) => {
@@ -538,16 +646,36 @@ export function startOverlay(video, subtitles, options = {}) {
       if (changes.subtitlePosition) {
         setSubtitlePosition(changes.subtitlePosition.newValue);
       }
+      // 281次：注释样式（第四栏池指派）与个性化字幕热更新——引导页改动即时生效
+      if (changes.videoOverlayAnnStyle) {
+        setVideoOverlayAnnStyle(changes.videoOverlayAnnStyle.newValue);
+      }
+      if (changes.subtitleCustom) {
+        setSubtitleCustom(changes.subtitleCustom.newValue);
+      }
+      // 282次：用户字幕正文样式（大加号保存/删除）热更新——整表重建 style-user-* 规则；
+      //   若当前激活样式被删除则回落默认（guide 端删除选中项时会写 subtitleStyle:'none'，
+      //   此处兜底防其他入口删除时激活类悬空）。
+      if (changes.subtitleUserStyles) {
+        syncUserStyleRules(changes.subtitleUserStyles.newValue);
+        if (_styleId && _styleId.indexOf('user-') === 0 &&
+            !_userStylesCache.some((s) => s.id === _styleId)) {
+          setSubtitleStyle('none');
+        }
+      }
+      // 280次：注释模板热更新——前后缀变化需强制重渲染（原 annBrackets）
+      // 283次：模板分键——本模块只响应 videoOverlayAnnTemplate（其他栏的模板不波及）
+      if (changes.videoOverlayAnnTemplate) {
+        if (typeof changes.videoOverlayAnnTemplate.newValue === 'string' && changes.videoOverlayAnnTemplate.newValue.trim()) _annTemplate = changes.videoOverlayAnnTemplate.newValue;
+        _lastKey = '';
+        if (_video && _enabled) onTimeUpdate();
+      }
     };
     chrome.storage.onChanged.addListener(_storageListener);
   }
 
-  // 调试：打印字幕时间戳范围
-  if (subtitles && subtitles.length > 0) {
-    const ranges = subtitles.map((s) => '[' + s.start + '-' + s.end + ']' + s.text.slice(0, 20)).join(' | ');
-    console.log('[VocabRadar][overlay] 字幕 ' + subtitles.length + ' 条: ' + ranges);
-    console.log('[VocabRadar][overlay] video.duration=' + video.duration + ' currentTime=' + video.currentTime);
-  }
+  // 调试日志（274次删除，用户："打印全部字幕干啥"）——旧版把全部字幕逐条 join 打印，
+  // 283 条字幕即刷一屏；每秒 timeupdate 的"命中"日志一并移除（需要时用诊断工具现场取）。
 
   // 注入样式 + 创建 overlay
   injectOverlayStyles();
@@ -558,15 +686,21 @@ export function startOverlay(video, subtitles, options = {}) {
   //   不再直接 classList.add 死类（旧删掉的样式 id 会让 overlay 回落黑底）。
   // 反思（2026-08-16 第六十九次）：同时应用已保存的位置样式（subtitlePosition）。
   if (chrome.storage?.local) {
-    chrome.storage.local.get({ subtitleStyle: 'none', subtitlePosition: 'b20' }, (res) => {
+    // 281次：初始读取补个性化字幕（subtitleCustom）与注释样式（videoOverlayAnnStyle）
+    // 282次：再补用户样式表（subtitleUserStyles）——须先重建 style-user-* 规则，
+    //   再应用激活样式（激活值可能是 user-*，规则就绪后类一挂即生效）
+    chrome.storage.local.get({ subtitleStyle: 'none', subtitlePosition: 'b20', subtitleCustom: null, videoOverlayAnnStyle: 'none', subtitleUserStyles: [] }, (res) => {
+      syncUserStyleRules(res.subtitleUserStyles);
       setSubtitleStyle(res.subtitleStyle || 'none');
       setSubtitlePosition(res.subtitlePosition || 'b20');
+      if (res.subtitleCustom) setSubtitleCustom(res.subtitleCustom);
+      setVideoOverlayAnnStyle(res.videoOverlayAnnStyle || 'none');
     });
   }
   // 反思（2026-08-16 第七十次）：构建版本 + 生效样式日志——若本日志版本与引导页头部
   //   "vXX" 不一致，即旧构建内容脚本残留（扩展已更新但视频页未重载），
   //   用户反馈"edge 默认样式被改/设定栏没选中"多为这类残留，不必再猜。
-  console.log('[VocabRadar][overlay] 构建 v' + BUILD_STAMP + '（引导页头部版本若不同 = 旧构建残留，请重载扩展并刷新视频页）');
+  console.log('[VocabRadar][overlay] 构建 ' + BUILD_STAMP + '（引导页头部版本若不同 = 旧构建残留，请重载扩展并刷新视频页）');
   console.log('[VocabRadar][overlay] overlay 已创建（mode=' + _mode + '，style=' + _styleId + '，pos=' + _posId + '）');
 
   video.addEventListener('timeupdate', onTimeUpdate);
@@ -648,17 +782,9 @@ export function setRankThreshold(v) {
   _lastKey = '';
 }
 
-// 全部字幕文字样式类名（配合 setSubtitleStyle 全量清理）
-// 反思（2026-08-15 第六十四次）：旧版硬编码 11 种类名，漏掉后续新增样式
-//   （bottom-up-white/big-bottom 等 4 种），导致选中的样式类永不应用，
-//   overlay 始终回落到默认半透明黑底（用户反馈"透明当作黑色"）。
-//   改为由 SUBTITLE_TEXT_STYLES 元数据动态生成，与 styles.js 永不脱节。
-// 反思（2026-08-16 第七十一次）：④ 含 'none'（.style-none 显式类）——
-//   旧版 filter 掉 'none' 且 setSubtitleStyle 只对非 none 加类，导致"无（默认）"
-//   只能靠基础规则兜底；现在选中任何样式（含默认）都有显式类驱动，透明/黑底
-//   完全由所选样式元数据决定，不再有"基础规则悄悄给黑底"的隐式行为。
-const SUBTITLE_STYLE_CLASSES = SUBTITLE_TEXT_STYLES
-  .map((s) => 'style-' + s.id);
+// 282次：删除静态类名清单 SUBTITLE_STYLE_CLASSES——用户样式（style-user-*）动态增删，
+//   静态清单必然滞后；setSubtitleStyle 改为按 'style-' 前缀扫描清理（与
+//   setVideoOverlayAnnStyle 的 'annstyle-' 前缀扫描同一手法），永不脱节。
 
 /**
  * 应用字幕文字样式
@@ -672,11 +798,17 @@ const SUBTITLE_STYLE_CLASSES = SUBTITLE_TEXT_STYLES
  */
 export function setSubtitleStyle(style) {
   if (!_overlay) return;
-  for (const cls of SUBTITLE_STYLE_CLASSES) {
-    _overlay.classList.remove(cls);
+  // 282次：'style-' 前缀扫描清理（原静态清单 SUBTITLE_STYLE_CLASSES 已删，
+  //   用户样式 style-user-* 动态增删，前缀扫描永不漏清）
+  for (const cls of Array.from(_overlay.classList)) {
+    if (cls.indexOf('style-') === 0) _overlay.classList.remove(cls);
   }
   let id = (style && style !== 'none') ? style : 'none';
-  if (id !== 'none' && !findStyle(SUBTITLE_TEXT_STYLES, id)) {
+  // 281次：'custom'（个性化字幕，CSS 变量驱动）为合法 id，不参与存在性校验
+  // 282次：user-* 前缀（guide 页大加号保存的用户样式，规则由 syncUserStyleRules 重建）
+  //   同为合法 id——CSS 表动态生成，无法用 findStyle 校验，直接放行
+  const isUserStyle = typeof id === 'string' && id.indexOf('user-') === 0;
+  if (id !== 'none' && id !== 'custom' && !isUserStyle && !findStyle(SUBTITLE_TEXT_STYLES, id)) {
     console.warn(`[VocabRadar][overlay] 字幕样式 "${id}" 已不存在，回退默认样式并清理 storage`);
     id = 'none';
     try {
@@ -720,6 +852,61 @@ export function setSubtitlePosition(posId) {
   }
   _posId = id;
   if (_video && _enabled) onTimeUpdate();
+}
+
+/**
+ * 281次：应用个性化字幕样式（guide 页四控件：底色/字色/字号/字体）
+ * 外观走 CSS 变量（buildSubtitleStyleCss 生成的 style-custom 规则消费），
+ * 变量写入 overlay 内联 style；字号/字体变化会改变 overlay 尺寸，custom 激活时
+ * 清 _lastKey 强制重渲染（渲染末尾会 updateOverlayPosition 重定位）。
+ * @param {{bg?:string, fg?:string, fontSize?:number, fontFamily?:string}|null} c
+ */
+export function setSubtitleCustom(c) {
+  if (!_overlay || !c || typeof c !== 'object') return;
+  // 283次：缺省对齐引导页新默认（透明底/28px）——空值回落不再是黑条/小字
+  _overlay.style.setProperty('--beaver-custom-bg', c.bg || 'transparent');
+  _overlay.style.setProperty('--beaver-custom-fg', c.fg || '#ffffff');
+  const fs = Number(c.fontSize);
+  _overlay.style.setProperty('--beaver-custom-fs', (fs > 0 ? fs : 28) + 'px');
+  _overlay.style.setProperty('--beaver-custom-ff', subFontFamily(c.fontFamily));
+  // 282次：fx 特效拆分写三变量（style-custom 规则消费，见 buildSubtitleStyleCss）。
+  //   subFxDecl 输出形如 'text-shadow:…' 或 '-webkit-text-stroke:…;paint-order:…'，
+  //   按「属性名:」前缀分发到对应变量；fx 无效/none 时回写合法缺省值
+  //  （描边缺省须 '0 transparent'，'none' 对 -webkit-text-stroke 非法），
+  //   保证特效从有→无切换时正确清除残留。
+  const fxDecls = {};
+  const fxd = subFxDecl(c.fx);
+  if (fxd) {
+    for (const d of fxd.split(';')) {
+      const i = d.indexOf(':');
+      if (i > 0) fxDecls[d.slice(0, i)] = d.slice(i + 1);
+    }
+  }
+  _overlay.style.setProperty('--beaver-custom-tsh', fxDecls['text-shadow'] || 'none');
+  _overlay.style.setProperty('--beaver-custom-stroke', fxDecls['-webkit-text-stroke'] || '0 transparent');
+  _overlay.style.setProperty('--beaver-custom-po', fxDecls['paint-order'] || 'normal');
+  if (_styleId === 'custom') {
+    _lastKey = '';
+    if (_video && _enabled) onTimeUpdate();
+  }
+}
+
+/**
+ * 281次：应用视频中字幕的注释样式（第四栏池指派，storage.videoOverlayAnnStyle）
+ * 注释行外观由 annstyle-{id} 类统一控制（规则见 buildSubtitleStyleCss），
+ * 纯外观切换，CSS 即时作用于现有 DOM，无需重渲染字幕。
+ * @param {string} id 池样式 id，'none' 表示不启用（回退基础透明白字）
+ */
+export function setVideoOverlayAnnStyle(id) {
+  if (!_overlay) return;
+  for (const cls of Array.from(_overlay.classList)) {
+    if (cls.indexOf('annstyle-') === 0) _overlay.classList.remove(cls);
+  }
+  const s = (id && id !== 'none') ? findStyle(POOL_STYLES, id) : null;
+  if (id && id !== 'none' && !s) {
+    console.warn(`[VocabRadar][overlay] 字幕注释样式 "${id}" 已不存在，回退基础注释外观`);
+  }
+  if (s) _overlay.classList.add('annstyle-' + id);
 }
 
 /**

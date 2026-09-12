@@ -46,9 +46,13 @@
   //   ping: { type:'vocabradar:parse-ping', from:'vocabradar-web', reqId }
   //         → 立即回 parse-response {ok:true, pong:true}（不经 SW；网站 1.5s 超时判未装）
   //   请求: { type:'vocabradar:parse-request', from:'vocabradar-web', reqId,
-  //           kind:'link'|'image', payload:{url}|{imageDataUrl, lang} }
-  //         → chrome.runtime.sendMessage({type:'PARSE_MATERIAL'}) 转发 SW
-  //         → SW 响应 {ok, text?|title?|error?|code?} 原样回传页面 parse-response
+//           kind:'link'|'image'|'document'|'llm',
+//           payload:{url}|{imageDataUrl, lang}|{docKind, b64, name}|{prompt} }
+//         → chrome.runtime.sendMessage({type:'PARSE_MATERIAL'}) 转发 SW
+//         → SW 响应 {ok, text?|title?|error?|code?} 原样回传页面 parse-response
+//   （B2，2026-09-10：document kind 为文件字节 b64 透传，本桥只转发不改写；透传无 kind 白名单）
+//   （W1，2026-09-11：llm kind 为提示词 payload:{prompt} 透传，SW 走 LLM 聊天返回 {ok, text}；
+//    供网站阅读理解 AI 生成与 AI 润色共用；本桥仍只转发不改写）
   //   接收校验：ev.source===window 且 from==='vocabradar-web'（G2 通道A 同款纪律）；
   //   reqId 由网站侧生成并配对，本桥原样带回，不做去重。
   const PARSE_PING = 'vocabradar:parse-ping';

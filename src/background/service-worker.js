@@ -26,6 +26,11 @@ import { resolveLlmConfig, getFreeProviders } from '../lib/llm.js';
 //   word-loader 链（~70KB 源码解析，与已静态引入的 word-db 链大量共享依赖），
 //   顶层无 IO 副作用（state.js 仅注册 chrome.storage 源语言监听，SW 可用）。
 import { ensureReady } from '../lib/dictionary.js';
+// 第二百六十六次（用户裁定"图片短边最长1280"）：OCR 图片入口统一等比缩放。
+//   handleOcrRecognize 是全部图片识别的收口（右键/侧栏 OCR_RECOGNIZE、引导页 OCR 栏/
+//   Parser 栏、网站 Creator PARSE_MATERIAL image），入口缩放一次，
+//   Tesseract 与 LLM 视觉两引擎、四条入口全部生效。
+import { downscaleImageDataUrl } from '../lib/image-downscale.js';
 
 // 第一百九十一次：SW 每次被唤醒立即后台预热词典投影。
 // MV3 SW 闲置 ~30s 休眠即清空 _projCache（SW 内存态），下一页首请求要付
@@ -54,6 +59,78 @@ chrome.runtime.onInstalled.addListener((details) => {
     }
   })();
 });
+
+// 275次：Deactivate 存量规则一次性迁移——「停用本站」菜单在 272 次之前默认写
+// 四项全停（hint/textSidebar/videoSidebar/overlay 全 true），用户已裁定默认应为
+// 仅提示停用；存量全停规则会让对应站点视频侧栏不可见（controller 走 overlay-only
+// 或全停分支）。此处把"四项全 true"的存量规则改写为仅 hint（其余字段含 query 原样
+// 保留），storage 标记防重入。只迁移菜单旧默认产物——迁移之后用户在引导页手动
+// 改出的规则按原样尊重。SW 顶层每次唤醒执行：先查标记早退，幂等且近乎零开销。
+(async () => {
+  try {
+    const done = await new Promise((resolve) => {
+      try { chrome.storage.local.get('deactivateRulesMigratedV1', (res) => resolve(res && res.deactivateRulesMigratedV1 === true)); } catch (_) { resolve(true); }
+    });
+    if (done) return;
+    const rules = await new Promise((resolve) => {
+      try { chrome.storage.local.get('deactivateRules', (res) => resolve(res && Array.isArray(res.deactivateRules) ? res.deactivateRules : [])); } catch (_) { resolve([]); }
+    });
+    let changed = 0;
+    const migrated = rules.map((raw) => {
+      const r = (raw && typeof raw === 'object') ? raw : {};
+      if (r.hint === true && r.textSidebar === true && r.videoSidebar === true && r.overlay === true) {
+        changed++;
+        return Object.assign({}, r, { textSidebar: false, videoSidebar: false, overlay: false });
+      }
+      return r;
+    });
+    if (changed > 0) {
+      await new Promise((resolve, reject) => {
+        try { chrome.storage.local.set({ deactivateRules: migrated }, () => { const e = chrome.runtime.lastError; e ? reject(e) : resolve(); }); } catch (e) { reject(e); }
+      });
+      console.log(`[VocabRadar][sw][${_ts()}] [init] Deactivate 旧全停规则迁移 ${changed} 条 → 仅提示停用（272 次默认变更追溯）`);
+    }
+    chrome.storage.local.set({ deactivateRulesMigratedV1: true });
+  } catch (e) {
+    console.warn('[VocabRadar][sw] Deactivate 规则迁移失败（不置位，下次唤醒重试）:', e);
+  }
+})();
+
+// 276次：Deactivate 存量规则 V2 迁移——V1 只覆盖"四项全 true"，但用户实测视频侧栏
+// 仍不可见（日志实证 controller 走 overlay-only=videoSidebar 仍被压）：规则是 272 次
+// 前旧菜单默认（四项全停）写入、后又经引导页点选残留的组合，漏过 V1 的精确匹配。
+// 规则唯一来源是旧菜单默认，故 V2 全量撤销其对视频侧栏的压制：所有规则
+// videoSidebar→false（其余字段含 query/hint 原样保留）；用户此后想停某站视频侧栏
+// 在引导页 Deactivate 栏重新勾选即可。幂等+标记防重入。
+(async () => {
+  try {
+    const done = await new Promise((resolve) => {
+      try { chrome.storage.local.get('deactivateRulesMigratedV2', (res) => resolve(res && res.deactivateRulesMigratedV2 === true)); } catch (_) { resolve(true); }
+    });
+    if (done) return;
+    const rules = await new Promise((resolve) => {
+      try { chrome.storage.local.get('deactivateRules', (res) => resolve(res && Array.isArray(res.deactivateRules) ? res.deactivateRules : [])); } catch (_) { resolve([]); }
+    });
+    let changed = 0;
+    const migrated = rules.map((raw) => {
+      const r = (raw && typeof raw === 'object') ? raw : {};
+      if (r.videoSidebar === true) {
+        changed++;
+        return Object.assign({}, r, { videoSidebar: false });
+      }
+      return r;
+    });
+    if (changed > 0) {
+      await new Promise((resolve, reject) => {
+        try { chrome.storage.local.set({ deactivateRules: migrated }, () => { const e = chrome.runtime.lastError; e ? reject(e) : resolve(); }); } catch (e) { reject(e); }
+      });
+      console.log(`[VocabRadar][sw][${_ts()}] [init] Deactivate 规则 V2 迁移 ${changed} 条 → 撤销对视频侧栏的压制（用户裁定恢复默认可见）`);
+    }
+    chrome.storage.local.set({ deactivateRulesMigratedV2: true });
+  } catch (e) {
+    console.warn('[VocabRadar][sw] Deactivate 规则 V2 迁移失败（不置位，下次唤醒重试）:', e);
+  }
+})();
 
 // 默认设置（与 popup.js DEFAULTS 保持一致）
 
@@ -275,9 +352,12 @@ function createContextMenus() {
     chrome.contextMenus.create({
       id: 'beaver-lookup',
       title: 'VocabRadar: 🔍 %s',
-      contexts: ['selection']
+      // 272次：contexts 由 ['selection'] 扩为 ['all']——没选中也能搜索：
+      // 有选中文本=查选区（原行为）；无选中=弹搜索栏输入（OPEN_QUERY_BAR，
+      // 见 onClicked 分发）。%s 在无选中时由浏览器渲染为空。
+      contexts: ['all']
     });
-    log('[VocabRadar][sw][' + _ts() + '] 右键菜单已注册（🔍 查词）');
+    log('[VocabRadar][sw][' + _ts() + '] 右键菜单已注册（🔍 查词/搜索）');
   });
 }
 
@@ -313,14 +393,23 @@ const MAIN_WORLD_FUNCS = { readPlayinfo: mwReadPlayinfo, readBiliTitle: mwReadBi
 chrome.contextMenus.onClicked.addListener((info, tab) => {
   if (!tab?.id) return;
   if (info.menuItemId === 'beaver-lookup') {
-    const text = info.selectionText || '';
-    if (!text.trim()) return;
-    log('[VocabRadar][sw][' + _ts() + '] 右键翻译: "' + text.slice(0, 30) + '" tab=' + tab.id);
-    chrome.tabs.sendMessage(tab.id, { type: 'SHOW_CONTEXT_PANEL', text }, (resp) => {
-      if (chrome.runtime.lastError) {
-        console.warn('[VocabRadar][sw][' + _ts() + '] 转发失败:', chrome.runtime.lastError.message);
-      }
-    });
+    const text = (info.selectionText || '').trim();
+    if (text) {
+      log('[VocabRadar][sw][' + _ts() + '] 右键翻译: "' + text.slice(0, 30) + '" tab=' + tab.id);
+      chrome.tabs.sendMessage(tab.id, { type: 'SHOW_CONTEXT_PANEL', text }, (resp) => {
+        if (chrome.runtime.lastError) {
+          console.warn('[VocabRadar][sw][' + _ts() + '] 转发失败:', chrome.runtime.lastError.message);
+        }
+      });
+    } else {
+      // 272次：没选中也能搜索——跳到页面搜索栏输入（文本侧栏搜索栏聚焦/query 标签）
+      log('[VocabRadar][sw][' + _ts() + '] 右键无选中 → 弹搜索栏 tab=' + tab.id);
+      chrome.tabs.sendMessage(tab.id, { type: 'OPEN_QUERY_BAR' }, () => {
+        if (chrome.runtime.lastError) {
+          console.warn('[VocabRadar][sw][' + _ts() + '] OPEN_QUERY_BAR 转发失败:', chrome.runtime.lastError.message);
+        }
+      });
+    }
   }
 });
 
@@ -507,7 +596,8 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       //        → offscreen 用 main-text.extractDefuddleFromHtml 提取正文；
       // image → 复用 OCR_RECOGNIZE 链路（Tesseract/LLM 引擎按用户设定）；
       // 视频站链接 → 引导走扩展自身字幕/转写工作流（code:'video-link'）；
-      // 音频/视频/文档 kind → 网站编排器已占位拦截，这里兜底明示错误（不静默）。
+      // document → offscreen parse-doc 解析（B2：pdf/docx/epub，文件字节 b64 透传）；
+      // 音频/视频 kind → 网站编排器已占位拦截，这里兜底明示错误（不静默）。
       handleParseMaterial(msg.kind, msg.payload)
         .then((r) => sendResponse(r))
         .catch((e) => sendResponse({ ok: false, error: String(e.message || e) }));
@@ -562,10 +652,18 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         .catch((e) => sendResponse({ ok: false, error: String(e.message || e) }));
       return true;
     // 第一百七十一次：Chat 面板"打开设置配置模型"按钮 —— content script 无法开扩展页
-    case 'OPEN_GUIDE':
-      chrome.tabs.create({ url: chrome.runtime.getURL('src/guide/guide.html') }).catch(() => {});
+    // 第二百七十次：扩展 OPEN_GUIDE——两侧栏 ⋯「停用本站」带 section:'deactivate'+
+    //   pattern（当前域名），打开引导页时带 ?deactivate=<地址> 查询串，
+    //   引导页 src/guide/deactivate.js 据此切设定栏/展开停用组/定位该地址行。
+    case 'OPEN_GUIDE': {
+      let guideUrl = chrome.runtime.getURL('src/guide/guide.html');
+      if (msg && msg.section === 'deactivate') {
+        guideUrl += '?deactivate=' + encodeURIComponent(String(msg.pattern || ''));
+      }
+      chrome.tabs.create({ url: guideUrl }).catch(() => {});
       sendResponse({ ok: true });
       return true;
+    }
     // 反思（2026-08-12）：统一词典 WORD_DB_* 消息分发
     //   content script 通过 sendMessage 请求 SW 操作 IndexedDB（CS 的 IDB 按站点隔离）
     // 反思（2026-08-13 第五十二次）：词典缓存 DICT_CACHE_GET/SET 也走本分发，
@@ -594,11 +692,53 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   }
 });
 
+// === F1（2026-09-10，用户报 Firefox 传图「offscreen API 不可用」）：OCR/链接/文档宿主统一选择 ===
+// Chromium：chrome.offscreen 建 offscreen document（ensureOffscreen 返 boolean，此处统一包
+//   成 {ok, error}）；Firefox：无 chrome.offscreen，但 MV3 后台是带 DOM 的 event page
+//   （build.mjs#patchManifestForFirefox），复用 ASR 先例 ensureFallbackIframe 在后台页内建
+//   隐藏 iframe（src=offscreen.html 本体，与 offscreen document 等价），OFFSCREEN_* 消息
+//   协议零改动（OCR/链接提取/文档解析与 ASR 同族）。
+async function ensureOffscreenHost() {
+  if (typeof chrome.offscreen !== 'undefined') {
+    const ok = await ensureOffscreen();
+    if (!ok) return { ok: false, error: 'offscreen 创建失败' };
+    // 第二百六十六次（用户报障：网站传 PNG 报 "Could not establish connection.
+    //   Receiving end does not exist."）：建好宿主 ≠ 监听器就绪——createDocument 返回时
+    //   offscreen.js（ES module）的 onMessage 可能尚未注册，紧接着的 OFFSCREEN_*
+    //   正是这个报错。复用 ASR 先例 waitOffscreenReady（PING 握手，见 179/180 次），
+    //   OCR/链接/文档三路共用本函数，握手一次全部生效。
+    const ready = await waitOffscreenReady(8000);
+    if (!ready) return { ok: false, error: 'offscreen 宿主 8 秒内无 PING 应答（监听器未就绪）' };
+    return { ok: true };
+  }
+  const fr = await ensureFallbackIframe();
+  if (!fr.ok) return fr;
+  // Firefox 回退 iframe：load 事件后同样握手确认 offscreen.js 监听器已注册（附诊断快照）
+  const ready = await waitOffscreenReady(8000);
+  if (!ready) {
+    return { ok: false, error: '回退 iframe 宿主 8 秒内无 PING 应答（' + describeFallbackFrame() + '）' };
+  }
+  return { ok: true };
+}
+
 // === OCR：转发到 offscreen 运行 Tesseract.js ===
 // 反思（2026-07-28）：content script 受页面 CSP 限制无法直接加载 Tesseract.js，
 //   需通过 offscreen document 运行。SW 负责确保 offscreen 存在并转发消息。
 // 反思（2026-08-16 第六十六次）：OCR 语言随 learnLanguage——透传 lang 给 offscreen。
 async function handleOcrRecognize(imageDataUrl, lang) {
+  // 第二百六十六次（用户裁定"图片短边最长1280"）：入口统一等比缩放——
+  //   本函数是全部图片 OCR 的收口（右键/侧栏/引导页 OCR 栏与 Parser 栏/网站 Creator），
+  //   在此缩放一次，Tesseract 与 LLM 视觉两引擎全部生效；缩放失败原样放行不阻断。
+  //   引导页/网站侧发送前已各自缩放的，此处短边未超限会原样返回（零开销直通）。
+  const ds = await downscaleImageDataUrl(imageDataUrl, 1280);
+  if (ds.scaled) {
+    log('[VocabRadar][sw][' + _ts() + '] OCR 图片已缩放: ' + ds.origWidth + 'x' + ds.origHeight
+      + ' → ' + ds.width + 'x' + ds.height + ', ' + (ds.origBytes / 1024).toFixed(0) + 'KB → '
+      + (ds.bytes / 1024).toFixed(0) + 'KB');
+  } else if (ds.error) {
+    log('[VocabRadar][sw][' + _ts() + '] OCR 图片缩放跳过（原图直送）: ' + ds.error);
+  }
+  imageDataUrl = ds.dataUrl;
   // 第二百一十四次（用户："OCR可选 Tesseract LLM"）：引擎由 storage.ocrEngine 选择——
   //   'tesseract'（默认，offscreen 本地识别）| 'api'（大模型视觉识别 API）。
   //   第二百二十五次：值 'llm' 改名 'api'，读侧兼容旧残留 'llm'。
@@ -617,11 +757,9 @@ async function handleOcrRecognize(imageDataUrl, lang) {
     return handleOcrByLlm(imageDataUrl, lang);
   }
   lang = tessLangs;   // 第二百一十九次：Tesseract 语言=引导页复选（42 语 tess 代码并集）
-  if (typeof chrome.offscreen === 'undefined') {
-    return { ok: false, error: 'offscreen API 不可用' };
-  }
-  const ready = await ensureOffscreen();
-  if (!ready) return { ok: false, error: 'offscreen 创建失败' };
+  // F1：宿主统一选择（Chromium=offscreen document；Firefox=后台页内回退 iframe），不再报「offscreen API 不可用」
+  const host = await ensureOffscreenHost();
+  if (!host.ok) return { ok: false, error: host.error || 'offscreen 宿主不可用' };
   const resp = await chrome.runtime.sendMessage({
     type: 'OFFSCREEN_OCR',
     imageDataUrl: imageDataUrl,
@@ -633,8 +771,10 @@ async function handleOcrRecognize(imageDataUrl, lang) {
 // === G4（2026-09-08）：网站素材解析（vocabradar-bridge 转发的 PARSE_MATERIAL） ===
 // 分工契约（网站阶段二 §5，各处理方不混用）：链接→SW 抓 HTML + offscreen Defuddle 提正文；
 //   图片→复用 OCR 链路；视频站（YouTube/B站）→ 字幕/转写有专门链路（FETCH_SUBTITLE/ASR），
-//   抓 HTML 提不出正文，明示引导走扩展页面工作流（code:'video-link'，网站侧有对应文案）。
-// Firefox：无 chrome.offscreen（ensureOffscreen 返 false）→ 链接解析报错明示（本批边界）。
+//   抓 HTML 提不出正文，明示引导走扩展页面工作流（code:'video-link'，网站侧有对应文案）；
+//   文档→offscreen parse-doc 解析（B2，2026-09-10：pdf/docx/epub，文件字节 b64 透传）。
+// Firefox：无 chrome.offscreen（F1，2026-09-10 起）→ 经 ensureOffscreenHost 走后台页内
+//   回退 iframe（同宿主同协议），图片 OCR/链接/文档解析全部可用，不再是报错边界。
 async function handleParseMaterial(kind, payload) {
   if (kind === 'link') {
     const url = String((payload && payload.url) || '').trim();
@@ -645,8 +785,8 @@ async function handleParseMaterial(kind, payload) {
     const res = await fetch(url, { redirect: 'follow', credentials: 'omit' });
     if (!res.ok) throw new Error('fetch ' + res.status + ' ' + url);
     const html = await res.text();
-    const ready = await ensureOffscreen();
-    if (!ready) throw new Error('offscreen document unavailable (Firefox has no chrome.offscreen)');
+    const host = await ensureOffscreenHost();   // F1：Firefox 走后台页内回退 iframe，链接解析不再报错
+    if (!host.ok) throw new Error('offscreen 宿主不可用：' + (host.error || 'unknown'));
     const resp = await chrome.runtime.sendMessage({
       type: 'OFFSCREEN_EXTRACT_TEXT',
       html: html,
@@ -660,7 +800,68 @@ async function handleParseMaterial(kind, payload) {
     if (!r || !r.ok) return { ok: false, error: (r && r.error) || 'ocr failed' };
     return { ok: true, text: r.text };
   }
-  // 音频/视频/文档：网站编排器已占位拦截，兜底明示（不静默成功）
+  if (kind === 'asr') {
+    // P 批（2026-09-11）：网站卷轴听说回退——浏览器 Web Speech 不可用时，网页把
+    // 跟读录音（audio/webm dataURL）发来走扩展转写。
+    // Q 批完善：按用户 ASR 引擎设置分流（对齐扩展「本地whisper也能选llm」决策）——
+    // 'local'（默认）→ offscreen 本地 whisper 模型推理（OFFSCREEN_ASR_WEBM，解码重采样
+    // 16k 在 offscreen 做，识别同步响应回 SW）；'api'/'llm' → 在线 LLM 转写
+    // （resolveLlmEngineCfg('asr') + llmTranscribeBlob）。协议见桥接扩展.md §2.2。
+    const audioDataUrl = String((payload && payload.audioDataUrl) || '');
+    const lang = String((payload && payload.lang) || 'en');
+    if (!audioDataUrl) return { ok: false, error: 'asr payload missing audioDataUrl' };
+    let asrEngine = 'local';
+    try { asrEngine = (await new Promise((r) => chrome.storage.local.get({ asrEngine: 'local' }, r))).asrEngine || 'local'; } catch (_) { }
+    const b64Part = audioDataUrl.replace(/^data:[^;]+;base64,/, '');
+    if (asrEngine === 'local') {
+      const host = await ensureOffscreenHost();
+      if (!host.ok) throw new Error('offscreen 宿主不可用：' + (host.error || 'unknown'));
+      const resp = await chrome.runtime.sendMessage({
+        type: 'OFFSCREEN_ASR_WEBM',
+        webmB64: b64Part,
+        lang: lang
+      }).catch((e) => ({ ok: false, error: String(e.message || e) }));
+      if (!resp || !resp.ok) return { ok: false, error: (resp && resp.error) || 'offscreen no response' };
+      return { ok: true, text: resp.text || '' };
+    }
+    const blob = new Blob([b64ToUint8(b64Part)], { type: 'audio/webm' });
+    let learn = lang;
+    try { learn = (await new Promise((r) => chrome.storage.local.get({ learnLanguage: lang }, r))).learnLanguage || lang; } catch (_) { }
+    const cfg = await resolveLlmEngineCfg('asr');
+    const text = await llmTranscribeBlob(blob, cfg, learn, 'audio.webm');
+    return { ok: true, text: String(text || '') };
+  }
+  if (kind === 'document') {
+    // B2（2026-09-10）：文档解析——offscreen 侧 parse-doc.js（与 guide/parser.js 同源，
+    // 复用包内 unpdf/mammoth + parser-epub，零新增 vendor）。文件字节 b64 透传
+    // （runtime message JSON 序列化约束），offscreen 侧 atob 还原后按 docKind 分流。
+    const docKind = String((payload && payload.docKind) || '');
+    const b64 = String((payload && payload.b64) || '');
+    const name = String((payload && payload.name) || '');
+    if (!b64) return { ok: false, error: 'document payload missing b64' };
+    const host = await ensureOffscreenHost();   // F1：Firefox 走后台页内回退 iframe，文档解析不再报错
+    if (!host.ok) throw new Error('offscreen 宿主不可用：' + (host.error || 'unknown'));
+    const resp = await chrome.runtime.sendMessage({
+      type: 'OFFSCREEN_PARSE_DOC',
+      docKind: docKind,
+      b64: b64,
+      name: name
+    }).catch((e) => ({ ok: false, error: String(e.message || e) }));
+    if (!resp || !resp.ok) throw new Error((resp && resp.error) || 'offscreen no response');
+    return { ok: true, text: resp.text };
+  }
+  if (kind === 'llm') {
+    // W1（2026-09-11）：网站卷轴 AI 通道（桥接扩展.md §4.2 kind:'llm'）——阅读理解
+    //   AI 生成、AI 润色共用。复用扩展聊天 handleLlmChat（llm* 配置 + 免费源轮替），
+    //   prompt 单串直传；超 12000 字符明示拒绝（网站侧 extParseChannel 先拦，双保险）。
+    const prompt = String((payload && payload.prompt) || '');
+    if (!prompt) return { ok: false, error: 'llm payload missing prompt' };
+    if (prompt.length > 12000) return { ok: false, error: 'prompt too long (max 12000 chars)' };
+    const out = await handleLlmChat([{ role: 'user', content: prompt }]);
+    if (!out.ok) return { ok: false, error: out.error };
+    return { ok: true, text: String(out.content || '').trim() };
+  }
+  // 音频/视频：网站编排器已占位拦截，兜底明示（不静默成功）
   return { ok: false, error: 'kind not supported: ' + kind };
 }
 

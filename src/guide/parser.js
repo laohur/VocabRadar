@@ -27,6 +27,8 @@
 
 import { t } from '../lib/i18n.js';
 import { extractDefuddleFromHtml } from '../lib/main-text.js';
+// 第二百六十六次（用户裁定"图片短边最长1280"）：图片 OCR 发送前等比缩放（与 OCR 栏同阈值）
+import { downscaleImageDataUrl } from '../lib/image-downscale.js';
 import { $, log, toast, formatFileSize, escapeHtml } from './guide-common.js';
 import { openCamera } from './ocr.js';
 import {
@@ -276,10 +278,20 @@ function fileToDataUrl(file) {
 
 /** 图片 OCR（后台 OCR_RECOGNIZE，语言随 learnLanguage，与 OCR 栏同消息） */
 async function parseImageOcr(dataUrl) {
+  // 第二百六十六次（用户裁定"图片短边最长1280"）：发送前等比缩放，短边 ≤1280 原样直通；
+  //   缩放失败按原图发送（image-downscale 不阻断主链路，错误随返回对象带出）。
+  const ds = await downscaleImageDataUrl(dataUrl, 1280);
+  if (ds.scaled) {
+    log('Parser 图片已缩放: ' + ds.origWidth + 'x' + ds.origHeight + ' → '
+      + ds.width + 'x' + ds.height + ', ' + (ds.origBytes / 1024).toFixed(0) + 'KB → '
+      + (ds.bytes / 1024).toFixed(0) + 'KB');
+  } else if (ds.error) {
+    log('Parser 图片缩放跳过（原图直送）: ' + ds.error);
+  }
   const { learnLanguage } = await chrome.storage.local.get({ learnLanguage: 'en' });
   const resp = await chrome.runtime.sendMessage({
     type: 'OCR_RECOGNIZE',
-    imageDataUrl: dataUrl,
+    imageDataUrl: ds.dataUrl,
     lang: learnLanguage || 'en'
   });
   if (!resp || !resp.ok) throw new Error((resp && resp.error) || t('ocr.unknownErr'));

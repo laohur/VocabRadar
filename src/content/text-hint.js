@@ -46,8 +46,72 @@ async function _loadImpl() {
   }
 }
 
+// === 第二百七十次：停用规则（Deactivate）gate ===
+// 命中「网页提示」停用规则时本页尽量不活动：不加载模块图（无 import）、不挂
+// 5s 对账定时器/可见性监听，仅留一个轻量 storage 监听，规则解除后再走完整
+// _hintBoot()。匹配/存储逻辑唯一来源 src/lib/deactivate.js（非打包入口文件，
+// 构建时原样进 dist，classic 入口可动态 import）。
+let _hintDeactLib = null;
+function _hintLoadDeactLib() {
+  return import(chrome.runtime.getURL('src/lib/deactivate.js'))
+    .then((m) => { _hintDeactLib = m; return true; })
+    .catch((e) => {
+      // 不遮蔽：规则库加载失败按"未停用"处理并出声（不拖垮提示主功能）
+      console.warn('[VocabRadar][text-hint] 停用规则库加载失败，按未停用处理:', e);
+      return false;
+    });
+}
+/** 当前页是否命中「网页提示」停用规则（规则库缺失时恒 false） */
+function _hintSuppressed() {
+  if (!_hintDeactLib) return Promise.resolve(false);
+  return _hintDeactLib.suppressionFor(location)
+    .then((s) => s.hint === true)
+    .catch(() => false);
+}
+// 272次：Query（右键查询+搜索栏）可用性——停用规则「搜索栏」项 + 全局开关 queryEnabled。
+// 与网页提示解耦：提示关/停不影响查询，查询关/停不影响提示。
+function _querySuppressed() {
+  if (!_hintDeactLib) return Promise.resolve(false);
+  return _hintDeactLib.suppressionFor(location)
+    .then((s) => s.query === true)
+    .catch(() => false);
+}
+function _queryEnabled() {
+  return new Promise((resolve) => {
+    try {
+      chrome.storage.local.get({ queryEnabled: true }, (r) => resolve(r.queryEnabled !== false));
+    } catch (_) { resolve(true); }
+  });
+}
+async function _queryAvailable() {
+  if (await _querySuppressed()) return false;
+  return _queryEnabled();
+}
+let _booted = false;
+
 (async () => {
   console.log(`[VocabRadar][text-hint] content script 已加载 @ ${location.href}`);
+  try {
+    await _hintLoadDeactLib();
+    // 272次：整页不加载的判据由「网页提示停」改为「网页提示+搜索栏双停」——
+    // 提示被停时仍需加载模块图以服务右键查询/搜索栏（SHOW_CONTEXT_PANEL 监听在本文件）。
+    const _sup0 = _hintDeactLib ? await _hintDeactLib.suppressionFor(location) : { hint: false, query: false };
+    if (_sup0.hint && _sup0.query) {
+      console.log('[VocabRadar][text-hint] 命中停用规则（网页提示+搜索栏全停），本页不加载提示模块（规则解除后自动恢复）');
+      _hintInstallUnsuppressWatch();
+      return;
+    }
+    if (_sup0.hint) console.log('[VocabRadar][text-hint] 停用规则命中（网页提示），本页不启动提示（右键查询/搜索栏仍可用）');
+    await _hintBoot();
+  } catch (e) {
+    console.error('[VocabRadar][text-hint] 加载失败', e);
+  }
+})();
+
+// === boot：启动主体（第二百七十次自 IIFE 抽出；逻辑原样 + 规则实时停用分支）===
+async function _hintBoot() {
+  if (_booted) return;
+  _booted = true;
   try {
     // 挂起看门狗：10s 提醒、30s 定性（import 悬而不决时此前零痕迹）
     const t0 = Date.now();
@@ -104,12 +168,14 @@ async function _loadImpl() {
         markManual();
         _sessionStop = false;
         try { await chrome.storage.local.set({ textHintEnabled: true }); } catch (_) { /* ignore */ }
-        const s = await getSettings();
-        await startOrReport(s);
+        const s = await _hintGetSettings();
+        await startOrReport(s, 'ctl.start');
       },
-      stop: () => { markManual(); if (_impl) _impl.stopHint(); },
+      stop: () => { markManual(); _lastStartSig = ''; if (_impl) _impl.stopHint(); },
       // 侧栏 ✕ 关闭专用：本页会话停用（不写 storage；reconcile 尊重该标记不再自动复活）
-      stopForPage: () => { markManual(); _sessionStop = true; if (_impl) _impl.stopHint(); },
+      // 第二百六十九次：停用即清防抖签名——此后用户重新展开侧栏/点注释开（ctl.start）
+      //   不会被 #267 的 30s 同参防抖误拦（防抖只拦"运行中的重复启动"，不拦"停后再启"）。
+      stopForPage: () => { markManual(); _sessionStop = true; _lastStartSig = ''; if (_impl) _impl.stopHint(); },
       rescan: () => { markManual(); if (_impl) _impl.rescanNow(); },
       clear: () => { markManual(); if (_impl) _impl.clearHighlights(); },
       setRank: (v) => {
@@ -136,18 +202,44 @@ async function _loadImpl() {
     //   修正：先注册监听器，再启动；并在窗口挂启动结果供诊断悬浮窗展示。
     chrome.storage.onChanged.addListener((changes) => {
       if (!_impl) return;
+      // 第二百七十次：停用规则变化——命中「网页提示」立即停（语义同显式停用，
+      //   清会话停用标记与防抖签名）；解除不在此处自动重启，交给 reconcile
+      //   （wantEnabled 已并入规则判定）在下一周期自然恢复，避免双启动竞态。
+      if ('deactivateRules' in changes) {
+        _hintSuppressed().then((sup) => {
+          if (sup) {
+            _sessionStop = false;
+            _lastStartSig = '';
+            _impl.stopHint();
+            console.log('[VocabRadar][text-hint] 停用规则命中（网页提示），已停止');
+          }
+        });
+        return;
+      }
       // 主开关
       // 反思（2026-08-15 第五十八次·续）：newValue 为 undefined（键被删除）时不应 stopHint，
       //   统一"仅显式 false 才停用"语义（与 reconcile 一致）。
       if ('textHintEnabled' in changes) {
-        if (changes.textHintEnabled.newValue !== false) {
-          // 2026-09-08：popup 显式（重）开主开关=用户最新意图，解除本页会话停用
-          _sessionStop = false;
-          getSettings().then((s) => startOrReport(s));
-        } else {
+        const _nv = changes.textHintEnabled.newValue;
+        const _ov = changes.textHintEnabled.oldValue;
+        if (_nv === false) {
           // 显式停用路径：标记已无意义，一并复位防悬挂
           _sessionStop = false;
+          _lastStartSig = '';   // 第二百六十九次：停用即清防抖签名，之后再启用不被 30s 防抖误拦
           _impl.stopHint();
+        } else if (_ov === false) {
+          // 第二百六十九次（用户报"扩展关闭侧栏后，网页依旧提示"）：只有真·关→开
+          //   切换（oldValue===false，popup/引导页显式重开=用户最新意图）才解除本页
+          //   会话停用并重启。旧版对任何非 false 写入都清 _sessionStop 并 startHint
+          //   ——storage 同值回声写（onChanged 对"写到相同值"也触发）会把 ✕ 关侧栏的
+          //   会话停用撤销并复活提示，日志实证 caller=onChanged 高频防抖命中即此因。
+          _sessionStop = false;
+          _hintGetSettings().then((s) => startOrReport(s, 'onChanged:textHintEnabled'));
+        } else {
+          // 同值回声写（oldValue===newValue 或首次建键 oldValue===undefined）：
+          //   会话停用标记不动、不重启，留痕便于对账（模块运行态本就不需要变）。
+          console.log('[VocabRadar][text-hint] onChanged: textHintEnabled 同值写（'
+            + String(_ov) + '→' + String(_nv) + '），忽略不改运行态');
         }
         return;
       }
@@ -167,32 +259,67 @@ async function _loadImpl() {
       if ('annotateRepeat' in changes) {
         _impl.setAnnotateRepeat(changes.annotateRepeat.newValue);
       }
+      // 280次：侧邻注释模板变化 → 清缓存重扫（与 annotateRepeat 同构，原 annBrackets）
+      if ('annTemplate' in changes) {
+        _impl.setAnnTemplate(changes.annTemplate.newValue);
+      }
       // 配色字段变化 → 热更新样式（无需重扫）
       const colorKeys = [
         'hintFirstEnabled', 'hintFirstBg', 'hintFirstFg',
         'hintLaterEnabled', 'hintLaterBg', 'hintLaterFg',
         // 侧邻注释（2026-08-05）：注释底色/字色变化热更新；开关变化需重扫
-        'hintSideAnnotation', 'hintAnnotationBg', 'hintAnnotationFg'
+        'hintSideAnnotation', 'hintAnnotationBg', 'hintAnnotationFg',
+        // 279次：注释样式候选池——池 id 变化热更新 pickColors（无需重扫）
+        'annotationStyle',
+        // 280次：统一池——textStyle 条目 wordBg/wordFg 参与变量派生，变化也热更
+        'textStyle'
       ];
       if (colorKeys.some((k) => k in changes)) {
-        getSettings().then((s) => _impl.updateColors(s));
+        _hintGetSettings().then((s) => _impl.updateColors(s));
       }
     });
 
     // 启动文本提示（含自愈）：调用 startHint 并在失败时记录诊断信息
     // 反思（2026-08-14 第五十六次）：startHint 内已尽量不抛错，但为万全，
     //   捕获异常并记录到 window.__beaverHintBoot 供诊断窗展示，避免"静默不启动"。
-    const startOrReport = async (settings) => {
+    // 第二百六十七次（用户报障"后台一直在不停地扫"，日志实证 [reset][已启动][分屏扫描]
+    //   [配色] 四条日志成环——即 startHint 被链式反复调用）：
+    //   ①caller 标签——startOrReport 每个调用方带名进入，控制台一眼定位驱动方；
+    //   ②同参防抖——30s 内同参数且上次启动成功时忽略重复启动。startHint 每次都
+    //   resetScan（侧栏清空）+ 整页重扫，重复调用纯属浪费；设置真变化（签名不同）、
+    //   模块已停（enabled=false 路径随每次启动翻新时间戳自然放行）、上次失败均放行。
+    //   防抖命中必打 warn（不静默），高频出现即暴露循环调用方。
+    let _lastStartSig = '';
+    let _lastStartOkAt = 0;
+    const _startSig = (s) => [s.rankThreshold, s.annotateOov, s.annotateRepeat, s.textStyle,
+      s.hintFirstEnabled, s.hintFirstBg, s.hintFirstFg,
+      s.hintLaterEnabled, s.hintLaterBg, s.hintLaterFg,
+      s.hintSideAnnotation, s.hintAnnotationBg, s.hintAnnotationFg].join('|');
+    const startOrReport = async (settings, caller) => {
+      const sig = _startSig(settings);
+      if (_impl && sig === _lastStartSig && (Date.now() - _lastStartOkAt) < 30000) {
+        console.warn('[VocabRadar][text-hint] startHint 防抖命中（30s 内同参数已启动，'
+          + Math.round((Date.now() - _lastStartOkAt) / 1000) + 's 前），忽略本次（caller=' + caller
+          + '）。此日志高频出现=有调用方在循环重启');
+        return;
+      }
+      console.log('[VocabRadar][text-hint] startHint 调用 (caller=' + caller + ')');
       try {
         await _impl.startHint(settings);
+        _lastStartSig = sig;
+        _lastStartOkAt = Date.now();
         window.__beaverHintBoot = { at: Date.now(), textHintEnabled: !!settings.textHintEnabled, ok: true, error: null };
       } catch (e) {
+        _lastStartSig = ''; // 失败允许重试
         window.__beaverHintBoot = { at: Date.now(), textHintEnabled: !!settings.textHintEnabled, ok: false, error: String((e && e.message) || e) };
         console.error('[VocabRadar][text-hint] startHint 异常:', e);
       }
     };
 
-    const settings = await getSettings();
+    const settings = await _hintGetSettings();
+    // 272次：初始启动判据并入停用规则——提示被停则不 startHint（reconcile 的
+    // wantEnabled 亦含规则判定，规则解除后自动恢复）；查询不受影响。
+    const _bootHintSup = await _hintSuppressed();
     // 启动结果元数据（诊断窗展示"为什么没启动"）
     window.__beaverHintBoot = {
       at: Date.now(),
@@ -201,8 +328,10 @@ async function _loadImpl() {
       ok: null,
       error: null
     };
-    if (settings.textHintEnabled) {
-      await startOrReport(settings);
+    if (settings.textHintEnabled && !_bootHintSup) {
+      await startOrReport(settings, 'init');
+    } else if (_bootHintSup) {
+      console.log('[VocabRadar][text-hint] init: 停用规则命中（网页提示），不启动提示');
     }
     // 文本样式差异化（粗细/斜体/下划线/阴影等）单独应用
     if (settings.textStyle && settings.textStyle !== 'none') {
@@ -210,12 +339,13 @@ async function _loadImpl() {
     }
     // 反思（2026-08-14 第五十六次自愈）：若存储要求启动但模块仍处于未启用态
     //   （首轮 startHint 被并发/页面时序干扰），延迟重试一次，避免"网页无提示"。
-    if (settings.textHintEnabled) {
+    //   272次：提示被停用规则命中时同样不自愈（否则对抗规则）。
+    if (settings.textHintEnabled && !_bootHintSup) {
       setTimeout(async () => {
         const st = await _impl.getDiagState().catch(() => null);
         if (st && st.effective && st.effective.enabled === false) {
           console.warn('[VocabRadar][text-hint] 启动后仍处于禁用态，自动重试 startHint');
-          getSettings().then((s) => startOrReport(s));
+          _hintGetSettings().then((s) => startOrReport(s, 'self-heal-3s'));
         }
       }, 3000);
     }
@@ -246,10 +376,10 @@ async function _loadImpl() {
       try { st = await _impl.getDiagState(); } catch (_) { /* 模块尚未就绪 */ }
       if (!st || !st.effective) return;
       let s = null;
-      try { s = await getSettings(); } catch (_) { return; }
+      try { s = await _hintGetSettings(); } catch (_) { return; }
       // 第一百三十七次：恢复分支防御——旧版把含 textHintEnabled=undefined 的 settings
       //   原样传给 startOrReport，startHint 内 falsy 判定静默中止，5s 对账永远空转
-      //   （用户日志实证）。getSettings 已加固，此处再兜底归一化并留痕。
+      //   （用户日志实证）。_hintGetSettings 已加固，此处再兜底归一化并留痕。
       if (s && s.textHintEnabled === undefined) {
         // 第二百零三次：限频——新装/新浏览器档案从未写入该键时，此 warn 每 5s 必刷，
         //   淹没真日志（用户实测一屏全是它）。60s 至多一条；键真异常时线索仍在。
@@ -267,8 +397,14 @@ async function _loadImpl() {
       // 反思（2026-08-15 第五十八次·续）：判定语义统一为"仅显式 false 才停用"。
       //   诊断实证 storage.textHintEnabled=undefined（键缺失或异常值），旧判定 `if (s.textHintEnabled)`
       //   把 undefined 判为 falsy → 走停用分支 → stopHint 杀掉正常启动的模块（"高亮闪一下又消失"）。
-      //   getSettings 默认 true，undefined 应视为启用（与 guide.js `!== false`、popup 语义一致）。
-      const wantEnabled = (s.textHintEnabled !== false);
+      //   _hintGetSettings 默认 true，undefined 应视为启用（与 guide.js `!== false`、popup 语义一致）。
+      // 第二百七十次：wantEnabled 并入停用规则判定——命中「网页提示」规则时
+      //   与显式停用同语义（走下方停用分支 stopHint；解除后本判定放行自动 startHint）
+      const _supHint = await _hintSuppressed();
+      if (_supHint && st.effective.enabled) {
+        console.warn('[VocabRadar][text-hint] 对账: 停用规则命中（网页提示），保持停止');
+      }
+      const wantEnabled = (s.textHintEnabled !== false) && !_supHint;
       // 2026-09-08：本页会话停用中（侧栏 ✕ 关闭触发）——存储仍要求启用也不自动复活，
       //   否则 stopForPage 撤掉的注解 5s 内被对账冲回（用户："影响并未消失"）。
       //   限频留痕不静默。
@@ -308,7 +444,7 @@ async function _loadImpl() {
           window.__beaverHintBoot = {
             at: Date.now(), textHintEnabled: true, ok: true, error: null, recovered: true
           };
-          await startOrReport(s);
+          await startOrReport(s, 'reconcile');
           return;
         }
         // 参数漂移对账（事件丢失时热同步，不等下一次 onChanged）
@@ -361,6 +497,7 @@ async function _loadImpl() {
         }
         console.warn('[VocabRadar][text-hint] 对账: 存储要求停用但模块仍启用，自动 stopHint' +
           '（storage.textHintEnabled=' + s.textHintEnabled + '）');
+        _lastStartSig = '';   // 第二百六十九次：停用即清防抖签名，之后再启用不被 30s 防抖误拦
         _impl.stopHint();
       }
     };
@@ -387,11 +524,26 @@ async function _loadImpl() {
     }, true);
 
     // 右键菜单查词消息
+    // 272次：①SHOW_CONTEXT_PANEL 由 Query 可用性（全局开关+停用规则「搜索栏」项）门控，
+    //   不再由网页提示负责——提示停了查询仍可用；②新增 OPEN_QUERY_BAR——右键菜单
+    //   无选中文本时弹搜索栏输入（转发 window 事件给文本侧栏 UI）。
     chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       if (msg.type === 'SHOW_CONTEXT_PANEL' && msg.text) {
-        // w4：panel.js 已改动态转发，catch 打日志防加载失败被静默吞掉
-        _impl.showContextPanel(msg.text, _lastClickX, _lastClickY)
-          .catch((e) => console.error('[VocabRadar][text-hint] 查词面板加载失败', e));
+        _queryAvailable().then((ok) => {
+          if (!ok) {
+            console.log('[VocabRadar][text-hint] 右键查询被 Query 开关/停用规则关闭，忽略');
+            return;
+          }
+          // w4：panel.js 已改动态转发，catch 打日志防加载失败被静默吞掉
+          _impl.showContextPanel(msg.text, _lastClickX, _lastClickY)
+            .catch((e) => console.error('[VocabRadar][text-hint] 查词面板加载失败', e));
+        });
+      }
+      if (msg.type === 'OPEN_QUERY_BAR') {
+        _queryAvailable().then((ok) => {
+          if (!ok) return;
+          try { window.dispatchEvent(new CustomEvent('beaver-open-query-bar')); } catch (_) { /* ignore */ }
+        });
       }
       sendResponse({ ok: true });
       return true;
@@ -411,7 +563,27 @@ async function _loadImpl() {
   } catch (e) {
     console.error('[VocabRadar][text-hint] 加载失败', e);
   }
-})();
+}
+
+/** gate 期间的解除观察（第二百七十次）：规则解除即 boot；boot 幂等（_booted 标记），
+ *  272次：解除判据同步改为「网页提示+搜索栏不全停」（只停其一时仍需加载模块图），
+ *  boot 后本监听残留无害——运行中的规则启停由 boot 内主监听与 reconcile 接管 */
+function _hintInstallUnsuppressWatch() {
+  try {
+    chrome.storage.onChanged.addListener((changes, area) => {
+      if (area !== 'local' || !('deactivateRules' in changes)) return;
+      if (!_hintDeactLib) return;
+      _hintDeactLib.suppressionFor(location).then((sup) => {
+        if (!(sup.hint && sup.query) && !_booted) {
+          console.log('[VocabRadar][text-hint] 停用规则解除，启动网页提示');
+          _hintBoot();
+        }
+      });
+    });
+  } catch (e) {
+    console.warn('[VocabRadar][text-hint] 停用规则解除监听注册失败:', e);
+  }
+}
 
 /** 读取完整设置（含默认值） */
 // 第一百三十七次：曾改用带 DEFAULTS 对象的 get()+重试兜底。
@@ -421,9 +593,11 @@ async function _loadImpl() {
 //   釜底抽薪：改用 get(null) + JS 手工合并默认值——结构上杜绝任何一层
 //   （Chrome 默认值合并/序列化）参与，「读到的值要么是存储实值要么是本地默认」，
 //   绝不再产出 undefined。绝不把"读失败"当"用户关了"。
-function getSettings() {
+function _hintGetSettings() {
   const DEFAULTS = {
     textHintEnabled: true,
+    // 272次：Query 独立开关（本模块消费右键查询/搜索栏门控）
+    queryEnabled: true,
     // 反思（2026-08-14 第五十四次修正）：恢复默认 5000，撤销第五十二次误改的 0
     rankThreshold: 5000,
     annotateOov: false,  // 注释表外词（2026-08-14 第五十四次：键名改名 + 默认不选）
@@ -443,7 +617,13 @@ function getSettings() {
     hintAnnotationBg: '#ffffff',
     hintAnnotationFg: '#2e6b43',
     // 文本样式预设（第五十一次）：'none' 或 TEXT_STYLES 中的 id
-    textStyle: 'none'
+    textStyle: 'none',
+    // 279次：注释样式候选池（三处共享）
+    annotationStyle: 'none',
+    // 280次：侧邻注释模板（annBrackets 布尔退役；
+    //   classic script 不便 import styles.js，默认值/迁移字面量与 lib/styles.js 保持一致）
+    // 281次：默认改 {word}{meaning}（直接相连无空格，与 styles.js DEFAULT_ANN_TEMPLATE 同步）
+    annTemplate: '{word}{meaning}'
   };
   return new Promise((resolve) => {
     const attempt = (retriesLeft) => {
@@ -462,6 +642,14 @@ function getSettings() {
           const merged = { ...DEFAULTS };
           for (const k of Object.keys(DEFAULTS)) {
             if (typeof all[k] !== 'undefined') merged[k] = all[k];
+          }
+          // 280次：旧 annBrackets 布尔一次性迁移——annTemplate 从未设置且旧键存在时，
+          //   按旧值派生模板（true/缺省=默认模板，false=素释义）；不回写 storage，
+          //   读取时派生即可（引导页保存 annTemplate 后旧键不再参与）。
+          // 281次：默认模板随 DEFAULT_ANN_TEMPLATE 同步为 {word}{meaning}。
+          if (typeof all.annTemplate === 'undefined' && typeof all.annBrackets !== 'undefined') {
+            merged.annTemplate = (all.annBrackets === false) ? '{meaning}' : '{word}{meaning}';
+            delete merged.annBrackets;
           }
           resolve(merged);
         });

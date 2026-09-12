@@ -168,13 +168,22 @@ async function onOcrClick() {
     toast(t('ws.imgNotLoaded'));
     return;
   }
+  // 第二百六十六次（用户裁定"图片短边最长1280"）：重编码前等比缩放——
+  //   展示区保留原图，发送给 SW 的 dataURL 短边缩到 ≤1280，页面→后台一跳不再扛 4K 原图；
+  //   短边未超限按原尺寸照旧。上传/拍照两条来源都在此汇合，改一处即全覆盖。
+  const MAX_SHORT = 1280;
+  const shortSide = Math.min(img.naturalWidth, img.naturalHeight);
+  const scale = shortSide > MAX_SHORT ? (MAX_SHORT / shortSide) : 1;
   const canvas = document.createElement('canvas');
-  canvas.width = img.naturalWidth;
-  canvas.height = img.naturalHeight;
+  canvas.width = Math.round(img.naturalWidth * scale);
+  canvas.height = Math.round(img.naturalHeight * scale);
   const ctx = canvas.getContext('2d');
+  ctx.imageSmoothingEnabled = true;
+  ctx.imageSmoothingQuality = 'high';
   ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
   const dataUrl = canvas.toDataURL('image/png');
-  log('OCR 截帧完成: dataUrl 长度=' + dataUrl.length);
+  log('OCR 截帧完成: ' + img.naturalWidth + 'x' + img.naturalHeight + ' → '
+    + canvas.width + 'x' + canvas.height + ', dataUrl 长度=' + dataUrl.length);
 
   const fname = (S.currentFile && S.currentFile.file) ? S.currentFile.file.name : '';
   const fsize = (S.currentFile && S.currentFile.file) ? S.currentFile.file.size : 0;

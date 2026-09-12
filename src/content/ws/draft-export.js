@@ -12,17 +12,45 @@
 
 import { _allAnnotations, _cachedLearnLang, _pageSentences, log } from './core.js';
 
-// 网站地址（「并且打开」跳转目标；生产域名定稿时单点改此常量）
-export const SITE_URL = 'https://localhost:3005';
+// 站点地址（「并且打开」跳转目标）。
+// 274次（用户裁定"本地版本跳本地，线上版本跳线上"）：按安装来源动态判定——
+//   商店/AMO 正式安装的扩展 manifest 带 update_url → 线上站 vocabradar.com；
+//   本地开发/解包加载（无 update_url）→ 本地站 https://localhost:3001。
+//   之前是单一常量（本地 localhost），线上安装的用户点 learn 会跳到打不开的 localhost。
+// 281次修正：3005 是 274 次凭空定的端口，未核对网站侧 vite.config.js（port:3001+
+//   mkcert https）——以网站实际端口 3001 为准，别再臆造。
+const SITE_URL_LOCAL = 'https://localhost:3001';
+const SITE_URL_ONLINE = 'https://vocabradar.com';
+let _siteUrl = null;
+export function getSiteUrl() {
+  if (_siteUrl) return _siteUrl;
+  let online = false;
+  try {
+    const m = chrome.runtime.getManifest();
+    online = !!(m && m.update_url);
+  } catch (e) {
+    console.warn('[VocabRadar][draft-export] getManifest 失败，按本地站处理:', e);
+  }
+  _siteUrl = online ? SITE_URL_ONLINE : SITE_URL_LOCAL;
+  log('[VocabRadar][draft-export] 站点判定:', _siteUrl, '(update_url=', online, ')');
+  return _siteUrl;
+}
 
 // 草稿缓存 key（扩展 camelCase 风格，语义对齐网站侧 vocabradar_local_scrolls）
 export const DRAFT_CACHE_KEY = 'vocabradarDraftScrolls';
 
 // djb2 字符串哈希（仅用于稳定 id，非安全用途）
+// 274次：导出别名供视频侧栏草稿（id 前缀 ext-v-）复用同一哈希。
+// 275次修复：上一轮重构误删了 djb2 函数本体导致 importCurrentSidebarDraft 抛
+// ReferenceError: djb2 is not defined（草稿导入全挂）——本体回归，教训：删函数
+// 前先 grep 全部调用点，"只是加导出别名"也必须保留被别名的原函数。
 function djb2(str) {
   let h = 5381;
   for (let i = 0; i < str.length; i++) h = ((h << 5) + h + str.charCodeAt(i)) >>> 0;
   return h.toString(36);
+}
+export function djb2Hash(str) {
+  return djb2(str);
 }
 
 // buildDraftFromSidebar：当前侧栏正文+生词 → §4.3 草稿投影；无正文返回 null

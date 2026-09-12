@@ -25,6 +25,9 @@
  *        b) vocabradar-extension-firefox-upload.zip —— Firefox (AMO) 提交包。
  *        上传后缀统一 -upload（2026-09-08 裁定：文件名不透出 obf 字样，改名
  *        在本 build 内部改）。
+ *        272次：所有 zip 文件名追加版本号后缀 -v{manifest.version}
+ *        （如 vocabradar-extension-chrome-upload-v0.3.3.zip，用户裁定"打包
+ *        zip 后缀要带版本号"）。
  *        原 make_amo_source_zip.mjs 及其产出的 vocabradar-extension-source.zip
  *        已删除（2026-09-08）。
  *      - 2026-09-08 全模式 terser 输出加 format beautify（indent_level 2）：
@@ -341,6 +344,47 @@ async function terserProcess(distDir, { compress = false, mangle = false, label 
   console.log(`[${label}] 总计 ${Math.floor(totalBefore / 1024)}KB -> ${Math.floor(totalAfter / 1024)}KB (节省 ${ratio.toFixed(0)}%)`);
 }
 
+// 272次（用户裁定"引导页的 vv82 改为 v{修改时间}"）：构建时刻戳注入——
+// 把 dist 内全部 .js（含 esbuild chunk）中的 BUILD_STAMP 占位符 __BUILD_STAMP__
+// 统一替换。源码 styles.js 持占位符，每类产物各自注入当次构建时刻；makeZip 前
+// 调用，保证 zip 内已注入。
+// 274次（用户裁定"时间为可读格式"）：格式 v{YYYY-MM-DD HH:mm:ss}，如
+// v2026-09-11 11:58:04（空格/冒号只进日志与显示，zip 文件名用的是 manifest 版本号）。
+function stampBuild(distDir) {
+  const now = new Date();
+  const pad = (n) => String(n).padStart(2, '0');
+  const stamp = 'v' + now.getFullYear() + '-' + pad(now.getMonth() + 1) + '-' + pad(now.getDate())
+    + ' ' + pad(now.getHours()) + ':' + pad(now.getMinutes()) + ':' + pad(now.getSeconds());
+  let files = 0;
+  const walk = (dir) => {
+    for (const name of fs.readdirSync(dir)) {
+      const p = path.join(dir, name);
+      const st = fs.statSync(p);
+      if (st.isDirectory()) { walk(p); continue; }
+      if (!name.endsWith('.js')) continue;
+      const s = fs.readFileSync(p, 'utf8');
+      if (!s.includes('__BUILD_STAMP__')) continue;
+      fs.writeFileSync(p, s.replace(/__BUILD_STAMP__/g, stamp));
+      files++;
+    }
+  };
+  walk(path.join(distDir, 'src'));
+  if (files === 0) {
+    console.log('[警告] BUILD_STAMP 注入 0 命中：产物里没有占位符（styles.js 未随包或已被替换），请检查！');
+  } else {
+    console.log(`[版本戳] BUILD_STAMP = ${stamp}（注入 ${files} 个文件）`);
+  }
+}
+
+// 272次（用户裁定"打包 zip 后缀要带版本号"）：读 data/manifest.json 的 version，
+// 拼进 zip 文件名（vocabradar-extension-<browser><suffix>-v<version>.zip）。
+function readAppVersion() {
+  const manifest = JSON.parse(fs.readFileSync(path.join(ROOT, 'data', 'manifest.json'), 'utf8'));
+  const v = String(manifest.version || '').trim();
+  if (!v) throw new Error('data/manifest.json 缺少 version 字段，无法命名带版本号的 zip');
+  return v;
+}
+
 function stripHtmlCssComments(distDir) {
   // 第二百三十七次（2026-09-08 用户反馈"html并没有清除注释"）：HTML/CSS 剥注释补齐
   //
@@ -495,8 +539,10 @@ async function buildBrowser(browser, mode) {
   const cfg = BUILD_MODES[mode];
   // 纯净沿用原目录/包名（dist、dist-firefox，zip 无后缀，Edge 上传等既有流程不受影响）；
   // 压缩/上传按后缀另开目录与包名，与纯净产物互不覆盖。
+  // 272次：zip 文件名追加版本号后缀 -v{manifest.version}（目录名不变）。
+  const appVersion = readAppVersion();
   const distDir = path.join(ROOT, `${browser === 'chrome' ? 'dist' : 'dist-firefox'}${cfg.suffix}`);
-  const zipPath = path.join(ROOT, `vocabradar-extension-${browser}${cfg.suffix}.zip`);
+  const zipPath = path.join(ROOT, `vocabradar-extension-${browser}${cfg.suffix}-v${appVersion}.zip`);
   console.log(`=== 构建 ${browser === 'chrome' ? 'Chrome/Edge' : 'Firefox'}（${cfg.label}）===`);
   cleanDist(distDir);
   copyRuntime(distDir);
@@ -516,6 +562,8 @@ async function buildBrowser(browser, mode) {
   // 第二百三十七次：HTML/CSS 剥注释，三模式统一（2026-09-08 用户裁定），在
   // zip 前最后执行——所有内容步骤（复制/适配/bundle/terser）完成后一次覆盖。
   stripHtmlCssComments(distDir);
+  // 272次：BUILD_STAMP 注入构建时刻（stripHtmlCssComments 只动 HTML/CSS，互不影响）
+  stampBuild(distDir);
   makeZip(distDir, zipPath);
   console.log(`dist 目录: ${distDir}`);
   console.log(`zip 文件: ${zipPath}`);

@@ -196,7 +196,8 @@ export function bindLemmaChipClick(shadow) {
  * 显示右键菜单查词面板
  * @param {string} text 用户选中的文本
  */
-export function showContextPanel(text, clientX, clientY) {  const trimmed = text.trim();
+export function showContextPanel(text, clientX, clientY) {
+  const trimmed = text.trim();
   if (!trimmed) return;
   // 2026-09-09 第二百四十二次：手势入口 prime 内置翻译（不 await，不阻塞面板）。
   //   本函数由右键菜单（SW 转发 SHOW_CONTEXT_PANEL）触发，距用户在页面右键 1-3s，
@@ -208,6 +209,35 @@ export function showContextPanel(text, clientX, clientY) {  const trimmed = text
   ensurePanel();
   syncBodyFontSize(thState.panel);
 
+  const shadow = thState.panel.shadowRoot;
+  thState.panel.style.display = 'block';
+  positionPanel(clientX, clientY);
+  // 第二百七十二次：查询渲染核心抽为 renderQueryCard——右键浮动面板与文本侧栏
+  //   query 标签内嵌卡片共用（同 buildCardInnerHTML 结构）。位置刷新经 onUpdate
+  //   回调；alive 守卫保留"面板隐藏期间不写"语义（过期异步不覆盖新查询）。
+  renderQueryCard(shadow, trimmed,
+    () => positionPanel(clientX, clientY),
+    () => !!(thState.panel && thState.panel.style.display !== 'none')
+  ).catch((e) => console.error('[VocabRadar][text-hint] 右键查询渲染异常:', e));
+}
+
+/**
+ * 查询渲染核心（第二百七十二次自 showContextPanel 抽出，逻辑 1:1 搬移）
+ * 把查询文本的 词典/翻译 结果渲染进 root。root 的 DOM 结构 = buildCardInnerHTML()
+ * （.word/.stage/.phonetic-row/.lemma-row/.lemma-group/.trans-row/.tags-row/.footer），
+ * 右键浮动面板的 shadowRoot 与文本侧栏 query 标签的内嵌卡片容器皆满足。
+ * 算法沿用第一百一十一次用户裁定：①先查词典 ②词典外才翻译 ③翻译后分词——多词仅翻译；
+ * 单词则翻译入词典并补全其他属性。
+ * @param {Element|ShadowRoot} root 渲染目标（内含 buildCardInnerHTML 结构）
+ * @param {string} trimmed 查询文本（已 trim 非空）
+ * @param {() => void} [onUpdate] 异步内容到达后的位置刷新回调（浮动面板=positionPanel；内嵌卡片缺省 no-op）
+ * @param {() => boolean} [isAlive] 写入守卫（浮动面板=display!==none；内嵌卡片缺省恒 true）
+ */
+export async function renderQueryCard(root, trimmed, onUpdate, isAlive) {
+  const refresh = (typeof onUpdate === 'function') ? onUpdate : () => {};
+  const alive = (typeof isAlive === 'function') ? isAlive : () => true;
+  const q = (sel) => root.querySelector(sel);
+
   let word = trimmed;
   // 第一百一十一次（用户裁定算法，撤销第一百一十次的"空白/长度即句子"启发式）：
   // ①先查词典 ②词典外才翻译 ③翻译后分词——多词仅翻译；单词则翻译入词典并补全其他属性。
@@ -217,34 +247,31 @@ export function showContextPanel(text, clientX, clientY) {  const trimmed = text
   //   修正：先查 IDB 已有数据，日志输出已有字段 + 待查字段。
   //   实际查询在下面的 async 块中完成，此处仅记录入口。
 
-  const shadow = thState.panel.shadowRoot;
-  // 反思（2026-08-13 第四十九次）：panel-header 固定显示品牌（左）+ 词阶（右，靠右不挤生词）。
-  //   品牌只此一处，footer 品牌已移除，消除 Edge 中"两个产品名称"问题。
-  //   正文 .word 显示查询词；正文 .word-row 的 .stage 由 CSS 隐藏（词阶只在 header 出现一次）。
-  shadow.querySelector('.panel-header .header-stage').textContent = '';
-  shadow.querySelector('.word').textContent = word;
+  // 反思（2026-08-13 第四十九次）：panel-header 固定显示品牌（左）+ 词阶（右）。
+  //   正文 .word 显示查询词；.word-row 的 .stage 由 CSS 隐藏（词阶只在 header 出现一次）。
+  //   内嵌卡片（query 标签）无 .panel-header，各行重置一律判空跳过。
+  const headerStage = q('.panel-header .header-stage');
+  if (headerStage) headerStage.textContent = '';
+  q('.word').textContent = word;
   // 反思（2026-08-13）：用户禁止"Querying..."/"No definition"等歧义文案。
   //   翻译未到时留空，不显示占位文字。翻译失败也留空，不自作主张。
-  shadow.querySelector('.phonetic-row').textContent = '';
-  shadow.querySelector('.stage').textContent = '';
-  shadow.querySelector('.lemma-row').innerHTML = '';
-  shadow.querySelector('.tags-row').innerHTML = '';
-  const tagsSection = shadow.querySelector('.tags-section');
+  q('.phonetic-row').textContent = '';
+  q('.stage').textContent = '';
+  q('.lemma-row').innerHTML = '';
+  q('.tags-row').innerHTML = '';
+  const tagsSection = q('.tags-section');
   if (tagsSection) tagsSection.style.display = 'none';
-  shadow.querySelector('.trans-row').textContent = '';
-
-  thState.panel.style.display = 'block';
-  positionPanel(clientX, clientY);
+  q('.trans-row').textContent = '';
 
   // 音标异步加载（词典命中路径用；词典外分支在 async 块内自行处理/清空）
   if (word && isContextValid()) {
     getPhonetic(word).then((phon) => {
-      if (thState.panel && thState.panel.style.display !== 'none') {
-        shadow.querySelector('.phonetic-row').textContent = phon || '';
-        if (clientX !== null && clientX !== undefined) positionPanel(clientX, clientY);
+      if (alive()) {
+        q('.phonetic-row').textContent = phon || '';
+        refresh();
       }
     }).catch(() => {
-      shadow.querySelector('.phonetic-row').textContent = '';
+      q('.phonetic-row').textContent = '';
     });
   }
 
@@ -256,12 +283,12 @@ export function showContextPanel(text, clientX, clientY) {  const trimmed = text
 
     if (!fullRec) {
       // ②词典外 → 翻译整个选区
-      shadow.querySelector('.phonetic-row').textContent = '';
-      shadow.querySelector('.trans-row').innerHTML = '<span class="dots"><i></i><i></i><i></i></span>';
+      q('.phonetic-row').textContent = '';
+      q('.trans-row').innerHTML = '<span class="dots"><i></i><i></i><i></i></span>';
       let translated = null;
       try { translated = isContextValid() ? await translate(trimmed, true) : null; } catch (e) { translated = null; }
-      if (thState.panel && thState.panel.style.display !== 'none') {
-        shadow.querySelector('.trans-row').textContent = translated || '';
+      if (alive()) {
+        q('.trans-row').textContent = translated || '';
         const ch = getLastTranslateChannel();
         console.log(`[VocabRadar][text-hint] 右键翻译(词典外, len=${trimmed.length}): ${translated ? '成功' : '失败'}${ch ? ' 渠道:' + ch : ''}`);
       }
@@ -271,23 +298,23 @@ export function showContextPanel(text, clientX, clientY) {  const trimmed = text
       const isMultiWord = tokens.length > 1 || trimmed.length > 24;
       if (!isMultiWord && translated && isContextValid()) {
         const info = await queryWordForPanel(lower, trimmed);
-        if (info && info.isWord && thState.panel && thState.panel.style.display !== 'none') {
+        if (info && info.isWord && alive()) {
           let stg = formatStage(info.rank);
           if (stg.indexOf('NaN') !== -1) stg = t('th.outside');
-          shadow.querySelector('.stage').textContent = stg;
-          shadow.querySelector('.panel-header .header-stage').textContent = stg;
+          q('.stage').textContent = stg;
+          if (headerStage) headerStage.textContent = stg;
           // 反思（2026-09-04）：原形行改走共用 renderLemmaInto（常显 chip＋小写归一，悬浮共用）
-          renderLemmaInto(shadow, trimmed, info.lemma);
+          renderLemmaInto(root, trimmed, info.lemma);
           if (info.phonetic) {
-            shadow.querySelector('.phonetic-row').textContent = info.phonetic;
+            q('.phonetic-row').textContent = info.phonetic;
           } else {
             getPhonetic(trimmed).then((phon) => {
-              if (thState.panel && thState.panel.style.display !== 'none') shadow.querySelector('.phonetic-row').textContent = phon || '';
+              if (alive()) q('.phonetic-row').textContent = phon || '';
             }).catch(() => {});
           }
         }
       }
-      if (clientX !== null && clientX !== undefined) positionPanel(clientX, clientY);
+      refresh();
       return;
     }
 
@@ -300,12 +327,12 @@ export function showContextPanel(text, clientX, clientY) {  const trimmed = text
       // === 立即显示 rank/tags/lemma（来自 IDB，不等待翻译）===
       let stage = formatStage(info.rank);
       if (stage.indexOf('NaN') !== -1) stage = t('th.outside');
-      shadow.querySelector('.stage').textContent = stage;
-      shadow.querySelector('.panel-header .header-stage').textContent = stage;
+      q('.stage').textContent = stage;
+      if (headerStage) headerStage.textContent = stage;
       // 词形还原原形（2026-09-04：改走共用 renderLemmaInto，常显 chip＋小写归一）
-      renderLemmaInto(shadow, word, info.lemma);
+      renderLemmaInto(root, word, info.lemma);
       // 标签
-      const tagsEl = shadow.querySelector('.tags-row');
+      const tagsEl = q('.tags-row');
       tagsEl.innerHTML = '';
       const tags = info.tags || [];
       if (tagsSection) tagsSection.style.display = tags.length > 0 ? '' : 'none';
@@ -320,52 +347,51 @@ export function showContextPanel(text, clientX, clientY) {  const trimmed = text
       //   翻译失败移除省略号留空，不显示"No definition"。
       const trans = info.translations || [];
       if (trans.length > 0) {
-        shadow.querySelector('.trans-row').innerHTML = trans.map(tr => `<div>${tr}</div>`).join('');
+        q('.trans-row').innerHTML = trans.map(tr => `<div>${tr}</div>`).join('');
       } else if (info.pending) {
-        shadow.querySelector('.trans-row').innerHTML = '<span class="dots"><i></i><i></i><i></i></span>';
-        if (clientX !== null && clientX !== undefined) positionPanel(clientX, clientY);
+        q('.trans-row').innerHTML = '<span class="dots"><i></i><i></i><i></i></span>';
+        refresh();
         if (isContextValid()) {
           translate(word, true).then((translated) => {
-            if (thState.panel && thState.panel.style.display !== 'none') {
+            if (alive()) {
               if (translated) {
-                shadow.querySelector('.trans-row').innerHTML = `<div>${translated}</div>`;
+                q('.trans-row').innerHTML = `<div>${translated}</div>`;
                 // 反思（2026-08-13 第五十二次）：日志标注翻译渠道（本地缓存/内置翻译/在线:xxx），
                 //   用户要求"日志能看出翻译渠道"。
                 const ch = getLastTranslateChannel();
                 console.log(`[VocabRadar][text-hint] 右键查词 "${lower}": 翻译完成 → "${translated}"${ch ? ` (渠道:${ch})` : ''}`);
               } else {
-                shadow.querySelector('.trans-row').textContent = '';
+                q('.trans-row').textContent = '';
                 console.warn(`[VocabRadar][text-hint] 右键查词 "${lower}": 翻译失败（所有渠道均未返回结果）`);
               }
-              if (clientX !== null && clientX !== undefined) positionPanel(clientX, clientY);
+              refresh();
             }
           }).catch(() => {
-            if (thState.panel && thState.panel.style.display !== 'none') {
-              shadow.querySelector('.trans-row').textContent = '';
+            if (alive()) {
+              q('.trans-row').textContent = '';
             }
           });
         }
       } else {
-        shadow.querySelector('.trans-row').textContent = '';
+        q('.trans-row').textContent = '';
       }
     } else {
-      shadow.querySelector('.stage').textContent = t('th.notWord');
-      shadow.querySelector('.panel-header .header-stage').textContent = t('th.notWord');
-      shadow.querySelector('.trans-row').textContent = '';
+      q('.stage').textContent = t('th.notWord');
+      if (headerStage) headerStage.textContent = t('th.notWord');
+      q('.trans-row').textContent = '';
     }
-    if (clientX !== null && clientX !== undefined) {
-      positionPanel(clientX, clientY);
-    }
+    refresh();
   })();
 
-  shadow.querySelector('.speak').onclick = () => speak(word);
+  const speakBtn = q('.speak');
+  if (speakBtn) speakBtn.onclick = () => speak(word);
   // 第一百七十一次：chat 按钮就"选区原文"发起对话（不是词元，保留用户实际选中的上下文）
   // 第一百八十四次：传 kind='word' —— 右键查询属"单词类查询"，用 chatWordPrompt 模板
   // 第一百八十六次（用户："对话框的上下文依旧胡说。老毛病，并不是第一次出现。
   //   你复述一遍我的要求上下文来源。"）：按 note.txt 原始规定，上下文框的正文**只有两种来源**
   //   —— Readability 提取的网页正文，或字幕。选区原文只能进提问语的 {}，绝不能当上下文。
   //   故此处第三参传 getAiMainText() 的网页正文；提取失败则退回选区原文（不静默留空）。
-  const chatBtn = shadow.querySelector('.chat');
+  const chatBtn = q('.chat');
   if (chatBtn) chatBtn.onclick = async () => {
     let ctxBody = '';
     try {
@@ -471,9 +497,13 @@ export async function queryWordForPanel(lower, original) {
 //   正文重复的 .stage 用 CSS .word-row .stage { display:none } 隐藏（词阶只显示一次）。
 // 反思（2026-08-13 第四十九次）：用户要求"翻译结果若在查询中，则应当是浮动省略号"。
 //   修正：新增 .dots 三点跳动动画，pending 时插入 trans-row，翻译完成移除。
-export function buildPanelHTML() {
+/**
+ * 查询卡片样式（272 次自 buildPanelHTML 抽出为独立导出）：
+ * 右键浮动面板与文本侧栏 query 标签的内嵌卡片共用同一份 CSS（唯一定义处）。
+ * @returns {string} CSS 文本（不含 <style> 标签）
+ */
+export function buildPanelCss() {
   return `
-    <style>
       * { box-sizing: border-box; margin: 0; padding: 0; }
       .panel-header { display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 10px 14px; background: #f5f8f3; border-radius: 16px 16px 0 0; }
       .panel-header .title { font-size: inherit; color: #1a1f1a; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; display: inline-flex; align-items: center; gap: 6px; min-width: 0; }
@@ -524,7 +554,12 @@ export function buildPanelHTML() {
       .dots i:nth-child(2) { animation-delay: 0.2s; }
       .dots i:nth-child(3) { animation-delay: 0.4s; }
       @keyframes beaver-dots { 0%, 60%, 100% { opacity: 0.25; transform: translateY(0); } 30% { opacity: 1; transform: translateY(-2px); } }
-    </style>
+    `;
+}
+
+export function buildPanelHTML() {
+  return `
+    <style>${buildPanelCss()}</style>
     <div class="panel-header">
       <div class="title">${brandIconSVG()}<span>${t('th.brand')}</span></div>
       <div class="header-stage"></div>
