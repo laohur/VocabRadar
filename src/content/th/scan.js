@@ -28,7 +28,7 @@ import { lookupFull, prefetchFull, getDiagState as getDictDiagState, ensureReady
 import { getDiagState as getLemmatizerDiagState } from '../../lib/lemmatizer.js';
 import { translate } from '../../lib/translator.js';
 import { initLang } from '../../lib/i18n.js';
-import { cleanDictEntry, isBalancedParens } from '../../lib/dict-clean.js';
+import { isBalancedParens, pickCleanShortTrans } from '../../lib/dict-clean.js';
 import { beginBatch, countChars, countTokens, countUnique, incField, incScalar, getBatches, logBatch } from '../../lib/dict-stats.js';
 import { emitBlock, resetScan } from '../page-scan-bus.js';
 import { lookupWord } from '../../lib/annotator.js';
@@ -1043,7 +1043,8 @@ export function appendSideAnnotation(span, translations) {
   if (!span || !translations || translations.length === 0) return;
   // 第一百八十次：页级去重——非首次出现的词，未开开关时不注释
   if (!thState.annotateRepeat && span.classList && span.classList.contains(LATER_CLASS)) return;
-  const transText = translations.map((x) => cleanDictEntry(x)).filter(Boolean).join('；');
+  // 302次（用户"侧邻注释都用短释"）：全量 join 改短释单项（detail 卡片不受影响）
+  const transText = pickCleanShortTrans(translations);
   if (!transText) return;
   // 检查是否已有侧邻注释兄弟节点（避免重复插入）
   let annSpan = span.nextElementSibling;

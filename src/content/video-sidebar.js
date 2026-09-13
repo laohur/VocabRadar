@@ -1479,8 +1479,9 @@ function applyColorSettings(settings) {
   rootStyle.setProperty('--beaver-first-fg', firstFg);
   rootStyle.setProperty('--beaver-later-bg', settings.hintLaterBg || firstBg);
   rootStyle.setProperty('--beaver-later-fg', settings.hintLaterFg || firstFg);
-  // 注释配色 = 单词配色的前后景互换（annBg=单词字色, annFg=单词底色）
-  rootStyle.setProperty('--beaver-ann-bg', firstFg);
+  // 注释配色 = 单词配色的前后景互换（annFg=单词底色）。
+  // 302次（用户"注释也应当没有背景色"）：annBg 默认改透明（显式 popup 色此前已不读，保持）。
+  rootStyle.setProperty('--beaver-ann-bg', 'transparent');
   rootStyle.setProperty('--beaver-ann-fg', firstBg);
 }
 

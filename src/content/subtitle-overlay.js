@@ -38,6 +38,8 @@
 //      CSS 变量缺省底色 transparent、字号 28px，与 guide 页 Custom 默认值同源。
 
 import { getAnnotations } from '../lib/annotator.js';
+// 302次：侧邻注释统一用短释（与各侧邻路径同源；本地旧版只认；已删）
+import { pickCleanShortTrans } from '../lib/dict-clean.js';
 // 反思（2026-08-13 第五十一次）：字幕样式数据驱动（差异化属性定义在 styles.js SUBTITLE_TEXT_STYLES），
 //   CSS 按元数据生成，避免样式定义与元数据不一致。
 // 反思（2026-08-16 第六十九次）：文字样式与位置样式解耦——文字外观由 SUBTITLE_TEXT_STYLES，
@@ -407,17 +409,9 @@ function escapeReg(s) {
   return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
-/**
- * 从释义列表中取一个短义项（第一个释义的第一个分号前部分）
- * @param {string[]} translations
- * @returns {string}
- */
-function pickShortTrans(translations) {
-  if (!translations || translations.length === 0) return '';
-  const t = translations[0] || '';
-  const idx = t.indexOf('；');
-  return idx > 0 ? t.slice(0, idx) : t;
-}
+// 302次（用户"侧邻注释都用短释"）：本地旧版只认 ；，radar 例漏网——
+//   改共享 pickCleanShortTrans（宽分隔符，与各侧邻路径同源），本地函数删除。
+//   （detail 列表仍全量 join，179次"详细全列"口径不变）
 
 /**
  * 283次：首尾生词筛选管线（side/detail 两模式共用）——
@@ -486,7 +480,7 @@ function buildSideAnnotationHtml(text, anns) {
     html += '<span class="' + cls + '">' + escapeHtml(m.word) + '</span>';
     if (!usedWords.has(lower)) {
       usedWords.add(lower);
-      const trans = pickShortTrans(ann.translations);
+      const trans = pickCleanShortTrans(ann.translations);
       if (trans) {
         // 280次：注释文本按模板拼装（{word}/{meaning} 变量，模板前后缀为字面量；
         //   侧邻只渲染释义段，{word} 变量丢弃——词本身已在高亮 span 中）

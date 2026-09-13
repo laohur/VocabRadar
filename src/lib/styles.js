@@ -289,6 +289,21 @@ export function resolveAnnEntry(id, customObj, userList) {
   return findStyle(POOL_STYLES, id) || findStyle(POOL_STYLES, 'none');
 }
 
+// 302次：样式绘制代价划分（合成/重绘/重排三组）——几何字段（内边距/边框/字号/字距/
+//   等宽字体）命中即重排组；transform/opacity 型（预留字段 wordTransform/wordOpacity）
+//   命中即合成组，当前池内暂无纯合成条目；其余（颜色/阴影/装饰线/描边/着重号/渐变/
+//   圆角/粗斜体）为重绘组。当前分布：重排 18 / 重绘 33 / 合成 0（与本函数同口径实测）。
+export function poolPaint(s) {
+  if (!s || s.id === 'none') return 'repaint';
+  if (s.wordTransform !== undefined || s.wordOpacity !== undefined) return 'composite';
+  const R = ['wordPadding', 'wordPaddingBottom', 'wordBorder', 'wordBorderBottom',
+    'wordBorderLeft', 'wordFontSize', 'wordLetterSpacing', 'wordMono', 'fontSize'];
+  for (const k of R) {
+    if (s[k] !== undefined) return 'reflow';
+  }
+  return 'repaint';
+}
+
 // 301次：个性化注释样式 CSS 代码文本（双区段，与 wordDecl/annDecl 同源，供代码框展示/解析）。
 export function annCustomCssText(o) {
   const w = wordDecl({

@@ -135,11 +135,12 @@ export const thState = {
   //   本轮结束后再跑一次。
   scanRunning: false,
   scanPendingRoot: null,
-  // 反思（2026-08-18 第七十三次修正）：默认配色——单词绿底白字，注释白底绿字。
+  // 反思（2026-08-18 第七十三次修正）：默认配色——单词绿底白字。
+  // 302次（用户"注释也应当没有背景色"）：注释默认改透明底绿字（白底绿字作废）。
   colors: {
     firstEnabled: true, firstBg: '#2e6b43', firstFg: '#ffffff',
     laterEnabled: true, laterBg: '#2e6b43', laterFg: '#ffffff',
-    sideAnnotation: true, annBg: '#ffffff', annFg: '#2e6b43'
+    sideAnnotation: true, annBg: 'transparent', annFg: '#2e6b43'
   },
   // 反思（2026-08-06）：扩展更新/重载后旧内容脚本的 chrome.runtime 上下文失效，
   //   translate 调用必然抛 "Extension context invalidated"，标记后跳过后续调用。
@@ -397,7 +398,8 @@ export function pickColors(s) {
   // 301次：同上走 resolveAnnEntry（custom/用户条目）。
   const annSt = resolveAnnEntry(s.annotationStyle, s.annotationCustom, s.annotationUserStyles);
   const opaque = isOpaqueBg(wordBg);
-  const annBg = explicitAnnBg || (annSt && annSt.annBg) || (opaque ? wordFg : 'transparent');
+  // 302次（用户"注释也应当没有背景色"）：默认派生改透明底（显式设置与池条目照旧优先）。
+  const annBg = explicitAnnBg || (annSt && annSt.annBg) || 'transparent';
   const annFg = explicitAnnFg || (annSt && annSt.annFg) || (opaque ? wordBg : wordFg);
   return {
     firstEnabled: true,          // 首次出现总是高亮（不再有开关）

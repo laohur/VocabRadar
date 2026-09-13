@@ -566,8 +566,9 @@ const _poolSel = {
 };
 // 281次：左列当前选中栏（点击 .pool-item 切换；池卡点击指派给该栏）
 let _poolTarget = 'textStyle';
-// 301次：注释个性化参数（Custom 行七控件；好看预设：青瓷底白字成对互换）＋用户自建缓存
-let _annCustom = { wordBg: '#e0f2f1', wordFg: '#004d40', annBg: '#004d40', annFg: '#e0f2f1', radius: '4px', bold: true };
+// 301次：注释个性化参数（Custom 行七控件）＋用户自建缓存
+// 302次（用户"注释也应当没有背景色"）：预设改透明底绿字（青瓷深底作废；生词底色待用户定值，暂留）。
+let _annCustom = { wordBg: '#e0f2f1', wordFg: '#004d40', annBg: 'transparent', annFg: '#004d40', radius: '4px', bold: true };
 let _annUserStyles = [];
 // 301次：装饰线形选项（none/underline/wavy/dashed/dotted；颜色取注释字色，见 buildAnnCustomObj）
 const ANN_DECO_OPTIONS = [
@@ -1557,17 +1558,19 @@ function parseAnnCustomCssText(text) {
 function applyAnnCustomControls() {
   const wb = $('annCustomWordBg'), wf = $('annCustomWordFg'),
     ab = $('annCustomAnnBg'), af = $('annCustomAnnFg'),
-    ra = $('annCustomRadius'), dc = $('annCustomDeco'), bo = $('annCustomBold');
+    ra = $('annCustomRadius'), dc = $('annCustomDeco'), bo = $('annCustomBold'),
+    tr = $('annCustomAnnBgTransparent');
   if (!wb || !wf || !ab || !af || !ra || !dc || !bo) return;
   _annCustom = {
     wordBg: wb.value || 'transparent',
     wordFg: wf.value || '#004d40',
-    annBg: ab.value || '#004d40',
-    annFg: af.value || '#e0f2f1',
+    // 302次：注释底色透明勾选（默认勾选即 transparent）
+    annBg: (tr && tr.checked) ? 'transparent' : (ab.value || '#004d40'),
+    annFg: af.value || '#004d40',
     radius: (ra.value || '').trim() || '4px',
     bold: !!bo.checked,
     deco: (!dc.value || dc.value === 'none')
-      ? undefined : { line: 'underline', style: dc.value, color: (af.value || '#e0f2f1') }
+      ? undefined : { line: 'underline', style: dc.value, color: (af.value || '#004d40') }
   };
   dc.dataset.want = dc.value;
   assignAnnCustomToTarget();
@@ -1612,7 +1615,13 @@ function applyAnnCustomCssText() {
   }
   if (parsed.wordBg) $('annCustomWordBg').value = /^#[0-9a-fA-F]{6}$/.test(parsed.wordBg) ? parsed.wordBg : '#000000';
   if (parsed.wordFg) $('annCustomWordFg').value = parsed.wordFg;
-  if (parsed.annBg) $('annCustomAnnBg').value = /^#[0-9a-fA-F]{6}$/.test(parsed.annBg) ? parsed.annBg : '#000000';
+  // 302次：注释底色透明同步勾选态
+  if (parsed.annBg) {
+    const t = !/^#[0-9a-fA-F]{6}$/.test(parsed.annBg);
+    $('annCustomAnnBgTransparent').checked = t;
+    $('annCustomAnnBg').value = t ? '#000000' : parsed.annBg;
+    $('annCustomAnnBg').disabled = t;
+  }
   if (parsed.annFg) $('annCustomAnnFg').value = parsed.annFg;
   if (parsed.radius) $('annCustomRadius').value = parsed.radius;
   if (parsed.deco) {
@@ -1669,10 +1678,17 @@ function bindAnnCustom() {
   wb.dataset.bound = '1';
   const apply = () => applyAnnCustomControls();
   for (const id of ['annCustomWordBg', 'annCustomWordFg', 'annCustomAnnBg', 'annCustomAnnFg',
-    'annCustomRadius', 'annCustomDeco', 'annCustomBold']) {
+    'annCustomRadius', 'annCustomDeco', 'annCustomBold', 'annCustomAnnBgTransparent']) {
     const el = $(id);
     if (el) el.addEventListener('change', apply);
   }
+  // 302次：透明勾选切换取色器禁用态（仿字幕行）
+  const tr0 = $('annCustomAnnBgTransparent'), ab0 = $('annCustomAnnBg');
+  if (tr0 && ab0 && !tr0.dataset.bound) {
+    tr0.dataset.bound = '1';
+    tr0.addEventListener('change', () => { ab0.disabled = tr0.checked; });
+  }
+  if (ab0 && tr0) ab0.disabled = tr0.checked;
   const ta = $('annCustomCss');
   if (ta && !ta.dataset.bound) {
     ta.dataset.bound = '1';
@@ -1759,7 +1775,10 @@ function backfillAnnCustomFrom(st) {
   };
   $('annCustomWordBg').value = hex(st.wordBg, '#e0f2f1');
   $('annCustomWordFg').value = _annCustom.wordFg;
-  $('annCustomAnnBg').value = hex(st.annBg, '#004d40');
+  const backTransparent = (_annCustom.annBg === 'transparent');
+  $('annCustomAnnBgTransparent').checked = backTransparent;
+  $('annCustomAnnBg').value = backTransparent ? '#000000' : hex(st.annBg, '#004d40');
+  $('annCustomAnnBg').disabled = backTransparent;
   $('annCustomAnnFg').value = _annCustom.annFg;
   $('annCustomRadius').value = _annCustom.radius;
   fillAnnCustomDeco();
@@ -1779,8 +1798,8 @@ function doAnnCustomBackfill(res) {
   _annCustom = {
     wordBg: sc.wordBg || '#e0f2f1',
     wordFg: hex(sc.wordFg, '#004d40'),
-    annBg: sc.annBg || '#004d40',
-    annFg: hex(sc.annFg, '#e0f2f1'),
+    annBg: sc.annBg || 'transparent',
+    annFg: hex(sc.annFg, '#004d40'),
     radius: sc.radius || '4px',
     bold: sc.bold !== false,
     // 301次：deco 透传（select 编辑器，见 fillAnnCustomDeco；无即 undefined，生成器跳过）
@@ -1788,7 +1807,11 @@ function doAnnCustomBackfill(res) {
   };
   $('annCustomWordBg').value = hex(sc.wordBg, '#e0f2f1');
   $('annCustomWordFg').value = _annCustom.wordFg;
-  $('annCustomAnnBg').value = hex(sc.annBg, '#004d40');
+  // 302次：透明底回填勾选态（取色器放不下 transparent，给占位黑并禁用）
+  const annTransparent = (_annCustom.annBg === 'transparent');
+  $('annCustomAnnBgTransparent').checked = annTransparent;
+  $('annCustomAnnBg').value = annTransparent ? '#000000' : hex(sc.annBg, '#004d40');
+  $('annCustomAnnBg').disabled = annTransparent;
   $('annCustomAnnFg').value = _annCustom.annFg;
   $('annCustomRadius').value = _annCustom.radius;
   $('annCustomBold').checked = _annCustom.bold;
@@ -2223,7 +2246,7 @@ async function loadSettings() {
     videoAnnotationStyle: 'none',
     // 301次：注释个性化参数＋样例句缺省（用户样式列表不进 defaults，读 res || []）
     annotationCustom: {
-      wordBg: '#e0f2f1', wordFg: '#004d40', annBg: '#004d40', annFg: '#e0f2f1',
+      wordBg: '#e0f2f1', wordFg: '#004d40', annBg: 'transparent', annFg: '#004d40',
       radius: '4px', bold: true
     },
     annotationSample: 'vocab radar',
