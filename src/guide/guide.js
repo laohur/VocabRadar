@@ -285,8 +285,9 @@ const MSG = {
   // MSG 词条 fieldAsrFirstChunk/asrFirstChunkDesc 一并删除
   chkRareWords: { en: 'Annotate out-of-vocabulary words', zh: '注释表外词' },
   chkAnnotateRepeat: { en: 'Annotate repeated words', zh: '注释重复生词' },
-  // 286次：word hits 栏目六开关文案（Query 拆分为右键查询+查询栏；chkQuery 随全局组开关删除）
-  groupWordHits: { en: 'Word Hits', zh: 'Word Hits' },
+  // 286次：六开关文案（Query 拆分为右键查询+查询栏）
+  // 299次：word hits 栏目撤销（开关并回左卡片，新增 Query 卡；groupWordHits 键删除）
+  poolItemQuery: { en: 'Query', zh: '查询' },
   hitContextLookup: { en: 'Right-click lookup', zh: '右键查询' },
   hitQueryBar: { en: 'Query bar', zh: '查询栏' },
   hitTextHint: { en: 'Web hints', zh: '网页提示' },
@@ -649,6 +650,8 @@ function bindPoolLeft() {
   left.addEventListener('click', (e) => {
     const item = e.target.closest('.pool-item');
     if (!item || !item.dataset.target) return;
+    // 299次：Query 卡无样式指派，不参与选中（豁免；开关照常用）
+    if (item.dataset.target === 'query') return;
     if (_poolTarget === item.dataset.target) return;
     _poolTarget = item.dataset.target;
     document.querySelectorAll('.pool-left .pool-item').forEach((it) => {

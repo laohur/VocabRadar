@@ -896,7 +896,10 @@ try {
         _overlayRuleSup = sup.overlay === true;
         if (was === _overlayRuleSup) return;
         chrome.storage.local.get('overlayEnabled', (res) => {
-          const on = res.overlayEnabled === true && !_overlayRuleSup;
+          // 300次（用户"Subtitle Hints on Video默认应当是开"）：与本文件 798/813/885 行
+          //   同口径，未设置视为开（!== false）；此前此处误用 === true，未设置用户一切
+          //   停用规则就被关叠加字幕
+          const on = res.overlayEnabled !== false && !_overlayRuleSup;
           _overlayEnabled = on;
           overlaySetEnabled(on);
           const btn = _root.querySelector('#beaver-overlay-toggle');

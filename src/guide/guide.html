@@ -80,44 +80,6 @@
         </div>
       </div>
 
-      <!-- 286次：word hits 栏目——六处生词触达开关集中设定（右键查询/查询栏/网页提示/
-           文本侧栏/视频侧栏/视频叠加字幕），分别从原 Query（拆分为右键查询+查询栏）、
-           Web Hints、Text Sidebar、Video Sidebar、Video Overlay Subtitles 开关抽取，
-           原位置开关删除（popup 快捷开关不动，写同一存储键）。 -->
-      <div class="group" id="group-wordhits">
-        <div class="group-head">
-          <span class="group-name" data-key="groupWordHits">Word Hits</span>
-        </div>
-        <div class="group-body">
-          <div class="field-row">
-            <label class="chk">
-              <input id="hitContextLookup" type="checkbox">
-              <span data-key="hitContextLookup">右键查询</span>
-            </label>
-            <label class="chk">
-              <input id="hitQueryBar" type="checkbox">
-              <span data-key="hitQueryBar">查询栏</span>
-            </label>
-            <label class="chk">
-              <input id="hitTextHint" type="checkbox">
-              <span data-key="hitTextHint">网页提示</span>
-            </label>
-            <label class="chk">
-              <input id="hitTextSidebar" type="checkbox">
-              <span data-key="hitTextSidebar">文本侧栏</span>
-            </label>
-            <label class="chk">
-              <input id="hitVideoSidebar" type="checkbox">
-              <span data-key="hitVideoSidebar">视频侧栏</span>
-            </label>
-            <label class="chk">
-              <input id="hitOverlay" type="checkbox">
-              <span data-key="hitOverlay">视频叠加字幕</span>
-            </label>
-          </div>
-        </div>
-      </div>
-
       <!-- 模型（第二百二十三次重排：对话大模型 / 翻译 / 语音识别模型 / OCR 四小节；
            LLM 四参数一行、两提示词与正文最大长度各一行；ASR/OCR 引擎为下拉两行式） -->
       <!-- 2026-09-02 模型栏默认折叠 -->
@@ -297,10 +259,28 @@
           <p class="style-desc" data-key="wordAnnDesc">Click a feature on the left to select it, then click a style card on the right — the card is assigned to that feature and copied into it. Subtitle hints on video controls the annotation line of overlay subtitles.</p>
           <div class="pool-cols">
             <div class="pool-left">
+              <!-- 299次：word hits 撤销——开关并回左卡片；Query 无对应栏，新增 Query 卡居首
+                   （无样式指派，不参与选中，见 bindPoolLeft 豁免；id 沿用 hit*，JS 零改动） -->
+              <div class="pool-item" data-target="query">
+                <div class="pool-item-name" data-key="poolItemQuery">Query</div>
+                <div class="pool-item-ctl">
+                  <label class="chk">
+                    <input id="hitContextLookup" type="checkbox">
+                    <span data-key="hitContextLookup">右键查询</span>
+                  </label>
+                  <label class="chk">
+                    <input id="hitQueryBar" type="checkbox">
+                    <span data-key="hitQueryBar">查询栏</span>
+                  </label>
+                </div>
+              </div>
               <div class="pool-item" data-target="textStyle">
                 <div class="pool-item-name" data-key="poolItemWebHint">Web Hints</div>
                 <div class="pool-item-ctl">
-                  <!-- 286次：网页提示开关抽至 word hits 栏目；本卡只留 Side hint 子选项 -->
+                  <label class="group-switch">
+                    <input id="hitTextHint" type="checkbox">
+                    <span data-key="switchOn">On</span>
+                  </label>
                   <label class="chk">
                     <input id="hintSideAnnotation" type="checkbox">
                     <span data-key="chkSideAnnotation">Side hint</span>
@@ -310,16 +290,32 @@
               </div>
               <div class="pool-item" data-target="annotationStyle">
                 <div class="pool-item-name" data-key="poolItemWebSidebar">Text Sidebar</div>
-                <!-- 286次：文本侧栏开关抽至 word hits 栏目 -->
+                <div class="pool-item-ctl">
+                  <label class="group-switch">
+                    <input id="hitTextSidebar" type="checkbox">
+                    <span data-key="switchOn">On</span>
+                  </label>
+                </div>
                 <div class="pool-item-demo"></div>
               </div>
               <div class="pool-item" data-target="videoAnnotationStyle">
                 <div class="pool-item-name" data-key="poolItemSidebar">Video Sidebar</div>
-                <!-- 286次：视频侧栏开关抽至 word hits 栏目 -->
+                <div class="pool-item-ctl">
+                  <label class="group-switch">
+                    <input id="hitVideoSidebar" type="checkbox">
+                    <span data-key="switchOn">On</span>
+                  </label>
+                </div>
                 <div class="pool-item-demo"></div>
               </div>
               <div class="pool-item" data-target="videoOverlayAnnStyle">
                 <div class="pool-item-name" data-key="poolItemSubAnn">Subtitle Hints on Video</div>
+                <div class="pool-item-ctl">
+                  <label class="group-switch">
+                    <input id="hitOverlay" type="checkbox">
+                    <span data-key="switchOn">On</span>
+                  </label>
+                </div>
                 <div class="pool-item-demo"></div>
               </div>
             </div>
