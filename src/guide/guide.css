@@ -350,6 +350,12 @@ input::placeholder { color: var(--g-muted); opacity: 1; }
    282次：min-height 26→44px，样例卡不再憋屈 */
 .pool-item-demo { min-height: 44px; display: flex; align-items: center; justify-content: flex-start; overflow: hidden; }
 .pool-item-demo:empty::before { content: '—'; color: var(--g-muted); font-size: 12px; }
+/* 303次：池绘制三组（合成/重绘/重排）——分组 wrapper display:contents 不打断 5 列流，
+   组名与空组占位占整行 */
+.pool-group { display: contents; }
+.pool-group-name { grid-column: 1 / -1; font-size: 13px; font-weight: 600; color: var(--g-primary); margin: 10px 0 2px; }
+.pool-group-name:first-child { margin-top: 0; }
+.pool-group-empty { grid-column: 1 / -1; color: var(--g-muted); font-size: 12px; }
 /* 复制卡内的样式名标签（池卡 card-label 的内联版） */
 .pool-inline-label { font-size: 11px; color: var(--g-text); margin-left: 6px; white-space: nowrap; }
 /* 281次：池顶文本说明（随左栏选中项切换）——正文色，不再灰。
