@@ -64,17 +64,31 @@ export function updateAnnStyle(styleId) {
 
 // 280次：注入统一池样式表（幂等；选择器同 web-sidebar.css 手写版：句子生词
 // .beaver-web-word、行内注释 .beaver-web-ann-inline、详细注释词头 .beaver-web-ann-word）
-function injectAnnPoolCss() {
-  if (document.getElementById('beaver-ann-pool-css-ws')) return;
-  const el = document.createElement('style');
-  el.id = 'beaver-ann-pool-css-ws';
-  el.textContent = buildAnnPoolCss({
+// 301次：个性化/用户条目规则刷新（独立覆盖写 textContent；空即只剩内置池）。
+export function refreshAnnPoolCss(customObj, userList) {
+  let el = document.getElementById('beaver-ann-pool-css-ws');
+  const extra = [];
+  if (customObj && typeof customObj === 'object') {
+    extra.push(Object.assign({ id: 'ann-custom' }, customObj));
+  }
+  if (Array.isArray(userList)) {
+    for (const st of userList) {
+      if (st && typeof st.id === 'string' && st.id.indexOf('ann-user-') === 0) extra.push(st);
+    }
+  }
+  const css = buildAnnPoolCss({
     root: '#beaver-web-sidebar',
     word: '.beaver-web-sub-text .beaver-web-word',
     annInline: '.beaver-web-ann-inline',
-    annWord: '.beaver-web-ann-line .beaver-web-ann-word'
+    annWord: '.beaver-web-ann-line .beaver-web-ann-word',
+    extra
   });
-  document.head.appendChild(el);
+  if (!el) {
+    el = document.createElement('style');
+    el.id = 'beaver-ann-pool-css-ws';
+    document.head.appendChild(el);
+  }
+  el.textContent = css;
 }
 
 // === 启停接口 ===
@@ -116,7 +130,8 @@ export async function startWebSidebar(settings) {
   applyAnnStyle(_settings.annotationStyle);
   // 280次：注入统一池样式表（52 条共享样式，选择器以 #beaver-web-sidebar 为根；
   //   取代 web-sidebar.css 手写 16 条。style id 带 -ws 后缀与视频侧栏 -vs 区分）
-  injectAnnPoolCss();
+  // 301次：带个性化/用户条目缓存注入（settings 无则仅内置池）
+  refreshAnnPoolCss(_settings.annotationCustom, _settings.annotationUserStyles);
   // 反思（2026-08-10）：构建后立即加 collapsed class，确保首次 ballRect 为 48x48。
   _root.classList.add('collapsed');
   // 反思（2026-08-07 修正）：用同步 <style> 注入关键 CSS，不依赖 <link> onload。

@@ -21,7 +21,7 @@ import { t } from '../../lib/i18n.js';
 // 279次：侧邻注释样式候选池共享——pickColors 读取池条目 annBg/annFg
 // 280次：TEXT/ANN 合并为统一池 POOL_STYLES（别名不变）；wordDecl 用于页面类生成；
 //   annBrackets 布尔退役改 annTemplate 模板（DEFAULT_ANN_TEMPLATE 为默认值）
-import { TEXT_STYLES, ANN_STYLES, findStyle, wordDecl, DEFAULT_ANN_TEMPLATE } from '../../lib/styles.js';
+import { TEXT_STYLES, ANN_STYLES, findStyle, resolveAnnEntry, wordDecl, DEFAULT_ANN_TEMPLATE } from '../../lib/styles.js';
 
 // 反思（2026-08-12 第四十一次）：i18n 格式化词阶显示
 //   rankToStage 返回中文（如 "3阶"/"表外"），此处用 i18n 重新格式化
@@ -376,7 +376,8 @@ export function pickColors(s) {
   // 280次：统一池接入——textStyle 命中池条目时，生词底/字色取条目 wordBg/wordFg
   //   （渐变/透明底字符串同样经 --beaver-first-bg 变量生效，页面用 background shorthand）；
   //   优先级：popup 显式 hintFirstBg/Fg > 池条目 > 默认绿白。
-  const txtSt = findStyle(TEXT_STYLES, s.textStyle);
+  // 301次：custom/用户条目经 resolveAnnEntry 解析（settings 直通 caches）。
+  const txtSt = resolveAnnEntry(s.textStyle, s.annotationCustom, s.annotationUserStyles);
   const wordBg = s.hintFirstBg || (txtSt && txtSt.wordBg) || '#2e6b43';
   const wordFg = s.hintFirstFg || (txtSt && txtSt.wordFg) || '#ffffff';
   // 反思（2026-08-15 第六十四次）：透明/半透明底色样式（下划线/荧光/描边等，wordBg=transparent
@@ -393,7 +394,8 @@ export function pickColors(s) {
   // 279次：注释样式候选池共享——annotationStyle 命中池条目（ANN_STYLES）时，
   //   侧邻注释色取条目 annBg/annFg；优先级：显式 hintAnnotationBg/Fg > 池条目 >
   //   默认派生（'none' 无 annBg/annFg 字段，自然落到派生分支，行为与旧版一致）。
-  const annSt = findStyle(ANN_STYLES, s.annotationStyle);
+  // 301次：同上走 resolveAnnEntry（custom/用户条目）。
+  const annSt = resolveAnnEntry(s.annotationStyle, s.annotationCustom, s.annotationUserStyles);
   const opaque = isOpaqueBg(wordBg);
   const annBg = explicitAnnBg || (annSt && annSt.annBg) || (opaque ? wordFg : 'transparent');
   const annFg = explicitAnnFg || (annSt && annSt.annFg) || (opaque ? wordBg : wordFg);
@@ -465,6 +467,42 @@ export function speak(word) {
   console.log(`[VocabRadar][tts] 朗读: ${word}`);
 }
 
+// 301次：单条目文本样式规则（上面 injectStyles 的 map 体抽出；extra 刷新复用）。
+function annTextStyleRule(s) {
+  const rules = wordDecl(s, { important: true, colors: false });
+  // 反思（2026-08-15 第六十四次）：透明/半透明底色样式清除首现 1px 深色描边，
+  //   避免透明底上浮现深色框（用户反馈"透明当作黑色"）。特定选择器覆盖 FIRST_CLASS 描边。
+  if (!isOpaqueBg(s.wordBg)) rules.push('box-shadow:none !important');
+  return 'html.beaver-text-style-' + s.id + ' .' + HIGHLIGHT_CLASS + '{' + rules.join(';') + ';}';
+}
+
+// 301次：个性化/用户条目文本样式规则刷新（#beaver-ann-extra-css-th 独立表；
+//   custom 对象拼 id，用户条目直用；空即清空，不留残留）。
+export function refreshAnnExtraCss(customObj, userList) {
+  let el = document.getElementById('beaver-ann-extra-css-th');
+  const parts = [];
+  if (customObj && typeof customObj === 'object') {
+    parts.push(annTextStyleRule(Object.assign({ id: 'ann-custom' }, customObj)));
+  }
+  if (Array.isArray(userList)) {
+    for (const st of userList) {
+      if (st && typeof st.id === 'string' && st.id.indexOf('ann-user-') === 0) {
+        parts.push(annTextStyleRule(st));
+      }
+    }
+  }
+  if (!parts.length) {
+    if (el) el.textContent = '';
+    return;
+  }
+  if (!el) {
+    el = document.createElement('style');
+    el.id = 'beaver-ann-extra-css-th';
+    document.documentElement.appendChild(el);
+  }
+  el.textContent = parts.join('\n');
+}
+
 // === 样式注入 ===
 // 颜色通过 CSS 变量引用（applyColorVars 写入 :root），改色无需重写样式表
 export function injectStyles() {
@@ -527,13 +565,7 @@ export function injectStyles() {
      * 280次：统一池——字体/边框/描边/着重号/动画等全部字段改由 wordDecl 生成
      *   （colors:false：底色字色仍走 --beaver-first-* 变量，渐变经变量生效）；
      *   isOpaqueBg 已识别渐变底，透明/渐变底同样清除首现 1px 描边。 */
-    ${TEXT_STYLES.filter((s) => s.id !== 'none').map((s) => {
-      const rules = wordDecl(s, { important: true, colors: false });
-      // 反思（2026-08-15 第六十四次）：透明/半透明底色样式清除首现 1px 深色描边，
-      //   避免透明底上浮现深色框（用户反馈"透明当作黑色"）。特定选择器覆盖 FIRST_CLASS 描边。
-      if (!isOpaqueBg(s.wordBg)) rules.push('box-shadow:none !important');
-      return 'html.beaver-text-style-' + s.id + ' .' + HIGHLIGHT_CLASS + '{' + rules.join(';') + ';}';
-    }).join('\n')}
+    ${TEXT_STYLES.filter((s) => s.id !== 'none').map(annTextStyleRule).join('\n')}
     /* 280次：隐藏态清理——统一池新增的描边/着重号/边框/动画/背景图等字段
      *   会让 .beaver-word-later / .beaver-word-hidden 隐藏词露出轮廓，
      *   特异性 (0,3,0) 高于上方生成规则，维持"零重扫隐藏"语义 */

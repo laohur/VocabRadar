@@ -673,6 +673,12 @@ export function startOverlay(video, subtitles, options = {}) {
       if (changes.videoOverlayAnnStyle) {
         setVideoOverlayAnnStyle(changes.videoOverlayAnnStyle.newValue);
       }
+      // 301次：个性化/用户注释规则热更新（类名不变即时生效）
+      if (changes.annotationCustom || changes.annotationUserStyles) {
+        chrome.storage.local.get({ annotationCustom: null, annotationUserStyles: [] }, (res) => {
+          syncAnnCustomRules(res.annotationCustom, res.annotationUserStyles);
+        });
+      }
       if (changes.subtitleCustom) {
         setSubtitleCustom(changes.subtitleCustom.newValue);
       }
@@ -718,6 +724,10 @@ export function startOverlay(video, subtitles, options = {}) {
       setSubtitlePosition(res.subtitlePosition || 'b20');
       if (res.subtitleCustom) setSubtitleCustom(res.subtitleCustom);
       setVideoOverlayAnnStyle(res.videoOverlayAnnStyle || 'none');
+    });
+    // 301次：个性化/用户注释规则初始同步（与正文用户样式表同构，独立键）
+    chrome.storage.local.get({ annotationCustom: null, annotationUserStyles: [] }, (res) => {
+      syncAnnCustomRules(res.annotationCustom, res.annotationUserStyles);
     });
   }
   // 反思（2026-08-16 第七十次）：构建版本 + 生效样式日志——若本日志版本与引导页头部
@@ -921,9 +931,43 @@ export function setSubtitleCustom(c) {
 }
 
 /**
+ * 301次：个性化/用户注释规则表（#beaver-ann-custom-css 独立元素；annDecl 输出，
+ *   font-size 照既有口径过滤；custom 对象拼 id，用户条目直用）。
+ */
+let _annCustomSheet = null;
+export function syncAnnCustomRules(customObj, userList) {
+  const rules = [];
+  const pushEntry = (entry, id) => {
+    const decl = annDecl(entry).filter((d) => !d.startsWith('font-size')).join(';');
+    if (!decl) return;
+    const sel = '#beaver-subtitle-overlay.annstyle-' + id;
+    rules.push(sel + ' .beaver-overlay-subtitle .beaver-side-ann,' +
+      sel + ' .beaver-overlay-ann-word,' +
+      sel + ' .beaver-overlay-ann-trans{' + decl + ';}');
+    rules.push(sel + ' .beaver-overlay-ann-word{font-weight:600;}');
+  };
+  if (customObj && typeof customObj === 'object') {
+    pushEntry(Object.assign({ id: 'ann-custom' }, customObj), 'ann-custom');
+  }
+  if (Array.isArray(userList)) {
+    for (const st of userList) {
+      if (st && typeof st.id === 'string' && st.id.indexOf('ann-user-') === 0) pushEntry(st, st.id);
+    }
+  }
+  if (!_annCustomSheet) {
+    if (!document.head) return;
+    _annCustomSheet = document.createElement('style');
+    _annCustomSheet.id = 'beaver-ann-custom-css';
+    document.head.appendChild(_annCustomSheet);
+  }
+  _annCustomSheet.textContent = rules.join('\n');
+}
+
+/**
  * 281次：应用视频中字幕的注释样式（第四栏池指派，storage.videoOverlayAnnStyle）
  * 注释行外观由 annstyle-{id} 类统一控制（规则见 buildSubtitleStyleCss），
  * 纯外观切换，CSS 即时作用于现有 DOM，无需重渲染字幕。
+ * 301次：ann-custom/ann-user-* 同样挂类（规则由 syncAnnCustomRules 提供）。
  * @param {string} id 池样式 id，'none' 表示不启用（回退基础透明白字）
  */
 export function setVideoOverlayAnnStyle(id) {
@@ -931,7 +975,8 @@ export function setVideoOverlayAnnStyle(id) {
   for (const cls of Array.from(_overlay.classList)) {
     if (cls.indexOf('annstyle-') === 0) _overlay.classList.remove(cls);
   }
-  const s = (id && id !== 'none') ? findStyle(POOL_STYLES, id) : null;
+  const known = (id === 'ann-custom') || (id && id.indexOf('ann-user-') === 0);
+  const s = (id && id !== 'none') ? (known ? { id } : findStyle(POOL_STYLES, id)) : null;
   if (id && id !== 'none' && !s) {
     console.warn(`[VocabRadar][overlay] 字幕注释样式 "${id}" 已不存在，回退基础注释外观`);
   }

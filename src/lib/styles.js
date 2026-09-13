@@ -276,21 +276,46 @@ export function annDecl(s, opts = {}) {
   return d;
 }
 
+// 301次：注释样式统一解析（内置池 / 个性化 ann-custom / 用户自建 ann-user-*）——
+//   四消费点（网页提示/文本侧栏/视频侧栏/叠加字幕注释）共用；未知 id 回落 'none'。
+export function resolveAnnEntry(id, customObj, userList) {
+  if (id === 'ann-custom' && customObj && typeof customObj === 'object') {
+    return Object.assign({ id: 'ann-custom', label: { en: 'Custom', zh: '个性化' } }, customObj);
+  }
+  if (id && id.indexOf('ann-user-') === 0 && Array.isArray(userList)) {
+    const st = userList.find((s) => s && s.id === id);
+    if (st) return st;
+  }
+  return findStyle(POOL_STYLES, id) || findStyle(POOL_STYLES, 'none');
+}
+
+// 301次：个性化注释样式 CSS 代码文本（双区段，与 wordDecl/annDecl 同源，供代码框展示/解析）。
+export function annCustomCssText(o) {
+  const w = wordDecl({
+    wordBg: o.wordBg, wordFg: o.wordFg, radius: o.radius, bold: o.bold, deco: o.deco
+  }).join(';\n');
+  const a = annDecl({ annBg: o.annBg, annFg: o.annFg, radius: o.radius }).join(';\n');
+  return '/* target */\n' + (w ? w + ';\n' : '') + '/* annotation */\n' + (a ? a + ';' : '');
+}
+
 /** 生成一个容器的统一池样式表（280次）。
  *  入参为该容器内部既有类名（三类，同 279 次手写 CSS 的选择器）：
  *    root：容器选择器（如 '#beaver-sidebar'），池类 beaver-ann-style-{id} 挂在它上；
  *    word：生词块选择器（含祖先，如 '.beaver-sub-text .beaver-word'）；
  *    annInline：行内注释选择器（如 '.beaver-ann-inline'）；
  *    annWord：详细注释词头选择器（如 '.beaver-ann-line .beaver-ann-word'）。
- *  颜色与字体属性全部 !important（覆盖容器基础配色），与手写版行为一致。 */
-export function buildAnnPoolCss({ root, word, annInline, annWord }) {
+ *  颜色与字体属性全部 !important（覆盖容器基础配色），与手写版行为一致。
+ *  301次：extra 追加条目（个性化 custom 对象 / 用户条目数组拍平），同口径生成
+ *   beaver-ann-style-{id} 规则（调用方刷新时重调本函数覆盖旧表）。 */
+export function buildAnnPoolCss({ root, word, annInline, annWord, extra }) {
   const parts = [];
-  for (const s of POOL_STYLES) {
+  const all = POOL_STYLES.concat(Array.isArray(extra) ? extra.filter((s) => s && s.id && s.id !== 'none') : []);
+  for (const s of all) {
     if (s.id === 'none') continue;
     const wd = wordDecl(s, { important: true }).join(';');
     const ad = annDecl(s, { important: true }).join(';');
-    parts.push(`${root} ${word}{${wd};}`);
-    parts.push(`${root} ${annInline},${root} ${annWord}{${ad};}`);
+    parts.push(`${root}.beaver-ann-style-${s.id} ${word}{${wd};}`);
+    parts.push(`${root}.beaver-ann-style-${s.id} ${annInline},${root}.beaver-ann-style-${s.id} ${annWord}{${ad};}`);
   }
   // blink 动画 keyframes（s21；动画只改 background-color，覆盖 !important 静态底色）
   parts.push('@keyframes beaver-ann-blink{0%,100%{background-color:#fde68a}50%{background-color:transparent}}');

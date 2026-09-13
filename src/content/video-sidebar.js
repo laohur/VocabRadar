@@ -289,6 +289,9 @@ async function loadSettings() {
       // 280次：videoAnnotationStyle 复活——三功能独立选样式（多对多），与共享池同 id 集
       annotationStyle: 'none',
       videoAnnotationStyle: 'none',
+      // 301次：个性化/用户条目缓存（规则表刷新用）
+      annotationCustom: null,
+      annotationUserStyles: [],
       // 280次：侧邻注释模板（annBrackets 布尔退役；284次默认 {target} {annotation}）
       annTemplate: '{target} {annotation}'
     }, resolve);
@@ -1407,6 +1410,8 @@ export async function startSidebar(video, options = {}) {
     applyColorSettings(settings);
     // 280次：videoAnnotationStyle 复活——三功能独立选样式（多对多），与共享池同 id 集；
     //   （279 次曾并入 annotationStyle，本轮引导页重组后文本侧栏/视频侧栏各自独立选择）
+    // 301次：个性化/用户条目规则先行注入（类切换即时生效）
+    refreshAnnPoolCss(settings.annotationCustom, settings.annotationUserStyles);
     applyAnnStyle(settings.videoAnnotationStyle);
     // 从 storage 读取注释模式（引导页 radio 或 Detail 按钮写入）
     const annMode = settings.videoSidebarAnnMode || (settings.subtitleDetailMode ? 'detail' : 'side');
@@ -1428,10 +1433,13 @@ export async function startSidebar(video, options = {}) {
     chrome.storage.onChanged.addListener((changes, area) => {
       if (area !== 'local') return;
       const colorKeys = ['hintFirstBg', 'hintFirstFg', 'hintLaterBg', 'hintLaterFg', 'hintAnnotationBg', 'hintAnnotationFg', 'videoSidebarAnnMode'];
-      if (!colorKeys.some((k) => k in changes) && !('videoAnnotationStyle' in changes) && !('videoAnnTemplate' in changes)) return;
+      if (!colorKeys.some((k) => k in changes) && !('videoAnnotationStyle' in changes) && !('videoAnnTemplate' in changes)
+        && !('annotationCustom' in changes) && !('annotationUserStyles' in changes)) return;
       // 读取完整设置后应用（避免部分更新遗漏）
       loadSettings().then((s) => {
         applyColorSettings(s);
+        // 301次：个性化/用户条目规则先刷新（类切换即时生效）
+        refreshAnnPoolCss(s.annotationCustom, s.annotationUserStyles);
         applyAnnStyle(s.videoAnnotationStyle);
         // 280次：注释模板热更新——前后缀变化需重绘（渲染时按模板分段拼装）
         // 283次：模板分键——annTemplate → videoAnnTemplate
@@ -1497,18 +1505,35 @@ function applyAnnStyle(styleId) {
 //   取代 sidebar.css 手写 16 条（文本侧栏 web-sidebar-impl.js 亦同源注入）。
 injectAnnPoolCss();
 
-/** 注入统一池样式表（幂等；style id 带 -vs 后缀，与文本侧栏 -ws 区分，二者可能共存一页） */
-function injectAnnPoolCss() {
-  if (document.getElementById('beaver-ann-pool-css-vs')) return;
-  const el = document.createElement('style');
-  el.id = 'beaver-ann-pool-css-vs';
-  el.textContent = buildAnnPoolCss({
+/** 注入统一池样式表（style id 带 -vs 后缀，与文本侧栏 -ws 区分，二者可能共存一页） */
+// 301次：个性化/用户条目规则刷新（独立覆盖写 textContent；空即只剩内置池）。
+function refreshAnnPoolCss(customObj, userList) {
+  let el = document.getElementById('beaver-ann-pool-css-vs');
+  const extra = [];
+  if (customObj && typeof customObj === 'object') {
+    extra.push(Object.assign({ id: 'ann-custom' }, customObj));
+  }
+  if (Array.isArray(userList)) {
+    for (const st of userList) {
+      if (st && typeof st.id === 'string' && st.id.indexOf('ann-user-') === 0) extra.push(st);
+    }
+  }
+  const css = buildAnnPoolCss({
     root: '#beaver-sidebar',
     word: '.beaver-sub-text .beaver-word',
     annInline: '.beaver-ann-inline',
-    annWord: '.beaver-ann-line .beaver-ann-word'
+    annWord: '.beaver-ann-line .beaver-ann-word',
+    extra
   });
-  document.head.appendChild(el);
+  if (!el) {
+    el = document.createElement('style');
+    el.id = 'beaver-ann-pool-css-vs';
+    document.head.appendChild(el);
+  }
+  el.textContent = css;
+}
+function injectAnnPoolCss() {
+  refreshAnnPoolCss(null, null);
 }
 
 // === 字幕到达后填充视频提示 ===

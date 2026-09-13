@@ -78,6 +78,10 @@
 //   （none 同改 7%，之前 6% 是误改，即改回；认错）。
 // 第二百九十七次：基线改视频短边＋默认 5%＋删 clamp（失真）。
 // 第二百九十八次（用户笔误纠正）：基线改回统一视频高（短边方案作废）；底色问题见汇报（代码未动）。
+// 第三百零一次（注释 Sample＋Custom，仿字幕结构；其他不动）：样例行（annotationSample，
+//   默认 vocab radar，只注释末词，动态链路同字幕）＋个性化行（七控件＋双区段 CSS 代码＋
+//   右侧卡＋大＋号，用户卡改名/删除/点击回填）＋统一解析器与四消费点接线；另修潜伏 bug：
+//   buildAnnPoolCss 52 条同选择器致末条通吃，补 beaver-ann-style-{id} 限定（只会让选择生效）。
 // 第二百九十三次（字号百分比，297-298次修订为视频高基线＋默认 5%＋无 clamp）：
 //   overlay 全样式走 --beaver-sub-fs 实时变量；guide 卡片 540/预览 1080 同口径换算；
 //   旧值三处一次性迁移（custom/用户条目）；短释义分隔符拓宽（radar 例）。
@@ -91,11 +95,13 @@ import {
   DEFAULT_ANN_TEMPLATE, splitAnnTemplate,
   SUBTITLE_TEXT_STYLES, SUBTITLE_POSITIONS, findStyle, styleLabel, BUILD_STAMP,
   SUB_FONT_OPTIONS, SUB_FX_OPTIONS, subFontFamily, subFxDecl, buildUserStyleDecl,
-  SUBTITLE_REF_H, pxToSizePct, sizePctToPx, subFontSizePct
+  SUBTITLE_REF_H, pxToSizePct, sizePctToPx, subFontSizePct,
+  resolveAnnEntry, annCustomCssText
 } from '../lib/styles.js';
 // 291次：预览动态注释（释义语言/词频跟随真实注解链路；guide-common 亦引此二模块，无新增依赖边）
 import { getAnnotations } from '../lib/annotator.js';
 import { ensureReady } from '../lib/dictionary.js';
+// 注：pickCleanShortTrans 已于 291 次引入（预览动态注释），301 次池样例复用，不重复引。
 // 292次：侧邻注释截短（与 guide-common 同源的短释义选取）
 import { pickCleanShortTrans } from '../lib/dict-clean.js';
 // 第二百五十三次：asr-common.js 名实不符改名 guide-common.js（import 同步）
@@ -322,6 +328,19 @@ const MSG = {
   poolItemWebHint: { en: 'Web Hints', zh: '网页提示' },
   poolItemWebSidebar: { en: 'Text Sidebar', zh: '文本侧栏' },
   poolItemSidebar: { en: 'Video Sidebar', zh: '视频侧栏' },
+  // 301次：注释样例行＋个性化行文案（仿字幕 Custom Style 结构）
+  annSampleText: { en: 'Sample text', zh: '样例文字' },
+  annSamplePh: { en: 'Sample sentence for style cards', zh: '样式卡展示用的样例句子' },
+  annCustomStyle: { en: 'Custom Style', zh: '个性化样式' },
+  annCustomCssPh: { en: 'CSS code of the custom annotation style — view and edit', zh: '个性化注释样式的 CSS 代码——可查看编辑' },
+  annAddStyle: { en: 'Save current custom settings as a new annotation style', zh: '把当前个性化参数保存为新注释样式' },
+  annCustomWordBg: { en: 'Word BG', zh: '生词底色' },
+  annCustomWordFg: { en: 'Word', zh: '生词字色' },
+  annCustomAnnBg: { en: 'Ann BG', zh: '注释底色' },
+  annCustomAnnFg: { en: 'Ann', zh: '注释字色' },
+  annCustomRadius: { en: 'Radius', zh: '圆角' },
+  annCustomDeco: { en: 'Line', zh: '装饰线' },
+  annCustomBold: { en: 'Bold', zh: '加粗' },
   // 281次：左列第四栏——视频叠加字幕的注释行样式（正文样式在下方视频叠加字幕组内选）
   poolItemSubAnn: { en: 'Subtitle Hints on Video', zh: '视频中字幕的注释' },
   // 281次：池顶文本说明（随左栏选中项切换；"最上是文本说明"）
@@ -380,10 +399,7 @@ const MSG = {
   ocrResultsTitle: { en: 'Recognition Results', zh: '识别结果' },
   ocrResultTip: { en: 'Recognized text will appear here.', zh: '识别出的文字将显示在这里。' },
   helpTitle: { en: 'User Guide', zh: '使用说明' },
-  wordDemo: { en: 'word', zh: '单词' },
-  // 282次：样例释义去括号（用户"候选项的释义不要加()"）——括号此前硬编码在键值里，
-  //   池卡样例按 annTemplate 拆分拼接，模板 {word}{meaning} 下直接输出裸释义
-  transDemo: { en: 'meaning', zh: '释义' },
+  // 301次：wordDemo/transDemo 退役（池卡样例改用户输入句，不再用固定词/释义键）
   subWord: { en: 'word', zh: '单词' },
   subTrans: { en: 'meaning', zh: '释义' }
 };
@@ -550,6 +566,23 @@ const _poolSel = {
 };
 // 281次：左列当前选中栏（点击 .pool-item 切换；池卡点击指派给该栏）
 let _poolTarget = 'textStyle';
+// 301次：注释个性化参数（Custom 行七控件；好看预设：青瓷底白字成对互换）＋用户自建缓存
+let _annCustom = { wordBg: '#e0f2f1', wordFg: '#004d40', annBg: '#004d40', annFg: '#e0f2f1', radius: '4px', bold: true };
+let _annUserStyles = [];
+// 301次：装饰线形选项（none/underline/wavy/dashed/dotted；颜色取注释字色，见 buildAnnCustomObj）
+const ANN_DECO_OPTIONS = [
+  { id: 'none', en: 'None', zh: '无' },
+  { id: 'underline', en: 'Underline', zh: '下划线' },
+  { id: 'wavy', en: 'Wavy', zh: '波浪线' },
+  { id: 'dashed', en: 'Dashed', zh: '虚线' },
+  { id: 'dotted', en: 'Dotted', zh: '点线' }
+];
+// 301次：注释样例（池卡共用；默认 vocab radar，只注释末词 radar，注释走动态链路）
+const DEFAULT_ANN_SAMPLE = 'vocab radar';
+let _annSample = DEFAULT_ANN_SAMPLE;
+let _annSampleTrans = new Map();
+let _annSampleTimer = 0;
+let _annSampleBusy = false;
 // 281次：个性化字幕样式缓存（storage.subtitleCustom，renderAll 回填）。
 //   282次：加 fx 特效字段（与 Custom 特效下拉/大加号保存的用户样式共用参数集）
 // 283次：默认改为"能直接用"的样式（用户裁定：底色透明、字号不小、投影特效）——
@@ -574,17 +607,64 @@ let _overlayAnnMode = 'side';
 function renderPoolGrid() {
   const grid = $('poolStyleGrid');
   grid.innerHTML = '';
-  for (const item of POOL_STYLES) {
-    if (item.id === 'none') continue;
+  const buildCard = (item) => {
     const card = document.createElement('div');
     card.className = 'style-card' + (_poolSel[_poolTarget] === item.id ? ' active' : '');
     card.dataset.style = item.id;
     card.appendChild(poolCardDemo(item));
-    const label = document.createElement('div');
-    label.className = 'card-label';
-    label.textContent = styleLabel(item, _lang);
-    card.appendChild(label);
+    return card;
+  };
+  const buildLabel = (item, editable) => {
+    if (!editable) {
+      const label = document.createElement('div');
+      label.className = 'card-label';
+      label.textContent = styleLabel(item, _lang);
+      return label;
+    }
+    const input = document.createElement('input');
+    input.type = 'text';
+    input.className = 'card-label-input';
+    input.value = styleLabel(item, _lang);
+    input.title = m('subRenameStyle');
+    input.addEventListener('click', (e) => e.stopPropagation());
+    input.addEventListener('keydown', (e) => e.stopPropagation());
+    input.addEventListener('change', () => {
+      const v = input.value.trim();
+      if (!v) { input.value = styleLabel(item, _lang); return; }
+      const st = _annUserStyles.find((s) => s && s.id === item.id);
+      if (!st) return;
+      st.label = { en: v, zh: v };
+      markOwnWrite();
+      chrome.storage.local.set({ annotationUserStyles: _annUserStyles }, () => log('annUserStyle rename=', item.id));
+    });
+    return input;
+  };
+  for (const item of POOL_STYLES) {
+    if (item.id === 'none') continue;
+    const card = buildCard(item);
+    card.appendChild(buildLabel(item, false));
     grid.appendChild(card);
+  }
+  // 301次：个性化卡（Custom 行参数的实时样例；点击选中 custom，与内置卡同逻辑）
+  const customObj = buildAnnCustomObj();
+  const ccard = buildCard(customObj);
+  ccard.appendChild(buildLabel(customObj, false));
+  grid.appendChild(ccard);
+  // 301次：用户自建卡（改名 input＋删除钮；点击选中/回填走通用逻辑）
+  for (const st of _annUserStyles) {
+    const ucard = buildCard(st);
+    const del = document.createElement('button');
+    del.className = 'sub-card-del';
+    del.type = 'button';
+    del.textContent = '×';
+    del.title = m('subDelStyle');
+    del.addEventListener('click', (e) => {
+      e.stopPropagation();
+      deleteAnnUserStyle(st.id);
+    });
+    ucard.appendChild(del);
+    ucard.appendChild(buildLabel(st, true));
+    grid.appendChild(ucard);
   }
 }
 
@@ -671,22 +751,87 @@ function bindPoolLeft() {
 
 // 281次：池卡样例——wordDecl/annDecl 生成器输出作 cssText（与真实渲染同源，覆盖渐变/描边/
 //   空心/着重号/SVG 波浪等全部新字段）；注释文本按 annTemplate 拆出 {meaning} 前后字面量。
+// 301次：样例改用户输入句（_annSample，默认 vocab radar）——前文原样，末拉丁词为注释词，
+//   释义取动态缓存（字幕同款链路），无缓存暂不渲染注释行（fetch 回来重绘补上）。
+function annSampleModel() {
+  const text = _annSample || DEFAULT_ANN_SAMPLE;
+  const words = [];
+  const re = /[A-Za-z]+/g;
+  let m;
+  while ((m = re.exec(text))) words.push({ word: m[0], index: m.index, end: m.index + m[0].length });
+  const last = words.length ? words[words.length - 1] : null;
+  const { pre, post } = splitAnnTemplate(_poolSel[ANN_TPL_KEYS[_poolTarget]] || DEFAULT_ANN_TEMPLATE);
+  const trans = (last && _annSampleTrans.get(last.word.toLowerCase())) || '';
+  return { text, last, pre, post, trans };
+}
 function poolCardDemo(item) {
   const demo = document.createElement('div');
   demo.className = 'demo';
-  const w = document.createElement('span');
-  w.className = 'word-demo';
-  w.textContent = m('wordDemo');
-  w.style.cssText = wordDecl(item).join(';');
-  demo.appendChild(w);
-  // 283次：样例注释文本按当前选中栏的模板拆分（模板分键，不再固定读 textStyle 栏的 annTemplate）
-  const { pre, post } = splitAnnTemplate(_poolSel[ANN_TPL_KEYS[_poolTarget]] || DEFAULT_ANN_TEMPLATE);
-  const a = document.createElement('span');
-  a.className = 'ann-demo';
-  a.textContent = pre + m('transDemo') + post;
-  a.style.cssText = annDecl(item).join(';');
-  demo.appendChild(a);
+  const model = annSampleModel();
+  const lead = model.last ? model.text.slice(0, model.last.index) : model.text;
+  if (lead) {
+    const l = document.createElement('span');
+    l.textContent = lead;
+    demo.appendChild(l);
+  }
+  if (model.last) {
+    const w = document.createElement('span');
+    w.className = 'word-demo';
+    w.textContent = model.last.word;
+    w.style.cssText = wordDecl(item).join(';');
+    demo.appendChild(w);
+    if (model.trans) {
+      const a = document.createElement('span');
+      a.className = 'ann-demo';
+      a.textContent = model.pre + model.trans + model.post;
+      a.style.cssText = annDecl(item).join(';');
+      demo.appendChild(a);
+    }
+    const tail = model.text.slice(model.last.end);
+    if (tail) {
+      const t = document.createElement('span');
+      t.textContent = tail;
+      demo.appendChild(t);
+    }
+  }
   return demo;
+}
+
+// 301次：样例末词动态注释（字幕 schedulePreviewAnns 同款：防抖＋忙互斥＋过期丢弃＋失败沿用缓存）。
+//   阈值传 0（展示位恒注释，不做词频过滤；释义语言走 translator 当前目标语言）。
+function scheduleAnnSample() {
+  if (_annSampleTimer) clearTimeout(_annSampleTimer);
+  _annSampleTimer = setTimeout(refreshAnnSample, 600);
+}
+async function refreshAnnSample() {
+  _annSampleTimer = 0;
+  if (_annSampleBusy) { scheduleAnnSample(); return; }
+  _annSampleBusy = true;
+  const text = _annSample || DEFAULT_ANN_SAMPLE;
+  const words = [];
+  const re = /[A-Za-z]+/g;
+  let m;
+  while ((m = re.exec(text))) words.push(m[0]);
+  const last = words.length ? words[words.length - 1] : '';
+  try {
+    try { await ensureReady(); } catch (_) { /* 降级：用缓存/空注释 */ }
+    if (text !== (_annSample || DEFAULT_ANN_SAMPLE)) return;
+    const anns = await getAnnotations(last, 0, new Set(), null, false);
+    if (text !== (_annSample || DEFAULT_ANN_SAMPLE)) return;
+    const hit = (anns || []).find((a) => a && String(a.word).toLowerCase() === last.toLowerCase());
+    const t = hit ? pickCleanShortTrans(hit.translations || []) : '';
+    const map = new Map(_annSampleTrans);
+    if (t) map.set(last.toLowerCase(), t);
+    else map.delete(last.toLowerCase());
+    _annSampleTrans = map;
+    renderPoolGrid();
+    renderPoolSideDemos();
+    updateAnnCustomSideCard();
+  } catch (e) {
+    console.warn('[VocabRadar][guide] 池样例注释获取失败，沿用旧缓存:', e && e.message);
+  } finally {
+    _annSampleBusy = false;
+  }
 }
 
 // 281次：池卡点击指派——点池卡=指派给左栏选中栏（再点同卡取消，回落 'none'）。
@@ -702,8 +847,11 @@ function bindPoolGrid() {
     const feat = _poolTarget;
     const next = (_poolSel[feat] === card.dataset.style) ? 'none' : card.dataset.style;
     _poolSel[feat] = next;
+    // 301次：指派写 storage 即打回声戳——本页已即时切类，跳过回声全量重建（281"不重渲染"本意）。
+    markOwnWrite();
     if (feat === 'textStyle') {
-      const st = next === 'none' ? null : findStyle(POOL_STYLES, next);
+      // 301次：联动解析改统一入口（custom/用户条目亦可派生前后景）
+      const st = next === 'none' ? null : resolveAnnEntry(next, buildAnnCustomObj(), _annUserStyles);
       chrome.storage.local.set({
         textStyle: next,
         hintFirstBg: (st && st.wordBg) || '#2e6b43',
@@ -711,6 +859,11 @@ function bindPoolGrid() {
       }, () => log('textStyle=', next));
     } else {
       chrome.storage.local.set({ [feat]: next }, () => log(feat + '=', next));
+    }
+    // 301次：点用户卡回填个性化行（仿字幕；custom 卡即当前控件参数，无需回填）
+    if (next !== 'none' && next !== 'ann-custom') {
+      const us = _annUserStyles.find((s) => s && s.id === next);
+      if (us) backfillAnnCustomFrom(us);
     }
     grid.querySelectorAll('.style-card').forEach((c) => {
       c.classList.toggle('active', c.dataset.style === _poolSel[feat]);
@@ -1312,6 +1465,354 @@ function backfillSubCustomFrom(obj) {
   updateCustomSideCard();
 }
 
+// 301次：注释个性化对象合成（_annCustom → 池条目结构，id 'ann-custom'）。
+//   deco 存 _annCustom 内（select 只是它的编辑器），重载不丢。
+function buildAnnCustomObj() {
+  return Object.assign(
+    { id: 'ann-custom', label: { en: 'Custom', zh: '个性化' } },
+    _annCustom
+  );
+}
+
+// 301次：装饰线 select 值 → deco 对象（颜色取注释字色；none 即无装饰字段）。
+function decoFromSelect() {
+  const sel = $('annCustomDeco');
+  const id = sel ? sel.value : 'none';
+  if (!id || id === 'none') return undefined;
+  return { line: 'underline', style: id, color: _annCustom.annFg };
+}
+let _annSampleSaveTimer = 0;
+
+// 301次：装饰线下拉填充（选项双语随界面语言；renderAll 每轮调用，幂等重建）。
+function fillAnnCustomDeco() {
+  const sel = $('annCustomDeco');
+  if (!sel) return;
+  sel.innerHTML = '';
+  for (const o of ANN_DECO_OPTIONS) {
+    const opt = document.createElement('option');
+    opt.value = o.id;
+    opt.textContent = (_lang === 'zh') ? o.zh : o.en;
+    sel.appendChild(opt);
+  }
+  sel.value = (_annCustom.deco && _annCustom.deco.style) || $('annCustomDeco').dataset.want || 'none';
+}
+
+// 301次：个性化 CSS 代码文本（与 wordDecl/annDecl 同源，见 styles.annCustomCssText）。
+function refreshAnnCustomCssText() {
+  const ta = $('annCustomCss');
+  if (!ta) return;
+  if (document.activeElement === ta) return;
+  ta.value = annCustomCssText(buildAnnCustomObj());
+}
+
+// 301次：注释 CSS 解析回填七控件——仅识别生成子集（background/color/border-radius/
+//   font-weight/font-style/text-decoration），未知忽略；全无可识别沿用旧参数并照实打日志。
+//   双区段按 /* annotation */ 标记切分（无标记视为全 Target 区）。
+function parseAnnCustomCssText(text) {
+  const out = {};
+  const src = String(text || '');
+  const ai = src.indexOf('/* annotation */');
+  const wText = ai === -1 ? src : src.slice(0, ai);
+  const aText = ai === -1 ? '' : src.slice(ai);
+  const scan = (part, zone) => {
+    for (const seg of part.split(';')) {
+      const i = seg.indexOf(':');
+      if (i === -1) continue;
+      const prop = seg.slice(0, i).trim().toLowerCase();
+      const val = seg.slice(i + 1).trim();
+      if (!val || /\/\*/.test(prop)) continue;
+      if (prop === 'background' || prop === 'background-color') {
+        if (/^#[0-9a-fA-F]{6}$/.test(val) || /^transparent$/i.test(val) || /^rgba?\(/i.test(val)) {
+          out[zone === 'w' ? 'wordBg' : 'annBg'] = val;
+        }
+      } else if (prop === 'color') {
+        if (/^#[0-9a-fA-F]{6}$/.test(val)) out[zone === 'w' ? 'wordFg' : 'annFg'] = val;
+      } else if (prop === 'border-radius' && zone === 'w' && !out.radius) {
+        out.radius = val;
+      } else if (prop === 'font-weight' && zone === 'w' && !out.boldSet) {
+        out.boldSet = true;
+        out.bold = /^(600|700|800|bold)$/i.test(val);
+      } else if (prop === 'text-decoration' && zone === 'w' && !out.decoSet) {
+        out.decoSet = true;
+        const m = val.match(/underline/i);
+        if (m) {
+          const st = /wavy/i.test(val) ? 'wavy' : (/dashed/i.test(val) ? 'dashed'
+            : (/dotted/i.test(val) ? 'dotted' : 'underline'));
+          out.deco = st;
+        } else {
+          out.deco = 'none';
+        }
+      }
+    }
+  };
+  scan(wText, 'w');
+  scan(aText, 'a');
+  delete out.boldSet;
+  delete out.decoSet;
+  return out;
+}
+
+// 301次：七控件统一应用（Custom 行改动与代码框改动共用）——设参数＋当前栏指派 custom＋
+///  持久化（annotationCustom＋目标键，textStyle 联动 hintFirstBg/Fg）＋原地刷新。
+function applyAnnCustomControls() {
+  const wb = $('annCustomWordBg'), wf = $('annCustomWordFg'),
+    ab = $('annCustomAnnBg'), af = $('annCustomAnnFg'),
+    ra = $('annCustomRadius'), dc = $('annCustomDeco'), bo = $('annCustomBold');
+  if (!wb || !wf || !ab || !af || !ra || !dc || !bo) return;
+  _annCustom = {
+    wordBg: wb.value || 'transparent',
+    wordFg: wf.value || '#004d40',
+    annBg: ab.value || '#004d40',
+    annFg: af.value || '#e0f2f1',
+    radius: (ra.value || '').trim() || '4px',
+    bold: !!bo.checked,
+    deco: (!dc.value || dc.value === 'none')
+      ? undefined : { line: 'underline', style: dc.value, color: (af.value || '#e0f2f1') }
+  };
+  dc.dataset.want = dc.value;
+  assignAnnCustomToTarget();
+  markOwnWrite();
+  chrome.storage.local.set({ annotationCustom: _annCustom },
+    () => log('annotationCustom=', JSON.stringify(_annCustom)));
+  updateAnnCustomSideCard();
+  refreshAnnCustomCssText();
+}
+
+// 301次：当前栏指派 custom（控件改动/代码改动/右侧卡点击共用）——写目标键＋textStyle 联动。
+function assignAnnCustomToTarget() {
+  const feat = _poolTarget;
+  _poolSel[feat] = 'ann-custom';
+  const obj = buildAnnCustomObj();
+  const patch = {};
+  patch[feat] = 'ann-custom';
+  if (feat === 'textStyle') {
+    patch.hintFirstBg = obj.wordBg || '#2e6b43';
+    patch.hintFirstFg = obj.wordFg || '#ffffff';
+  }
+  markOwnWrite();
+  chrome.storage.local.set(patch, () => log(feat + '= ann-custom'));
+  const grid = $('poolStyleGrid');
+  if (grid) grid.querySelectorAll('.style-card').forEach((c) => {
+    c.classList.toggle('active', c.dataset.style === 'ann-custom');
+  });
+  renderPoolSideDemos();
+}
+
+// 301次：代码框改动应用——解析→写回七控件→走统一应用路径；成功后重生成规范文本；
+//   全无可识别回滚旧代码并照实打日志。
+function applyAnnCustomCssText() {
+  const ta = $('annCustomCss');
+  if (!ta) return;
+  const parsed = parseAnnCustomCssText(ta.value);
+  const keys = Object.keys(parsed);
+  if (!keys.length) {
+    console.warn('[VocabRadar][guide] 注释 CSS 无可识别声明，沿用旧参数');
+    ta.value = annCustomCssText(buildAnnCustomObj());
+    return;
+  }
+  if (parsed.wordBg) $('annCustomWordBg').value = /^#[0-9a-fA-F]{6}$/.test(parsed.wordBg) ? parsed.wordBg : '#000000';
+  if (parsed.wordFg) $('annCustomWordFg').value = parsed.wordFg;
+  if (parsed.annBg) $('annCustomAnnBg').value = /^#[0-9a-fA-F]{6}$/.test(parsed.annBg) ? parsed.annBg : '#000000';
+  if (parsed.annFg) $('annCustomAnnFg').value = parsed.annFg;
+  if (parsed.radius) $('annCustomRadius').value = parsed.radius;
+  if (parsed.deco) {
+    fillAnnCustomDeco();
+    $('annCustomDeco').dataset.want = parsed.deco;
+    $('annCustomDeco').value = parsed.deco;
+  }
+  if (typeof parsed.bold === 'boolean') $('annCustomBold').checked = parsed.bold;
+  // rgba/transparent 底色取色器放不下：沿用旧色值（上两行已按 #rrggbb 设），如实注明
+  applyAnnCustomControls();
+  ta.value = annCustomCssText(buildAnnCustomObj());
+  try { ta.focus(); } catch (_) { /* ignore */ }
+}
+
+// 301次：右侧样例卡原地刷新（常驻 word＋ann 双 span，只改样式与文本，不替换节点去闪）。
+function updateAnnCustomSideCard() {
+  const card = $('annCustomSideCard');
+  if (!card) return;
+  card.classList.toggle('active', _poolSel[_poolTarget] === 'ann-custom');
+  const demo = $('annCustomSideDemo');
+  const model = annSampleModel();
+  const obj = buildAnnCustomObj();
+  if (demo) {
+    let w = demo.querySelector('.word-demo');
+    let a = demo.querySelector('.ann-demo');
+    if (!w) {
+      demo.innerHTML = '';
+      w = document.createElement('span');
+      w.className = 'word-demo';
+      demo.appendChild(w);
+      a = document.createElement('span');
+      a.className = 'ann-demo';
+      demo.appendChild(a);
+    }
+    w.style.cssText = wordDecl(obj).join(';');
+    const word = model.last ? model.last.word : model.text;
+    if (w.textContent !== word) w.textContent = word;
+    a.style.cssText = annDecl(obj).join(';');
+    const annText = model.last && model.trans ? (model.pre + model.trans + model.post) : '';
+    if (a.textContent !== annText) a.textContent = annText;
+    a.style.display = annText ? '' : 'none';
+  }
+  const lab = $('annCustomSideLabel');
+  if (lab) {
+    const t = styleLabel(obj, _lang);
+    if (lab.textContent !== t) lab.textContent = t;
+  }
+}
+
+// 301次：七控件＋代码框＋右侧卡＋样例行绑定（各只绑一次）。
+function bindAnnCustom() {
+  const wb = $('annCustomWordBg');
+  if (!wb || wb.dataset.bound) return;
+  wb.dataset.bound = '1';
+  const apply = () => applyAnnCustomControls();
+  for (const id of ['annCustomWordBg', 'annCustomWordFg', 'annCustomAnnBg', 'annCustomAnnFg',
+    'annCustomRadius', 'annCustomDeco', 'annCustomBold']) {
+    const el = $(id);
+    if (el) el.addEventListener('change', apply);
+  }
+  const ta = $('annCustomCss');
+  if (ta && !ta.dataset.bound) {
+    ta.dataset.bound = '1';
+    ta.addEventListener('change', applyAnnCustomCssText);
+  }
+  const card = $('annCustomSideCard');
+  if (card && !card.dataset.bound) {
+    card.dataset.bound = '1';
+    card.addEventListener('click', () => {
+      assignAnnCustomToTarget();
+      updateAnnCustomSideCard();
+    });
+  }
+  const sample = $('annSampleText');
+  if (sample && !sample.dataset.bound) {
+    sample.dataset.bound = '1';
+    sample.addEventListener('input', () => {
+      const v = sample.value.trim();
+      _annSample = v || DEFAULT_ANN_SAMPLE;
+      if (_annSampleSaveTimer) clearTimeout(_annSampleSaveTimer);
+      _annSampleSaveTimer = setTimeout(() => {
+        _annSampleSaveTimer = 0;
+        markOwnWrite();
+        chrome.storage.local.set({ annotationSample: _annSample }, () => log('annotationSample=', _annSample));
+      }, 500);
+      renderPoolGrid();
+      renderPoolSideDemos();
+      updateAnnCustomSideCard();
+      scheduleAnnSample();
+    });
+    sample.addEventListener('change', () => {
+      if (_annSampleSaveTimer) { clearTimeout(_annSampleSaveTimer); _annSampleSaveTimer = 0; }
+      const v = sample.value.trim();
+      _annSample = v || DEFAULT_ANN_SAMPLE;
+      if (!v) sample.value = _annSample;
+      markOwnWrite();
+      chrome.storage.local.set({ annotationSample: _annSample }, () => log('annotationSample=', _annSample));
+      renderPoolGrid();
+      renderPoolSideDemos();
+      updateAnnCustomSideCard();
+      scheduleAnnSample();
+    });
+  }
+  const btn = $('annCustomAdd');
+  if (btn && !btn.dataset.bound) {
+    btn.dataset.bound = '1';
+    btn.title = m('annAddStyle');
+    btn.addEventListener('click', () => {
+      const entry = Object.assign(
+        { id: 'ann-user-' + Date.now(), label: { en: 'Style ' + (_annUserStyles.length + 1), zh: '样式 ' + (_annUserStyles.length + 1) } },
+        _annCustom,
+        { deco: buildAnnCustomObj().deco }
+      );
+      _annUserStyles = _annUserStyles.concat([entry]);
+      const feat = _poolTarget;
+      _poolSel[feat] = entry.id;
+      const patch = { annotationUserStyles: _annUserStyles };
+      patch[feat] = entry.id;
+      if (feat === 'textStyle') {
+        patch.hintFirstBg = entry.wordBg || '#2e6b43';
+        patch.hintFirstFg = entry.wordFg || '#ffffff';
+      }
+      markOwnWrite();
+      chrome.storage.local.set(patch, () => log('annotationUserStyles+', entry.id));
+      renderPoolGrid();
+      renderPoolSideDemos();
+    });
+  }
+}
+
+// 301次：点击用户卡回填个性化行（仿字幕 backfillSubCustomFrom；选中态不变）。
+function backfillAnnCustomFrom(st) {
+  if (!st || st.id === 'ann-custom') return;
+  const hex = (v, fb) => (/^#[0-9a-fA-F]{6}$/.test(v || '') ? v : fb);
+  const decoId = (st.deco && st.deco.style) || 'none';
+  _annCustom = {
+    wordBg: st.wordBg || 'transparent',
+    wordFg: hex(st.wordFg, '#004d40'),
+    annBg: st.annBg || 'transparent',
+    annFg: hex(st.annFg, '#e0f2f1'),
+    radius: st.radius || '4px',
+    bold: !!st.bold,
+    deco: (decoId === 'none') ? undefined : { line: 'underline', style: decoId, color: hex(st.annFg, '#e0f2f1') }
+  };
+  $('annCustomWordBg').value = hex(st.wordBg, '#e0f2f1');
+  $('annCustomWordFg').value = _annCustom.wordFg;
+  $('annCustomAnnBg').value = hex(st.annBg, '#004d40');
+  $('annCustomAnnFg').value = _annCustom.annFg;
+  $('annCustomRadius').value = _annCustom.radius;
+  fillAnnCustomDeco();
+  $('annCustomDeco').dataset.want = ANN_DECO_OPTIONS.some((o) => o.id === decoId) ? decoId : 'none';
+  $('annCustomDeco').value = $('annCustomDeco').dataset.want;
+  $('annCustomBold').checked = _annCustom.bold;
+  markOwnWrite();
+  chrome.storage.local.set({ annotationCustom: _annCustom }, () => log('annotationCustom 回填<=', st.id));
+  refreshAnnCustomCssText();
+  updateAnnCustomSideCard();
+}
+
+// 301次：个性化参数回填（renderAll；storage.annotationCustom，缺省好看预设）。
+function doAnnCustomBackfill(res) {
+  const sc = (res && res.annotationCustom) || {};
+  const hex = (v, fb) => (/^#[0-9a-fA-F]{6}$/.test(v || '') ? v : fb);
+  _annCustom = {
+    wordBg: sc.wordBg || '#e0f2f1',
+    wordFg: hex(sc.wordFg, '#004d40'),
+    annBg: sc.annBg || '#004d40',
+    annFg: hex(sc.annFg, '#e0f2f1'),
+    radius: sc.radius || '4px',
+    bold: sc.bold !== false,
+    // 301次：deco 透传（select 编辑器，见 fillAnnCustomDeco；无即 undefined，生成器跳过）
+    deco: (sc.deco && sc.deco.style && sc.deco.style !== 'none') ? sc.deco : undefined
+  };
+  $('annCustomWordBg').value = hex(sc.wordBg, '#e0f2f1');
+  $('annCustomWordFg').value = _annCustom.wordFg;
+  $('annCustomAnnBg').value = hex(sc.annBg, '#004d40');
+  $('annCustomAnnFg').value = _annCustom.annFg;
+  $('annCustomRadius').value = _annCustom.radius;
+  $('annCustomBold').checked = _annCustom.bold;
+  fillAnnCustomDeco();
+  refreshAnnCustomCssText();
+  updateAnnCustomSideCard();
+}
+
+// 301次：删除用户自建注释样式（选中它时回落 'none'）。
+function deleteAnnUserStyle(id) {
+  _annUserStyles = _annUserStyles.filter((s) => s && s.id !== id);
+  const patch = { annotationUserStyles: _annUserStyles };
+  for (const k of ['textStyle', 'annotationStyle', 'videoAnnotationStyle', 'videoOverlayAnnStyle']) {
+    if (_poolSel[k] === id) {
+      _poolSel[k] = 'none';
+      patch[k] = 'none';
+    }
+  }
+  markOwnWrite();
+  chrome.storage.local.set(patch, () => log('annotationUserStyles-', id));
+  renderPoolGrid();
+  renderPoolSideDemos();
+}
+
 // 282次：删除用户自建样式——从 subtitleUserStyles 移除；若正选中该样式则回落 'none'。
 function deleteUserStyle(id) {
   _userStyles = _userStyles.filter((s) => s.id !== id);
@@ -1720,6 +2221,12 @@ async function loadSettings() {
     annotationStyle: 'none',
     // 280 次：videoAnnotationStyle 复活（池内三指派之一）；annBrackets 布尔退役 → annTemplate 模板
     videoAnnotationStyle: 'none',
+    // 301次：注释个性化参数＋样例句缺省（用户样式列表不进 defaults，读 res || []）
+    annotationCustom: {
+      wordBg: '#e0f2f1', wordFg: '#004d40', annBg: '#004d40', annFg: '#e0f2f1',
+      radius: '4px', bold: true
+    },
+    annotationSample: 'vocab radar',
     annTemplate: DEFAULT_ANN_TEMPLATE,
     // 283次：注释模板分键——其余三栏各自的模板缺省（与 annTemplate 同默认值）
     webAnnTemplate: DEFAULT_ANN_TEMPLATE,
@@ -1848,9 +2355,14 @@ function renderAll(res) {
   //   旧残留若不在池内，经 VANN_TO_ANN_MIGRATION 映射后写回自身（280 次复活语义：
   //   池内同名保留，池外经映射表回落，不再并入 annotationStyle、不再 remove 键）。
   //   第四键 videoOverlayAnnStyle：视频中字幕的注释行样式（无迁移，残留即回落）。
+  // 301次：用户自建注释样式载入（非法条目过滤；残留 custom/用户 id 放行，见下）
+  _annUserStyles = Array.isArray(res.annotationUserStyles)
+    ? res.annotationUserStyles.filter((s) => s && typeof s.id === 'string' && s.id.indexOf('ann-user-') === 0)
+    : [];
+  const annStyleOk = (id) => id === 'ann-custom' || _annUserStyles.some((s) => s.id === id);
   for (const key of ['textStyle', 'annotationStyle', 'videoAnnotationStyle', 'videoOverlayAnnStyle']) {
-    let val = sanitizeStyleId(POOL_STYLES, res[key] || 'none');
-    if (key === 'videoAnnotationStyle' && res[key] && !POOL_STYLES.some((s) => s.id === res[key])) {
+    let val = (res[key] && annStyleOk(res[key])) ? res[key] : sanitizeStyleId(POOL_STYLES, res[key] || 'none');
+    if (key === 'videoAnnotationStyle' && res[key] && !POOL_STYLES.some((s) => s.id === res[key]) && !annStyleOk(res[key])) {
       val = VANN_TO_ANN_MIGRATION[res[key]] || 'none';
       chrome.storage.local.set({ videoAnnotationStyle: val });
     } else if (val !== (res[key] || 'none')) {
@@ -1858,6 +2370,15 @@ function renderAll(res) {
     }
     _poolSel[key] = val;
   }
+  // 301次：个性化参数回填（缺省好看预设；deco 下拉按 _annCustom.deco 回填）
+  // 301次：样例行回填（空回落默认）＋绑定＋动态注释跟进
+  doAnnCustomBackfill(res);
+  _annSample = (typeof res.annotationSample === 'string' && res.annotationSample.trim())
+    ? res.annotationSample : DEFAULT_ANN_SAMPLE;
+  if (_annSample !== res.annotationSample) { markOwnWrite(); chrome.storage.local.set({ annotationSample: _annSample }); }
+  $('annSampleText').value = _annSample;
+  bindAnnCustom();
+  scheduleAnnSample();
   // 280 次：注释模板回填（空/非字符串回落默认并回写）
   _poolSel.annTemplate = (typeof res.annTemplate === 'string' && res.annTemplate.trim())
     ? res.annTemplate : DEFAULT_ANN_TEMPLATE;
@@ -2385,9 +2906,12 @@ async function init() {
        || changes.videoOverlayAnnStyle || changes.subtitleCustom || changes.subtitleUserStyles
        || changes.subtitleSample || changes.videoOverlayAnnMode
        // 291次：阈值/表外开关影响预览动态注释，布局键跨页同步预览
-       || changes.rankThreshold || changes.annotateOov) {
-      // 292次回声抑制：本页字幕流刚写入（控件编辑已即时渲染最终态），1200ms 内回声跳过
+       || changes.rankThreshold || changes.annotateOov
+       // 301次：注释个性化三键（与字幕流同分支，共享回声抑制）
+       || changes.annotationCustom || changes.annotationUserStyles || changes.annotationSample) {
+      // 292次回声抑制：本页刚写入（即时渲染已是最终态），1200ms 内回声跳过
       //   全量 renderAll——否则"先经过一个样式再到最终"地闪一次；他页写入正常同步。
+      // 301次：池指派写 storage 同样打戳，281"不重渲染"至此才真正落地（此前回声必全量重建）。
       if (Date.now() - _ownWriteAt < 1200) return;
       // 280 次：候选池四键跨标签页同步（池三指派键 + 注释模板；annBrackets 退役）。
       //   282次：补第四栏注释样式键与字幕个性化/用户样式键——缺了会"别的标签页改了

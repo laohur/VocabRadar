@@ -133,6 +133,10 @@ async function _wsBoot() {
       if ('annotationStyle' in changes) {
         _wsImpl.updateAnnStyle(changes.annotationStyle.newValue);
       }
+      // 301次：个性化/用户条目变化 → 刷新规则表（类名不变即时生效，无需重扫）
+      if ('annotationCustom' in changes || 'annotationUserStyles' in changes) {
+        _wsGetSettings().then((s) => _wsImpl.refreshAnnPoolCss(s.annotationCustom, s.annotationUserStyles));
+      }
     });
 
     // 反思（2026-08-12）：视频页面也启动文本侧栏，SPA 导航不再停止/启动文本侧栏。
@@ -219,6 +223,9 @@ function _wsGetSettings() {
       hintLaterFg: '#ffffff',
       hintSideAnnotation: false,
       annotationStyle: 'none',
+      // 301次：个性化/用户条目缓存（applyAnnStyle 类切换之外，规则表刷新用）
+      annotationCustom: null,
+      annotationUserStyles: [],
       webSidebarEnabled: true,
       webSidebarAnnMode: 'side'
     }, resolve);

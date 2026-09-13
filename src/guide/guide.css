@@ -556,6 +556,9 @@ input::placeholder { color: var(--g-muted); opacity: 1; }
   align-items: center;
   flex-wrap: wrap;
 }
+/* 301次：注释个性化控件行（复用 sub-custom-item 样式；圆角文本框宽度收窄） */
+.ann-custom-row { display: flex; gap: 14px; align-items: center; flex-wrap: wrap; }
+.ann-custom-row input[type="text"] { width: 64px; padding: 3px 6px; border: 1px solid var(--g-border); border-radius: var(--g-radius); font-size: 13px; }
 .sub-custom-item { display: inline-flex; gap: 6px; align-items: center; font-size: 13px; color: var(--g-text); }
 .sub-custom-item input[type="color"] { width: 34px; height: 24px; padding: 0; border: 1px solid var(--g-border); border-radius: 4px; background: transparent; cursor: pointer; }
 .sub-custom-item input[type="number"] { width: 64px; padding: 3px 6px; border: 1px solid var(--g-border); border-radius: var(--g-radius); font-size: 13px; }

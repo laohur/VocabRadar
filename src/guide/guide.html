@@ -329,11 +329,38 @@
                    左栏时把段2文案里的栏名同步更新为当前选中栏（两段说明永远可见）。 -->
               <div class="pool-note" id="poolNoteNoRerender"></div>
               <div class="style-grid" id="poolStyleGrid"></div>
+              <!-- 301次：样例行——样例句子驱动池卡（默认 vocab radar，只注释末词 radar，
+                   注释走动态链路，见 scheduleAnnSample），持久化 storage.annotationSample -->
+              <div class="sub-sample-row">
+                <span class="sub-sample-label" data-key="annSampleText">Sample text</span>
+                <input id="annSampleText" type="text" data-ph-key="annSamplePh">
+              </div>
               <div class="pool-note pool-note-2" id="poolNoteRerender" data-key="poolNoteRerender">Annotation template — changing it re-renders the samples.</div>
               <div class="ann-tpl-row">
                 <label for="annTemplate" data-key="fieldAnnTemplate">Annotation template</label>
                 <input id="annTemplate" type="text" placeholder="{target} {annotation}">
                 <span class="ann-tpl-hint" data-key="annTemplateHint">{target} {annotation} are variables</span>
+              </div>
+              <!-- 301次：个性化行（仿字幕 Custom Style）——七控件（生词底/字、注释底/字、
+                   圆角、装饰线形、加粗）＋ CSS 代码框（双区段 target/annotation）＋
+                   右侧样例卡（原地刷新，点击选中 custom）＋ 大＋号（存用户样式） -->
+              <div class="sub-sec-label" data-key="annCustomStyle">Custom Style</div>
+              <div class="ann-custom-row" id="annCustomRow">
+                <label class="sub-custom-item"><span data-key="annCustomWordBg">Word BG</span><input id="annCustomWordBg" type="color" value="#e0f2f1"></label>
+                <label class="sub-custom-item"><span data-key="annCustomWordFg">Word</span><input id="annCustomWordFg" type="color" value="#004d40"></label>
+                <label class="sub-custom-item"><span data-key="annCustomAnnBg">Ann BG</span><input id="annCustomAnnBg" type="color" value="#004d40"></label>
+                <label class="sub-custom-item"><span data-key="annCustomAnnFg">Ann</span><input id="annCustomAnnFg" type="color" value="#e0f2f1"></label>
+                <label class="sub-custom-item"><span data-key="annCustomRadius">Radius</span><input id="annCustomRadius" type="text" value="4px"></label>
+                <label class="sub-custom-item"><span data-key="annCustomDeco">Line</span><select id="annCustomDeco"></select></label>
+                <label class="sub-custom-item"><input id="annCustomBold" type="checkbox" checked><span data-key="annCustomBold">Bold</span></label>
+              </div>
+              <div class="sub-css-row" id="annCssRow">
+                <textarea id="annCustomCss" rows="6" spellcheck="false" data-ph-key="annCustomCssPh"></textarea>
+                <div class="style-card sub-side-card" id="annCustomSideCard">
+                  <div class="demo sub-stage" id="annCustomSideDemo"></div>
+                  <div class="card-label" id="annCustomSideLabel">个性化</div>
+                </div>
+                <button id="annCustomAdd" class="sub-add-btn" type="button" title="Save current custom as a new style">+</button>
               </div>
             </div>
           </div>

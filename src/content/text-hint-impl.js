@@ -34,7 +34,8 @@
 //   - 右键面板点击外部立即关闭；hover tooltip mouseleave 延迟 panelHideDelay（默认5秒）
 
 // 配色热更新与文本样式类（来源：th/core.js）
-export { updateColors, applyTextStyleClass } from './th/core.js';
+// 301次：refreshAnnExtraCss——个性化/用户条目文本规则刷新（门面直通，引用方零改动）
+export { updateColors, applyTextStyleClass, refreshAnnExtraCss } from './th/core.js';
 
 // 右键查词面板 / OCR 结果面板 / 视频帧 OCR（来源：th/panel.js）
 // w4（2026-09-09）：panel.js 连带 dictionary/translator/lemmatizer/phonetics/chat 等重依赖，

@@ -254,6 +254,10 @@ async function _hintBoot() {
       if ('textStyle' in changes) {
         _impl.applyTextStyleClass(changes.textStyle.newValue);
       }
+      // 301次：个性化/用户条目变化 → 刷新 extra 文本规则（无需重扫；类名不变即时生效）
+      if ('annotationCustom' in changes || 'annotationUserStyles' in changes) {
+        _hintGetSettings().then((s) => _impl.refreshAnnExtraCss(s.annotationCustom, s.annotationUserStyles));
+      }
       // 阈值变化 → 重扫
       if ('rankThreshold' in changes) {
         _impl.setRankThreshold(changes.rankThreshold.newValue);
@@ -344,6 +348,8 @@ async function _hintBoot() {
     if (settings.textStyle && settings.textStyle !== 'none') {
       _impl.applyTextStyleClass(settings.textStyle);
     }
+    // 301次：个性化/用户条目文本规则初始刷新（提示被停用规则拦下时也刷新，查询面板同样式）
+    try { _impl.refreshAnnExtraCss(settings.annotationCustom, settings.annotationUserStyles); } catch (_) { /* ignore */ }
     // 反思（2026-08-14 第五十六次自愈）：若存储要求启动但模块仍处于未启用态
     //   （首轮 startHint 被并发/页面时序干扰），延迟重试一次，避免"网页无提示"。
     //   272次：提示被停用规则命中时同样不自愈（否则对抗规则）。
@@ -605,6 +611,9 @@ function _hintGetSettings() {
     textHintEnabled: true,
     // 272次：Query 独立开关（旧键，286次拆分为右键查询/查询栏后仅作回退，见 _storeFlag）
     queryEnabled: true,
+    // 301次：注释个性化参数＋用户样式（pickColors 经 resolveAnnEntry 解析，直通 settings）
+    annotationCustom: null,
+    annotationUserStyles: [],
     // 反思（2026-08-14 第五十四次修正）：恢复默认 5000，撤销第五十二次误改的 0
     rankThreshold: 5000,
     annotateOov: false,  // 注释表外词（2026-08-14 第五十四次：键名改名 + 默认不选）
