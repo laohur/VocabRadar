@@ -135,11 +135,12 @@ export const thState = {
   //   本轮结束后再跑一次。
   scanRunning: false,
   scanPendingRoot: null,
-  // 反思（2026-08-18 第七十三次修正）：默认配色——单词绿底白字。
-  // 302次（用户"注释也应当没有背景色"）：注释默认改透明底绿字（白底绿字作废）。
+  // 反思（2026-08-18 第七十三次修正）：默认配色曾是单词绿底白字。
+  // 302次注释默认改透明底绿字；304次（用户"默认无底色"）：生词底色一并去底——
+  //   默认即透明底绿字（微读绿字式），白底绿字/绿底白字旧口径作废。
   colors: {
-    firstEnabled: true, firstBg: '#2e6b43', firstFg: '#ffffff',
-    laterEnabled: true, laterBg: '#2e6b43', laterFg: '#ffffff',
+    firstEnabled: true, firstBg: 'transparent', firstFg: '#2e6b43',
+    laterEnabled: true, laterBg: 'transparent', laterFg: '#2e6b43',
     sideAnnotation: true, annBg: 'transparent', annFg: '#2e6b43'
   },
   // 反思（2026-08-06）：扩展更新/重载后旧内容脚本的 chrome.runtime 上下文失效，
@@ -376,11 +377,11 @@ export function pickColors(s) {
   //   单词绿底白字，注释是白底绿字"。旧版 #0d2014（近黑）/#a8e6cf（青）被视为黑色。
   // 280次：统一池接入——textStyle 命中池条目时，生词底/字色取条目 wordBg/wordFg
   //   （渐变/透明底字符串同样经 --beaver-first-bg 变量生效，页面用 background shorthand）；
-  //   优先级：popup 显式 hintFirstBg/Fg > 池条目 > 默认绿白。
+  //   优先级：popup 显式 hintFirstBg/Fg > 池条目 > 默认（304次：透明底绿字）。
   // 301次：custom/用户条目经 resolveAnnEntry 解析（settings 直通 caches）。
   const txtSt = resolveAnnEntry(s.textStyle, s.annotationCustom, s.annotationUserStyles);
-  const wordBg = s.hintFirstBg || (txtSt && txtSt.wordBg) || '#2e6b43';
-  const wordFg = s.hintFirstFg || (txtSt && txtSt.wordFg) || '#ffffff';
+  const wordBg = s.hintFirstBg || (txtSt && txtSt.wordBg) || 'transparent';
+  const wordFg = s.hintFirstFg || (txtSt && txtSt.wordFg) || '#2e6b43';
   // 反思（2026-08-15 第六十四次）：透明/半透明底色样式（下划线/荧光/描边等，wordBg=transparent
   //   或带 alpha 的 rgba）派生侧邻注释时，annFg=wordBg 会得到透明字色 → 注释文字不可见。
   // 反思（2026-08-15 第六十五次修正）：上一版把注释底设为 wordFg（如荧光笔 #332700 深色）
@@ -513,8 +514,8 @@ export function injectStyles() {
   s.id = STYLE_ID;
   s.textContent = `
     .${HIGHLIGHT_CLASS} {
-      background: var(--beaver-later-bg, #2e6b43) !important;
-      color: var(--beaver-later-fg, #ffffff) !important;
+      background: var(--beaver-later-bg, transparent) !important;
+      color: var(--beaver-later-fg, #2e6b43) !important;
       border-radius: 3px !important;
       padding: 0 2px !important;
       cursor: pointer !important;
@@ -522,9 +523,10 @@ export function injectStyles() {
     }
     .${HIGHLIGHT_CLASS}:hover { filter: brightness(1.1) !important; }
     .${FIRST_CLASS} {
-      background: var(--beaver-first-bg, #2e6b43) !important;
-      color: var(--beaver-first-fg, #ffffff) !important;
-      box-shadow: 0 0 0 1px rgba(0,0,0,0.15) !important;
+      /* 304次（用户"默认无底色"）：回退值同步透明底绿字；1px 描边删除
+         （实底上不可见，透明底上是多余 chrome；透明池条目同口径已清，见上）。 */
+      background: var(--beaver-first-bg, transparent) !important;
+      color: var(--beaver-first-fg, #2e6b43) !important;
     }
     /* 反思（2026-08-06）：后续出现可见性由 .beaver-hide-later 控制（零重扫）
      *   laterEnabled=false 时 documentElement 加 .beaver-hide-later，
@@ -553,7 +555,7 @@ export function injectStyles() {
      *   使用 --beaver-ann-bg/fg 变量（与视频提示字幕/视频内字幕复用同一套配色）
      *   默认深绿底亮绿字（单词配色的前后景互换），与生词形成反相对比 */
     .${SIDE_ANN_CLASS} {
-      background: var(--beaver-ann-bg, #ffffff) !important;
+      background: var(--beaver-ann-bg, transparent) !important;
       color: var(--beaver-ann-fg, #2e6b43) !important;
       border-radius: 3px !important;
       padding: 0 2px !important;

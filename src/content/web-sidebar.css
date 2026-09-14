@@ -44,8 +44,8 @@
 
   --beaver-outline: #c2c9bf;
 
-  --beaver-ann-bg: #a8e6cf;
-  --beaver-ann-fg: #0d2014;
+  --beaver-ann-bg: transparent;   /* 304次：默认无底色 */
+  --beaver-ann-fg: #2e6b43;
 
   --beaver-radius: 12px;
   --beaver-radius-sm: 8px;
@@ -55,12 +55,12 @@
   --beaver-shadow-2: 0 2px 6px rgba(26,31,26,.12), 0 1px 2px rgba(26,31,26,.08);
   --beaver-shadow-3: 0 4px 12px rgba(26,31,26,.12), 0 1px 3px rgba(26,31,26,.08);
 
-  /* 兜底默认配色（与 popup 默认值一致），sidebar.js / web-sidebar-impl.js 会用用户设置覆盖
-   * 反思（2026-08-11 第三十八次）：生词=深底浅字（强），注释=浅底深字（弱），二者反相对比 */
-  --beaver-first-bg: #0d2014;
-  --beaver-first-fg: #a8e6cf;
-  --beaver-later-bg: #0d2014;
-  --beaver-later-fg: #a8e6cf;
+  /* 兜底默认配色（304次：透明底绿字；会被用户设置覆盖）
+   * 反思（2026-08-11 第三十八次）：曾用生词深底浅字/注释浅底深字反相对比，304次作废 */
+  --beaver-first-bg: transparent;
+  --beaver-first-fg: #2e6b43;
+  --beaver-later-bg: transparent;
+  --beaver-later-fg: #2e6b43;
 }
 
 /* === 防御性 CSS 重置 ===
@@ -869,16 +869,16 @@
 #beaver-web-sidebar .beaver-web-sub-text .beaver-web-word {
   display: inline-block;
   vertical-align: baseline;
-  color: var(--beaver-first-fg, #0d2014);
-  background: var(--beaver-first-bg, #a8e6cf);
+  color: var(--beaver-first-fg, #2e6b43);
+  background: var(--beaver-first-bg, transparent);
   padding: 0 2px;
   border-radius: 2px;
   font-weight: inherit;
 }
 
 #beaver-web-sidebar .beaver-web-sub-text .beaver-web-word.later {
-  color: var(--beaver-later-fg, #0d2014);
-  background: var(--beaver-later-bg, #a8e6cf);
+  color: var(--beaver-later-fg, #2e6b43);
+  background: var(--beaver-later-bg, transparent);
 }
 
 /* 简略模式正文内联注释 */
@@ -1005,8 +1005,8 @@
 #beaver-web-sidebar .beaver-web-word-item .beaver-w-word {
   display: inline-block;
   max-width: 100%;
-  background: var(--beaver-first-bg, #a8e6cf);
-  color: var(--beaver-first-fg, #0d2014);
+  background: var(--beaver-first-bg, transparent);
+  color: var(--beaver-first-fg, #2e6b43);
   padding: 0 4px;
   border-radius: 3px;
   font-weight: 500;

@@ -274,11 +274,12 @@ async function loadSettings() {
   return new Promise((resolve) => {
     chrome.storage.local.get({
       rankThreshold: 5000,
-      // 反思（2026-08-18 第七十三次修正）：默认配色——用户明确"单词绿底白字，注释白底绿字"
-      hintFirstBg: '#2e6b43',
-      hintFirstFg: '#ffffff',
-      hintLaterBg: '#2e6b43',
-      hintLaterFg: '#ffffff',
+      // 反思（2026-08-18 第七十三次修正）：默认配色曾是单词绿底白字。
+      // 304次（用户"默认无底色"）：改透明底绿字。
+      hintFirstBg: 'transparent',
+      hintFirstFg: '#2e6b43',
+      hintLaterBg: 'transparent',
+      hintLaterFg: '#2e6b43',
       hintAnnotationBg: '#ffffff',
       hintAnnotationFg: '#2e6b43',
       // 反思（2026-08-14 第五十四次）：注释表外词默认不选（键名 annotateOov）
@@ -1472,9 +1473,10 @@ export async function startSidebar(video, options = {}) {
  */
 function applyColorSettings(settings) {
   const rootStyle = document.documentElement.style;
-  // 反思（2026-08-18 第七十三次修正）：默认绿底白字（#2e6b43/#ffffff），注释自动派生为白底绿字
-  const firstBg = settings.hintFirstBg || '#2e6b43';
-  const firstFg = settings.hintFirstFg || '#ffffff';
+  // 反思（2026-08-18 第七十三次修正）：默认曾是绿底白字。
+  // 304次（用户"默认无底色"）：生词默认透明底绿字（注释见上）。
+  const firstBg = settings.hintFirstBg || 'transparent';
+  const firstFg = settings.hintFirstFg || '#2e6b43';
   rootStyle.setProperty('--beaver-first-bg', firstBg);
   rootStyle.setProperty('--beaver-first-fg', firstFg);
   rootStyle.setProperty('--beaver-later-bg', settings.hintLaterBg || firstBg);

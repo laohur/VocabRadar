@@ -216,11 +216,12 @@ function _wsGetSettings() {
       // 280次：侧邻注释模板默认（annBrackets 布尔退役）
       // 284次：默认组合 {target} {annotation}（与 styles.js 同步）
       annTemplate: '{target} {annotation}',
-      // 反思（2026-08-18 第七十三次修正）：默认配色——用户明确"单词绿底白字，注释白底绿字"
-      hintFirstBg: '#2e6b43',
-      hintFirstFg: '#ffffff',
-      hintLaterBg: '#2e6b43',
-      hintLaterFg: '#ffffff',
+      // 反思（2026-08-18 第七十三次修正）：默认配色曾是单词绿底白字。
+      // 304次（用户"默认无底色"）：改透明底绿字。
+      hintFirstBg: 'transparent',
+      hintFirstFg: '#2e6b43',
+      hintLaterBg: 'transparent',
+      hintLaterFg: '#2e6b43',
       hintSideAnnotation: false,
       annotationStyle: 'none',
       // 301次：个性化/用户条目缓存（applyAnnStyle 类切换之外，规则表刷新用）

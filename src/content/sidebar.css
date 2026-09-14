@@ -68,12 +68,11 @@
   /* 侧邻注释配色（2026-08-05）：与 text-hint-impl 共用，popup 取色框控制
    *   text-hint-impl.applyColorVars 会覆盖 :root 的这两个变量
    *   此处仅声明默认值兜底（文本提示未启动时视频提示仍有配色）
-   * 反思（2026-08-05 修正）：用户要求"注释为单词的前后景互换"。
-   *   反思（2026-08-11 第三十八次）：生词=深底浅字（强），注释=浅底深字（弱）。
-   *   单词: 底色 #0d2014 字色 #a8e6cf → 注释: 底色 #a8e6cf 字色 #0d2014
-   *   深底浅字与浅底深字形成反相对比 */
-  --beaver-ann-bg: #a8e6cf;               /* 注释底色（浅绿，弱）*/
-  --beaver-ann-fg: #0d2014;               /* 注释字色（深绿，弱）*/
+  * 反思（2026-08-05 修正）：用户要求"注释为单词的前后景互换"（304次作废，改无底色）。
+  *   反思（2026-08-11 第三十八次）旧口径已作废。
+  *   单词: 无底色 字色 #2e6b43 → 注释: 无底色 字色 #2e6b43 */
+  --beaver-ann-bg: transparent;           /* 注释底色（304次：无底色）*/
+  --beaver-ann-fg: #2e6b43;               /* 注释字色（绿）*/
 
   /* M3 shape scale（圆角比 MD1 更大更柔和）*/
   --beaver-radius: 12px;                  /* M3 medium（卡片容器）*/
@@ -362,8 +361,8 @@
 #beaver-sidebar .beaver-sub-text .beaver-word {
   display: inline-block !important;
   vertical-align: baseline !important;
-  color: var(--beaver-first-fg, #a8e6cf) !important;
-  background: var(--beaver-first-bg, #0d2014) !important;
+  color: var(--beaver-first-fg, #2e6b43) !important;
+  background: var(--beaver-first-bg, transparent) !important;
   font-weight: inherit !important;
   text-decoration: none !important;
   padding: 0 2px !important;
@@ -375,8 +374,8 @@
 #beaver-sidebar .beaver-sub-text .beaver-word.later {
   display: inline-block !important;
   vertical-align: baseline !important;
-  color: var(--beaver-later-fg, #a8e6cf) !important;
-  background: var(--beaver-later-bg, #0d2014) !important;
+  color: var(--beaver-later-fg, #2e6b43) !important;
+  background: var(--beaver-later-bg, transparent) !important;
   font-weight: inherit !important;
   text-decoration: none !important;
   padding: 0 2px !important;
@@ -584,8 +583,8 @@
   display: inline-block;
   width: max-content;
   max-width: 100%;
-  background: var(--beaver-first-bg, #0d2014);
-  color: var(--beaver-first-fg, #a8e6cf);
+  background: var(--beaver-first-bg, transparent);
+  color: var(--beaver-first-fg, #2e6b43);
   padding: 0 8px;
   border-radius: 3px;
   font-weight: 500;

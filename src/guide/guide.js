@@ -346,8 +346,9 @@ async function loadSettings() {
     // 280 次：videoAnnotationStyle 复活（池内三指派之一）；annBrackets 布尔退役 → annTemplate 模板
     videoAnnotationStyle: 'none',
     // 301次：注释个性化参数＋样例句缺省（用户样式列表不进 defaults，读 res || []）
+    // 304次：生词底色默认透明（用户"默认无底色"）。
     annotationCustom: {
-      wordBg: '#e0f2f1', wordFg: '#004d40', annBg: 'transparent', annFg: '#004d40',
+      wordBg: 'transparent', wordFg: '#004d40', annBg: 'transparent', annFg: '#004d40',
       radius: '4px', bold: true
     },
     annotationSample: 'vocab radar',
@@ -371,8 +372,9 @@ async function loadSettings() {
     webSidebarAnnMode: 'side',
     videoSidebarAnnMode: 'side',
     videoOverlayAnnMode: 'side',
-    hintFirstBg: '#2e6b43',
-    hintFirstFg: '#ffffff'
+    // 304次（用户"默认无底色"）：透明底绿字。
+    hintFirstBg: 'transparent',
+    hintFirstFg: '#2e6b43'
   }, cfgDefaults);
   // 272 次：等待 storage 读取完成再返回——init 里改 await loadSettings()，
   //   保证 _lang 在后续动态行渲染（deactivate 停用栏 chip 等）前已按界面语言就绪

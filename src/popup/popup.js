@@ -101,12 +101,11 @@ const DEFAULTS = {
   // 反思（2026-07-08 MD3 重构）：默认背景色改为 MD3 primary 马卡龙深绿 #2e6b43
   //   （原 #5a8a6a 河狸棕绿），与 sidebar.css --beaver-primary 一致。
   hintFirstEnabled: true,
-  // 反思（2026-08-18 第七十三次修正）：用户明确"网页提示默认配色是单词绿底白字，
-  //   注释是白底绿字"。旧版 #0d2014 墨绿近黑被用户视为黑色（"你老毛病就是把黑色
-  //   当作无色"）。修正：单词=绿底白字（#2e6b43/#ffffff），注释=白底绿字
-  //   （#ffffff/#2e6b43），与 MD3 primary #2e6b43 一致。
-  hintFirstBg: '#2e6b43',   // 绿底（强，吸睛高亮）
-  hintFirstFg: '#ffffff',   // 白字（绿底配白字）
+  // 反思（2026-08-18 第七十三次修正）：默认配色曾是单词绿底白字，注释白底绿字。
+  // 304次（用户"默认无底色"）：以下仅为取色器初始 paint（取色器放不下 transparent），
+  //   不再代表产品默认——产品默认透明底绿字；且 popup 不再自动派生保存（见 updateSample）。
+  hintFirstBg: '#2e6b43',   // 取色器初始值（显式选择后才写入 storage）
+  hintFirstFg: '#ffffff',   // 取色器初始值
   // 反思（2026-08-05 修正）：用户要求"生词多次出现 复选框 默认空"。
   hintLaterEnabled: false,
   hintLaterBg: '#2e6b43',   // 后续出现复用生词配色
@@ -361,17 +360,14 @@ function bindOptionChanges() {
     wordEl.style.borderRadius = '3px';
     if (sideAnn) {
       annEl.style.display = '';
-      // 反思（2026-08-06）：注释配色自动派生自单词配色（前后景互换）
-      // 反思（2026-08-06 修正）：用户反馈"设定栏的值是错的，实际值并没有跟随设定参数"。
-      //   根因：updateSample 用互换色渲染样例，但 hintAnnotationBg/Fg input 值未同步更新，
-      //   导致 input 显示旧值而样例显示正确互换色。
-      //   修正：同步 input 值到互换色，并保存到 storage。
-      const annBg = wordFg;  // 注释底色 = 单词字色
-      const annFg = wordBg;  // 注释字色 = 单词底色
+      // 反思（2026-08-06）：注释配色自动派生自单词配色（前后景互换）——304次作废：
+      //   用户裁定"默认无底色"后，自动派生＋保存会把显式白底写进 storage，杀掉透明默认
+      //   （打开一次 popup 就回不去）。改样例只读两组输入框各自的值（所见即所存，
+      //   不替用户写 storage）；透明之类取色器放不下的值由各消费端回退处理。
       const annBgInput = document.getElementById('hintAnnotationBg');
       const annFgInput = document.getElementById('hintAnnotationFg');
-      if (annBgInput) { annBgInput.value = annBg; saveSetting('hintAnnotationBg', annBg); }
-      if (annFgInput) { annFgInput.value = annFg; saveSetting('hintAnnotationFg', annFg); }
+      const annBg = annBgInput ? annBgInput.value : '#ffffff';
+      const annFg = annFgInput ? annFgInput.value : '#2e6b43';
       annEl.style.background = annBg;
       annEl.style.color = annFg;
       annEl.style.padding = '0 2px';
