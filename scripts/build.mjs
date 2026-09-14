@@ -324,7 +324,8 @@ async function terserProcess(distDir, { compress = false, mangle = false, label 
         module: isModule,
       });
       fs.writeFileSync(full, result.code, 'utf8');
-    } catch (e) {
+  } catch (e) {
+    console.log('[预打包] esbuild 构建失败');
       // 不遮蔽错误：失败仅记录，最后统一 raise——不打静默包
       failed.push([rel, String(e.message || e).slice(0, 300)]);
       continue;
@@ -457,8 +458,9 @@ async function bundleContentScripts(distDir) {
   // 入口 = 各 classic 入口动态 import 的模块。输出路径与源文件一致（覆盖 dist
   // 里的散文件副本），classic 入口代码零改动、manifest 路径零改动。
   // 运行时动态 import 的 youtube-audio/asr 链不入图：无状态共享，保持懒加载原样。
+  let metafile;
   try {
-    await esbuildBuild({
+    const result = await esbuildBuild({
       entryPoints: BUNDLE_ENTRIES.map((e) => path.join(ROOT, e)),
       bundle: true,
       splitting: true,
@@ -468,13 +470,11 @@ async function bundleContentScripts(distDir) {
       outbase: path.join(ROOT, 'src'),
       chunkNames: 'content/chunks/[name]-[hash]',
       target: 'es2022',
-      // 2026-09-04：默认 charset=ascii 会把字符串里的中文/Unicode 全转成 \uXXXX
-      //（如 \u7684），产物满屏转义形似混淆、AMO 审核可读性差。utf8 让字符串
-      // 字面量输出原文；正则字面量里的 \uXXXX 范围惯用写法不受影响（esbuild
-      // 原样保留正则 body，本就是保留项）。
       charset: 'utf8',
       logLevel: 'warning',
+      metafile: true,
     });
+    metafile = result.metafile;
   } catch (e) {
     // 不遮蔽：失败必须出声。esbuild 可能已覆盖部分入口文件，恢复原散文件保证功能不变。
     console.log('[错误] esbuild 预打包失败（本次 dist 回退为未打包散文件，功能不变，优化未生效）：');
@@ -484,6 +484,89 @@ async function bundleContentScripts(distDir) {
     }
     return;
   }
+  // 给 chunks 起有意义的名称：分析 metafile，按主要源模块命名
+  if (metafile && metafile.outputs) {
+    const chunksDir = path.join(distDir, 'src', 'content', 'chunks');
+    if (fs.existsSync(chunksDir)) {
+      // 1) 收集所有 chunk 输出及其输入模块
+      const chunkInputs = {};  // chunkPath -> [sourceModules]
+      for (const [outPath, info] of Object.entries(metafile.outputs)) {
+        if (!outPath.includes('content/chunks/') || !outPath.endsWith('.js')) continue;
+        const absOut = path.isAbsolute(outPath) ? outPath : path.join(ROOT, outPath);
+        chunkInputs[absOut] = Object.keys(info.inputs || {});
+      }
+      // 2) 为每个 chunk 确定有意义的名称（取最大输入模块的文件名）
+      const renameMap = {};  // oldPath -> { newName, oldBase }
+      for (const [absOut, inputs] of Object.entries(chunkInputs)) {
+        if (!fs.existsSync(absOut)) continue;
+        // 按模块大小排序，取最大的作为"主要模块"
+        let bestName = null;
+        let bestSize = 0;
+        for (const mod of inputs) {
+          const modAbs = path.isAbsolute(mod) ? mod : path.join(ROOT, mod);
+          if (!fs.existsSync(modAbs)) continue;
+          const sz = fs.statSync(modAbs).size;
+          if (sz > bestSize) {
+            bestSize = sz;
+            // 取模块路径的最后一段（不含扩展名）作为名称
+            bestName = path.basename(mod, path.extname(mod));
+          }
+        }
+        if (!bestName) continue;
+        // 哈希取前8位保持唯一性
+        const hash = path.basename(absOut).replace(/^.*?-([A-Za-z0-9]+)\.js$/, '$1');
+        const newName = `${bestName}-${hash}.js`;
+        const oldBase = path.basename(absOut);
+        if (newName !== oldBase) {
+          renameMap[absOut] = { newName, oldBase };
+        }
+      }
+      // 3) 重命名 chunk 文件
+      let renamedCnt = 0;
+      for (const [absOut, { newName, oldBase }] of Object.entries(renameMap)) {
+        const newPath = path.join(path.dirname(absOut), newName);
+        fs.renameSync(absOut, newPath);
+        renamedCnt++;
+      }
+      // 4) 更新所有入口文件中的 import 路径
+      if (renamedCnt > 0) {
+        for (const entry of BUNDLE_ENTRIES) {
+          const p = path.join(distDir, entry);
+          if (!fs.existsSync(p)) continue;
+          let content = fs.readFileSync(p, 'utf8');
+          let changed = false;
+          for (const [absOut, { newName, oldBase }] of Object.entries(renameMap)) {
+            // import 路径中的旧文件名 → 新文件名
+            const oldRef = './chunks/' + oldBase;
+            const newRef = './chunks/' + newName;
+            if (content.includes(oldRef)) {
+              content = content.replaceAll(oldRef, newRef);
+              changed = true;
+            }
+          }
+          if (changed) fs.writeFileSync(p, content, 'utf8');
+        }
+        // 也更新 chunk 之间的互相引用
+        for (const f of fs.readdirSync(chunksDir)) {
+          if (!f.endsWith('.js')) continue;
+          const fp = path.join(chunksDir, f);
+          let content = fs.readFileSync(fp, 'utf8');
+          let changed = false;
+          for (const [absOut, { newName, oldBase }] of Object.entries(renameMap)) {
+            const oldRef = './' + oldBase;
+            const newRef = './' + newName;
+            if (content.includes(oldRef)) {
+              content = content.replaceAll(oldRef, newRef);
+              changed = true;
+            }
+          }
+          if (changed) fs.writeFileSync(fp, content, 'utf8');
+        }
+        console.log(`[预打包] chunks 重命名: ${renamedCnt} 个（有意义名称）`);
+      }
+    }
+  }
+
   // 第二百零二次：入口 import URL 追加内容哈希（?v=<hash>）。
   //   Firefox 对扩展模块的缓存可能在扩展重载后残留旧模块——旧 bundle 引用已被本次
   //   构建删除的旧 chunk → import 失败 → text-hint/web-sidebar 双双失效，表现为
