@@ -338,8 +338,8 @@
               <div class="pool-note pool-note-2" id="poolNoteRerender" data-key="poolNoteRerender">Annotation template — changing it re-renders the samples.</div>
               <div class="ann-tpl-row">
                 <label for="annTemplate" data-key="fieldAnnTemplate">Annotation template</label>
-                <input id="annTemplate" type="text" placeholder="{target} {annotation}">
-                <span class="ann-tpl-hint" data-key="annTemplateHint">{target} {annotation} are variables</span>
+                <input id="annTemplate" type="text" placeholder="{target}{annotation}">
+                <span class="ann-tpl-hint" data-key="annTemplateHint">{target}{annotation} are variables</span>
               </div>
               <!-- 301次：个性化行（仿字幕 Custom Style）——七控件（生词底/字、注释底/字、
                    圆角、装饰线形、加粗）＋ CSS 代码框（双区段 target/annotation）＋
@@ -360,9 +360,10 @@
               </div>
               <div class="sub-css-row" id="annCssRow">
                 <textarea id="annCustomCss" rows="6" spellcheck="false" data-ph-key="annCustomCssPh"></textarea>
-                <div class="style-card sub-side-card" id="annCustomSideCard">
-                  <div class="demo sub-stage" id="annCustomSideDemo"></div>
-                  <div class="card-label" id="annCustomSideLabel">个性化</div>
+                <!-- 305次：个性化预览卡改横向（demo+可编辑名称一行，仿池卡布局） -->
+                <div class="sub-side-card-h" id="annCustomSideCard">
+                  <div class="demo" id="annCustomSideDemo"></div>
+                  <input id="annCustomSideLabel" type="text" class="card-label-input" value="Custom">
                 </div>
                 <button id="annCustomAdd" class="sub-add-btn" type="button" title="Save current custom as a new style">+</button>
               </div>

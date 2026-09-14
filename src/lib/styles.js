@@ -22,7 +22,7 @@
 //   3. 新增字段模型（见 POOL_STYLES 注释）与共享 CSS 生成器 buildAnnPoolCss——
 //      两处侧栏的手写 16 条 CSS（sidebar.css / web-sidebar.css）由生成器取代；
 //   4. annBrackets 布尔开关退役，改 annTemplate 字符串模板（280次默认 {word}({meaning})；
-//      284次默认改为 {target} {annotation}，旧变量名兼容），
+//   284次默认改为 {target}{annotation}，旧变量名兼容），
 //      导出 splitAnnTemplate / renderAnnText / migrateAnnBrackets 工具；
 //   5. SUBTITLE_TEXT_STYLES 再增补 4 条调研所得流行字幕样式。
 export const BUILD_STAMP = '__BUILD_STAMP__';
@@ -142,7 +142,13 @@ export const POOL_STYLES = [
   // s20 渐变文字（background-clip:text）
   { id: 'gradient-text', label: { en: 'Gradient Text', zh: '渐变文字' }, wordBg: 'transparent', wordFg: 'transparent', annBg: 'transparent', annFg: '#ec4899', radius: '0', wordGradient: 'linear-gradient(90deg,#6366f1,#ec4899)', wordWeight: 700 },
   // s21 闪烁高亮（生成器注入 @keyframes beaver-ann-blink）
-  { id: 'blink', label: { en: 'Blink', zh: '闪烁高亮' }, wordBg: '#fde68a', wordFg: '#713f12', annBg: 'transparent', annFg: '#b45309', radius: '3px', wordPadding: '1px 3px', wordAnimation: 'beaver-ann-blink' }
+  { id: 'blink', label: { en: 'Blink', zh: '闪烁高亮' }, wordBg: '#fde68a', wordFg: '#713f12', annBg: 'transparent', annFg: '#b45309', radius: '3px', wordPadding: '1px 3px', wordAnimation: 'beaver-ann-blink' },
+
+  // ---- 合成组（transform/opacity，不触发重排重绘） ----
+  // 305次：轻量合成效果——只改 transform/opacity，GPU 合成层处理，性能最优
+  { id: 'scale-lift', label: { en: 'Scale Lift', zh: '微浮' }, wordBg: 'transparent', wordFg: '#1a1d26', annBg: 'transparent', annFg: '#6b7280', radius: '0', wordTransform: 'translateY(-1px) scale(1.02)' },
+  { id: 'soft-dim', label: { en: 'Soft Dim', zh: '柔淡' }, wordBg: 'transparent', wordFg: '#374151', annBg: 'transparent', annFg: '#9ca3af', radius: '0', wordOpacity: '0.78' },
+  { id: 'glow-lift', label: { en: 'Glow Lift', zh: '浮光' }, wordBg: 'transparent', wordFg: '#7c3aed', annBg: 'transparent', annFg: '#a78bfa', radius: '0', wordTransform: 'translateY(-1px)', shadow: '0 2px 8px rgba(124,58,237,.35)' }
 ];
 
 // 280次：别名导出——既有消费点（th/core.js 生成页面类、pickColors 取注释色、
@@ -179,12 +185,12 @@ export const VANN_TO_ANN_MIGRATION = {
 // 注释模板（280次：annBrackets 布尔退役 → annTemplate 字符串模板）
 // ================================================================
 // 模板变量：{target}=目标文本（旧名 {word}，兼容）、{annotation}=注释（旧名 {meaning}，兼容）。
-// 284次（用户裁定）：默认组合改为 {target} {annotation}——目标文本后接空格再接注释
+// 284次（用户裁定）：默认组合改为 {target}{annotation}——目标文本后直接接注释
 //   （渲染如「apple 苹果」）。旧模板 {word}{meaning} / {word}({meaning}) 仍可解析。
 // 侧邻注释渲染时目标 span 已独立存在，{target} token 被丢弃（不重复输出），
 // 即渲染结果 = {annotation} 前后的字面量（pre + 注释 + post）。
 // 详细模式（注释另起一行）保持"词头+注释"结构，不套模板（维持现状）。
-export const DEFAULT_ANN_TEMPLATE = '{target} {annotation}';
+export const DEFAULT_ANN_TEMPLATE = '{target}{annotation}';
 
 /** 拆分模板为 {annotation} 前后字面量；{target} 丢弃（兼容旧 {word}/{meaning}） */
 export function splitAnnTemplate(tpl) {
@@ -261,6 +267,9 @@ export function wordDecl(s, opts = {}) {
     d.push(`text-emphasis-position:${s.emphasisPosition || 'under right'}${p}`);
   }
   if (s.wordAnimation) d.push(`animation:${s.wordAnimation} 1.4s ease-in-out infinite${p}`);
+  // 305次：合成组字段（transform/opacity，GPU 合成层处理）
+  if (s.wordTransform) d.push(`transform:${s.wordTransform}${p}`);
+  if (s.wordOpacity !== undefined) d.push(`opacity:${s.wordOpacity}${p}`);
   return d;
 }
 

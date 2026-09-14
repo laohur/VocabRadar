@@ -91,7 +91,7 @@ export function renderPoolGrid() {
     card.appendChild(poolCardDemo(item));
     return card;
   };
-  const buildLabel = (item, editable) => {
+  const buildLabel = (item, editable, kind) => {
     if (!editable) {
       const label = document.createElement('div');
       label.className = 'card-label';
@@ -108,6 +108,12 @@ export function renderPoolGrid() {
     input.addEventListener('change', () => {
       const v = input.value.trim();
       if (!v) { input.value = styleLabel(item, getLangState()); return; }
+      if (kind === 'custom') {
+        _annCustom.label = { en: v, zh: v };
+        markOwnWrite();
+        chrome.storage.local.set({ annotationCustom: _annCustom }, () => log('annCustom rename=', v));
+        return;
+      }
       const st = _annUserStyles.find((s) => s && s.id === item.id);
       if (!st) return;
       st.label = { en: v, zh: v };
@@ -161,9 +167,11 @@ export function renderPoolGrid() {
           deleteAnnUserStyle(item.id);
         });
         card.appendChild(del);
-        card.appendChild(buildLabel(item, true));
+        card.appendChild(buildLabel(item, true, 'user'));
+      } else if (kind === 'custom') {
+        card.appendChild(buildLabel(item, true, 'custom'));
       } else {
-        card.appendChild(buildLabel(item, false));
+        card.appendChild(buildLabel(item, false, 'builtin'));
       }
       wrap.appendChild(card);
     }
@@ -552,7 +560,7 @@ function applyAnnCustomCssText() {
   try { ta.focus(); } catch (_) { /* ignore */ }
 }
 
-// 301次：右侧样例卡原地刷新（常驻 word＋ann 双 span，只改样式与文本，不替换节点去闪）。
+// 301次：右侧样例卡原地刷新（305次改横向：全文+样式词+注释，仿池卡布局；名称可编辑）。
 function updateAnnCustomSideCard() {
   const card = $('annCustomSideCard');
   if (!card) return;
@@ -561,29 +569,30 @@ function updateAnnCustomSideCard() {
   const model = annSampleModel();
   const obj = buildAnnCustomObj();
   if (demo) {
-    let w = demo.querySelector('.word-demo');
-    let a = demo.querySelector('.ann-demo');
-    if (!w) {
-      demo.innerHTML = '';
-      w = document.createElement('span');
+    demo.innerHTML = '';
+    const lead = model.last ? model.text.slice(0, model.last.index) : model.text;
+    if (lead) demo.appendChild(document.createTextNode(lead));
+    if (model.last) {
+      const w = document.createElement('span');
       w.className = 'word-demo';
+      w.textContent = model.last.word;
+      w.style.cssText = wordDecl(obj).join(';');
       demo.appendChild(w);
-      a = document.createElement('span');
-      a.className = 'ann-demo';
-      demo.appendChild(a);
+      if (model.trans) {
+        const a = document.createElement('span');
+        a.className = 'ann-demo';
+        a.textContent = model.pre + model.trans + model.post;
+        a.style.cssText = annDecl(obj).join(';');
+        demo.appendChild(a);
+      }
+      const tail = model.text.slice(model.last.end);
+      if (tail) demo.appendChild(document.createTextNode(tail));
     }
-    w.style.cssText = wordDecl(obj).join(';');
-    const word = model.last ? model.last.word : model.text;
-    if (w.textContent !== word) w.textContent = word;
-    a.style.cssText = annDecl(obj).join(';');
-    const annText = model.last && model.trans ? (model.pre + model.trans + model.post) : '';
-    if (a.textContent !== annText) a.textContent = annText;
-    a.style.display = annText ? '' : 'none';
   }
   const lab = $('annCustomSideLabel');
   if (lab) {
     const t = styleLabel(obj, getLangState());
-    if (lab.textContent !== t) lab.textContent = t;
+    if (lab.value !== t) lab.value = t;
   }
 }
 
@@ -620,9 +629,23 @@ function bindAnnCustom() {
   const card = $('annCustomSideCard');
   if (card && !card.dataset.bound) {
     card.dataset.bound = '1';
-    card.addEventListener('click', () => {
+    card.addEventListener('click', (e) => {
+      if (e.target.tagName === 'INPUT') return;
       assignAnnCustomToTarget();
       updateAnnCustomSideCard();
+    });
+  }
+  const labInput = $('annCustomSideLabel');
+  if (labInput && !labInput.dataset.bound) {
+    labInput.dataset.bound = '1';
+    labInput.addEventListener('click', (e) => e.stopPropagation());
+    labInput.addEventListener('keydown', (e) => e.stopPropagation());
+    labInput.addEventListener('change', () => {
+      const v = labInput.value.trim();
+      if (!v) { labInput.value = styleLabel(buildAnnCustomObj(), getLangState()); return; }
+      _annCustom.label = { en: v, zh: v };
+      markOwnWrite();
+      chrome.storage.local.set({ annotationCustom: _annCustom }, () => log('annCustom rename=', v));
     });
   }
   const sample = $('annSampleText');
@@ -694,7 +717,7 @@ function backfillAnnCustomFrom(st) {
     annFg: hex(st.annFg, '#004d40'),
     radius: st.radius || '4px',
     bold: !!st.bold,
-    deco: (decoId === 'none') ? undefined : { line: 'underline', style: decoId, color: hex(st.annFg, '#e0f2f1') }
+    deco: (decoId === 'none') ? undefined : { line: 'underline', style: decoId, color: hex(st.annFg, '#004d40') }
   };
   // 304次：生词底色透明同步勾选态（与注释底同模式）
   const wordTransparent = (_annCustom.wordBg === 'transparent');
@@ -732,7 +755,11 @@ function doAnnCustomBackfill(res) {
     // 301次：deco 透传（select 编辑器，见 fillAnnCustomDeco；无即 undefined，生成器跳过）
     deco: (sc.deco && sc.deco.style && sc.deco.style !== 'none') ? sc.deco : undefined
   };
-  $('annCustomWordBg').value = hex(sc.wordBg, '#e0f2f1');
+  // 304次：生词底色透明回填勾选态
+  const wordTransparent = (_annCustom.wordBg === 'transparent');
+  $('annCustomWordBgTransparent').checked = wordTransparent;
+  $('annCustomWordBg').value = wordTransparent ? '#000000' : hex(sc.wordBg, '#004d40');
+  $('annCustomWordBg').disabled = wordTransparent;
   $('annCustomWordFg').value = _annCustom.wordFg;
   // 302次：透明底回填勾选态（取色器放不下 transparent，给占位黑并禁用）
   const annTransparent = (_annCustom.annBg === 'transparent');
@@ -799,7 +826,7 @@ export function syncPoolSettings(res) {
     ? res.annTemplate : DEFAULT_ANN_TEMPLATE;
   // 282次：280 批旧默认残留迁移——'{word}({meaning})' 会让候选样例与真实注释多出一层
   //   括号（用户"候选项的释义不要加()"），统一迁到新默认（下分支回写）。
-  // 284次：旧默认 '{word}({meaning})' 与 '{word}{meaning}' 统一迁到 '{target} {annotation}'。
+  // 284次：旧默认 '{word}({meaning})' 与 '{word}{meaning}' 统一迁到 '{target}{annotation}'。
   if (_poolSel.annTemplate === '{word}({meaning})' || _poolSel.annTemplate === '{word}{meaning}') {
     _poolSel.annTemplate = DEFAULT_ANN_TEMPLATE;
   }

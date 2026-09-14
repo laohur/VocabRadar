@@ -308,6 +308,20 @@ input::placeholder { color: var(--g-muted); opacity: 1; }
 /* 290次：代码右侧个性化样例卡（固定宽，原地刷新；点击选中 custom） */
 .sub-side-card { flex: 0 0 150px; }
 .sub-side-card .demo { min-height: 52px; }
+/* 305次：个性化预览卡改横向（demo+可编辑名称一行，仿池卡布局） */
+.sub-side-card-h {
+  flex: 0 1 auto;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 180px;
+  padding: 4px 8px;
+  border: 1px solid var(--g-border);
+  border-radius: var(--g-radius);
+  background: #fbfdf9;
+}
+.sub-side-card-h .demo { flex: 1 1 auto; min-height: 24px; font-size: 13px; }
+.sub-side-card-h .card-label-input { flex: 0 0 auto; width: 80px; }
 @media (max-width: 720px) {
   .style-grid { grid-template-columns: repeat(2, 1fr); }
   /* 294次：窄屏改 1 列（换行全显卡在窄列下过高）；296次一排方案回滚，恢复此条 */

@@ -214,8 +214,8 @@ function _wsGetSettings() {
       annotateOov: false,
       annotateRepeat: false,
       // 280次：侧邻注释模板默认（annBrackets 布尔退役）
-      // 284次：默认组合 {target} {annotation}（与 styles.js 同步）
-      annTemplate: '{target} {annotation}',
+      // 284次：默认组合 {target}{annotation}（与 styles.js 同步）
+      annTemplate: '{target}{annotation}',
       // 反思（2026-08-18 第七十三次修正）：默认配色曾是单词绿底白字。
       // 304次（用户"默认无底色"）：改透明底绿字。
       hintFirstBg: 'transparent',

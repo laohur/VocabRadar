@@ -16,7 +16,7 @@
   "uiLanguage": "en",
   "textStyle": "none",
   "annotationStyle": "none",
-  "annTemplate": "{target} {annotation}",
+  "annTemplate": "{target}{annotation}",
   "subtitleStyle": "none",
   "subtitlePosition": "b20",
   "subtitleCustom": { "bg": "#000000", "fg": "#ffffff", "fontSizePct": 5, "fontFamily": "sans" },
