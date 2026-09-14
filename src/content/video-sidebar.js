@@ -115,7 +115,8 @@ let _annotateOov = false;
 // 注释重复生词（2026-08-15 第六十二次：默认不选，同一字幕文本内重复词仅注释首次）
 let _annotateRepeat = false;
 // 280次：侧邻注释模板（annBrackets 布尔退役；vs/subtitle-renderer 消费）
-// 284次：默认组合 {target}{annotation}（与 styles.js DEFAULT_ANN_TEMPLATE 同步）
+// 284次：默认组合 {target} {annotation}（与 styles.js DEFAULT_ANN_TEMPLATE 同步）
+// 306次：默认去空格 '{target}{annotation}'
 let _annTemplate = '{target}{annotation}';
 // 视频叠加字幕开关（2026-08-14 第五十四次修正）：startOverlay 曾硬编码 enabled:true，
 //   覆盖 storage overlayEnabled 导致"取消叠加字幕后仍显示"。改为缓存存储值供启动时使用。
@@ -184,7 +185,7 @@ export function getAnnotateRepeat() { return _annotateRepeat; }
 // 280次：侧邻注释模板 getter（vs/subtitle-renderer 渲染用，原 getAnnBrackets）
 export function getAnnTemplate() { return _annTemplate; }
 // 280次：storage 监听分支调用，热更新后需 rerenderSlotsFromCache() 重绘（原 setAnnBrackets）
-// 284次：回落默认同步 {target}{annotation}
+// 284次：回落默认同步 {target} {annotation}；306次去空格 '{target}{annotation}'
 export function setAnnTemplate(v) { _annTemplate = (typeof v === 'string' && v.trim()) ? v : '{target}{annotation}'; }
 export function getCfg() { return _cfg; }
 export function getActiveTab() { return _activeTab; }
@@ -293,7 +294,8 @@ async function loadSettings() {
       // 301次：个性化/用户条目缓存（规则表刷新用）
       annotationCustom: null,
       annotationUserStyles: [],
-      // 280次：侧邻注释模板（annBrackets 布尔退役；284次默认 {target}{annotation}）
+      // 280次：侧邻注释模板（annBrackets 布尔退役；284次默认 {target} {annotation}）
+      // 306次：默认去空格 '{target}{annotation}'
       annTemplate: '{target}{annotation}'
     }, resolve);
   });

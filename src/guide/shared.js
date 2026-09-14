@@ -204,7 +204,12 @@ const MSG = {
   annSampleText: { en: 'Sample text', zh: '样例文字' },
   annSamplePh: { en: 'Sample sentence for style cards', zh: '样式卡展示用的样例句子' },
   annCustomStyle: { en: 'Custom Style', zh: '个性化样式' },
-  annCustomCssPh: { en: 'CSS code of the custom annotation style — view and edit', zh: '个性化注释样式的 CSS 代码——可查看编辑' },
+  // 306次：单 CSS 框拆双框（target/annotation 各一段），placeholder 各配一键（原 annCustomCssPh 停用删除）
+  // 307次：双 CSS 框名称行（用户"两种css 输入框加名字"）——比 placeholder 常驻可辨
+  annCssTargetName: { en: 'Target word CSS', zh: '生词 CSS（target）' },
+  annCssAnnName: { en: 'Annotation CSS', zh: '注释 CSS（annotation）' },
+  annCustomCssTargetPh: { en: 'CSS for the target word, e.g. background:#004d40;color:#fff', zh: '生词（target）的 CSS，如 background:#004d40;color:#fff' },
+  annCustomCssAnnPh: { en: 'CSS for the annotation, e.g. background:rgba(0,0,0,.55);color:#fff', zh: '注释（annotation）的 CSS，如 background:rgba(0,0,0,.55);color:#fff' },
   annAddStyle: { en: 'Save current custom settings as a new annotation style', zh: '把当前个性化参数保存为新注释样式' },
   annCustomWordBg: { en: 'Word BG', zh: '生词底色' },
   annCustomWordFg: { en: 'Word', zh: '生词字色' },

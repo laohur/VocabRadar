@@ -22,7 +22,7 @@
 //   3. 新增字段模型（见 POOL_STYLES 注释）与共享 CSS 生成器 buildAnnPoolCss——
 //      两处侧栏的手写 16 条 CSS（sidebar.css / web-sidebar.css）由生成器取代；
 //   4. annBrackets 布尔开关退役，改 annTemplate 字符串模板（280次默认 {word}({meaning})；
-//   284次默认改为 {target}{annotation}，旧变量名兼容），
+//      284次默认改为 {target} {annotation}，旧变量名兼容），
 //      导出 splitAnnTemplate / renderAnnText / migrateAnnBrackets 工具；
 //   5. SUBTITLE_TEXT_STYLES 再增补 4 条调研所得流行字幕样式。
 export const BUILD_STAMP = '__BUILD_STAMP__';
@@ -51,6 +51,9 @@ export const BUILD_STAMP = '__BUILD_STAMP__';
 //   - wordMono：等宽字体（kbd）
 //   - wordFontSize/wordLetterSpacing：字号/字距
 //   - wordAnimation：动画名（blink → 生成器注入 @keyframes beaver-ann-blink）
+//   - wordDisplay/wordTransform/wordOpacity：合成组三字段（306次）——display:inline-block
+//     让 transform 对行内生词 span 生效（transform 不作用于非替换行内元素）；
+//     transform/opacity 变更只走 GPU 合成不重排不重绘（css-triggers 口径）
 //   注释区：
 //   - annBg/annFg：背景/前景；fontSize：字号（仅注释区）
 //   - 无显式 annBg/annFg 的条目由消费方派生（th/core.pickColors 前后景互换逻辑）
@@ -144,11 +147,18 @@ export const POOL_STYLES = [
   // s21 闪烁高亮（生成器注入 @keyframes beaver-ann-blink）
   { id: 'blink', label: { en: 'Blink', zh: '闪烁高亮' }, wordBg: '#fde68a', wordFg: '#713f12', annBg: 'transparent', annFg: '#b45309', radius: '3px', wordPadding: '1px 3px', wordAnimation: 'beaver-ann-blink' },
 
-  // ---- 合成组（transform/opacity，不触发重排重绘） ----
-  // 305次：轻量合成效果——只改 transform/opacity，GPU 合成层处理，性能最优
-  { id: 'scale-lift', label: { en: 'Scale Lift', zh: '微浮' }, wordBg: 'transparent', wordFg: '#1a1d26', annBg: 'transparent', annFg: '#6b7280', radius: '0', wordTransform: 'translateY(-1px) scale(1.02)' },
-  { id: 'soft-dim', label: { en: 'Soft Dim', zh: '柔淡' }, wordBg: 'transparent', wordFg: '#374151', annBg: 'transparent', annFg: '#9ca3af', radius: '0', wordOpacity: '0.78' },
-  { id: 'glow-lift', label: { en: 'Glow Lift', zh: '浮光' }, wordBg: 'transparent', wordFg: '#7c3aed', annBg: 'transparent', annFg: '#a78bfa', radius: '0', wordTransform: 'translateY(-1px)', shadow: '0 2px 8px rgba(124,58,237,.35)' }
+  // ---- 306次：合成组 6 条（css-triggers/web.dev 口径：transform + opacity 是仅有的
+  //   "不重排不重绘、只走 GPU 合成"的属性；先例：skewX faux oblique 假斜体技巧、
+  //   scale/translate 强调、opacity 淡显弱化——阅读类扩展通用手法）。
+  //   不带任何颜色字段——配色继承默认/用户变量，保持"纯合成"语义（poolPaint 判定干净）。
+  //   transform 对行内元素无效，条目带 wordDisplay:'inline-block'（首次应用有一次
+  //   重排，之后仅改 transform/opacity 值为纯合成，见 wordDecl 注释）。
+  { id: 'fade', label: { en: 'Fade', zh: '淡显' }, wordOpacity: '0.55' },
+  { id: 'skew', label: { en: 'Skew', zh: '斜切' }, wordDisplay: 'inline-block', wordTransform: 'skewX(-8deg)' },
+  { id: 'zoom', label: { en: 'Zoom', zh: '放大' }, wordDisplay: 'inline-block', wordTransform: 'scale(1.08)' },
+  { id: 'press', label: { en: 'Press', zh: '缩小' }, wordDisplay: 'inline-block', wordTransform: 'scale(0.9)' },
+  { id: 'lift', label: { en: 'Lift', zh: '上浮' }, wordDisplay: 'inline-block', wordTransform: 'translateY(-2px)' },
+  { id: 'tilt', label: { en: 'Tilt', zh: '旋转' }, wordDisplay: 'inline-block', wordTransform: 'rotate(-3deg)' }
 ];
 
 // 280次：别名导出——既有消费点（th/core.js 生成页面类、pickColors 取注释色、
@@ -185,8 +195,12 @@ export const VANN_TO_ANN_MIGRATION = {
 // 注释模板（280次：annBrackets 布尔退役 → annTemplate 字符串模板）
 // ================================================================
 // 模板变量：{target}=目标文本（旧名 {word}，兼容）、{annotation}=注释（旧名 {meaning}，兼容）。
-// 284次（用户裁定）：默认组合改为 {target}{annotation}——目标文本后直接接注释
+// 284次（用户裁定）：默认组合改为 {target} {annotation}——目标文本后接空格再接注释
 //   （渲染如「apple 苹果」）。旧模板 {word}{meaning} / {word}({meaning}) 仍可解析。
+// 306次（用户"改为 {target}{annotation}，没空格，看起来间距很大"）：默认去掉中间空格。
+//   侧邻注释 span 自带 margin-left:1px、池卡 ann-demo 有 3px 外距，视觉间距已够；
+//   大间距观感来自旧默认的显式空格 + 这些边距叠加。ann-pool.syncPoolSettings
+//   对旧默认 '{target} {annotation}' 做一次性迁移（与 282/284 次同模式）。
 // 侧邻注释渲染时目标 span 已独立存在，{target} token 被丢弃（不重复输出），
 // 即渲染结果 = {annotation} 前后的字面量（pre + 注释 + post）。
 // 详细模式（注释另起一行）保持"词头+注释"结构，不套模板（维持现状）。
@@ -262,14 +276,16 @@ export function wordDecl(s, opts = {}) {
   if (s.wordMono) d.push(`font-family:ui-monospace,Consolas,monospace${p}`);
   if (s.wordFontSize) d.push(`font-size:${s.wordFontSize}${p}`);
   if (s.wordLetterSpacing) d.push(`letter-spacing:${s.wordLetterSpacing}${p}`);
+  // 306次：合成组三字段——display 须先于 transform 输出（inline-block 让 transform
+  //   对行内 span 生效）；opacity 直接作用于行内元素无需 display。
+  if (s.wordDisplay) d.push(`display:${s.wordDisplay}${p}`);
+  if (s.wordTransform) d.push(`transform:${s.wordTransform}${p}`);
+  if (s.wordOpacity !== undefined) d.push(`opacity:${s.wordOpacity}${p}`);
   if (s.wordEmphasis) {
     d.push(`text-emphasis:${s.wordEmphasis}${p}`);
     d.push(`text-emphasis-position:${s.emphasisPosition || 'under right'}${p}`);
   }
   if (s.wordAnimation) d.push(`animation:${s.wordAnimation} 1.4s ease-in-out infinite${p}`);
-  // 305次：合成组字段（transform/opacity，GPU 合成层处理）
-  if (s.wordTransform) d.push(`transform:${s.wordTransform}${p}`);
-  if (s.wordOpacity !== undefined) d.push(`opacity:${s.wordOpacity}${p}`);
   return d;
 }
 
@@ -299,12 +315,19 @@ export function resolveAnnEntry(id, customObj, userList) {
 }
 
 // 302次：样式绘制代价划分（合成/重绘/重排三组）——几何字段（内边距/边框/字号/字距/
-//   等宽字体）命中即重排组；transform/opacity 型（预留字段 wordTransform/wordOpacity）
-//   命中即合成组，当前池内暂无纯合成条目；其余（颜色/阴影/装饰线/描边/着重号/渐变/
-//   圆角/粗斜体）为重绘组。当前分布：重排 18 / 重绘 33 / 合成 0（与本函数同口径实测）。
+//   等宽字体）命中即重排组；transform/opacity 型（字段 wordTransform/wordOpacity）
+//   命中即合成组；其余（颜色/阴影/装饰线/描边/着重号/渐变/圆角）为重绘组。
+// 306次修正（用户"你确定划分正确了？"——核实确实有错）：bold/italic/wordWeight
+//   （font-weight/font-style）改变字形度量、行内盒宽度随之变化，css-triggers 与
+//   web.dev 均归 layout（重排），原误归重绘。修正后分布（本函数同口径实测）：
+//   重排 30 / 重绘 16 / 合成 6（fade/skew/zoom/press/lift/tilt）。
+//   注：合成组条目带 wordDisplay:'inline-block'（transform 生效前提），首次应用该
+//   display 变更本身是重排；条目按其代表特征 transform/opacity 归合成组（纯合成变更）。
 export function poolPaint(s) {
   if (!s || s.id === 'none') return 'repaint';
   if (s.wordTransform !== undefined || s.wordOpacity !== undefined) return 'composite';
+  // 306次：粗斜体三字段 → 重排（字形度量变化）
+  if (s.bold || s.italic || s.wordWeight !== undefined) return 'reflow';
   const R = ['wordPadding', 'wordPaddingBottom', 'wordBorder', 'wordBorderBottom',
     'wordBorderLeft', 'wordFontSize', 'wordLetterSpacing', 'wordMono', 'fontSize'];
   for (const k of R) {
@@ -314,12 +337,20 @@ export function poolPaint(s) {
 }
 
 // 301次：个性化注释样式 CSS 代码文本（双区段，与 wordDecl/annDecl 同源，供代码框展示/解析）。
-export function annCustomCssText(o) {
+// 306次（用户"两种样式混在一起，为何不分两个框"）：拆出 annCustomCssSections——
+//   target/annotation 两段独立文本，引导页双代码框各占一段（解析回填互不混写）；
+//   本函数保留（单框格式拼接两段），旧调用点不破坏。
+export function annCustomCssSections(o) {
   const w = wordDecl({
     wordBg: o.wordBg, wordFg: o.wordFg, radius: o.radius, bold: o.bold, deco: o.deco
   }).join(';\n');
   const a = annDecl({ annBg: o.annBg, annFg: o.annFg, radius: o.radius }).join(';\n');
-  return '/* target */\n' + (w ? w + ';\n' : '') + '/* annotation */\n' + (a ? a + ';' : '');
+  return { target: w ? w + ';' : '', annotation: a ? a + ';' : '' };
+}
+
+export function annCustomCssText(o) {
+  const s = annCustomCssSections(o);
+  return '/* target */\n' + s.target + '\n/* annotation */\n' + s.annotation;
 }
 
 /** 生成一个容器的统一池样式表（280次）。

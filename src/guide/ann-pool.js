@@ -9,8 +9,8 @@
 import { $, m, getLangState, markOwnWrite, log, sanitizeStyleId } from './shared.js';
 import {
   POOL_STYLES, VANN_TO_ANN_MIGRATION, wordDecl, annDecl,
-  DEFAULT_ANN_TEMPLATE, splitAnnTemplate, styleLabel, resolveAnnEntry, annCustomCssText,
-  poolPaint
+  DEFAULT_ANN_TEMPLATE, splitAnnTemplate, styleLabel, resolveAnnEntry,
+  annCustomCssSections, poolPaint
 } from '../lib/styles.js';
 import { getAnnotations } from '../lib/annotator.js';
 import { ensureReady } from '../lib/dictionary.js';
@@ -91,7 +91,7 @@ export function renderPoolGrid() {
     card.appendChild(poolCardDemo(item));
     return card;
   };
-  const buildLabel = (item, editable, kind) => {
+  const buildLabel = (item, editable) => {
     if (!editable) {
       const label = document.createElement('div');
       label.className = 'card-label';
@@ -108,12 +108,6 @@ export function renderPoolGrid() {
     input.addEventListener('change', () => {
       const v = input.value.trim();
       if (!v) { input.value = styleLabel(item, getLangState()); return; }
-      if (kind === 'custom') {
-        _annCustom.label = { en: v, zh: v };
-        markOwnWrite();
-        chrome.storage.local.set({ annotationCustom: _annCustom }, () => log('annCustom rename=', v));
-        return;
-      }
       const st = _annUserStyles.find((s) => s && s.id === item.id);
       if (!st) return;
       st.label = { en: v, zh: v };
@@ -167,11 +161,10 @@ export function renderPoolGrid() {
           deleteAnnUserStyle(item.id);
         });
         card.appendChild(del);
-        card.appendChild(buildLabel(item, true, 'user'));
-      } else if (kind === 'custom') {
-        card.appendChild(buildLabel(item, true, 'custom'));
+        // 307次：名称挪进 demo 框内新行（用户"样式名称挪进框内，新行"）；删除按钮仍挂卡
+        card.querySelector('.demo').appendChild(buildLabel(item, true));
       } else {
-        card.appendChild(buildLabel(item, false, 'builtin'));
+        card.querySelector('.demo').appendChild(buildLabel(item, false));
       }
       wrap.appendChild(card);
     }
@@ -224,10 +217,18 @@ export function renderPoolSideDemos() {
     if (!id || id === 'none') return;
     const src = grid ? grid.querySelector('.style-card[data-style="' + id + '"]') : null;
     if (!src) return;
-    box.appendChild(src.querySelector('.demo').cloneNode(true));
+    // 307次：demo 内已含名称行（.card-label/.card-label-input），clone 后剥除——
+    //   左栏复制卡仍用外置 .pool-inline-label，避免与框内名称重复。
+    //   顺带修复隐性崩溃：原 src.querySelector('.card-label') 对用户卡返回 null
+    //   （用户卡类名是 .card-label-input，token 不同），textContent 读取即崩。
+    const srcDemo = src.querySelector('.demo').cloneNode(true);
+    const innerLab = srcDemo.querySelector('.card-label, .card-label-input');
+    if (innerLab) innerLab.remove();
+    box.appendChild(srcDemo);
     const lab = document.createElement('div');
     lab.className = 'pool-inline-label';
-    lab.textContent = src.querySelector('.card-label').textContent;
+    const labEl = src.querySelector('.card-label, .card-label-input');
+    lab.textContent = labEl ? ((labEl.value !== undefined) ? labEl.value : labEl.textContent) : '';
     box.appendChild(lab);
   });
 }
@@ -278,31 +279,36 @@ function annSampleModel() {
 function poolCardDemo(item) {
   const demo = document.createElement('div');
   demo.className = 'demo';
+  // 307次（用户"样式名称挪进框内，新行"）：样例四段包进 .demo-line 同行流，
+  //   名称行（buildLabel）由 renderPoolGrid 追加到 demo，形成「样例行＋名称行」纵向结构
+  const line = document.createElement('div');
+  line.className = 'demo-line';
+  demo.appendChild(line);
   const model = annSampleModel();
   const lead = model.last ? model.text.slice(0, model.last.index) : model.text;
   if (lead) {
     const l = document.createElement('span');
     l.textContent = lead;
-    demo.appendChild(l);
+    line.appendChild(l);
   }
   if (model.last) {
     const w = document.createElement('span');
     w.className = 'word-demo';
     w.textContent = model.last.word;
     w.style.cssText = wordDecl(item).join(';');
-    demo.appendChild(w);
+    line.appendChild(w);
     if (model.trans) {
       const a = document.createElement('span');
       a.className = 'ann-demo';
       a.textContent = model.pre + model.trans + model.post;
       a.style.cssText = annDecl(item).join(';');
-      demo.appendChild(a);
+      line.appendChild(a);
     }
     const tail = model.text.slice(model.last.end);
     if (tail) {
       const t = document.createElement('span');
       t.textContent = tail;
-      demo.appendChild(t);
+      line.appendChild(t);
     }
   }
   return demo;
@@ -415,25 +421,24 @@ function fillAnnCustomDeco() {
   sel.value = (_annCustom.deco && _annCustom.deco.style) || $('annCustomDeco').dataset.want || 'none';
 }
 
-// 301次：个性化 CSS 代码文本（与 wordDecl/annDecl 同源，见 styles.annCustomCssText）。
+// 301次：个性化 CSS 代码文本（与 wordDecl/annDecl 同源，见 styles.annCustomCssSections）。
+// 306次：单框拆双框——target/annotation 两框各写各段（互不混写）；聚焦框不回写防打断输入。
 function refreshAnnCustomCssText() {
-  const ta = $('annCustomCss');
-  if (!ta) return;
-  if (document.activeElement === ta) return;
-  ta.value = annCustomCssText(buildAnnCustomObj());
+  const wt = $('annCustomCssTarget'), at = $('annCustomCssAnn');
+  if (!wt && !at) return;
+  const secs = annCustomCssSections(buildAnnCustomObj());
+  if (wt && document.activeElement !== wt) wt.value = secs.target;
+  if (at && document.activeElement !== at) at.value = secs.annotation;
 }
 
-// 301次：注释 CSS 解析回填七控件——仅识别生成子集（background/color/border-radius/
+// 301次：注释 CSS 解析回填控件——仅识别生成子集（background/color/border-radius/
 //   font-weight/font-style/text-decoration），未知忽略；全无可识别沿用旧参数并照实打日志。
-//   双区段按 /* annotation */ 标记切分（无标记视为全 Target 区）。
-function parseAnnCustomCssText(text) {
+// 306次：改单区段解析——双框各含一段 CSS，由调用方传 zone（w=target 框／a=annotation 框）；
+//   radius/font-weight/text-decoration 仅在 w 区有意义，a 区忽略（避免两框互覆盖）。
+function parseAnnCustomCssText(text, zone) {
   const out = {};
-  const src = String(text || '');
-  const ai = src.indexOf('/* annotation */');
-  const wText = ai === -1 ? src : src.slice(0, ai);
-  const aText = ai === -1 ? '' : src.slice(ai);
-  const scan = (part, zone) => {
-    for (const seg of part.split(';')) {
+  const scan = (part, z) => {
+    for (const seg of String(part || '').split(';')) {
       const i = seg.indexOf(':');
       if (i === -1) continue;
       const prop = seg.slice(0, i).trim().toLowerCase();
@@ -441,16 +446,16 @@ function parseAnnCustomCssText(text) {
       if (!val || /\/\*/.test(prop)) continue;
       if (prop === 'background' || prop === 'background-color') {
         if (/^#[0-9a-fA-F]{6}$/.test(val) || /^transparent$/i.test(val) || /^rgba?\(/i.test(val)) {
-          out[zone === 'w' ? 'wordBg' : 'annBg'] = val;
+          out[z === 'w' ? 'wordBg' : 'annBg'] = val;
         }
       } else if (prop === 'color') {
-        if (/^#[0-9a-fA-F]{6}$/.test(val)) out[zone === 'w' ? 'wordFg' : 'annFg'] = val;
-      } else if (prop === 'border-radius' && zone === 'w' && !out.radius) {
+        if (/^#[0-9a-fA-F]{6}$/.test(val)) out[z === 'w' ? 'wordFg' : 'annFg'] = val;
+      } else if (prop === 'border-radius' && z === 'w' && !out.radius) {
         out.radius = val;
-      } else if (prop === 'font-weight' && zone === 'w' && !out.boldSet) {
+      } else if (prop === 'font-weight' && z === 'w' && !out.boldSet) {
         out.boldSet = true;
         out.bold = /^(600|700|800|bold)$/i.test(val);
-      } else if (prop === 'text-decoration' && zone === 'w' && !out.decoSet) {
+      } else if (prop === 'text-decoration' && z === 'w' && !out.decoSet) {
         out.decoSet = true;
         const m = val.match(/underline/i);
         if (m) {
@@ -463,8 +468,7 @@ function parseAnnCustomCssText(text) {
       }
     }
   };
-  scan(wText, 'w');
-  scan(aText, 'a');
+  scan(text, zone === 'a' ? 'a' : 'w');
   delete out.boldSet;
   delete out.decoSet;
   return out;
@@ -519,19 +523,21 @@ function assignAnnCustomToTarget() {
   renderPoolSideDemos();
 }
 
-// 301次：代码框改动应用——解析→写回七控件→走统一应用路径；成功后重生成规范文本；
-//   全无可识别回滚旧代码并照实打日志。
-function applyAnnCustomCssText() {
-  const ta = $('annCustomCss');
-  if (!ta) return;
-  const parsed = parseAnnCustomCssText(ta.value);
+// 301次：代码框改动应用——解析→写回控件→走统一应用路径。
+// 306次：双框各自独立应用——按框 id 定区段（annCustomCssAnn=a 区，其余=w 区）解析该框，
+//   写回对应控件后 applyAnnCustomControls 统一刷新两框；全无可识别回滚该框旧文本并照实打日志。
+function applyAnnCustomCssText(ta) {
+  const box = (ta && ta.id) ? ta : $('annCustomCssTarget');
+  if (!box) return;
+  const zone = box.id === 'annCustomCssAnn' ? 'a' : 'w';
+  const parsed = parseAnnCustomCssText(box.value, zone);
   const keys = Object.keys(parsed);
   if (!keys.length) {
     console.warn('[VocabRadar][guide] 注释 CSS 无可识别声明，沿用旧参数');
-    ta.value = annCustomCssText(buildAnnCustomObj());
+    box.value = annCustomCssSections(buildAnnCustomObj())[zone === 'a' ? 'annotation' : 'target'];
     return;
   }
-  // 304次：生词底色透明同步勾选态（与注释底同模式）
+  // 304次：生词底色透明同步勾选态（与注释底同模式；仅 w 区声明存在时触发）
   if (parsed.wordBg) {
     const tw = !/^#[0-9a-fA-F]{6}$/.test(parsed.wordBg);
     $('annCustomWordBgTransparent').checked = tw;
@@ -539,7 +545,7 @@ function applyAnnCustomCssText() {
     $('annCustomWordBg').disabled = tw;
   }
   if (parsed.wordFg) $('annCustomWordFg').value = parsed.wordFg;
-  // 302次：注释底色透明同步勾选态
+  // 302次：注释底色透明同步勾选态（仅 a 区声明存在时触发）
   if (parsed.annBg) {
     const t = !/^#[0-9a-fA-F]{6}$/.test(parsed.annBg);
     $('annCustomAnnBgTransparent').checked = t;
@@ -556,43 +562,45 @@ function applyAnnCustomCssText() {
   if (typeof parsed.bold === 'boolean') $('annCustomBold').checked = parsed.bold;
   // rgba/transparent 底色取色器放不下：沿用旧色值（上两行已按 #rrggbb 设），如实注明
   applyAnnCustomControls();
-  ta.value = annCustomCssText(buildAnnCustomObj());
-  try { ta.focus(); } catch (_) { /* ignore */ }
+  try { box.focus(); } catch (_) { /* ignore */ }
 }
 
-// 301次：右侧样例卡原地刷新（305次改横向：全文+样式词+注释，仿池卡布局；名称可编辑）。
+// 301次：右侧样例卡原地刷新（常驻 word＋ann 双 span，只改样式与文本，不替换节点去闪）。
+//   307次：名称 input 挪进 demo 框内后，刷新目标改为样例行 #annCustomSideLine——
+//   若仍清空整个 demo 会把框内 input 一并抹掉。
 function updateAnnCustomSideCard() {
   const card = $('annCustomSideCard');
   if (!card) return;
   card.classList.toggle('active', _poolSel[_poolTarget] === 'ann-custom');
-  const demo = $('annCustomSideDemo');
+  const line = $('annCustomSideLine');
   const model = annSampleModel();
   const obj = buildAnnCustomObj();
-  if (demo) {
-    demo.innerHTML = '';
-    const lead = model.last ? model.text.slice(0, model.last.index) : model.text;
-    if (lead) demo.appendChild(document.createTextNode(lead));
-    if (model.last) {
-      const w = document.createElement('span');
+  if (line) {
+    let w = line.querySelector('.word-demo');
+    let a = line.querySelector('.ann-demo');
+    if (!w) {
+      line.innerHTML = '';
+      w = document.createElement('span');
       w.className = 'word-demo';
-      w.textContent = model.last.word;
-      w.style.cssText = wordDecl(obj).join(';');
-      demo.appendChild(w);
-      if (model.trans) {
-        const a = document.createElement('span');
-        a.className = 'ann-demo';
-        a.textContent = model.pre + model.trans + model.post;
-        a.style.cssText = annDecl(obj).join(';');
-        demo.appendChild(a);
-      }
-      const tail = model.text.slice(model.last.end);
-      if (tail) demo.appendChild(document.createTextNode(tail));
+      line.appendChild(w);
+      a = document.createElement('span');
+      a.className = 'ann-demo';
+      line.appendChild(a);
     }
+    w.style.cssText = wordDecl(obj).join(';');
+    const word = model.last ? model.last.word : model.text;
+    if (w.textContent !== word) w.textContent = word;
+    a.style.cssText = annDecl(obj).join(';');
+    const annText = model.last && model.trans ? (model.pre + model.trans + model.post) : '';
+    if (a.textContent !== annText) a.textContent = annText;
+    a.style.display = annText ? '' : 'none';
   }
   const lab = $('annCustomSideLabel');
   if (lab) {
     const t = styleLabel(obj, getLangState());
-    if (lab.value !== t) lab.value = t;
+    // 306次：名称区从 div 改 input（用户可改名后提交），回填写 value 而非 textContent；
+    //   用户正在输入名称（聚焦中）不回写防打断（与 CSS 双框同口径）
+    if (document.activeElement !== lab && lab.value !== t) lab.value = t;
   }
 }
 
@@ -621,32 +629,37 @@ function bindAnnCustom() {
     tw0.addEventListener('change', () => { wb0.disabled = tw0.checked; });
   }
   if (wb0 && tw0) wb0.disabled = tw0.checked;
-  const ta = $('annCustomCss');
-  if (ta && !ta.dataset.bound) {
-    ta.dataset.bound = '1';
-    ta.addEventListener('change', applyAnnCustomCssText);
+  // 306次：双 CSS 框绑定——target/annotation 各自 change 按框应用；focus/blur 按
+  //   data-css-zone 给对应手动控件组（guide.html label 上标注）加/去 .zone-focus 高亮，
+  //   回答"点击哪个框，Word BG 等手动选择器显示哪个值归属"。
+  for (const [bid, zone] of [['annCustomCssTarget', 'w'], ['annCustomCssAnn', 'a']]) {
+    const box = $(bid);
+    if (!box || box.dataset.bound) continue;
+    box.dataset.bound = '1';
+    box.addEventListener('change', () => applyAnnCustomCssText(box));
+    // 307次：选择器泛化 label.sub-custom-item[data-css-zone] → [data-css-zone]——
+    //   名称行（guide.html 双框 label）也带 data-css-zone，聚焦时同步高亮
+    const zl = '[data-css-zone="' + zone + '"]';
+    box.addEventListener('focus', () => {
+      document.querySelectorAll(zl).forEach((l) => l.classList.add('zone-focus'));
+    });
+    box.addEventListener('blur', () => {
+      document.querySelectorAll(zl).forEach((l) => l.classList.remove('zone-focus'));
+    });
   }
   const card = $('annCustomSideCard');
   if (card && !card.dataset.bound) {
     card.dataset.bound = '1';
-    card.addEventListener('click', (e) => {
-      if (e.target.tagName === 'INPUT') return;
+    card.addEventListener('click', () => {
       assignAnnCustomToTarget();
       updateAnnCustomSideCard();
     });
-  }
-  const labInput = $('annCustomSideLabel');
-  if (labInput && !labInput.dataset.bound) {
-    labInput.dataset.bound = '1';
-    labInput.addEventListener('click', (e) => e.stopPropagation());
-    labInput.addEventListener('keydown', (e) => e.stopPropagation());
-    labInput.addEventListener('change', () => {
-      const v = labInput.value.trim();
-      if (!v) { labInput.value = styleLabel(buildAnnCustomObj(), getLangState()); return; }
-      _annCustom.label = { en: v, zh: v };
-      markOwnWrite();
-      chrome.storage.local.set({ annotationCustom: _annCustom }, () => log('annCustom rename=', v));
-    });
+    // 306次：名称 input 防冒泡（仿字幕 283次做法）——点击/键盘不触发容器选卡
+    const lab = $('annCustomSideLabel');
+    if (lab) {
+      lab.addEventListener('click', (e) => e.stopPropagation());
+      lab.addEventListener('keydown', (e) => e.stopPropagation());
+    }
   }
   const sample = $('annSampleText');
   if (sample && !sample.dataset.bound) {
@@ -683,12 +696,19 @@ function bindAnnCustom() {
     btn.dataset.bound = '1';
     btn.title = m('annAddStyle');
     btn.addEventListener('click', () => {
+      // 306次：命名优先读侧卡名称输入框（用户改名后提交）；空回退自动序号
+      const labIn = $('annCustomSideLabel');
+      const custom = labIn && labIn.value.trim();
+      const n = _annUserStyles.length + 1;
       const entry = Object.assign(
-        { id: 'ann-user-' + Date.now(), label: { en: 'Style ' + (_annUserStyles.length + 1), zh: '样式 ' + (_annUserStyles.length + 1) } },
+        { id: 'ann-user-' + Date.now(), label: custom
+          ? { en: custom, zh: custom }
+          : { en: 'Style ' + n, zh: '样式 ' + n } },
         _annCustom,
         { deco: buildAnnCustomObj().deco }
       );
       _annUserStyles = _annUserStyles.concat([entry]);
+      if (labIn) labIn.value = '';
       const feat = _poolTarget;
       _poolSel[feat] = entry.id;
       const patch = { annotationUserStyles: _annUserStyles };
@@ -717,7 +737,7 @@ function backfillAnnCustomFrom(st) {
     annFg: hex(st.annFg, '#004d40'),
     radius: st.radius || '4px',
     bold: !!st.bold,
-    deco: (decoId === 'none') ? undefined : { line: 'underline', style: decoId, color: hex(st.annFg, '#004d40') }
+    deco: (decoId === 'none') ? undefined : { line: 'underline', style: decoId, color: hex(st.annFg, '#e0f2f1') }
   };
   // 304次：生词底色透明同步勾选态（与注释底同模式）
   const wordTransparent = (_annCustom.wordBg === 'transparent');
@@ -755,11 +775,7 @@ function doAnnCustomBackfill(res) {
     // 301次：deco 透传（select 编辑器，见 fillAnnCustomDeco；无即 undefined，生成器跳过）
     deco: (sc.deco && sc.deco.style && sc.deco.style !== 'none') ? sc.deco : undefined
   };
-  // 304次：生词底色透明回填勾选态
-  const wordTransparent = (_annCustom.wordBg === 'transparent');
-  $('annCustomWordBgTransparent').checked = wordTransparent;
-  $('annCustomWordBg').value = wordTransparent ? '#000000' : hex(sc.wordBg, '#004d40');
-  $('annCustomWordBg').disabled = wordTransparent;
+  $('annCustomWordBg').value = hex(sc.wordBg, '#e0f2f1');
   $('annCustomWordFg').value = _annCustom.wordFg;
   // 302次：透明底回填勾选态（取色器放不下 transparent，给占位黑并禁用）
   const annTransparent = (_annCustom.annBg === 'transparent');
@@ -826,8 +842,10 @@ export function syncPoolSettings(res) {
     ? res.annTemplate : DEFAULT_ANN_TEMPLATE;
   // 282次：280 批旧默认残留迁移——'{word}({meaning})' 会让候选样例与真实注释多出一层
   //   括号（用户"候选项的释义不要加()"），统一迁到新默认（下分支回写）。
-  // 284次：旧默认 '{word}({meaning})' 与 '{word}{meaning}' 统一迁到 '{target}{annotation}'。
-  if (_poolSel.annTemplate === '{word}({meaning})' || _poolSel.annTemplate === '{word}{meaning}') {
+  // 284次：旧默认 '{word}({meaning})' 与 '{word}{meaning}' 统一迁到 '{target} {annotation}'。
+  // 306次：284 批旧默认 '{target} {annotation}'（带空格）迁到无空格新默认 '{target}{annotation}'。
+  if (_poolSel.annTemplate === '{word}({meaning})' || _poolSel.annTemplate === '{word}{meaning}'
+    || _poolSel.annTemplate === '{target} {annotation}') {
     _poolSel.annTemplate = DEFAULT_ANN_TEMPLATE;
   }
   if (_poolSel.annTemplate !== res.annTemplate) chrome.storage.local.set({ annTemplate: _poolSel.annTemplate });

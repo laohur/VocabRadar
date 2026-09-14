@@ -336,34 +336,51 @@
                 <input id="annSampleText" type="text" data-ph-key="annSamplePh">
               </div>
               <div class="pool-note pool-note-2" id="poolNoteRerender" data-key="poolNoteRerender">Annotation template — changing it re-renders the samples.</div>
+              <!-- 306次：模板默认去空格 '{target}{annotation}'（原 '{target} {annotation}' 间距大） -->
               <div class="ann-tpl-row">
                 <label for="annTemplate" data-key="fieldAnnTemplate">Annotation template</label>
                 <input id="annTemplate" type="text" placeholder="{target}{annotation}">
                 <span class="ann-tpl-hint" data-key="annTemplateHint">{target}{annotation} are variables</span>
               </div>
               <!-- 301次：个性化行（仿字幕 Custom Style）——七控件（生词底/字、注释底/字、
-                   圆角、装饰线形、加粗）＋ CSS 代码框（双区段 target/annotation）＋
-                   右侧样例卡（原地刷新，点击选中 custom）＋ 大＋号（存用户样式） -->
+                   圆角、装饰线形、加粗）＋ CSS 代码框（306次拆双框 target/annotation）＋
+                   右侧样例卡（原地刷新，点击选中 custom）＋ 大＋号（存用户样式）。
+                   306次：data-css-zone 标注控件归属（w=生词条区／a=注释区），
+                   聚焦对应 CSS 框时该组控件加 .zone-focus 高亮（联动归属提示） -->
               <div class="sub-sec-label" data-key="annCustomStyle">Custom Style</div>
               <div class="ann-custom-row" id="annCustomRow">
-                <label class="sub-custom-item"><span data-key="annCustomWordBg">Word BG</span><input id="annCustomWordBg" type="color" value="#000000"></label>
+                <label class="sub-custom-item" data-css-zone="w"><span data-key="annCustomWordBg">Word BG</span><input id="annCustomWordBg" type="color" value="#000000"></label>
                 <!-- 304次：生词底色透明勾选（默认透明，与注释底勾选同模式） -->
-                <label class="sub-custom-item"><input id="annCustomWordBgTransparent" type="checkbox" checked><span data-key="subCustomTransparent">Transparent</span></label>
-                <label class="sub-custom-item"><span data-key="annCustomWordFg">Word</span><input id="annCustomWordFg" type="color" value="#004d40"></label>
-                <label class="sub-custom-item"><span data-key="annCustomAnnBg">Ann BG</span><input id="annCustomAnnBg" type="color" value="#000000"></label>
+                <label class="sub-custom-item" data-css-zone="w"><input id="annCustomWordBgTransparent" type="checkbox" checked><span data-key="subCustomTransparent">Transparent</span></label>
+                <label class="sub-custom-item" data-css-zone="w"><span data-key="annCustomWordFg">Word</span><input id="annCustomWordFg" type="color" value="#004d40"></label>
+                <label class="sub-custom-item" data-css-zone="a"><span data-key="annCustomAnnBg">Ann BG</span><input id="annCustomAnnBg" type="color" value="#000000"></label>
                 <!-- 302次：注释底色透明勾选（仿字幕行；默认透明，勾选时禁用取色器） -->
-                <label class="sub-custom-item"><input id="annCustomAnnBgTransparent" type="checkbox" checked><span data-key="subCustomTransparent">Transparent</span></label>
-                <label class="sub-custom-item"><span data-key="annCustomAnnFg">Ann</span><input id="annCustomAnnFg" type="color" value="#004d40"></label>
-                <label class="sub-custom-item"><span data-key="annCustomRadius">Radius</span><input id="annCustomRadius" type="text" value="4px"></label>
-                <label class="sub-custom-item"><span data-key="annCustomDeco">Line</span><select id="annCustomDeco"></select></label>
-                <label class="sub-custom-item"><input id="annCustomBold" type="checkbox" checked><span data-key="annCustomBold">Bold</span></label>
+                <label class="sub-custom-item" data-css-zone="a"><input id="annCustomAnnBgTransparent" type="checkbox" checked><span data-key="subCustomTransparent">Transparent</span></label>
+                <label class="sub-custom-item" data-css-zone="a"><span data-key="annCustomAnnFg">Ann</span><input id="annCustomAnnFg" type="color" value="#004d40"></label>
+                <label class="sub-custom-item" data-css-zone="w"><span data-key="annCustomRadius">Radius</span><input id="annCustomRadius" type="text" value="4px"></label>
+                <label class="sub-custom-item" data-css-zone="w"><span data-key="annCustomDeco">Line</span><select id="annCustomDeco"></select></label>
+                <label class="sub-custom-item" data-css-zone="w"><input id="annCustomBold" type="checkbox" checked><span data-key="annCustomBold">Bold</span></label>
               </div>
+              <!-- 306次：单框拆双框——target/annotation 各一段 CSS（原混一框靠 /* annotation */ 标记切分，
+                   难区分且易互覆盖）；聚焦某框，其归属控件组（data-css-zone）高亮。
+                   306次：样例卡 demo 去 sub-stage 类（该类背景 #888 是字幕舞台专用，
+                   导致个性化预览卡行背景与池卡不一致）；名称 div 改 input（可改名后提交，
+                   annCustomAdd 优先读它命名），复用 style-card 下的 .card-label-input 样式。
+                   307次：双框各加名称行（annCssTargetName/annCssAnnName，同带 data-css-zone
+                   参与聚焦高亮）；预览卡收窄至候选池样品卡同级尺寸 130px 居右（腾宽给 CSS 框），
+                   名称 input 挪进 demo 框内新行（与池卡同构，刷新目标改 #annCustomSideLine） -->
               <div class="sub-css-row" id="annCssRow">
-                <textarea id="annCustomCss" rows="6" spellcheck="false" data-ph-key="annCustomCssPh"></textarea>
-                <!-- 305次：个性化预览卡改横向（demo+可编辑名称一行，仿池卡布局） -->
-                <div class="sub-side-card-h" id="annCustomSideCard">
-                  <div class="demo" id="annCustomSideDemo"></div>
-                  <input id="annCustomSideLabel" type="text" class="card-label-input" value="Custom">
+                <div class="ann-css-boxes">
+                  <label class="ann-css-box-label" for="annCustomCssTarget" data-css-zone="w"><span data-key="annCssTargetName">Target word CSS</span></label>
+                  <textarea id="annCustomCssTarget" rows="6" spellcheck="false" data-ph-key="annCustomCssTargetPh"></textarea>
+                  <label class="ann-css-box-label" for="annCustomCssAnn" data-css-zone="a"><span data-key="annCssAnnName">Annotation CSS</span></label>
+                  <textarea id="annCustomCssAnn" rows="6" spellcheck="false" data-ph-key="annCustomCssAnnPh"></textarea>
+                </div>
+                <div class="style-card sub-side-card" id="annCustomSideCard">
+                  <div class="demo" id="annCustomSideDemo">
+                    <div class="demo-line" id="annCustomSideLine"></div>
+                    <input class="card-label-input" id="annCustomSideLabel" type="text" value="个性化">
+                  </div>
                 </div>
                 <button id="annCustomAdd" class="sub-add-btn" type="button" title="Save current custom as a new style">+</button>
               </div>

@@ -638,7 +638,8 @@ function _hintGetSettings() {
     annotationStyle: 'none',
     // 280次：侧邻注释模板（annBrackets 布尔退役；
     //   classic script 不便 import styles.js，默认值/迁移字面量与 lib/styles.js 保持一致）
-    // 284次：默认组合 {target}{annotation}（与 styles.js DEFAULT_ANN_TEMPLATE 同步）
+    // 284次：默认组合 {target} {annotation}（空格分隔，与 styles.js DEFAULT_ANN_TEMPLATE 同步）
+    // 306次：默认去空格 '{target}{annotation}'
     annTemplate: '{target}{annotation}'
   };
   return new Promise((resolve) => {
@@ -662,7 +663,8 @@ function _hintGetSettings() {
           // 280次：旧 annBrackets 布尔一次性迁移——annTemplate 从未设置且旧键存在时，
           //   按旧值派生模板（true/缺省=默认模板，false=素释义）；不回写 storage，
           //   读取时派生即可（引导页保存 annTemplate 后旧键不再参与）。
-          // 284次：默认模板随 DEFAULT_ANN_TEMPLATE 同步为 {target}{annotation}。
+          // 284次：默认模板随 DEFAULT_ANN_TEMPLATE 同步为 {target} {annotation}。
+          // 306次：去空格 '{target}{annotation}'（与引导页迁移同口径）。
           if (typeof all.annTemplate === 'undefined' && typeof all.annBrackets !== 'undefined') {
             merged.annTemplate = (all.annBrackets === false) ? '{annotation}' : '{target}{annotation}';
             delete merged.annBrackets;
