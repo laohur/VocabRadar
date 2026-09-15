@@ -237,10 +237,11 @@ export async function loadWordfreq(lang) {
  * 加载 wordlists.json 词表标签（装载函数，与词典无关--仅初始化或词典数据缺失/不全时启用）
  * 反思（2026-08-20 第八十五次）：词表标签不是独立缓存，而是词典字段（words store 记录 tags 字段）。
  *   装载完成由 _loadDict 送入词典，此后页面加载只从词典投影读，本函数仅词典缺数据时执行。
+ * 2026-09-15：translations 和 wordlists.json 合并到 en 文件夹。
  * @returns {Promise<Map<string, string[]>>} Map<word_lower, [list_ids]>
  */
 export async function loadWordlists() {
-  const url = chrome.runtime.getURL('src/data/wordlists.json');
+  const url = chrome.runtime.getURL('src/data/en/wordlists.json');
   console.log(`[VocabRadar][dictionary][${_ts()}] 词典缺少词表数据，装载词表源文件: ${url}`);
   const res = await fetch(url);
   if (!res.ok) {
@@ -263,16 +264,17 @@ export async function loadWordlists() {
 /**
  * 加载内置英中翻译包（装载函数，与词典无关--仅初始化或词典数据缺失/不全时启用）
  * 反思（2026-09-04）：小程序内置英中翻译包（VocabRadar/preprocess/build_translation_zh.py
- *   产出，ECDICT+LLM，见 src/data/translations/ATTRIBUTION.md）接入扩展——不走内存直查
+ *   产出，ECDICT+LLM）接入扩展——不走内存直查
  *   （违反"业务只从词典读"），而在此装载为 Map<word, translation定稿字符串>，
  *   由 projection._rebuildFromSources 经 bulkWriteTranslations 一次性写入词典 d_trans
  *   分表（translationLang='zh'），之后 translator 首层词典缓存即命中，在线只补真正缺词。
  *   仅 learnLanguage=en 时调用；其它语言对不受影响（translationLang 校验天然隔离）。
  *   释义定稿：数组 join(' | ')，与详细模式 translations.join(' | ') 全列口径一致。
+ * 2026-09-15：translations 和 wordlists.json 合并到 en 文件夹。
  * @returns {Promise<Map<string, string>>} Map<word_lower, translation>
  */
 export async function loadBuiltinEnZh() {
-  const url = chrome.runtime.getURL('src/data/translations/en_zh.json');
+  const url = chrome.runtime.getURL('src/data/en/translations_zh.json');
   console.log(`[VocabRadar][dictionary][${_ts()}] 装载内置英中翻译包: ${url}`);
   let res;
   try {

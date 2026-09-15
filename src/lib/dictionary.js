@@ -22,8 +22,10 @@
 // 数据来源：
 //   1. src/data/wordfreq/small_{lang}.msgpack.gz (wordfreq 数据，10种语言)
 //      格式：{ word: frequency }，frequency 为每百万词出现次数（float）
-//   2. src/data/wordlists.json (英文词表标签)
+//   2. src/data/en/wordlists.json (英文词表标签)
 //      格式：{ word_lower: [list_ids] }，仅英文，list_ids 如 ["CET4","CET6"]
+//   3. src/data/en/translations_zh.json (英中翻译包)
+//      格式：{ word_lower: [中文释义] }，仅英文
 //
 // 查询接口：
 //   - lookup(word) 返回 { rank, tags }（不再含 translations，释义改由 translator.js 异步获取）
