@@ -1426,6 +1426,7 @@ export async function getDiagState() {
         textHintEnabled: true, sidebarEnabled: true, webSidebarEnabled: true,
         learnLanguage: 'en', meaningLanguage: 'zh', rankThreshold: 5000,
         annotateOov: false, hintFirstEnabled: true, hintSideAnnotation: false,
+        hintLaterEnabled: false,
         uiLanguage: 'en'
       }, resolve);
     } catch (_) { resolve({}); }
@@ -1463,12 +1464,15 @@ export async function getDiagState() {
       webSidebarEnabled: settings.webSidebarEnabled,
       learnLanguage: settings.learnLanguage, meaningLanguage: settings.meaningLanguage,
       rankThreshold: settings.rankThreshold, annotateOov: settings.annotateOov,
+      hintLaterEnabled: settings.hintLaterEnabled,
+      hintSideAnnotation: settings.hintSideAnnotation,
       uiLanguage: settings.uiLanguage
     },
     effective: {
       enabled: thState.enabled, rankThreshold: thState.rankThreshold, annotateOov: thState.annotateOov,
       annotateRepeat: thState.annotateRepeat,
       sideAnnotation: thState.colors ? thState.colors.sideAnnotation : null,
+      laterEnabled: thState.colors ? thState.colors.laterEnabled : null,
       firstEnabled: thState.colors ? thState.colors.firstEnabled : null,
       startedEver: thState.startedEver, lastStartError: thState.lastStartError,
       contextValid: isContextValid()

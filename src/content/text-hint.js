@@ -478,6 +478,21 @@ async function _hintBoot() {
             st.effective.annotateRepeat + ' → ' + s.annotateRepeat);
           _impl.setAnnotateRepeat(s.annotateRepeat);
         }
+        // 326次：配色开关漂移对账——hintLaterEnabled/hintSideAnnotation 走 updateColors
+        //   通道，onChanged 偶发丢失（v56 已实证 storage 事件丢失）时运行态永久 stale，
+        //   即"弹窗关了、页上还多处亮"。updateColors 已重算 colors（325次），此处调即自愈
+        //   （只写 CSS 变量+类名，无 DOM 结构操作，不触发 08-06"点几次消失"）。
+        if (typeof st.effective.laterEnabled === 'boolean' || typeof st.effective.sideAnnotation === 'boolean') {
+          const wantLater = (s.hintLaterEnabled === true);
+          const wantSide = (s.hintSideAnnotation === true);
+          if ((st.effective.laterEnabled === true) !== wantLater
+            || (st.effective.sideAnnotation === true) !== wantSide) {
+            console.warn('[VocabRadar][text-hint] 对账: 配色开关漂移（later '
+              + st.effective.laterEnabled + ' → ' + wantLater + '，side '
+              + st.effective.sideAnnotation + ' → ' + wantSide + '），热同步 updateColors');
+            _impl.updateColors(s);
+          }
+        }
       } else if (st.effective.enabled) {
         // 反思（2026-08-15 第五十八次·续）：诊断窗手动操作（启动/重扫/调参等）后 8s 内
         //   不对账停用——用户正在调试，立即停掉会"高亮闪一下又消失"。

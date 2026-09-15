@@ -29,5 +29,13 @@
   "llmProvider": "pollinations",
   "llmBaseUrl": "",
   "llmModel": "",
-  "llmApiKey": ""
+  "llmApiKey": "",
+  "deactivateRules": [
+    { "pat": "vocabradar.com", "query": true, "hint": true, "textSidebar": true, "videoSidebar": true, "overlay": true },
+    { "pat": "localhost", "query": false, "hint": true, "textSidebar": false, "videoSidebar": false, "overlay": false },
+    { "pat": "127.*.*.*", "query": false, "hint": true, "textSidebar": false, "videoSidebar": false, "overlay": false },
+    { "pat": "10.*.*.*", "query": false, "hint": true, "textSidebar": false, "videoSidebar": false, "overlay": false },
+    { "pat": "172.*.*.*", "query": false, "hint": true, "textSidebar": false, "videoSidebar": false, "overlay": false },
+    { "pat": "192.168.*.*", "query": false, "hint": true, "textSidebar": false, "videoSidebar": false, "overlay": false }
+  ]
 }

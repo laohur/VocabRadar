@@ -321,13 +321,20 @@ export function isContextValid() {
  *   直接操作 DOM，虽然不重扫但仍有副作用（反复追加/移除 span 可能导致框架 DOM 错乱）。
  *   用户建议"实在做不好就算了，提示用户刷新后生效"。
  *   修正：updateColors 只做 CSS 变量热更新（applyColorVars），不操作 DOM。
- *   开关变化（sideAnnotation/laterEnabled）需要刷新页面才能生效：
- *     - laterEnabled：CSS 类 .beaver-hide-later 已即时切换（无需刷新，后续可见性即时生效）
+ *   开关变化生效口径：
+ *     - laterEnabled：先由 pickColors(settings) 重算 thState.colors 再
+ *       applyColorVars，CSS 类 .beaver-hide-later 即时切换（无需刷新；
+ *       2026-09-15 第三百二十五次修复：旧版漏了重算这步，读的一直是启动时的
+ *       旧值，关掉「生词多次出现」后多处高亮仍亮，必须刷新才生效）。
  *     - sideAnnotation：已扫描的 span 不会追加/移除注释，需刷新后重新扫描
+ *      （新扫描的词按新值执行，因 thState.colors 已重算）。
  *   配色变化（bg/fg）：CSS 变量即时生效，无需刷新。
  */
 export function updateColors(settings) {
   if (!thState.enabled) return;
+  // 325次：先重算再写变量——否则 laterEnabled/sideAnnotation/配色全读旧值，
+  //   开关热切换永不生效。pickColors 纯函数无 DOM 操作，无 08-06「点几次消失」风险。
+  thState.colors = pickColors(settings || {});
   applyColorVars();
   // 文本样式差异化：挂 beaver-text-style-{id} 类到 <html>
   // 318次：哨兵 'none' 改空串（非法值全清）。

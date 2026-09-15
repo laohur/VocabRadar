@@ -310,6 +310,8 @@ async function loadSettings() {
     rankThreshold: 5000,
     annotateOov: false,
     annotateRepeat: false,
+    // 327次：引导页新增复选框回填默认（与 popup.hintLaterEnabled 同键，默认空即仅首次高亮）
+    hintLaterEnabled: false,
     hintSideAnnotation: false,
     textHintEnabled: true,
     // 272 次：Query 独立开关（右键查询+查询栏），默认开；不再由网页提示负责
@@ -456,7 +458,8 @@ function renderAll(res) {
     }
   });
   $('llmTranslatePrompt').value = res.llmTranslatePrompt || LLM_TRANSLATE_PROMPT;
-  $('annotateRepeat').checked = !!res.annotateRepeat;
+  // 328次：单开关回填——任一重复键为开即勾选（收敛历史分歧值；勾选态=允许重复）
+  $('hintLaterEnabled').checked = !!(res.hintLaterEnabled || res.annotateRepeat);
   $('hintSideAnnotation').checked = !!res.hintSideAnnotation;
   // 286次：word hits 六开关回填（缺省=开；右键查询/查询栏 undefined 时回退旧 queryEnabled）
   const _effQuery = (v) => (typeof v === 'undefined' ? res.queryEnabled : v) !== false;
@@ -720,8 +723,12 @@ async function init() {
   $('annotateOov').addEventListener('change', (e) => {
     chrome.storage.local.set({ annotateOov: e.target.checked }, () => log('注释表外词=', e.target.checked));
   });
-  $('annotateRepeat').addEventListener('change', (e) => {
-    chrome.storage.local.set({ annotateRepeat: e.target.checked }, () => log('注释重复生词=', e.target.checked));
+  // 328次：旧 annotateRepeat 复选框已删（只留一个开关）；单开关双写——
+  //   hintLaterEnabled（后续高亮显隐）+ annotateRepeat（侧邻/侧栏/字幕注释去重）
+  //   同值，确保"重复"一个概念两处机制一致；content 侧 onChanged+5s 对账已覆盖两键。
+  $('hintLaterEnabled').addEventListener('change', (e) => {
+    const v = !!e.target.checked;
+    chrome.storage.local.set({ hintLaterEnabled: v, annotateRepeat: v }, () => log('注释重复生词=', v));
   });
   $('hintSideAnnotation').addEventListener('change', (e) => {
     chrome.storage.local.set({ hintSideAnnotation: e.target.checked }, () => log('侧邻提示=', e.target.checked));

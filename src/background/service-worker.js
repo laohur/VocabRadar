@@ -181,7 +181,10 @@ const DEFAULT_SETTINGS = {
   hintFirstEnabled: true,
   hintFirstBg: '#2e6b43',
   hintFirstFg: '#ffffff',
-  hintLaterEnabled: true,
+  // 326次：默认改 false——与 popup.js:110「生词多次出现 复选框 默认空」（08-05 用户裁定）
+  //   及 text-hint.js DEFAULTS 对齐；旧版 true 致新装用户开箱即多处高亮。
+  //   存量用户 storage 已有值不受影响（onInstalled 合并 stored 优先）。
+  hintLaterEnabled: false,
   hintLaterBg: '#2e6b43',
   hintLaterFg: '#ffffff',
   // 反思（2026-08-14 第五十四次修正）：设置键改名 localTranslateEnabled → annotateOov。
@@ -264,6 +267,50 @@ chrome.runtime.onInstalled.addListener(async (details) => {
     //   避免陈旧值残留在 storage 中造成混淆。
     chrome.storage.local.remove(['localTranslateEnabled']);
   });
+  // 默认停用规则注入——config.json 定义 vocabradar.com/localhost/127.0.0.1/*.*.*.*
+  //   四条默认规则（抑制网页提示），storage 无 deactivateRules 或为空时写入。
+  //   用户已有规则不覆盖；迁移标记防重入。
+  (async () => {
+    try {
+      const done = await new Promise((resolve) => {
+        try { chrome.storage.local.get('deactivateRulesDefaultsInjected', (res) => resolve(res && res.deactivateRulesDefaultsInjected === true)); } catch (_) { resolve(true); }
+      });
+      if (done) return;
+      const existing = await new Promise((resolve) => {
+        try { chrome.storage.local.get('deactivateRules', (res) => resolve(res && Array.isArray(res.deactivateRules) ? res.deactivateRules : [])); } catch (_) { resolve([]); }
+      });
+      if (existing.length > 0) {
+        chrome.storage.local.set({ deactivateRulesDefaultsInjected: true });
+        log('[VocabRadar][sw][' + _ts() + '] deactivateRules 已有规则(' + existing.length + '条)，跳过默认注入');
+        return;
+      }
+      let defaults = [];
+      try {
+        const url = chrome.runtime.getURL('src/data/config.json');
+        const res = await fetch(url);
+        const cfg = await res.json();
+        defaults = Array.isArray(cfg.deactivateRules) ? cfg.deactivateRules : [];
+      } catch (e) {
+        console.warn('[VocabRadar][sw][' + _ts() + '] 读取 config.json 默认停用规则失败:', e);
+      }
+      if (defaults.length === 0) {
+        chrome.storage.local.set({ deactivateRulesDefaultsInjected: true });
+        return;
+      }
+      await new Promise((resolve, reject) => {
+        try {
+          chrome.storage.local.set({ deactivateRules: defaults }, () => {
+            const err = chrome.runtime.lastError;
+            if (err) reject(new Error(err.message)); else resolve();
+          });
+        } catch (e) { reject(e); }
+      });
+      chrome.storage.local.set({ deactivateRulesDefaultsInjected: true });
+      log('[VocabRadar][sw][' + _ts() + '] 默认停用规则已注入', defaults.length, '条');
+    } catch (e) {
+      console.warn('[VocabRadar][sw] 默认停用规则注入失败（不置位，下次唤醒重试）:', e);
+    }
+  })();
   // 反思（2026-08-14 第五十五次修正）：删除 word-cache.js（fnv1aHash 100 分桶旧缓存）。
   //   第五十二次已迁移统一词典（word-db.js IDB 单库），translator.js 不再读写 wc_* 桶，
   //   旧版版本变更清空 wc_* 桶的逻辑与文件一同删除；翻译缓存改由 onInstalled 清 IDB。
