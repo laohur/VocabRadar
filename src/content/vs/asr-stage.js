@@ -87,24 +87,27 @@ export function updateASRProgressFromStage(s) {
   if (ASR_INTERNAL_STAGES.has(stage)) return;
 
   // 音频准备阶段（B站）——第一百一十次：标签全部走 i18n
+  // 322次：阶段标题固定英文直文本（同 321 批 detail 串口径，不走 t() 不随界面语言）；
+  //   原用 i18n 键已删（孤儿键清理），仅 dlAudioDone/fallbackMode 留有其他消费点
   const prepStages = {
-    'bili-audio-url': 'asr.fetchAudio',
-    'bili-meta': 'asr.probeMeta',
-    'bili-meta-fail': 'asr.metaFail',
-    'bili-init': 'asr.parseHead',
-    'bili-first-ok': 'asr.firstReady',
-    'bili-download': 'asr.dlAudioFile',
-    'bili-download-ok': 'asr.dlAudioDone',
-    'bili-download-fail': 'asr.dlAudioFail',
-    'bili-decode': 'asr.decoding',
-    'bili-decode-ok': 'asr.decodeDone',
-    'bili-decode-fail': 'asr.decodeFail',
-    'bili-pcm': 'asr.pcmReady',
-    'bili-stream-fail': 'asr.streamFallback',
-    'bili-none': 'asr.directFail',
-    'yt-audio': 'asr.ytAudio',
-    'bili-start': 'asr.prepRecog',
-    'fallback': 'asr.fallbackMode'
+    'bili-audio-url': 'Fetching audio',
+    'bili-meta': 'Probing audio',
+    'bili-meta-fail': 'Meta probe failed',
+    'bili-init': 'Parsing audio header',
+    'bili-first-ok': 'First chunk ready',
+    'bili-download': 'Downloading audio',
+    'bili-download-ok': 'Audio downloaded',
+    'bili-download-fail': 'Audio download failed',
+    'bili-decode': 'Decoding audio',
+    'bili-decode-ok': 'Audio decoded',
+    'bili-decode-fail': 'Decode failed',
+    'bili-pcm': 'PCM ready',
+    'bili-reuse': 'Audio cached, resuming',  // 320次：压缩缓存复用（不重下载直接续识）
+    'bili-stream-fail': 'Stream fallback',
+    'bili-none': 'Direct download unavailable',
+    'yt-audio': 'YouTube audio',
+    'bili-start': 'Preparing recognition',
+    'fallback': 'Fallback mode'
   };
 
   // 后台下载进度：只更新文字，不抢占识别段的进度条百分比
@@ -156,7 +159,7 @@ export function updateASRProgressFromStage(s) {
       // 第一百一十次：直连失败原因（技术性文本保留原文，标题随界面语言）
       detail = s.reason;
     }
-    showASRProgress(t(prepStages[stage]), detail);
+    showASRProgress(prepStages[stage], detail);  // 322次：标题已是英文直文本，不再过 t()
     if (stage.endsWith('-ok') || stage === 'bili-pcm') {
       updateASRProgressFill(100);
     } else if (stage.endsWith('-fail')) {

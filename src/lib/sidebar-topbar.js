@@ -6,7 +6,8 @@
 //
 // 顶行结构（统称"侧栏"，内容照旧）：
 //   [◎ VocabRadar] ······ [切换形态][🌐][⋯][◀][✕(仅文本)]
-//   - 左端 ◎ 为内联 SVG 小图标（brandIconSVG），第一百七十六次由 🦫 替换而来
+//   - 左端 ◎ 为小图标（brandIconSVG），第一百七十六次由 🦫 替换而来；
+//     324次起 SVG 本体存 data/radar.svg，构建期注入（本文件只留 __RADAR_SVG__ 占位符）
 //   - 切换形态：视频形态显示 📄（切去文本），文本形态显示 🎬（切回视频）
 //   - 折叠态约定：视频侧栏折叠=仅剩本顶行；文本侧栏折叠=悬浮球
 //
@@ -29,14 +30,15 @@ export const TOPBAR_FORM = { VIDEO: 'video', TEXT: 'text' };
  * 图形取"雷达"意象（同心圆 + 中心点 + 扫描线），与产品名 VocabRadar 对应。
  * 导出原因：图片翻译面板（th/panel.js）等扩展自身界面同样需要这枚图标，
  *   由本文件唯一定义，避免各处各画一版。
- * @returns {string} SVG 字符串
+ * 324次（用户："比较一下搜索栏和文本侧栏的小图标，没差异的话输出到data/radar.svg，
+ *   以后从文件加载"）：比较结论＝搜索栏（ws/ui.js）与文本侧栏顶行/图片翻译面板全部
+ *   调用本函数，同源无差异。SVG 本体移至 data/radar.svg 作为唯一图标源——本函数改返回
+ *   __RADAR_SVG__ 占位符，构建期由 scripts/build.mjs 注入SVG文本（仿 __BUILD_STAMP__ 模式，
+ *   运行时零 fetch/零异步/WAR 依赖，保留上方三大好处）。
+ * @returns {string} SVG 字符串（构建后为 data/radar.svg 的内容）
  */
 export function brandIconSVG() {
-  return `<svg class="beaver-brand-icon" viewBox="0 0 24 24" width="18" height="18" fill="none"
-    stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true" focusable="false"
-  ><circle cx="12" cy="12" r="9"></circle><circle cx="12" cy="12" r="4.5"></circle
-  ><circle cx="12" cy="12" r="1.2" fill="currentColor" stroke="none"></circle
-  ><path d="M12 12 L18.4 5.6"></path></svg>`;
+  return '__RADAR_SVG__';
 }
 
 /**

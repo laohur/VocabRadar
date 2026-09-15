@@ -152,6 +152,9 @@ export const thState = {
   startedEver: false,
   lastStartError: null,
   seenWords: new Set(),
+  // 318次：侧注独立账本——seenWords 会被阈值/开关/模板变化清空导致同词误判页级首见
+  //   （FIRST→重复挂注释），annSeenWords 仅随标注移除/高亮清理而清空，见 scan.js。
+  annSeenWords: new Set(),
   wordCache: new Map(),
   tooltip: null,
   panel: null,
@@ -162,7 +165,8 @@ export const thState = {
   scrollHandler: null,
   tooltipTargetEl: null,
   // 反思（2026-08-13 第五十一次）：当前生效的文本样式 id
-  curTextStyle: 'none',
+  // 318次：'none' 哨兵非法——空串表示"未启用文本样式"，truthy 判定。
+  curTextStyle: '',
   // 反思（2026-08-06）：当前 tooltip 显示的单词，用于异步音标加载后校验是否仍是同一个词
   tooltipWord: '',
   // 反思（2026-08-18 第七十五次修正）：最近一次 pointermove 的视口坐标
@@ -326,7 +330,8 @@ export function updateColors(settings) {
   if (!thState.enabled) return;
   applyColorVars();
   // 文本样式差异化：挂 beaver-text-style-{id} 类到 <html>
-  const id = settings.textStyle || 'none';
+  // 318次：哨兵 'none' 改空串（非法值全清）。
+  const id = settings.textStyle || '';
   applyTextStyleClass(id);
   // 反思（2026-08-06）：不再在开关变化时操作 DOM，避免"点击几次文本提示消失"。
   //   sideAnnotation 开关变化需刷新页面生效（新扫描的词才追加注释）。
@@ -338,11 +343,12 @@ export function updateColors(settings) {
 //   字体属性（粗细/斜体/下划线/阴影/圆角）由 html.beaver-text-style-{id} 类控制。
 export function applyTextStyleClass(id) {
   const root = document.documentElement;
-  if (thState.curTextStyle && thState.curTextStyle !== 'none') {
+  // 318次：哨兵 'none' 改空串——truthy 判定替代 !=='none'。
+  if (thState.curTextStyle) {
     root.classList.remove('beaver-text-style-' + thState.curTextStyle);
   }
-  thState.curTextStyle = id || 'none';
-  if (thState.curTextStyle !== 'none') {
+  thState.curTextStyle = id || '';
+  if (thState.curTextStyle) {
     root.classList.add('beaver-text-style-' + thState.curTextStyle);
   }
 }
@@ -381,7 +387,12 @@ export function pickColors(s) {
   // 301次：custom/用户条目经 resolveAnnEntry 解析（settings 直通 caches）。
   const txtSt = resolveAnnEntry(s.textStyle, s.annotationCustom, s.annotationUserStyles);
   const wordBg = s.hintFirstBg || (txtSt && txtSt.wordBg) || 'transparent';
-  const wordFg = s.hintFirstFg || (txtSt && txtSt.wordFg) || '#2e6b43';
+  // 308次：条目显式 wordFg:'inherit'（Green Underline"生词不变色"）最优先——
+  //   继承正文色是条目自身的视觉承诺，须压过 popup/storage 端兜底色（text-hint.js
+  //   defaults 仍为白字等旧值），否则下划线样式会意外改字色。'inherit' 经
+  //   --beaver-first-fg 变量直达 color:var(--beaver-first-fg) 合法生效。
+  const wordFg = (txtSt && txtSt.wordFg === 'inherit') ? 'inherit'
+    : (s.hintFirstFg || (txtSt && txtSt.wordFg) || '#2e6b43');
   // 反思（2026-08-15 第六十四次）：透明/半透明底色样式（下划线/荧光/描边等，wordBg=transparent
   //   或带 alpha 的 rgba）派生侧邻注释时，annFg=wordBg 会得到透明字色 → 注释文字不可见。
   // 反思（2026-08-15 第六十五次修正）：上一版把注释底设为 wordFg（如荧光笔 #332700 深色）
@@ -400,8 +411,11 @@ export function pickColors(s) {
   const annSt = resolveAnnEntry(s.annotationStyle, s.annotationCustom, s.annotationUserStyles);
   const opaque = isOpaqueBg(wordBg);
   // 302次（用户"注释也应当没有背景色"）：默认派生改透明底（显式设置与池条目照旧优先）。
+  // 308次：wordFg='inherit'（生词不变色条目）派生注释字色时无实色可用，
+  //   回落主题绿 #2e6b43（与 Green Underline 自带 annFg 同值）。
   const annBg = explicitAnnBg || (annSt && annSt.annBg) || 'transparent';
-  const annFg = explicitAnnFg || (annSt && annSt.annFg) || (opaque ? wordBg : wordFg);
+  const annFg = explicitAnnFg || (annSt && annSt.annFg)
+    || (opaque ? wordBg : (wordFg === 'inherit' ? '#2e6b43' : wordFg));
   return {
     firstEnabled: true,          // 首次出现总是高亮（不再有开关）
     firstBg: wordBg,             // 生词底色（亮色高亮，吸睛）
@@ -441,19 +455,10 @@ export function applyColorVars() {
   });
 }
 
-// 反思（2026-07-07）：用户要求"正文字号应当同网页正文字号"。
-// panel/tooltip 挂在 document.documentElement 上，默认继承 <html> 字号（通常16px），
-// 而非 <body> 的字号（B站等可能为14px）。每次显示时同步 body 计算字号到宿主元素。
-// 反思（2026-08-19 第八十一次）：字号下限钳制 14px——部分站点正文仅 12px，
-//   悬浮提示/右键面板跟随后过小不可读（用户反馈"有时候文本悬浮提示的字号小"）。
-//   正文 ≥14px 时仍完全跟随正文（满足 2026-07-07"正文字号同网页正文"约束）。
-export function syncBodyFontSize(el) {
-  try {
-    if (!document.body) return;  // 防御：body 未就绪时跳过
-    const fs = parseFloat(getComputedStyle(document.body).fontSize) || 0;
-    if (fs) el.style.fontSize = (fs >= 14 ? fs : 14) + 'px';
-  } catch (_) { /* ignore */ }
-}
+// 310次（用户"查询窗固定字号"）：syncBodyFontSize 已删除——它每次显示把 body 计算字号
+//   写进查询窗宿主，覆盖 ensurePanel/ensureTooltip 的 14px !important（CSSOM 同名声明
+//   整体替换），localhost:3001（body 18px）查询窗字号偏大。查询窗字号恒 14px 基准，
+//   buildPanelCss 内 em 已换算 px 定死；"正文字号同网页正文"旧约束由用户本次裁定废止。
 
 // === 朗读（Web Speech API） ===
 
@@ -569,7 +574,7 @@ export function injectStyles() {
      * 280次：统一池——字体/边框/描边/着重号/动画等全部字段改由 wordDecl 生成
      *   （colors:false：底色字色仍走 --beaver-first-* 变量，渐变经变量生效）；
      *   isOpaqueBg 已识别渐变底，透明/渐变底同样清除首现 1px 描边。 */
-    ${TEXT_STYLES.filter((s) => s.id !== 'none').map(annTextStyleRule).join('\n')}
+    ${TEXT_STYLES.map(annTextStyleRule).join('\n')}
     /* 280次：隐藏态清理——统一池新增的描边/着重号/边框/动画/背景图等字段
      *   会让 .beaver-word-later / .beaver-word-hidden 隐藏词露出轮廓，
      *   特异性 (0,3,0) 高于上方生成规则，维持"零重扫隐藏"语义 */

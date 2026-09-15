@@ -12,15 +12,15 @@ import {
   SUBTITLE_TEXT_STYLES, SUBTITLE_POSITIONS, POOL_STYLES, findStyle, styleLabel, annDecl,
   SUB_FONT_OPTIONS, SUB_FX_OPTIONS, subFontFamily, subFxDecl, buildUserStyleDecl,
   SUBTITLE_REF_H, pxToSizePct, sizePctToPx, subFontSizePct,
-  DEFAULT_ANN_TEMPLATE, splitAnnTemplate
+  DEFAULT_ANN_TEMPLATE, splitAnnTemplate, SUB_DEFAULT_STYLE
 } from '../lib/styles.js';
 import { getAnnotations } from '../lib/annotator.js';
 import { ensureReady } from '../lib/dictionary.js';
 import { pickCleanShortTrans } from '../lib/dict-clean.js';
 
 // 当前选中的字幕文字/位置样式 id（渲染样卡与双预览共用，切换时同步刷新）
-let _subStyleId = 'none';
-let _subPosId = 'b20';   // 第二百二十三次：默认位置统一下 1/5（原 'b10' 与 storage 默认 b20 不一致）
+let _subStyleId = SUB_DEFAULT_STYLE;   // 318次：初值=默认代指常量 SUB_DEFAULT_STYLE（default 是代指，版本变化才改常量值）
+let _subPosId = 'b10';   // 314次：默认位置改贴底 1/10（用户裁定"default位置应当是底部10%"，推翻 223/219 次的 b20）
 // 290次：样例句子（样式卡与预览共用；持久化 storage.subtitleSample）
 // 291次：默认改纯英文句（注释不再硬编码，动态按释义语言/词频注释）；290版旧默认做一次性迁移
 const DEFAULT_SUB_SAMPLE = 'VocabRadar is short for vocabulary radar.';
@@ -121,9 +121,9 @@ function buildSubBoxCss(item, s, refH) {
   parts.push('font-size:' + sizePctToPx(subFontSizePct(item), refH) + 'px');
   // 282次：用户样式字体 id（arial/impact 等）不在 GUIDE_FONTS 时回落共享层 SUB_FONTS
   parts.push('font-family:' + (GUIDE_FONTS[item.font] || subFontFamily(item.font)));
-  if (item.id === 'none') {
-    parts.push('background:rgba(0,0,0,0.75)');
-  } else if (item.bg) {
+  // 318次：'none' 死分支删除（'none' 作为样式 id 非法已全库清理）；默认深条改由首卡
+  //   'white-bottom' 自带 bg:rgba(0,0,0,0.75) 经下方 bg 分支自然生效，渲染不变。
+  if (item.bg) {
     parts.push('background:' + item.bg);
   }
   // 281次：weight 字段优先（特粗 800，如 edge-white-bold），否则 bold→600（与 overlay 渲染一致）
@@ -141,7 +141,7 @@ function buildSubBoxCss(item, s, refH) {
 
 // 按字幕文字样式元数据 + 位置 ratio 生成迷你字幕元素 cssText（样卡/双预览共用）
 // 反思（2026-08-16 第六十九次）：位置与文字样式解耦——bottom = ratio×100%（距视频底部比例），
-//   'none'（默认）= 深色半透明条 + 无文本投影（第六十七次起，与 overlay 基础样式一致）。
+//   默认卡 'white-bottom'（318 次实名化，旧 id 'none'）= 深色半透明条 + 无文本投影。
 // 反思（2026-08-19 第七十九次）：新增 flow 模式——文字样式卡（.sub-stage）不再用
 //   绝对定位迷你视频区（与前三个栏目尺寸一致，见 subCard），flow=true 时省略
 //   position/left/bottom/transform，按普通流渲染水平文本样例。
@@ -178,7 +178,7 @@ function escapeHtml(s) {
 }
 
 // 281次：新增 annStyle 参数——字幕注释行样式改由第四栏池条目（Subtitle hints on video）
-//   控制（annDecl 输出与真实 overlay 渲染同源）；缺省/'none' 时沿用旧配色逻辑。
+//   控制（annDecl 输出与真实 overlay 渲染同源）；缺省时沿用旧配色逻辑。
 function subSampleHtml(item, ratio, annMode, scale, wrap, flow, plain, annStyle) {
   const sample = item.sample || 'He passed the quiz(测验).';
   // 反思（2026-08-19 第八十一次）：样例解析修正——旧正则以 `(?:\(...\))?` 将括号组设为可选，
@@ -206,9 +206,10 @@ function subSampleHtml(item, ratio, annMode, scale, wrap, flow, plain, annStyle)
     }
   }
   const s = (typeof scale === 'number' && scale > 0) ? scale : 1;
-  // 281次：注释样式由第四栏池条目控制（annDecl 生成器输出 cssText）；未指派（缺省/'none'）
+  // 281次：注释样式由第四栏池条目控制（annDecl 生成器输出 cssText）；未指派（缺省）
   //   时沿用旧逻辑：有底色样式（含默认深条）注释用白字，透明底直显样式前景色。
-  const annCss = (annStyle && annStyle.id !== 'none') ? annDecl(annStyle).join(';') : '';
+  // 318次：annStyle.id !== 'none' 判定删除——池内已无 'none' id（'none' 全清）。
+  const annCss = annStyle ? annDecl(annStyle).join(';') : '';
   const annFg = item.bg ? '#ffffff' : (item.fg || '#ffffff');
   const wordCss = 'background:#2e6b43;color:#ffffff;border-radius:2px;padding:0 3px;font-weight:600';
   // 注释模式：预览优先用 radio 选中的模式（用户要求"侧邻注释跟详细注释预览中有变化"），
@@ -320,8 +321,8 @@ function userStyleObj(st) {
   };
 }
 
-// 文字样式网格重渲染：none + 10 内置（renderStyleGrid）+ 用户自建样式卡
-//   （282次，右上角删除钮）。active 高亮按 _subStyleId。
+// 文字样式网格重渲染：内置池（SUBTITLE_TEXT_STYLES，318次首卡实名 'white-bottom'，无
+//   'none' 卡）+ 用户自建样式卡（282次，右上角删除钮）。active 高亮按 _subStyleId。
 //   290次：个性化卡搬出网格（代码右侧独立卡 #subCustomSideCard，原地刷新不闪）。
 function renderSubTextGrid() {
   const grid = $('subtitleStyleGrid');
@@ -393,7 +394,9 @@ function parseSamplePairs(text) {
 //   radar/雷达；side 行内、detail 独立多行。样例卡（subCard/plain）仍纯文字无注释。
 function subPreviewHtml(style, ratio, annMode, annStyle) {
   const tplParts = splitAnnTemplate(getPoolSel().videoOverlayAnnTemplate || DEFAULT_ANN_TEMPLATE);
-  const annCss = (annStyle && annStyle.id !== 'none') ? annDecl(annStyle).join(';') : '';
+  // 281次：注释样式由第四栏池条目控制（annDecl 生成器输出 cssText）。
+  // 318次：annStyle.id !== 'none' 判定删除——池内已无 'none' id（'none' 全清）。
+  const annCss = annStyle ? annDecl(annStyle).join(';') : '';
   const annFg = style.bg ? '#ffffff' : (style.fg || '#ffffff');
   const wordCss = 'background:#2e6b43;color:#ffffff;border-radius:2px;padding:0 3px;font-weight:600';
   // 292次（用户"侧邻模式没有截短释义"）：注释文本截短（超 24 字切…，detail 独立行同口径）；
@@ -461,8 +464,8 @@ function subPreviewHtml(style, ratio, annMode, annStyle) {
 // 282次：预览重做（用户"少了竖屏""预览的视频大小按照1080p缩放的，注意字体显示比例"）——
 //   ①横屏 16:9 / 竖屏 9:16 切换按钮（_subPreviewOrient 本地态，不写 storage）。
 //   ②1080p 虚拟舞台：内层按真实 1080p 像素（1920×1080 / 1080×1920）渲染字幕——
-//   字号用样式 size 的真实 px（'none' 时真实 overlay 为 clamp(18, 高×4.5%, 40)，
-//   1080p 恰取上限 40px），外层横 480×270 / 竖 270×480 整体 transform:scale(0.25)——
+//   字号用样式 size 的真实 px（默认卡 'white-bottom'，318 次实名化、旧 id 'none'；
+//   overlay 侧 clamp 特例已于 297 次删除），外层横 480×270 / 竖 270×480 整体 transform:scale(0.25)——
 //   字体显示比例与真实 1080p 视频完全一致（旧版 scale=0.8 是 480px 小窗比例，失真）。
 //   ③正文样式按 _subStyleId（custom/用户样式→合成对象）；注释行按第四栏池条目
 //   （getPoolSel().videoOverlayAnnStyle）——正文/位置/注释任一变化调用本函数立即刷新。
@@ -676,13 +679,15 @@ function backfillSubCustomFrom(obj) {
   updateCustomSideCard();
 }
 
-// 282次：删除用户自建样式——从 subtitleUserStyles 移除；若正选中该样式则回落 'none'。
+// 282次：删除用户自建样式——从 subtitleUserStyles 移除；若正选中该样式则回落默认。
+//   318次：回落改默认代指常量 SUB_DEFAULT_STYLE（317 次的指针重置块撤销——default 是
+//   代指不是指针，常量本身永在池内，不存在"被删卡恰是默认指向"）。
 function deleteUserStyle(id) {
   _userStyles = _userStyles.filter((s) => s.id !== id);
   const patch = { subtitleUserStyles: _userStyles };
   if (_subStyleId === id) {
-    _subStyleId = 'none';
-    patch.subtitleStyle = 'none';
+    _subStyleId = SUB_DEFAULT_STYLE;
+    patch.subtitleStyle = _subStyleId;
   }
   markOwnWrite();
   chrome.storage.local.set(patch, () => log('subtitleUserStyles-', id));
@@ -835,12 +840,15 @@ export function syncSubtitleSettings(res) {
     }
   }
   if (_userMigrated) { markOwnWrite(); chrome.storage.local.set({ subtitleUserStyles: _userStyles }); }
+  // 318次：正文样式清洗回落锚定默认代指常量 SUB_DEFAULT_STYLE；'none'（317 次前的旧值/
+  //   旧首卡 id）不在池内，sanitizeStyleId 自动回落常量并写盘——存量迁移就地完成。
+  //   317 次的指针读盘清洗块（subDefaultStyle 键）撤销。
   const subActive = (res.subtitleStyle === 'custom') ? 'custom'
     : (_userStyles.some((s) => s.id === res.subtitleStyle) ? res.subtitleStyle
-      : sanitizeStyleId(SUBTITLE_TEXT_STYLES, res.subtitleStyle));
-  if (subActive !== (res.subtitleStyle || 'none')) { markOwnWrite(); chrome.storage.local.set({ subtitleStyle: subActive }); }
+      : sanitizeStyleId(SUBTITLE_TEXT_STYLES, res.subtitleStyle, SUB_DEFAULT_STYLE));
+  if (subActive !== (res.subtitleStyle || SUB_DEFAULT_STYLE)) { markOwnWrite(); chrome.storage.local.set({ subtitleStyle: subActive }); }
   const posActive = sanitizePositionId(res.subtitlePosition);
-  if (posActive !== (res.subtitlePosition || 'b20')) { markOwnWrite(); chrome.storage.local.set({ subtitlePosition: posActive }); }
+  if (posActive !== (res.subtitlePosition || 'b10')) { markOwnWrite(); chrome.storage.local.set({ subtitlePosition: posActive }); }   // 314次：默认回落对齐 b10
   _subStyleId = subActive;
   _subPosId = posActive;
   // 281次：个性化参数回填（storage.subtitleCustom；缺省/非法值回落默认对象）。
@@ -890,7 +898,17 @@ export function syncSubtitleSettings(res) {
         const us = _userStyles.find((s) => s.id === id);
         if (us) sel = userStyleObj(us);
       }
-      if (sel) backfillSubCustomFrom(sel);
+      if (sel) {
+        backfillSubCustomFrom(sel);
+        // 314次：内置字幕样式可携带可选 pos（如 'white-bottom'（318 次实名化，旧 'none'）绑 'b10'），指派时
+        //   同步字幕位置——用户手改位置后不被覆盖，直至再次指派带 pos 的样式；自建/
+        //   用户样式无 pos，指派不动位置（位置仍是独立维度，见 69 次解耦）。
+        //   写位置触发 guide.js 整栏重渲染，位置 radio 选中态自动同步。
+        if (sel.pos && SUBTITLE_POSITIONS.some((p) => p.id === sel.pos)) {
+          markOwnWrite();
+          chrome.storage.local.set({ subtitlePosition: sel.pos }, () => log('subtitlePosition<=style pos', sel.pos));
+        }
+      }
     }
     renderSubPreview();
   });

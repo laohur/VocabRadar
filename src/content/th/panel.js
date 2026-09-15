@@ -28,9 +28,12 @@ import { lemmaFamily } from '../../lib/lemmatizer.js';
 import { LANGUAGES } from '../../lib/vendor/diverse-lemmas/languages.js';
 import { t } from '../../lib/i18n.js';
 import { getPhonetic } from '../../lib/phonetics.js';
+// 310次（用户裁定"本应该只插入短释义"）：插入口径回滚为 pickCleanShortTrans 首条短义项
+//   （上轮全义项 join 是误判"插入不全"的正确行为，予以撤销）。
+import { pickCleanShortTrans, splitTransLines } from '../../lib/dict-clean.js';
 import {
   thState, PANEL_ID, OCR_PANEL_ID, HIGHLIGHT_CLASS, PROCESSED_ATTR,
-  formatStage, isContextValid, syncBodyFontSize, speak
+  formatStage, isContextValid, speak
 } from './core.js';
 import { hideTooltip } from './tooltip.js';
 import { processTextNode } from './scan.js';
@@ -192,13 +195,109 @@ export function bindLemmaChipClick(shadow) {
   shadow.addEventListener('click', (e) => onCardLemmaClick(e, shadow));
 }
 
+// 308次：show in page 插入锚点——showContextPanel 时保存的选区 Range 克隆（模块级单查询生效）
+let lastQueryRange = null;
+// 319次：整段插入时认定的块级元素集合（选区起点向上找最近块级，段落后新行插译文；
+//   与 scan.js getBlockOriginText 的 BLOCK_TAGS 同口径精简）
+const TH_BLOCK_TAGS = new Set(['P', 'DIV', 'LI', 'TD', 'TH', 'H1', 'H2', 'H3', 'H4', 'H5', 'H6',
+  'BLOCKQUOTE', 'DD', 'DT', 'SECTION', 'ARTICLE', 'MAIN', 'FIGCAPTION', 'CAPTION']);
+// 309次第三轮（用户"插入的释义应当是短释义"）：showContextPanel/renderQueryCard 数据流中
+//   解析出的释义数组缓存（每次新查询重置）——插入时经 pickCleanShortTrans 取首条短义项，
+//   与侧邻注释同一口径；无数组时回退 .trans-row 首行文本。
+let lastQueryTranslations = [];
+// 310次（用户"你禁止了文段翻译差异"）：来源标记——词典外选区走整段翻译（true），
+//   词典释义/词典词翻译回填（false）。插入时文段插整段译文，词典插短释义，二者有别。
+let lastQueryIsSegment = false;
+
+/**
+ * 309次第三轮（用户"查询到非单词，多个词的时候，不要注音，不要词形还原"）：
+ * 多词/长文判定（与 renderQueryCard/insertMeaningIntoPage 既有口径统一抽取）：
+ * 含 ≥2 个拉丁词元，或整体长度 >24 视为整段。
+ * @param {string} text 查询文本
+ * @returns {boolean}
+ */
+function isMultiWordText(text) {
+  const tokens = String(text).split(/[\s\u3000]+/).filter((s) => /[A-Za-z\u00C0-\u024F]/.test(s));
+  return tokens.length > 1 || String(text).length > 24;
+}
+
+/**
+ * 316次：选段过滤辅助——按 Range 逐文本节点重建选区文本，跳过 .beaver-page-insert
+ * （本扩展插入页面的释义节点，见 insertMeaningIntoPage）祖先内的文本，只保留原文。
+ * 处理 start/end offset 切片；被跳过节点处以空格占位防跨块文字粘连；
+ * 结果多空白归一，异常/空串返回 ''（调用方退回原始 selectionText）。
+ * @param {Range} range 页面选区 Range
+ * @returns {string}
+ */
+function extractCleanSelText(range) {
+  try {
+    const anc = range.commonAncestorContainer;
+    const walkerRoot = (anc.nodeType === 1) ? anc : anc.parentElement;
+    if (!walkerRoot) return '';
+    const walker = document.createTreeWalker(walkerRoot, NodeFilter.SHOW_TEXT, null);
+    const sc = range.startContainer;
+    const ec = range.endContainer;
+    const parts = [];
+    let n;
+    while ((n = walker.nextNode())) {
+      if (!range.intersectsNode(n)) continue;
+      const el = n.parentElement;
+      if (el && el.closest && el.closest('.beaver-page-insert')) { parts.push(' '); continue; }
+      let txt = n.textContent || '';
+      const isStart = (n === sc && sc.nodeType === 3);
+      const isEnd = (n === ec && ec.nodeType === 3);
+      if (isStart && isEnd) txt = txt.slice(range.startOffset, range.endOffset);
+      else if (isStart) txt = txt.slice(range.startOffset);
+      else if (isEnd) txt = txt.slice(0, range.endOffset);
+      parts.push(txt);
+    }
+    return parts.join('').replace(/\s+/g, ' ').trim();
+  } catch (_) {
+    return '';
+  }
+}
+
 /**
  * 显示右键菜单查词面板
  * @param {string} text 用户选中的文本
  */
 export function showContextPanel(text, clientX, clientY) {
+  // 316次（用户"选段翻译时候，排除插入的释义，只选原文"）：SW 转发的 selectionText
+  //   取自浏览器原生选区（info.selectionText），若框选范围混入了本扩展插入页面的
+  //   释义节点（.beaver-page-insert），译文会被一并送查。此刻右键菜单刚触发、选区
+  //   仍在，先取 Range：克隆作 lastQueryRange（308次插入锚点，原逻辑提前至此共用）；
+  //   混入检测（端点落在插入节点内 或 克隆片段含插入元素）命中时按节点级过滤重取原文，
+  //   过滤结果为空才退回原始 selectionText（例如只框选了插入释义本身）。
+  let range = null;
+  try {
+    const sel = window.getSelection();
+    range = (sel && sel.rangeCount > 0) ? sel.getRangeAt(0) : null;
+  } catch (_) { range = null; }
+  if (range) {
+    lastQueryRange = range.cloneRange();
+    let hitInsert = false;
+    try {
+      const sEl = range.startContainer && range.startContainer.parentElement;
+      const eEl = range.endContainer && range.endContainer.parentElement;
+      hitInsert = !!(sEl && sEl.closest && sEl.closest('.beaver-page-insert'))
+        || !!(eEl && eEl.closest && eEl.closest('.beaver-page-insert'))
+        || (() => {
+          const frag = range.cloneContents();
+          return !!(frag.querySelector && frag.querySelector('.beaver-page-insert'));
+        })();
+    } catch (_) { hitInsert = false; }
+    if (hitInsert) {
+      const cleaned = extractCleanSelText(range);
+      if (cleaned) text = cleaned;
+    }
+  } else {
+    lastQueryRange = null;
+  }
   const trimmed = text.trim();
   if (!trimmed) return;
+  // 310次：新查询重置短释缓存与来源标记（旧查询残留会被 pickCleanShortTrans 误取）
+  lastQueryTranslations = [];
+  lastQueryIsSegment = false;
   // 2026-09-09 第二百四十二次：手势入口 prime 内置翻译（不 await，不阻塞面板）。
   //   本函数由右键菜单（SW 转发 SHOW_CONTEXT_PANEL）触发，距用户在页面右键 1-3s，
   //   transient activation（约 5s 窗口）仍有效，Translator.create() 此刻可成功；
@@ -207,7 +306,9 @@ export function showContextPanel(text, clientX, clientY) {
   //   force 语义现由 primeTranslator(opts) 控制，hover 等高频入口不得用。
   primeTranslator({ force: true });
   ensurePanel();
-  syncBodyFontSize(thState.panel);
+  // 310次（用户"查询窗固定字号"）：删 syncBodyFontSize——body 字号同步会覆盖
+  //   ensurePanel 的 14px !important（localhost:3001 body 18px → 查询窗字号偏大），
+  //   查询窗字号恒为 14px 基准（buildPanelCss 内 em 已换算 px 定死）。
 
   const shadow = thState.panel.shadowRoot;
   thState.panel.style.display = 'block';
@@ -217,7 +318,8 @@ export function showContextPanel(text, clientX, clientY) {
   //   回调；alive 守卫保留"面板隐藏期间不写"语义（过期异步不覆盖新查询）。
   renderQueryCard(shadow, trimmed,
     () => positionPanel(clientX, clientY),
-    () => !!(thState.panel && thState.panel.style.display !== 'none')
+    () => !!(thState.panel && thState.panel.style.display !== 'none'),
+    { showInPage: true }
   ).catch((e) => console.error('[VocabRadar][text-hint] 右键查询渲染异常:', e));
 }
 
@@ -232,8 +334,10 @@ export function showContextPanel(text, clientX, clientY) {
  * @param {string} trimmed 查询文本（已 trim 非空）
  * @param {() => void} [onUpdate] 异步内容到达后的位置刷新回调（浮动面板=positionPanel；内嵌卡片缺省 no-op）
  * @param {() => boolean} [isAlive] 写入守卫（浮动面板=display!==none；内嵌卡片缺省恒 true）
+ * @param {{showInPage?: boolean}} [opts] 308次：showInPage=true 时显示 footer 中部
+ *   "show in page" 按钮（仅右键浮动面板；内嵌卡片语境无页面插入点，按钮隐藏）
  */
-export async function renderQueryCard(root, trimmed, onUpdate, isAlive) {
+export async function renderQueryCard(root, trimmed, onUpdate, isAlive, opts) {
   const refresh = (typeof onUpdate === 'function') ? onUpdate : () => {};
   const alive = (typeof isAlive === 'function') ? isAlive : () => true;
   const q = (sel) => root.querySelector(sel);
@@ -264,7 +368,9 @@ export async function renderQueryCard(root, trimmed, onUpdate, isAlive) {
   q('.trans-row').textContent = '';
 
   // 音标异步加载（词典命中路径用；词典外分支在 async 块内自行处理/清空）
-  if (word && isContextValid()) {
+  // 309次第三轮（用户"查询到非单词，多个词的时候，不要注音，不要词形还原"）：
+  //   多词/整段不注音——多词无对应单词条目音标，异步回填会覆盖词典外分支的清空
+  if (word && isContextValid() && !isMultiWordText(word)) {
     getPhonetic(word).then((phon) => {
       if (alive()) {
         q('.phonetic-row').textContent = phon || '';
@@ -278,8 +384,16 @@ export async function renderQueryCard(root, trimmed, onUpdate, isAlive) {
   (async () => {
     const lower = word.toLowerCase();
     // 第一百一十一次：①先查词典（lookupFull 含词形还原重试；OOV 返回 null）
+    // 316次（用户"便签按钮插你似乎把翻译也像短释义那样截断了"）：多词/长文跳过词典
+    //   查询——lookupFull 对表外文段也返回占位词条（query.js 尾部无条件 return result，
+    //   其注释声称的"表外返回 null"分支并不存在），导致文段恒走"词典命中"路径、
+    //   lastQueryIsSegment 恒 false，show in page 便签被 pickCleanShortTrans 按短释
+    //   口径截断。跳过后文段直接落"词典外→翻译整段"分支，插入不再截断；单词路径零变化
+    //   （不改 lookupFull：tooltip/scan 等消费方依赖其占位词条行为）。
     let fullRec = null;
-    try { fullRec = await lookupFull(lower); } catch (e) { fullRec = null; }
+    if (!isMultiWordText(word)) {
+      try { fullRec = await lookupFull(lower); } catch (e) { fullRec = null; }
+    }
 
     if (!fullRec) {
       // ②词典外 → 翻译整个选区
@@ -289,6 +403,9 @@ export async function renderQueryCard(root, trimmed, onUpdate, isAlive) {
       try { translated = isContextValid() ? await translate(trimmed, true) : null; } catch (e) { translated = null; }
       if (alive()) {
         q('.trans-row').textContent = translated || '';
+        // 310次：词典外＝文段翻译路径——整段译文入缓存，标记来源（插入时插整段）
+        lastQueryTranslations = translated ? [translated] : [];
+        lastQueryIsSegment = true;
         const ch = getLastTranslateChannel();
         console.log(`[VocabRadar][text-hint] 右键翻译(词典外, len=${trimmed.length}): ${translated ? '成功' : '失败'}${ch ? ' 渠道:' + ch : ''}`);
       }
@@ -330,11 +447,16 @@ export async function renderQueryCard(root, trimmed, onUpdate, isAlive) {
       q('.stage').textContent = stage;
       if (headerStage) headerStage.textContent = stage;
       // 词形还原原形（2026-09-04：改走共用 renderLemmaInto，常显 chip＋小写归一）
-      renderLemmaInto(root, word, info.lemma);
+      // 309次第三轮（用户"查询到非单词，多个词的时候，不要注音，不要词形还原"）：
+      //   多词/整段（词典整体命中短语等）不显示词形还原
+      if (!isMultiWordText(word)) renderLemmaInto(root, word, info.lemma);
       // 标签
+      // 309次：用户实测"词表标签直接消失"，静态排查无果——在此输出诊断日志：
+      //   tags 为空（词典记录无标签数据）与 tagsSection 隐藏状态均可从控制台直接判别
+      const tags = info.tags || [];
+      console.log(`[VocabRadar][text-hint] 查询卡词表标签: isWord=${info.isWord} tags=${tags.length}`, tags);
       const tagsEl = q('.tags-row');
       tagsEl.innerHTML = '';
-      const tags = info.tags || [];
       if (tagsSection) tagsSection.style.display = tags.length > 0 ? '' : 'none';
       tags.forEach((tag) => {
         const span = document.createElement('span');
@@ -346,8 +468,12 @@ export async function renderQueryCard(root, trimmed, onUpdate, isAlive) {
       //   已缓存则直接显示；pending 则显示浮动省略号（动画三点），翻译完成替换；
       //   翻译失败移除省略号留空，不显示"No definition"。
       const trans = info.translations || [];
+      // 310次：缓存释义数组供 show in page 取短释；词典命中＝非文段来源
+      lastQueryTranslations = trans;
+      lastQueryIsSegment = false;
       if (trans.length > 0) {
-        q('.trans-row').innerHTML = trans.map(tr => `<div>${tr}</div>`).join('');
+        // 310次（用户"查询卡片释义没有分拆"）：单条释义内按 | 词性段拆行（letter 案例）
+        q('.trans-row').innerHTML = splitTransLines(trans).map(row => `<div>${row}</div>`).join('');
       } else if (info.pending) {
         q('.trans-row').innerHTML = '<span class="dots"><i></i><i></i><i></i></span>';
         refresh();
@@ -355,7 +481,10 @@ export async function renderQueryCard(root, trimmed, onUpdate, isAlive) {
           translate(word, true).then((translated) => {
             if (alive()) {
               if (translated) {
-                q('.trans-row').innerHTML = `<div>${translated}</div>`;
+                // 310次：词典词翻译回填同样按 | 拆行（来源仍为词典路径，非文段）
+                q('.trans-row').innerHTML = splitTransLines([translated]).map(row => `<div>${row}</div>`).join('');
+                // 310次：翻译完成后同步短释缓存（词典路径保持 lastQueryIsSegment=false）
+                lastQueryTranslations = [translated];
                 // 反思（2026-08-13 第五十二次）：日志标注翻译渠道（本地缓存/内置翻译/在线:xxx），
                 //   用户要求"日志能看出翻译渠道"。
                 const ch = getLastTranslateChannel();
@@ -402,6 +531,336 @@ export async function renderQueryCard(root, trimmed, onUpdate, isAlive) {
     }
     openChatPanel(trimmed, 'word', ctxBody || trimmed);
   };
+
+  // 308次：底部按钮 show in page——把释义插入页面。整段新换行、单词插入续接。
+  // 315次（用户"便签按钮插你禁止了文段翻译插入，大错，撤销任何禁止插入"）：
+  //   撤销 308 次的 showInPage 条件——所有查询表面（右键面板/悬浮提示/文本侧栏/
+  //   视频侧栏内嵌卡）一律绑定插入并显示按钮，不再任何一处隐藏。侧栏内嵌卡点击时
+  //   锚点已失效则走实时选区回落（insertMeaningIntoPage L506-523），无选区给卡片内
+  //   反馈行，均可见非静默。
+  const showPageBtn = q('.show-page');
+  if (showPageBtn) {
+    showPageBtn.onclick = () => insertMeaningIntoPage(trimmed, q);
+  }
+}
+
+/**
+ * 322次：选区布局分析——译文样式「跟随原文多数」（用户裁定：跟随原文多数而不是
+ *   开头一个字；多段的逐段跟随）。TreeWalker 遍历选区覆盖的文本节点（跳过扩展
+ *   UI/已插入译文/侧邻注释），按最近块级容器（TH_BLOCK_TAGS，与路径 C 同口径）
+ *   分组，以字符数为权重对五项样式（字色/字族/字号/斜体/粗细）投票：
+ *   - global：全选区多数 → 单处插入的译文样式；
+ *   - blocks：各块多数（文档序）→ 多段译文逐段插入各块末尾时的该段样式。
+ *   生词高亮 span 内文本仍算原文，但样式取高亮容器的父元素（原文容器口径，同 318 次）。
+ *   必须在任何 DOM 变更（B 路径 splitText）之前调用；分析失效（选区丢失/落在
+ *   扩展 UI 内/无文本）返回 null，调用方回落旧口径（起点元素锁定）。
+ * @param {Range} range 插入锚点选区
+ * @returns {{blocks: Array<{el: Element, style: Object}>, global: Object}|null}
+ */
+function analyzeRangeLayout(range) {
+  try {
+    if (!range || !range.commonAncestorContainer) return null;
+    const root = range.commonAncestorContainer;
+    const rootEl = root.nodeType === 1 ? root : root.parentElement;
+    if (!rootEl || !rootEl.isConnected || rootEl.getRootNode() !== document) return null;
+    const SKIP = '.beaver-page-insert, .beaver-side-ann, #' + PANEL_ID
+      + ', #beaver-sidebar, #beaver-web-sidebar, #beaver-subtitle-overlay, #beaver-debug-panel';
+    if (rootEl.closest && rootEl.closest(SKIP)) return null;
+    const STYLE_PROPS = ['color', 'fontFamily', 'fontSize', 'fontStyle', 'fontWeight'];
+    const byBlk = new Map();   // 块元素 -> Map<样式签名,{style,chars}>
+    const global = new Map();  // 签名 -> {style,chars}
+    const addVote = (map, style, chars) => {
+      const sig = STYLE_PROPS.map((k) => style[k]).join('|');
+      const cur = map.get(sig);
+      if (cur) cur.chars += chars;
+      else map.set(sig, { style, chars });
+    };
+    const walker = document.createTreeWalker(rootEl, NodeFilter.SHOW_TEXT, {
+      acceptNode(n) {
+        if (!n.nodeValue || !n.nodeValue.trim()) return NodeFilter.FILTER_REJECT;
+        const p = n.parentElement;
+        if (!p || !p.closest || p.closest(SKIP)) return NodeFilter.FILTER_REJECT;
+        if (!range.intersectsNode(n)) return NodeFilter.FILTER_REJECT;
+        return NodeFilter.FILTER_ACCEPT;
+      }
+    });
+    for (let n = walker.nextNode(); n; n = walker.nextNode()) {
+      const p = n.parentElement;
+      let styleEl = p;
+      const wordWrap = p.closest('.beaver-word');
+      if (wordWrap && wordWrap.parentElement) styleEl = wordWrap.parentElement;
+      const cs = getComputedStyle(styleEl);
+      const style = {};
+      for (const k of STYLE_PROPS) style[k] = cs[k];
+      const chars = n.nodeValue.replace(/\s+/g, '').length;
+      // 归块：向上找最近块级容器；到 body 未命中则该文本不参与逐段（无块可插），
+      //   但仍计入整体多数
+      let blk = p;
+      while (blk && blk !== document.body && blk !== document.documentElement
+        && !TH_BLOCK_TAGS.has(blk.tagName)) {
+        blk = blk.parentElement;
+      }
+      if (blk && blk !== document.body && blk !== document.documentElement
+        && TH_BLOCK_TAGS.has(blk.tagName)) {
+        let m = byBlk.get(blk);
+        if (!m) { m = new Map(); byBlk.set(blk, m); }
+        addVote(m, style, chars);
+      }
+      addVote(global, style, chars);
+    }
+    if (global.size === 0) return null;
+    const majorityOf = (m) => {
+      let best = null;
+      m.forEach((v) => { if (!best || v.chars > best.chars) best = v; });
+      return best ? best.style : null;
+    };
+    const blocks = [];
+    byBlk.forEach((m, el) => {
+      const style = majorityOf(m);
+      if (style) blocks.push({ el, style });
+    });
+    return { blocks, global: majorityOf(global) };
+  } catch (e) {
+    console.warn('[VocabRadar][text-hint] 选区布局分析失败，回落起点样式:', e);
+    return null;
+  }
+}
+
+/**
+ * 308次：show in page——把查询卡片释义插回页面原文处。
+ * 整段（多词或长文，同 renderQueryCard 的 isMultiWord 口径）→ 块级 div 新起一行；
+ * 单词 → 行内 span 续接在选区词后（空格分隔）。插入点 = showContextPanel 保存的
+ * 选区 Range（折叠到选区末尾＝原词后）。插入节点带主题绿字色，便于与正文区分。
+ * 309次（用户"无反应"）：旧版失败只写 console，用户不可见——所有结果（成功/失败原因）
+ *   均显示在卡片内反馈行（showInsertFeedback，footer 上方，5 秒自动消失）；
+ *   保存的 Range 可能因页面重渲染脱离文档（detached），插入前检测
+ *   startContainer.isConnected，失效则回落实时选区（排除扩展 UI 内的选区）。
+ * @param {string} trimmed 查询原文
+ * @param {(sel: string) => Element|null} q 卡片内选择器（读释义用）
+ */
+function insertMeaningIntoPage(trimmed, q) {
+  // 310次（用户裁定）：词典来源取短释义首条 pickCleanShortTrans（"只插一段翻译的前几个
+  //   字"即短释义口径，是预期行为非截断 bug）；文段翻译来源插整段译文（保留差异，不切分）。
+  let text = lastQueryIsSegment
+    ? (lastQueryTranslations[0] || '').trim()
+    : pickCleanShortTrans(lastQueryTranslations);
+  if (!text) {
+    const transRow = q('.trans-row');
+    const firstLine = transRow && transRow.firstElementChild ? transRow.firstElementChild.textContent : '';
+    text = String(firstLine || (transRow ? transRow.textContent : '') || '').trim();
+  }
+  if (!text) {
+    console.warn('[VocabRadar][text-hint] show in page：释义未就绪，跳过插入');
+    showInsertFeedback(q, false, t('th.insertNoDef'));
+    return;
+  }
+  // 309次：锚点有效性——保存的 Range 引用节点若已被页面移除（SPA 重渲染等），
+  //   对 detached range insertNode 会把节点插进孤立子树，页面看不到＝"无反应"。
+  let range = lastQueryRange;
+  if (!range || !range.startContainer || !range.startContainer.isConnected) {
+    const sel = window.getSelection();
+    const live = (sel && sel.rangeCount > 0) ? sel.getRangeAt(0) : null;
+    // 回落条件：实时选区存在、在主文档（非扩展 shadow UI）、且不在本面板内
+    const liveOk = live && live.startContainer && live.startContainer.isConnected
+      && live.startContainer.getRootNode() === document
+      && !(live.startContainer.nodeType === 1
+        ? live.startContainer.closest(`#${PANEL_ID}`)
+        : live.startContainer.parentElement && live.startContainer.parentElement.closest(`#${PANEL_ID}`));
+    if (liveOk) {
+      console.warn('[VocabRadar][text-hint] show in page：保存锚点已失效，回落实时选区');
+      range = live;
+    } else {
+      console.warn('[VocabRadar][text-hint] show in page：无可用插入锚点（选区已丢失），跳过插入');
+      showInsertFeedback(q, false, t('th.insertNoAnchor'));
+      return;
+    }
+  }
+  // 320次：插入护栏——保存的锚点落在已插入的译文/注释节点内部（用户先翻译一个词
+  //   再选中一段翻译）时，再插入会把新译文嵌进旧译文（"先翻译一个词再选中一段翻译
+  //   会让之前翻译囊括进来污染"）。命中即中止并提示重选原文。
+  const guardEl = range.startContainer.nodeType === 3
+    ? range.startContainer.parentElement : range.startContainer;
+  if (guardEl && guardEl.closest && guardEl.closest('.beaver-page-insert, .beaver-side-ann')) {
+    console.warn('[VocabRadar][text-hint] show in page：锚点在已插入译文/注释内，中止插入');
+    showInsertFeedback(q, false, t('th.insertInsideAnn'));
+    return;
+  }
+  try {
+    // 309次第三轮：多词口径统一走 isMultiWordText
+    const isMultiWord = isMultiWordText(trimmed);
+    const node = document.createElement(isMultiWord ? 'div' : 'span');
+    node.className = 'beaver-page-insert';
+    // 318次：插入翻译沿用"原文"样式（用户裁定）——317 次的"外移后纯继承"继承的是
+    //   插入点后文样式，原文与后文字体/字色不同时会错。改为在折叠/外移前锁定选区
+    //   起点元素的 computedStyle 五项（字色/字族/字号/斜体/粗细）内联，样式随原文走。
+    // 322次：译文样式跟随原文「多数」——先 analyzeRangeLayout（必须在任何 DOM
+    //   变更之前）按字符权重投票取整体多数；分析失效回落旧口径：
+    // 318次：起点元素锁定五项（起点在标注容器内取标注父元素＝原文容器）。
+    let fallbackEl = null;
+    const layout = analyzeRangeLayout(range);
+    if (!layout) {
+      fallbackEl = range.startContainer.nodeType === 3
+        ? range.startContainer.parentElement
+        : range.startContainer;
+      const srcAnn = fallbackEl && fallbackEl.closest
+        ? fallbackEl.closest('.beaver-word, .beaver-side-ann') : null;
+      if (srcAnn && srcAnn.parentElement) fallbackEl = srcAnn.parentElement;
+      if (fallbackEl && !fallbackEl.isConnected) fallbackEl = null;
+    }
+    const baseStyle = layout ? layout.global
+      : (fallbackEl ? getComputedStyle(fallbackEl) : null);
+    node.style.cssText = (isMultiWord ? 'margin-top:4px;' : 'margin-left:2px;');
+    if (baseStyle) {
+      node.style.color = baseStyle.color;
+      node.style.fontFamily = baseStyle.fontFamily;
+      node.style.fontSize = baseStyle.fontSize;
+      node.style.fontStyle = baseStyle.fontStyle;
+      node.style.fontWeight = baseStyle.fontWeight;
+    }
+    node.textContent = isMultiWord ? text : ` ${text}`;
+    // 319次（调研 kiss-translator 后重写；用户反馈"跑到下一个元素位置插入前面"）：
+    //   旧实现信任 live Range 端点——lastQueryRange 保存后 text-hint 扫描用
+    //   surroundContents 把词包进 .beaver-word，浏览器把端点自动重映射成
+    //   (父元素P, 词span相邻下标N)，closest 不命中时 insertNode 落在 (P,N)＝
+    //   下一个元素之前。kiss-translator 的做法是不信任跨 DOM 变更的 Range，
+    //   以原文节点为锚插兄弟节点。改为四路径：A 词span紧后 / B 单词文本节点
+    //   切分紧后 / C 多词最近块级元素后新行 / F 旧 collapse 序列兜底（317次保留）。
+    let pathTag = 'F-Range兜底';
+    // 319次：解析词锚——起点在文本节点：父链 closest 找 .beaver-word，文本节点即
+    //   B 的操作对象；起点漂移成 (元素,offset)：看 offset 处与前一子节点是否
+    //   .beaver-word（修复重映射 (P,N) 场景）或文本节点（B 可继续）。
+    const scEl = range.startContainer.nodeType === 3
+      ? range.startContainer.parentElement : range.startContainer;
+    let wordSpan = scEl && scEl.closest ? scEl.closest('.beaver-word') : null;
+    let wordNode = range.startContainer.nodeType === 3 ? range.startContainer : null;
+    if (!wordSpan && scEl && scEl.nodeType === 1 && range.startContainer.nodeType !== 3) {
+      const kids = scEl.childNodes;
+      const c0 = range.startOffset > 0 ? kids[range.startOffset - 1] : null;
+      const c1 = kids[range.startOffset] || null;
+      if (c0 && c0.nodeType === 1 && c0.classList && c0.classList.contains('beaver-word')) wordSpan = c0;
+      else if (c1 && c1.nodeType === 1 && c1.classList && c1.classList.contains('beaver-word')) wordSpan = c1;
+      if (!wordNode && c1 && c1.nodeType === 3) wordNode = c1;
+      else if (!wordNode && c0 && c0.nodeType === 3) wordNode = c0;
+    }
+    let inserted = false;
+    // 322次：多段逐段跟随——译文按换行拆出的段数与选区覆盖的块数一致时，逐段插到
+    //   各块末尾（各段用该块多数样式），优先于 A/B 单点插入（多段译文挤在选区开头
+    //   一词之后＝旧观感）；段块数不一致或译文无换行回落单处插入（整体多数样式）。
+    const layoutBlocks = (layout && isMultiWord) ? layout.blocks : [];
+    const segs = layoutBlocks.length > 1
+      ? text.split(/\n+/).map((s) => s.trim()).filter(Boolean) : [];
+    if (layoutBlocks.length > 1 && segs.length === layoutBlocks.length) {
+      pathTag = 'C-逐段末尾';
+      layoutBlocks.forEach((b, i) => {
+        const seg = document.createElement(isMultiWord ? 'div' : 'span');
+        seg.className = 'beaver-page-insert';
+        seg.style.cssText = 'margin-top:4px;';
+        seg.style.color = b.style.color;
+        seg.style.fontFamily = b.style.fontFamily;
+        seg.style.fontSize = b.style.fontSize;
+        seg.style.fontStyle = b.style.fontStyle;
+        seg.style.fontWeight = b.style.fontWeight;
+        seg.textContent = segs[i];
+        if (!(b.el.lastElementChild && b.el.lastElementChild.tagName === 'BR')) {
+          b.el.appendChild(document.createElement('br'));
+        }
+        b.el.appendChild(seg);
+      });
+      inserted = true;
+    }
+    // A：词 span 命中→紧贴其后插；紧邻已是注释节点（.beaver-side-ann）则排其后，
+    //   不插进"词与注释"中间（tooltip.js 同规则，避免夹心观感）。
+    if (wordSpan && wordSpan.parentNode) {
+      pathTag = 'A-词span紧后';
+      const sib = wordSpan.nextElementSibling;
+      if (sib && sib.classList && sib.classList.contains('beaver-side-ann')) {
+        sib.parentNode.insertBefore(node, sib.nextSibling);
+      } else {
+        wordSpan.parentNode.insertBefore(node, wordSpan.nextSibling);
+      }
+      inserted = true;
+    }
+    // B：单词且拿到起点文本节点→在该节点内定位选中文本，splitText 切出独立节点后
+    //   紧后插（kiss 式以原文为锚）；定位失败保持 inserted=false 落 F 兜底。
+    if (!inserted && !isMultiWord && wordNode && wordNode.nodeValue) {
+      const txt = wordNode.nodeValue;
+      let idx = range.startContainer === wordNode
+        ? txt.indexOf(trimmed, Math.min(range.startOffset, txt.length)) : -1;
+      if (idx < 0) idx = txt.indexOf(trimmed);
+      if (idx >= 0) {
+        pathTag = 'B-文本切分紧后';
+        wordNode.splitText(idx + trimmed.length);
+        const mid = idx > 0 ? wordNode.splitText(idx) : wordNode;
+        mid.parentNode.insertBefore(node, mid.nextSibling);
+        inserted = true;
+      }
+    }
+    // C：多词/整段→自起点向上找最近块级元素（TH_BLOCK_TAGS，与 scan.js BLOCK_TAGS
+    //   同口径），插到块级之后＝新行；到 body 仍未命中块级则不动（不插 body 层级）。
+    if (!inserted && isMultiWord) {
+      let blk = scEl;
+      while (blk && blk !== document.body && blk !== document.documentElement
+        && !TH_BLOCK_TAGS.has(blk.tagName)) {
+        blk = blk.parentElement;
+      }
+      if (blk && blk !== document.body
+        && blk !== document.documentElement && TH_BLOCK_TAGS.has(blk.tagName)) {
+        pathTag = 'C-块内末尾新行';
+        // 321次（用户"没从下一行开始而是从右边格子开始……不应当是原文行末尾加入换行和新文本吗"）：
+        //   旧版插到块级之后（insertBefore(node, blk.nextSibling)）——表格/网格布局下
+        //   "块级之后"是同级并排块（td 旁的下一个 td），译文跑进右边格子。改为原文块内
+        //   末尾追加 <br>＋译文：译文永远在原文文本流末尾换行，与外层布局无关。
+        if (!(blk.lastElementChild && blk.lastElementChild.tagName === 'BR')) {
+          blk.appendChild(document.createElement('br'));
+        }
+        blk.appendChild(node);
+        inserted = true;
+      }
+    }
+    // F：兜底＝317次序列原样：折叠到选区末尾；折叠点落在标注 span 内部时外移到
+    //   标注之后，避免释义插进标注继承生词样式（"字体变粗"根因）。
+    if (!inserted) {
+      range.collapse(false);
+      let anchor = range.startContainer;
+      if (anchor.nodeType === 3) anchor = anchor.parentElement;
+      const ann = anchor && anchor.closest ? anchor.closest('.beaver-word, .beaver-side-ann') : null;
+      if (ann && ann.parentNode) range.setStartAfter(ann);
+      range.insertNode(node);
+    }
+    console.log(`[VocabRadar][text-hint] show in page：已插入（${isMultiWord ? '整段新行' : '单词续接'}，锚点${pathTag}）→ ${text.slice(0, 40)}`);
+    // 309次第四轮：成功不显示反馈行（用户裁定），失败反馈保留。
+    // 315次（用户"撤销任何禁止插入"）：309 次第五轮"成功后禁用本卡按钮"撤销——
+    //   按钮永远可点，允许重复插入（插几次、插到哪里由用户决定，不做任何阻断）。
+  } catch (e) {
+    console.error('[VocabRadar][text-hint] show in page 插入失败:', e);
+    showInsertFeedback(q, false, `${t('th.insertFail')}${e && e.message ? `：${e.message}` : ''}`);
+  }
+}
+
+/**
+ * 309次：show in page 插入结果反馈行（卡片内可见，替代旧版"静默 + console"）。
+ * 插入在 footer 上方，成功绿/失败红，5 秒后自动移除；重复点击复用同一行。
+ * 309次第二轮：tooltip 语境也复用（export）——悬浮提示与右键面板共用卡片结构，
+ *   两边的 show-page 都需要把插入结果显示给用户。
+ * @param {(sel: string) => Element|null} q 卡片内选择器
+ * @param {boolean} ok 是否成功
+ * @param {string} msg 文案（已翻译）
+ */
+export function showInsertFeedback(q, ok, msg) {
+  const footer = q('.footer');
+  if (!footer || !footer.parentElement) return;
+  const card = footer.parentElement;
+  let tip = card.querySelector('.insert-tip');
+  if (!tip) {
+    tip = document.createElement('div');
+    tip.className = 'insert-tip';
+    card.insertBefore(tip, footer);
+  }
+  tip.style.cssText = 'font-size:12px;line-height:1.5;margin-top:2px;padding:2px 0;'
+    + (ok ? 'color:#2e6b43;' : 'color:#b3261e;');
+  tip.textContent = msg;
+  clearTimeout(tip._beaverTimer);
+  tip._beaverTimer = setTimeout(() => { tip.remove(); }, 5000);
 }
 
 // 反思（2026-07-07）：用户要求"右键查询弹出框应当在当前位置"。
@@ -511,14 +970,14 @@ export function buildPanelCss() {
          顶行样式表（sidebar-topbar.js）不会穿透进来，故此处须自带一份尺寸规则。 */
       .panel-header .title .beaver-brand-icon { width: 16px; height: 16px; flex: 0 0 auto; display: block; color: inherit; }
       .panel-header .title > span { overflow: hidden; text-overflow: ellipsis; min-width: 0; }
-      .panel-header .header-stage { display: inline-block; padding: 2px 8px; background: #2e6b43; color: #ffffff; border-radius: 8px; font-size: 0.85em; white-space: nowrap; flex-shrink: 0; }
+      .panel-header .header-stage { display: inline-block; padding: 2px 8px; background: #2e6b43; color: #ffffff; border-radius: 8px; font-size: 12px; white-space: nowrap; flex-shrink: 0; }
       .panel-content { padding: 12px 14px; max-height: var(--panel-max-h, 80vh); overflow-y: auto; }
       .word-row { display: flex; justify-content: space-between; align-items: center; gap: 8px; margin-bottom: 6px; }
-      .word { font-size: 1.15em; color: #1a1f1a; font-weight: 600; }
+      .word { font-size: 16px; color: #1a1f1a; font-weight: 600; }
       /* 反思（2026-08-13 第四十九次）：词阶只在 header 右侧显示一次（不挤生词），正文重复的 .stage 隐藏 */
       .word-row .stage { display: none; }
-      .stage { display: inline-block; padding: 2px 8px; background: #2e6b43; color: #ffffff; border-radius: 8px; font-size: 0.85em; white-space: nowrap; }
-      .phonetic-row { font-size: 0.95em; color: #424942; margin-bottom: 6px;
+      .stage { display: inline-block; padding: 2px 8px; background: #2e6b43; color: #ffffff; border-radius: 8px; font-size: 12px; white-space: nowrap; }
+      .phonetic-row { font-size: 13px; color: #424942; margin-bottom: 6px;
         /* 反思（2026-09-04）：用户反馈"注音用的啥字体，咋看不懂"。注音 span 此前未指定
            字体，Shadow DOM 内继承宿主页面字体，缺 IPA 扩展区字形即显示豆腐块。
            修正：统一指定系统字体栈（扩展装不到字体文件，只能用系统栈；Segoe UI 是
@@ -526,7 +985,7 @@ export function buildPanelCss() {
            （"注音有结果才显示"；加载中占位符 … 非空故仍显示）。 */
         font-family: "Segoe UI", "Microsoft YaHei", "Noto Sans", "Charis SIL", "Doulos SIL", "Arial Unicode MS", Arial, sans-serif; }
       .phonetic-row:empty { display: none; }
-      .lemma-row { font-size: 0.85em; color: #424942; margin-bottom: 8px; }
+      .lemma-row { font-size: 12px; color: #424942; margin-bottom: 8px; }
       .lemma-row b { color: #1a1f1a; font-weight: 500; }
       .lemma-row:empty { display: none; }
       /* 原形 chip（2026-09-04）：斜体＋底色按钮即开关，无"原形："前缀无 ▶/▼ 后缀；
@@ -534,21 +993,35 @@ export function buildPanelCss() {
       .lemma-chip { font-style: italic; background: #e4efe6; color: #2e6b43; border: 0; border-radius: 8px; padding: 1px 10px; cursor: pointer; font-size: inherit; line-height: 1.6; }
       .lemma-chip:hover { filter: brightness(0.96); }
       .lemma-chip.open { background: #2e6b43; color: #ffffff; }
-      .lemma-group { margin: 0 0 8px 0; padding: 2px 10px; border-radius: 8px; background: #e4efe6; color: #2e6b43; font-size: 0.9em; font-style: normal; line-height: 1.7; word-break: break-word; }
+      .lemma-group { margin: 0 0 8px 0; padding: 2px 10px; border-radius: 8px; background: #e4efe6; color: #2e6b43; font-size: 13px; font-style: normal; line-height: 1.7; word-break: break-word; }
       .lemma-group:empty { display: none; }
       .lemma-more { color: #8a918a; }
       .section { margin-bottom: 10px; }
-      .section-label { font-size: 0.85em; color: #424942; margin-bottom: 4px; }
-      .trans-row { color: #1a1f1a; line-height: 1.7; }
+      .section-label { font-size: 12px; color: #424942; margin-bottom: 4px; }
+      .trans-row { color: #1a1f1a; line-height: 1.7;
+        /* 314次（用户"文本侧栏的字号正常，查询窗口可以参考"）：trans-row 原先未指定
+           字号，Shadow DOM 内继承宿主页面字号（网页正文字号多大释义就多大）；
+           对齐文本侧栏 sidebar.css 正文 16px 写死方案，查询卡不再随网页缩放。 */
+        font-size: 16px; }
       .trans-row div { margin-bottom: 6px; }
       .tags-row { display: flex; flex-wrap: wrap; gap: 4px; }
-      .tag { display: inline-block; padding: 3px 10px; background: #2e6b43; color: #ffffff; border-radius: 8px; font-size: 0.85em; }
+      /* 308次（用户"词表标签用浅色底，就跟侧栏中那样"）：对齐侧栏 beaver-w-tags/beaver-ann-tags
+         的浅色底（sidebar.css --beaver-secondary-container #d1e8d8 / on #0d2014），
+         深绿底白字退役 */
+      /* 309次（用户"词表标签……现在直接消失了"）：静态排查产物 CSS 规则完整、渲染链路
+         未改，无法复现；加 1px 深绿描边增强 chip 与浅底的对比（防"浅底淹没在卡片底色里"
+         的视觉消失），并在渲染处补 console 诊断日志（见 renderQueryCard tags 段） */
+      .tag { display: inline-block; padding: 3px 10px; background: #d1e8d8; color: #0d2014; border: 1px solid rgba(13,32,20,.22); border-radius: 8px; font-size: 12px; }
       .footer { display: flex; justify-content: space-between; align-items: center; gap: 8px; padding-top: 8px; border-top: 1px solid #e9eee7; margin-top: 6px; }
       .speak { padding: 8px 16px; background: #2e6b43; color: #fff; border: 0; border-radius: 8px; cursor: pointer; font-size: inherit; white-space: nowrap; }
       .speak:hover { filter: brightness(1.1); }
       /* 第一百七十一次：footer 右侧新增 chat 按钮（与朗读按钮同视觉，footer 为 space-between 故左右分列） */
       .chat { padding: 8px 16px; background: #2e6b43; color: #fff; border: 0; border-radius: 8px; cursor: pointer; font-size: inherit; white-space: nowrap; }
       .chat:hover { filter: brightness(1.1); }
+      /* 308次（用户"底部中间增加按钮 show in page，将释义插入页面"）：footer 三按钮
+         space-between 自动左中右分布；仅右键浮动面板显示（内嵌卡片隐藏，见 renderQueryCard） */
+      .show-page { padding: 8px 16px; background: #2e6b43; color: #fff; border: 0; border-radius: 8px; cursor: pointer; font-size: inherit; white-space: nowrap; }
+      .show-page:hover { filter: brightness(1.1); }
       .dots { display: inline-flex; gap: 4px; align-items: center; padding: 4px 0; }
       .dots i { width: 5px; height: 5px; border-radius: 50%; background: #424942; opacity: 0.25; animation: beaver-dots 1.2s infinite ease-in-out; }
       .dots i:nth-child(2) { animation-delay: 0.2s; }
@@ -589,6 +1062,9 @@ export function buildCardInnerHTML() {
     </div>
     <div class="footer">
       <button class="speak">🔊</button>
+      <!-- 308次：footer 中部 show in page（默认渲染，非浮动面板语境由 renderQueryCard 隐藏）
+           309次（用户"按钮应当是便签图标🗒️。图标不需要翻译"）：改 emoji 图标，语义进 title -->
+      <button class="show-page" title="${t('btn.showInPage')}">🗒️</button>
       <button class="chat" title="${t('btn.chat')}">💬</button>
     </div>
   `;
@@ -607,7 +1083,12 @@ export function ensurePanel() {
     box-shadow: 0 4px 12px rgba(26,31,26,.12), 0 1px 3px rgba(26,31,26,.08) !important;
     padding: 0 !important;
     font-family: -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif !important;
-    font-size: inherit;
+    /* 309次第四轮（用户"查询窗口字号咋定的，比之前和其他地方的正文大了很多"）：
+       旧 font-size:inherit——面板挂在 documentElement 下，继承浏览器默认 16px，
+       卡内 .word 1.15em≈18.4px，比侧栏正文 14px 大一截。定死 14px 与侧栏正文同基准。
+       310次（用户"查询窗固定字号"）：删 syncBodyFontSize 覆盖路径 + buildPanelCss
+       内 em 全换 px，查询窗任何站点恒 14px 基准（.word 16px） */
+    font-size: 14px !important;
     line-height: 1.5 !important;
     min-width: 280px !important;
     max-width: 400px !important;
@@ -698,7 +1179,7 @@ export function ensureOcrPanel() {
   `;
   thState.ocrPanel.innerHTML = `
     <div style="display:flex;justify-content:space-between;align-items:center;padding:10px 14px;background:#f5f8f3;border-radius:16px 16px 0 0;flex-shrink:0;">
-      <span style="font-size:0.95em;color:#424942;display:inline-flex;align-items:center;gap:6px;">${brandIconSVG()}<span>VocabRadar · OCR 识别结果</span></span>
+      <span style="font-size:13px;color:#424942;display:inline-flex;align-items:center;gap:6px;">${brandIconSVG()}<span>VocabRadar · OCR 识别结果</span></span>
       <button class="beaver-ocr-close" style="background:none;border:0;cursor:pointer;font-size:18px;color:#424942;padding:0 4px;">✕</button>
     </div>
     <div class="beaver-ocr-text" style="padding:12px 14px;overflow-y:auto;flex:1 1 auto;white-space:pre-wrap;word-break:break-word;"></div>

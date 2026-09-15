@@ -223,7 +223,12 @@ function _wsGetSettings() {
       hintLaterBg: 'transparent',
       hintLaterFg: '#2e6b43',
       hintSideAnnotation: false,
-      annotationStyle: 'none',
+      // 309次第五轮（用户四栏统一裁定）：注释样式兜底默认改 'green-background'，
+      //   与 guide.js defaults 一致——storage 空时实际生效的是本兜底
+      // 318次：'green-background' 是代指常量 ANN_DEFAULT_STYLE 的镜像兜底（classic
+      //   script 不便 import styles.js；代指=常量锚定无指针键，版本变化才改常量值，
+      //   锚点见 lib/styles.js）
+      annotationStyle: 'green-background',
       // 301次：个性化/用户条目缓存（applyAnnStyle 类切换之外，规则表刷新用）
       annotationCustom: null,
       annotationUserStyles: [],

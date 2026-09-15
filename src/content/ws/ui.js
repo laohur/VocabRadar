@@ -13,7 +13,7 @@ import { LANG_NAMES, LANG_NAMES_EN, TRANSLATE_LANGS, UI_LANGS, setLang, t } from
 import { primeTranslator } from '../../lib/translator.js';
 // 272次：顶行构建器同源的品牌小图标（搜索栏左端）
 import { brandIconSVG, buildTopbarHTML, ensureTopbarCss } from '../../lib/sidebar-topbar.js';
-import { SUBTITLE_TEXT_STYLES, findStyle } from '../../lib/styles.js';
+import { SUBTITLE_TEXT_STYLES, findStyle, SUB_DEFAULT_STYLE } from '../../lib/styles.js';
 // 272次：query 标签复用右键搜索卡片（唯一定义 th/panel.js：同 CSS/同结构/同渲染核心；
 // ES module 按 URL 单实例，与 text-hint bundle 共享同一 thState/模块状态）
 import { buildPanelCss, buildCardInnerHTML, renderQueryCard, bindLemmaChipClick } from '../th/panel.js';
@@ -356,9 +356,11 @@ makeResizable();
   //   字幕样式选择集中在引导页，启动时恢复已保存的 overlay 字幕样式 class 保留。
 
   // 反思（2026-08-13 第五十次）：启动时恢复已保存的 overlay 字幕样式 class
+  // 318次：缺省值引用 SUB_DEFAULT_STYLE 常量（'none' 非法已全清）；存量 'none'
+  //   由 applyOverlayStyleClass 内部回落常量并写盘迁移。
   try {
-    chrome.storage.local.get({ subtitleStyle: 'none' }, (res) => {
-      const saved = res.subtitleStyle || 'none';
+    chrome.storage.local.get({ subtitleStyle: SUB_DEFAULT_STYLE }, (res) => {
+      const saved = res.subtitleStyle || SUB_DEFAULT_STYLE;
       applyOverlayStyleClass(saved);
     });
   } catch (e) { /* ignore */ }
@@ -1130,8 +1132,15 @@ async function runSidebarQuery(text) {
   const host = document.createElement('div');
   box.appendChild(host);
   const shadow = host.attachShadow({ mode: 'open' });
+  // 309次第六轮（用户"查询窗口只有 https://localhost:3001 字号才会偏大"）根因实锤：
+  //   第四轮把右键面板/tooltip 宿主定死 14px，但本内嵌卡漏了——嵌套 host 被
+  //   web-sidebar.css `#beaver-web-sidebar * { font-size: inherit !important }` 锁死
+  //   继承侧栏宿主 16px，卡内 .word 1.15em≈18.4px＝其他站右键面板 16.1px 显得偏大；
+  //   用户在本站（官网）用侧栏 query 标签测试，其他站用右键面板，观感"只有本站偏大"。
+  //   卡根节点写死 14px（shadow 内部声明压过外层继承，页面/侧栏 CSS 不可达），
+  //   与右键面板/tooltip 同基准。视频侧栏内嵌卡同构同修。
   shadow.innerHTML = '<style>' + buildPanelCss() + '</style>'
-    + '<div class="beaver-query-card" style="padding:10px 12px;background:#fbfdf9;border-radius:8px;">'
+    + '<div class="beaver-query-card" style="padding:10px 12px;background:#fbfdf9;border-radius:8px;font-size:14px;line-height:1.5;">'
     + buildCardInnerHTML() + '</div>';
   bindLemmaChipClick(shadow);
   try {
@@ -1345,27 +1354,25 @@ function closeAllPopups() {
 // 反思（2026-08-15 第六十四次）：类名列表由 SUBTITLE_STYLES 动态生成，不再硬编码。
 // 反思（2026-08-15 第六十五次）：样式校验——storage 中已被移除的样式 id（旧版曾删
 //   right-vertical/center-vertical）不再挂死类（挂死类 → 无对应 CSS → 回落黑底），
-//   未知 id 优雅回退 'none' 并清理 storage。
+//   未知 id 优雅回退默认样式并清理 storage。
 // 反思（2026-08-16 第六十九次）：字幕样式改为"文字样式×位置样式"两维；overlay 元素由
 //   subtitle-overlay.js 管理（位置按 subtitlePosition 内联计算），本函数只同步文字样式类。
+// 318次：'none' 哨兵非法已全清——缺省/未知 id 一律回落 SUB_DEFAULT_STYLE 常量
+//   （styles.js 唯一真源）；未知 id 回落时写盘完成存量迁移。
 function applyOverlayStyleClass(style) {
   const overlay = document.getElementById('beaver-subtitle-overlay');
   if (!overlay) return;
-  const styleClasses = SUBTITLE_TEXT_STYLES
-    .filter((s) => s.id !== 'none')
-    .map((s) => 'style-' + s.id);
+  const styleClasses = SUBTITLE_TEXT_STYLES.map((s) => 'style-' + s.id);
   overlay.classList.remove(...styleClasses);
-  let id = (style && style !== 'none') ? style : 'none';
-  if (id !== 'none' && !findStyle(SUBTITLE_TEXT_STYLES, id)) {
+  let id = style || SUB_DEFAULT_STYLE;
+  if (!findStyle(SUBTITLE_TEXT_STYLES, id)) {
     console.warn(`[VocabRadar][web-sidebar] 字幕样式 "${id}" 已不存在，回退默认样式并清理 storage`);
-    id = 'none';
+    id = SUB_DEFAULT_STYLE;
     try {
-      chrome.storage.local.set({ subtitleStyle: 'none' });
+      chrome.storage.local.set({ subtitleStyle: SUB_DEFAULT_STYLE });
     } catch (e) { /* 清理失败忽略 */ }
   }
-  if (id !== 'none') {
-    overlay.classList.add('style-' + id);
-  }
+  overlay.classList.add('style-' + id);
 }
 
 /**

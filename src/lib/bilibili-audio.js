@@ -18,7 +18,8 @@
 //       }
 //     }
 //   }
-//   id=30280 为高品质（192kbps），30232 为标准（64kbps），取 bandwidth 最高即可。
+//   id=30280 为高品质（192kbps），30232 为标准（64kbps）。315次：改取 bandwidth 最低——
+//   消费方是 ASR（Whisper 16kHz 单声道），最低档精度足够、下载更快（见 getBilibiliAudioInfo）。
 
 // 第一百零七次（P1 方案C，借鉴 VideoSeek injectXhr）：主世界桥注入与 playurl 钩子消费。
 // page-fetch.js 在页面主世界拦截播放器自身的 /x/player/wbi/playurl 请求（签名/cookie/referer
@@ -277,10 +278,13 @@ export async function getBilibiliAudioUnavailableReason() {
 }
 
 /**
- * 从 __playinfo__ 提取最高品质音频流信息（第九十五次扩展；第九十六次补 backupUrls/title）
+ * 从 __playinfo__ 提取最低带宽音频流信息（315次改；第九十六次补 backupUrls/title）
  * B站 DASH 格式：data.dash.audio[] 数组，含 baseUrl/base_url、backupUrl(s)、bandwidth、codecs
- * 按 bandwidth 降序排序，取最高品质（通常 id=30280, 192kbps）
- * bandwidth 用于流式下载的字节位置估算：字节偏移 ≈ bandwidth/8 × 秒数。
+ * 315次（用户"音频下载识别只需要模型支持的精度"）：排序由 bandwidth 降序取最高
+ *   改为升序取最低——本链路消费方全部是 ASR 预识别（下载→解码 PCM→Whisper
+ *   重采样 16kHz 单声道），最低档（通常 id=30232, 64kbps AAC）对识别精度零影响，
+ *   下载体积/耗时显著下降（192k→64k 体积减 2/3）。
+ * bandwidth 用于流式下载的字节位置估算：字节偏移 ≈ bandwidth/8 × 秒数（与所选轨自洽）。
  * 反思（2026-07-09 #76）：优先通过 window.__playinfo__ 读取最新数据，
  *   SPA 换集后 script 标签里的 playinfo 是旧集 → URL 过期。
  * 第九十六次（借鉴 videoseek/bilibili-evolved）：返回 baseUrl+backupUrl 全列表供 SW 依序回退；
@@ -331,8 +335,8 @@ export async function getBilibiliAudioInfo() {
       console.warn('[VocabRadar][bilibili-audio] __playinfo__ 中无 dash.audio:', reason);
       return null;
     }
-    // 按 bandwidth 降序，取最高品质
-    const sorted = [...audioTracks].sort((a, b) => (b.bandwidth || 0) - (a.bandwidth || 0));
+    // 315次：按 bandwidth 升序，取最低带宽轨（ASR 精度足够，见函数头注释）
+    const sorted = [...audioTracks].sort((a, b) => (a.bandwidth || 0) - (b.bandwidth || 0));
     const best = sorted[0];
     const url = best.baseUrl || best.base_url;
     if (!url) {

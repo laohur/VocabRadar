@@ -46,10 +46,14 @@ function extractVideoId() {
 }
 
 /**
- * 获取当前 YouTube 视频最高音质音频流信息
+ * 获取当前 YouTube 视频音频流信息（315次：选最低可用音质）
  * 第一百一十二次：多客户端回退链 WEB→IOS→ANDROID→TV_EMBEDDED——
  *   对标 yt-dlp 客户端矩阵策略（PO Token/SABR 按客户端差异放行，见调研文档 3.2）；
  *   全部失败时聚合各客户端原因抛出（sidebar toast 直接可见具体卡点）。
+ * 315次（用户"音频下载识别只需要模型支持的精度"）：quality 'best'→'lowest'——
+ *   本链路的消费方全部是 ASR 预识别（asr-client/record-workflow 下载→解码 PCM→
+ *   Whisper 重采样 16kHz 单声道），低码率轨（如 opus ~50kbps）对识别精度零影响，
+ *   下载体积/耗时显著下降。手动排序回退同步改 bitrate 升序取最低。
  * @returns {Promise<{url:string,backupUrls:string[],bandwidth:number,contentType:string,title:string,client:string}>}
  */
 export async function getYoutubeAudioInfo() {
@@ -65,13 +69,13 @@ export async function getYoutubeAudioInfo() {
   for (const client of CLIENTS) {
     try {
       const info = await yt.getBasicInfo(videoId, client);
-      // chooseFormat：audio 中选最高音质；个别客户端无 streaming_data 时明确记录
+      // chooseFormat：audio 中选最低码率（ASR 精度下限，见 315 次注释）；个别客户端无 streaming_data 时明确记录
       let fmt = null;
       try {
-        fmt = info.chooseFormat({ type: 'audio', quality: 'best' });
+        fmt = info.chooseFormat({ type: 'audio', quality: 'lowest' });
       } catch (e) {
         const audios = (info.streaming_data?.adaptive_formats || []).filter((f) => String(f.mime_type || '').startsWith('audio/'));
-        fmt = audios.sort((a, b) => (b.bitrate || 0) - (a.bitrate || 0))[0] || null;
+        fmt = audios.sort((a, b) => (a.bitrate || 0) - (b.bitrate || 0))[0] || null;
         if (!fmt && e) reasons.push(client + ': ' + (e.message || e));
       }
       if (!fmt) {

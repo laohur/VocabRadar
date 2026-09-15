@@ -371,10 +371,16 @@
                    名称 input 挪进 demo 框内新行（与池卡同构，刷新目标改 #annCustomSideLine） -->
               <div class="sub-css-row" id="annCssRow">
                 <div class="ann-css-boxes">
-                  <label class="ann-css-box-label" for="annCustomCssTarget" data-css-zone="w"><span data-key="annCssTargetName">Target word CSS</span></label>
-                  <textarea id="annCustomCssTarget" rows="6" spellcheck="false" data-ph-key="annCustomCssTargetPh"></textarea>
-                  <label class="ann-css-box-label" for="annCustomCssAnn" data-css-zone="a"><span data-key="annCssAnnName">Annotation CSS</span></label>
-                  <textarea id="annCustomCssAnn" rows="6" spellcheck="false" data-ph-key="annCustomCssAnnPh"></textarea>
+                  <!-- 308次（用户"两种css 输入框加名字，应当左右并排"）：双框各包 .ann-css-col
+                       左右并排（名称行居各自框上方），容器 column→row -->
+                  <div class="ann-css-col">
+                    <label class="ann-css-box-label" for="annCustomCssTarget" data-css-zone="w"><span data-key="annCssTargetName">Target word CSS</span></label>
+                    <textarea id="annCustomCssTarget" rows="6" spellcheck="false" data-ph-key="annCustomCssTargetPh"></textarea>
+                  </div>
+                  <div class="ann-css-col">
+                    <label class="ann-css-box-label" for="annCustomCssAnn" data-css-zone="a"><span data-key="annCssAnnName">Annotation CSS</span></label>
+                    <textarea id="annCustomCssAnn" rows="6" spellcheck="false" data-ph-key="annCustomCssAnnPh"></textarea>
+                  </div>
                 </div>
                 <div class="style-card sub-side-card" id="annCustomSideCard">
                   <div class="demo" id="annCustomSideDemo">

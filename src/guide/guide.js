@@ -92,7 +92,7 @@ import {
   initLang, setLang,
   LANG_NAMES, LANG_NAMES_EN, UI_LANGS, TRANSLATE_LANGS
 } from '../lib/i18n.js';
-import { DEFAULT_ANN_TEMPLATE, BUILD_STAMP } from '../lib/styles.js';
+import { DEFAULT_ANN_TEMPLATE, BUILD_STAMP, ANN_DEFAULT_STYLE, SUB_DEFAULT_STYLE } from '../lib/styles.js';
 // 302次：拆分模块（编排仅调它们的导出； direct lib 引用随代码搬迁，见各模块头）。
 import { $, m, log, getLangState, setLangState, ownWriteAt } from './shared.js';
 import {
@@ -341,10 +341,20 @@ async function loadSettings() {
     translationChannels: DEFAULT_TRANS_CH,   // 第二百二十三次：改引常量（LLM 渠道默认不选，其余全选）
     llmTranslatePrompt: LLM_TRANSLATE_PROMPT,   // LLM 翻译渠道提示词（{text}=原文，{lang}=释义语言）
     // 第一百零二次：asrFirstChunkSec 默认值条目移除（唯一来源 src/data/config.json）
-    textStyle: 'none',
-    annotationStyle: 'none',
+    // 308次（用户"新增默认样式"）：网页提示默认样式改绿色下划线，annotationStyle 等注释栏默认不动。
+    // 309次第二轮：名字定稿 'green-underline'。
+    // 309次第五轮（用户"单词注释的网页提示、文本侧栏、视频侧栏、视频叠加字幕默认样式
+    //   应当是Green Background"）：四注释类指派出厂默认统一改 'green-background'
+    //   （生词绿底#2e6b43白字+注释同主题绿字）——旧默认下引导页四栏指派 none/兜底色
+    //   （hintFirstBg transparent+hintFirstFg #2e6b43 绿字）与池指派脱节，用户看不出"是啥样式"；
+    //   池指派后 pickColors 压过兜底，四端观感与引导页样式卡一致。none 仍是合法选项可手选。
+    // 317次（用户"default 不是绝对而是代指"）：出厂默认改引代指常量。
+    // 318次：default=代指定稿——绝对值唯一真源在常量，版本变化才改常量值；
+    //   317 次新增的指针键出厂值（annDefaultStyle/subDefaultStyle）撤销。
+    textStyle: ANN_DEFAULT_STYLE,
+    annotationStyle: ANN_DEFAULT_STYLE,
     // 280 次：videoAnnotationStyle 复活（池内三指派之一）；annBrackets 布尔退役 → annTemplate 模板
-    videoAnnotationStyle: 'none',
+    videoAnnotationStyle: ANN_DEFAULT_STYLE,
     // 301次：注释个性化参数＋样例句缺省（用户样式列表不进 defaults，读 res || []）
     // 304次：生词底色默认透明（用户"默认无底色"）。
     annotationCustom: {
@@ -357,18 +367,23 @@ async function loadSettings() {
     webAnnTemplate: DEFAULT_ANN_TEMPLATE,
     videoAnnTemplate: DEFAULT_ANN_TEMPLATE,
     videoOverlayAnnTemplate: DEFAULT_ANN_TEMPLATE,
-    subtitleStyle: 'none',
-    subtitlePosition: 'b20',   // 第二百一十九次：默认位置改为下 1/5（用户裁定）
+    // 318次：字幕样式出厂默认改引代指常量 SUB_DEFAULT_STYLE（default=代指，版本变化才改常量值）
+    subtitleStyle: SUB_DEFAULT_STYLE,
+    subtitlePosition: 'b10',   // 314次：默认位置改贴底 1/10（用户裁定"default位置应当是底部10%"，推翻 219 次的 b20）
     // 281次：个性化字幕四参默认（subtitleStyle='custom' 时生效）+ 第四栏注释行样式键
-    //   283次：默认改"能直接用"——透明底/不小字号/投影特效（用户裁定），与 overlay 端缺省对齐
+    // 283次：默认改"能直接用"——透明底/不小字号/投影特效（用户裁定），与 overlay 端缺省对齐
     // 293次：字号改百分比；294次：默认 7%（用户裁定）
     subtitleCustom: { bg: 'transparent', fg: '#ffffff', fontSizePct: 5, fontFamily: 'sans', fx: 'shadow' },
-    videoOverlayAnnStyle: 'none',
+    // 309次第五轮：视频叠加字幕注释行默认同改 'green-background'（用户四栏统一裁定）
+    // 317次：改引默认代指常量（回落不写死绝对 id）
+    videoOverlayAnnStyle: ANN_DEFAULT_STYLE,
     webSidebarEnabled: true,
     sidebarEnabled: true,
     // 反思（2026-08-21 第九十次）：用户曾要求"视频叠加字幕应当默认不选"——
     // 277次（用户"引导页 视频叠加字幕默认选中"）改默认开（storage 未设置即勾选）
-    overlayEnabled: true,
+    // 308次（用户"视频叠加字幕默认关"）改回默认关：与 video-sidebar.js 三处 === true
+    //   口径一致——未设置视为关，全链路统一
+    overlayEnabled: false,
     webSidebarAnnMode: 'side',
     videoSidebarAnnMode: 'side',
     videoOverlayAnnMode: 'side',
@@ -451,7 +466,8 @@ function renderAll(res) {
   $('hitTextSidebar').checked = res.webSidebarEnabled !== false;
   $('hitVideoSidebar').checked = res.sidebarEnabled !== false;
   // 277次（用户"引导页 视频叠加字幕默认选中"）：默认开——未设置视为勾选（!== false）
-  $('hitOverlay').checked = res.overlayEnabled !== false;
+  // 308次：改回默认关——未设置视为未勾选（=== true），与 video-sidebar.js / defaults 同口径
+  $('hitOverlay').checked = res.overlayEnabled === true;
   // Whisper 模型下拉回填（第二百二十六次：由单选铺开改回下拉；storage 残留 offscreen 不支持的值时回落 base）
   $('asrModelSize').value = res.asrModelSize || 'base';
   if (!$('asrModelSize').value) {

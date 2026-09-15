@@ -15,6 +15,8 @@
 //   避免 common ↔ asr 循环依赖（本文件不 import asr/ocr）。
 
 import { t } from '../lib/i18n.js';
+// 317次：文本侧栏 annotationStyle 兜底改引默认代指常量（回落不写死绝对 id）
+import { ANN_DEFAULT_STYLE } from '../lib/styles.js';
 import { getAnnotations } from '../lib/annotator.js';
 // 第二百二十五次：短义项选取统一收敛到 lib 版（原本地独立实现已漂移，见下方删除说明）
 import { pickCleanShortTrans } from '../lib/dict-clean.js';
@@ -73,7 +75,9 @@ async function startGuideWebSidebar() {
         rankThreshold: 5000,
         annotateOov: false,
         annotateRepeat: false,
-        annotationStyle: 'none',
+        // 310次：fallback 与 config.json 出厂值/guide.js defaults 对齐（原 'none' 脱节）
+        // 317次：改引默认代指常量（storage 空时生效的兜底同指针锚点，不写死绝对 id）
+        annotationStyle: ANN_DEFAULT_STYLE,
         webSidebarAnnMode: 'side'
       }, resolve);
     });

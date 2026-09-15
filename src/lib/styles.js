@@ -28,11 +28,24 @@
 export const BUILD_STAMP = '__BUILD_STAMP__';
 
 // ================================================================
+// 318次（用户裁定"样式代指绝对值要分清，default 是代指，Green Background 是绝对值；
+//   default 的指代内容会变化，绝对值不会；版本变化才会导致替 default 值"）：
+// 默认样式"代指"= 本两常量。常量值是绝对样式 id（内置池/ann-custom/ann-user-*/
+//   custom/user-*），全库唯一允许出现缺省样式字面量的地方；所有回落/清洗/迁移
+//   miss 一律引用本常量，不写死绝对 id——将来替换默认样式时只改这里的常量值，
+//   代码零改动。317 次的 storage 指针键（annDefaultStyle/subDefaultStyle）撤销。
+// classic script（text-hint/web-sidebar/video-sidebar）与 config.json 无法 import，
+//   保留字面量仅为镜像（注释注明），语义由本常量锚定。
+// ================================================================
+export const ANN_DEFAULT_STYLE = 'green-background';
+export const SUB_DEFAULT_STYLE = 'white-bottom';
+
+// ================================================================
 // 统一样式候选池（网页提示 textStyle / 文本侧栏 annotationStyle / 视频侧栏
 // videoAnnotationStyle 三键共用同一 id 集；一条样式同时定义生词区与注释区外观）
 // ================================================================
 // 字段模型（280次定稿）：
-//   - id：storage 保存标识（'none'=默认配色，不应用额外样式）
+//   - id：storage 保存标识（316次起默认配色=green-background，本池已无 'none' 条目）
 //   - label：中英文短名（引导页卡小字）
 //   生词区：
 //   - wordBg/wordFg：背景/前景（支持 gradient 字符串，页面经 --beaver-first-bg 变量生效）
@@ -58,14 +71,41 @@ export const BUILD_STAMP = '__BUILD_STAMP__';
 //   - annBg/annFg：背景/前景；fontSize：字号（仅注释区）
 //   - 无显式 annBg/annFg 的条目由消费方派生（th/core.pickColors 前后景互换逻辑）
 export const POOL_STYLES = [
-  // 'none' = 使用默认配色（生词绿底白字/注释白底绿字），不应用任何额外样式覆盖
-  { id: 'none', label: { en: 'Default', zh: '默认配色' } },
+  // 316次（用户"删除none default样式。都已经指定了默认样式，回落至此，你咋还能回落到其他样式"）：
+  //   none（Default）条目删除——指派/取消/脏值回落统一落 green-background（老默认绿底），
+  //   不再有"回落到 none 这个其他样式"的歧义。字幕文本样式 SUBTITLE_TEXT_STYLES 的
+  //   none（White Bottom）是实名样式（白字贴底），不在本池，不受影响。
 
   // ---- 原 ANN_STYLES 16 条（279次共享池骨架，参数原样保留） ----
-  { id: 'mint', label: { en: 'Mint', zh: '薄荷' }, wordBg: '#a8e6cf', wordFg: '#0d2014', annBg: '#0d2014', annFg: '#ffffff', radius: '999px', bold: true },
+  // 309次（用户"样式卡显示背景黑色，例如Mint？没有背景，不要背景"）：注释区黑底退役——
+  //   annBg 'transparent' 直显页面背景（同 marker/lingq 模式），annFg 同步换深色
+  //   （透明底白字不可见），取与生词字同源的 #0d2014 保持薄荷系配色
+  { id: 'mint', label: { en: 'Mint', zh: '薄荷' }, wordBg: '#a8e6cf', wordFg: '#0d2014', annBg: 'transparent', annFg: '#0d2014', radius: '999px', bold: true },
   { id: 'gold', label: { en: 'Gold', zh: '鎏金' }, wordBg: '#ffd54f', wordFg: '#332700', annBg: '#fff8e1', annFg: '#8a6d00', radius: '2px', bold: true, fontSize: '15px' },
   { id: 'marker', label: { en: 'Marker', zh: '荧光笔' }, wordBg: 'rgba(255,213,79,.45)', wordFg: '#332700', annBg: 'transparent', annFg: '#b28704', radius: '0', bold: true },
   { id: 'red-underline', label: { en: 'Red Underline', zh: '红下划线' }, wordBg: 'transparent', wordFg: '#d81b60', annBg: 'transparent', annFg: '#d81b60', radius: '0', underline: true },
+  // 308次（用户"新增默认样式……就叫Green Underline？"）：生词=主题绿下划线、文字不变色
+  //   （wordFg:'inherit' → wordDecl 输出 color:inherit 继承正文；pickColors 特判直通变量，
+  //   压过 popup/storage 端兜底色），侧邻注释同主题色；注释显不显示仍由 popup
+  //   hintSideAnnotation 总开关控制（默认关，即该样式"默认不开侧邻注释"）。
+  // 309次（用户"就叫Green Underline？因为我不主题色是不是green"）：颜色主题化——
+  //   deco/annFg 用 var(--beaver-primary, #2e6b43)（--beaver-primary 定义于
+  //   sidebar.css/web-sidebar.css/video-sidebar/popup；网页正文无该变量定义，
+  //   回落默认主题绿，行为不变；侧栏/视频侧栏端跟随变量）。
+  // 309次第二轮（用户"Theme Underline命名错了，正确是Green Underline"）：
+  //   名字定稿 Green Underline / 绿色下划线（id 同步回 green-underline，
+  //   ann-pool.js syncPoolSettings 反向迁移保已选样式）；颜色主题化维持不变。
+  { id: 'green-underline', label: { en: 'Green Underline', zh: '绿色下划线' }, wordBg: 'transparent', wordFg: 'inherit', annBg: 'transparent', annFg: 'var(--beaver-primary, #2e6b43)', radius: '0', deco: { line: 'underline', color: 'var(--beaver-primary, #2e6b43)', width: '2px', offset: '4px' } },
+  // 309次第三轮（用户"样式池中老版本的默认样式没见着，名称从none改为Green Background"）：
+  //   老版本默认生词外观 = 绿底 #2e6b43 + 白字（304 次收口前的 th/core.js colors 默认，
+  //   git bd8f041 实证）——304 收口后池内 none 条目预览变透明无底，用户"没见着"。
+  //   故新增 green-background 样式卡承载老默认绿底。
+  // 316次（用户裁定删 none 卡）：green-background 同时接管原 none 的回落语义——
+  //   四栏缺省、再点取消、脏值清洗、删用户卡回落全部落本条目（见 ann-pool.js/shared.js）。
+  { id: 'green-background', label: { en: 'Green Background', zh: '绿色背景' }, wordBg: '#2e6b43', wordFg: '#ffffff', annBg: 'transparent', annFg: '#2e6b43', radius: '0' },
+  // 309次第三轮（用户"增加样式Green Wave样式"）：绿色波浪线——对齐 Green Underline 家族
+  //   （生词文字不变色 wordFg inherit + 注释同主题色），波浪参照 wx-wavy 线型。
+  { id: 'green-wave', label: { en: 'Green Wave', zh: '绿色波浪' }, wordBg: 'transparent', wordFg: 'inherit', annBg: 'transparent', annFg: 'var(--beaver-primary, #2e6b43)', radius: '0', deco: { line: 'underline', style: 'wavy', color: 'var(--beaver-primary, #2e6b43)', width: '1.5px', offset: '5px' } },
   { id: 'plain', label: { en: 'Plain', zh: '素字' }, wordBg: 'transparent', wordFg: '#1565c0', annBg: 'transparent', annFg: '#1565c0', radius: '0' },
   { id: 'capsule', label: { en: 'Blue Capsule', zh: '胶囊蓝' }, wordBg: '#64b5f6', wordFg: '#0d1b33', annBg: '#0d1b33', annFg: '#64b5f6', radius: '999px', bold: true },
   { id: 'shadow-pop', label: { en: 'Shadow Pop', zh: '立体' }, wordBg: '#6d4c41', wordFg: '#fff8f0', annBg: '#fff8f0', annFg: '#6d4c41', radius: '3px', bold: true, shadow: '0 2px 3px rgba(0,0,0,.45), 0 5px 8px rgba(0,0,0,.25)' },
@@ -169,26 +209,27 @@ export const ANN_STYLES = POOL_STYLES;
 
 // === 视频侧栏旧样式 → 共享池迁移映射（279次，VANN_STYLES 废弃） ===
 // guide.js 启动时若读到旧键 videoAnnotationStyle：映射为池内最近似 id 写入
-// annotationStyle（池中无对应/'none' 值 = 阴间样式舍弃，回落默认配色），
+// annotationStyle（池中无对应 = 阴间样式舍弃，回落默认配色），
 // 随后 chrome.storage.local.remove('videoAnnotationStyle') 一次性清理。
 // 280次注：videoAnnotationStyle 键复活（三功能独立选样式），本迁移只在
 // 引导页对"迁移后从未再设置"的旧值做一次回落式处理，详见 guide.js。
+// 316次：回落目标 'none'（已删）→ 默认代指 ANN_DEFAULT_STYLE 常量（318次口径）。
 export const VANN_TO_ANN_MIGRATION = {
-  'lime-tight': 'none',
+  'lime-tight': 'green-background',
   sunset: 'sunset',
   plain: 'plain',
   underline: 'red-underline',
   capsule: 'capsule',
-  big: 'none',
+  big: 'green-background',
   snow: 'snow',
   glacier: 'glacier',
   violet: 'violet',
-  ember: 'none',
-  mustard: 'none',
+  ember: 'green-background',
+  mustard: 'green-background',
   seafoam: 'glacier',
   raspberry: 'raspberry',
   'cyan-glass': 'cyan-glass',
-  brick: 'none'
+  brick: 'green-background'
 };
 
 // ================================================================
@@ -302,7 +343,10 @@ export function annDecl(s, opts = {}) {
 }
 
 // 301次：注释样式统一解析（内置池 / 个性化 ann-custom / 用户自建 ann-user-*）——
-//   四消费点（网页提示/文本侧栏/视频侧栏/叠加字幕注释）共用；未知 id 回落 'none'。
+//   四消费点（网页提示/文本侧栏/视频侧栏/叠加字幕注释）共用。
+// 316次（用户裁定删 none 卡）：未知 id 回落默认卡。
+// 317次：曾加第四参 defId 指针；318次撤销——回落统一走 ANN_DEFAULT_STYLE 常量
+//   （代指锚定，版本变化才改常量值），恢复三参签名。
 export function resolveAnnEntry(id, customObj, userList) {
   if (id === 'ann-custom' && customObj && typeof customObj === 'object') {
     return Object.assign({ id: 'ann-custom', label: { en: 'Custom', zh: '个性化' } }, customObj);
@@ -311,7 +355,7 @@ export function resolveAnnEntry(id, customObj, userList) {
     const st = userList.find((s) => s && s.id === id);
     if (st) return st;
   }
-  return findStyle(POOL_STYLES, id) || findStyle(POOL_STYLES, 'none');
+  return findStyle(POOL_STYLES, id) || findStyle(POOL_STYLES, ANN_DEFAULT_STYLE);
 }
 
 // 302次：样式绘制代价划分（合成/重绘/重排三组）——几何字段（内边距/边框/字号/字距/
@@ -324,7 +368,7 @@ export function resolveAnnEntry(id, customObj, userList) {
 //   注：合成组条目带 wordDisplay:'inline-block'（transform 生效前提），首次应用该
 //   display 变更本身是重排；条目按其代表特征 transform/opacity 归合成组（纯合成变更）。
 export function poolPaint(s) {
-  if (!s || s.id === 'none') return 'repaint';
+  if (!s) return 'repaint';
   if (s.wordTransform !== undefined || s.wordOpacity !== undefined) return 'composite';
   // 306次：粗斜体三字段 → 重排（字形度量变化）
   if (s.bold || s.italic || s.wordWeight !== undefined) return 'reflow';
@@ -364,9 +408,8 @@ export function annCustomCssText(o) {
  *   beaver-ann-style-{id} 规则（调用方刷新时重调本函数覆盖旧表）。 */
 export function buildAnnPoolCss({ root, word, annInline, annWord, extra }) {
   const parts = [];
-  const all = POOL_STYLES.concat(Array.isArray(extra) ? extra.filter((s) => s && s.id && s.id !== 'none') : []);
+  const all = POOL_STYLES.concat(Array.isArray(extra) ? extra.filter((s) => s && s.id) : []);
   for (const s of all) {
-    if (s.id === 'none') continue;
     const wd = wordDecl(s, { important: true }).join(';');
     const ad = annDecl(s, { important: true }).join(';');
     parts.push(`${root}.beaver-ann-style-${s.id} ${word}{${wd};}`);
@@ -380,7 +423,7 @@ export function buildAnnPoolCss({ root, word, annInline, annWord, extra }) {
 // === 字幕文字样式（视频内字幕外观，class style-{id} 定义在 subtitle-overlay.js） ===
 // 反思（2026-08-16 第六十九次）：字幕样式 = 文字样式×位置样式 两维独立选择——
 //   位置不编码在文字样式里，改由 SUBTITLE_POSITIONS 单独选择（storage.subtitlePosition）。
-// 281次：精简内置条目；残留旧 id 由 sanitizeStyleId 回落 'none'（渲染端 findStyle
+// 281次：精简内置条目；残留旧 id 由 sanitizeStyleId 回落默认代指（渲染端 findStyle
 //   找不到即用首项，不会崩）。字幕正文样式只管字幕正文——注释（释义行）外观改由
 //   样式池第四栏 subtitle hints on video（storage.videoOverlayAnnStyle 池条目）单独控制。
 // 283次（用户裁定"选最流行的十种字幕样式，按照流行度排列，包括最流行产品的字幕样式，
@@ -422,8 +465,14 @@ export function subFontSizePct(item) {
   return 5;
 }
 export const SUBTITLE_TEXT_STYLES = [
-  // 'none' = 默认字幕外观（深色半透明条 + 白字），不应用任何额外样式覆盖
-  { id: 'none', label: { en: 'Default', zh: '默认外观' }, font: 'sans', fg: '#ffffff', bg: 'rgba(0,0,0,0.75)', fontSizePct: 5, edge: null, bold: false, italic: false, shadow: false, annMode: 'side', sample: 'He passed the quiz.' },
+  // 314次（用户"字幕样式目前的default位置应当是底部10%，改名White Bottom"）：
+  //   条目实名 White Bottom（白字贴底）——黑半透明条+白字，本身即贴底观感；
+  //   新增可选 pos 字段：指派该样式时引导页同步把 subtitlePosition 写为 'b10'（底部10%），
+  //   用户手改位置后不被覆盖，直至再次指派带 pos 的样式（位置仍是独立维度，见 69 次解耦）。
+  // 318次（用户"'none'是非法，全部清理"）：id 由 'none' 实名化为 'white-bottom'，
+  //   与 SUB_DEFAULT_STYLE 常量锚定；存量 storage.subtitleStyle='none' 由
+  //   sanitizeStyleId（不在池内即回落 SUB_DEFAULT_STYLE）与各渲染端清洗点迁移。
+  { id: 'white-bottom', label: { en: 'White Bottom', zh: '白字贴底' }, pos: 'b10', font: 'sans', fg: '#ffffff', bg: 'rgba(0,0,0,0.75)', fontSizePct: 5, edge: null, bold: false, italic: false, shadow: false, annMode: 'side', sample: 'He passed the quiz.' },
   // 1. YouTube 官方默认：白字 + 黑半透明底（全球覆盖面最大的字幕样式）
   { id: 'yt-box', label: { en: 'YouTube', zh: 'YouTube 底条' }, font: 'sans', fg: '#ffffff', bg: 'rgba(8,8,8,0.75)', fontSizePct: 4, edge: null, bold: false, italic: false, shadow: false, annMode: 'side', sample: 'He passed the quiz.' },
   // 2. Netflix 官方：白字 + 软阴影（无底条，阴影保证亮暗场景均可读）
@@ -531,12 +580,19 @@ export function buildUserStyleDecl(st, refH) {
 // === 字幕位置样式（距视频底部比例，subtitle-overlay 按 ratio 计算 top） ===
 // ratio = 字幕框中心线距视频底部的高度占视频高度比例（0.1=贴底 … 0.75=接近顶部）。
 export const SUBTITLE_POSITIONS = [
+  // 315次（用户"Top 1/10应当放在末尾"）：顶部档从首位移到末尾——顺序保持
+  //   自下而上渐进（贴底 b10 → 越靠上 ratio 越大），最高档 b90 收尾。
+  //   314次加档记录：顶部 1/10（ratio 0.9，字幕框中心线在视频高度 10% 处，与 b10 对称）。
+  //   316次（用户"为啥叫末尾 t10而不是延续之前叫法？"）：id 改名 t10→b90，延续 b 系列
+  //   命名体系——id 数字 = ratio×100（b90=0.9），label 不变（Top 1/10 / 上1/10）；
+  //   存量 't10' 脏值由 shared.js sanitizePositionId 迁移。
   { id: 'b10', label: { en: 'Bottom 1/10', zh: '下1/10' }, ratio: 0.1 },
   { id: 'b20', label: { en: 'Bottom 1/5', zh: '下1/5' }, ratio: 0.2 },
   { id: 'b25', label: { en: 'Bottom 1/4', zh: '下1/4' }, ratio: 0.25 },
   { id: 'b33', label: { en: 'Bottom 1/3', zh: '下1/3' }, ratio: 1 / 3 },
   { id: 'b50', label: { en: 'Center', zh: '正中' }, ratio: 0.5 },
-  { id: 'b75', label: { en: 'Top 1/4', zh: '上1/4' }, ratio: 0.75 }
+  { id: 'b75', label: { en: 'Top 1/4', zh: '上1/4' }, ratio: 0.75 },
+  { id: 'b90', label: { en: 'Top 1/10', zh: '上1/10' }, ratio: 0.9 }
 ];
 
 // 取当前界面语言下的样式短名

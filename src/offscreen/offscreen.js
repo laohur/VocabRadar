@@ -84,12 +84,10 @@ async function loadConfig() {
     if (fileCfg.asrSegmentSec && fileCfg.asrSegmentSec > 0) {
       _segmentSec = fileCfg.asrSegmentSec;
     }
-    // 2. storage 覆盖（popup 用户设置优先）
+    // 2. storage 覆盖（仅模型大小——320次：asrSegmentSec 不再读 storage，与 asr-client
+    //    同步收敛为 config.json 唯一来源；分段长度须全局一致，不允许 popup 配置漂移）
     if (chrome?.storage?.local) {
-      const stored = await new Promise((r) => chrome.storage.local.get(['asrSegmentSec', 'asrModelSize'], r));
-      if (stored.asrSegmentSec && stored.asrSegmentSec > 0) {
-        _segmentSec = stored.asrSegmentSec;
-      }
+      const stored = await new Promise((r) => chrome.storage.local.get(['asrModelSize'], r));
       if (stored.asrModelSize && SUPPORTED_MODELS.includes(stored.asrModelSize)) {
         _modelSize = stored.asrModelSize;
       }
@@ -100,14 +98,11 @@ async function loadConfig() {
   }
 }
 
-// 监听 storage 变化：popup 改 asrSegmentSec/asrModelSize 时即时生效
+// 监听 storage 变化：popup 改 asrModelSize 时即时生效
+// 320次：asrSegmentSec 监听分支删除（不再读 storage，见 loadConfig 注释）
 if (chrome?.storage?.onChanged) {
   chrome.storage.onChanged.addListener((changes, area) => {
     if (area !== 'local') return;
-    if (changes.asrSegmentSec && changes.asrSegmentSec.newValue > 0) {
-      _segmentSec = changes.asrSegmentSec.newValue;
-      console.log('[VocabRadar][offscreen][' + _ts() + '] asrSegmentSec 变更生效: ' + _segmentSec + 's');
-    }
     // 反思（2026-07-14）：用户要求「切换模型，自然asr要重新识别」。
     //   旧版只更新变量并打印日志，但 _whisper 实例不会自动切换，需手动重启 ASR。
     //   修正：模型大小变更时，清除旧 _whisper 和 _whisperPromise，下次 getWhisper() 会加载新模型。
@@ -205,6 +200,48 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         sendResponse({ ok: true, text: text });
       } catch (e) {
         try { sendResponse({ ok: false, error: String(e.message || e) }); } catch (_) { }
+      }
+    })();
+    return true;
+  }
+  if (msg.type === 'OFFSCREEN_AUDIO_DECODE') {
+    // 316次（用户"送入模型之前应当转换，包括网页送入"）：音频解码+重采样辅助消息——
+    //   SW 端把网页（桥接站）送入的原始录音（webm/opus 等）在送在线 LLM 转写引擎前
+    //   先做客户端转换：本端 decodeAudioData 解码 → OfflineAudioContext 重采样 16k
+    //   单声道 → Float32 PCM 以 base64 回传，SW 端 pcmF32ToWavBlob 编码 WAV 再送
+    //   （对齐本地 whisper 口径，与分片路径 handleSegmentByLlm 的 16k WAV 同款）。
+    //   offscreen 有 AudioContext，SW 没有（OFFSCREEN_ASR_WEBM 同理，解码必须在本端）。
+    (async () => {
+      let ab = null;
+      try {
+        const webmB64 = String(msg.webmB64 || '');
+        if (!webmB64) throw new Error('webmB64 missing');
+        const bin = atob(webmB64);
+        const u8 = new Uint8Array(bin.length);
+        for (let i = 0; i < bin.length; i++) u8[i] = bin.charCodeAt(i);
+        ab = new AudioContext();
+        const decoded = await ab.decodeAudioData(u8.buffer);
+        // 重采样到 16k 单声道（whisper 输出口径，对齐 SAMPLE_RATE）
+        const target = SAMPLE_RATE;
+        const off = new OfflineAudioContext(1, Math.ceil(decoded.duration * target), target);
+        const srcNode = off.createBufferSource();
+        srcNode.buffer = decoded;
+        srcNode.connect(off.destination);
+        srcNode.start();
+        const rendered = await off.startRendering();
+        const pcm = rendered.getChannelData(0);
+        // Float32Array → base64（分块防 apply 栈溢出）
+        const f32Bytes = new Uint8Array(pcm.buffer, pcm.byteOffset, pcm.byteLength);
+        let s = '';
+        const CHUNK = 0x8000;
+        for (let i = 0; i < f32Bytes.length; i += CHUNK) {
+          s += String.fromCharCode.apply(null, f32Bytes.subarray(i, i + CHUNK));
+        }
+        sendResponse({ ok: true, pcmB64: btoa(s), sampleRate: target, samples: pcm.length });
+      } catch (e) {
+        try { sendResponse({ ok: false, error: String(e.message || e) }); } catch (_) { }
+      } finally {
+        if (ab) { try { ab.close(); } catch (_) { } }
       }
     })();
     return true;

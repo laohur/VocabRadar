@@ -90,3 +90,26 @@ export function pickCleanShortTrans(translations) {
   }
   return '';
 }
+
+/**
+ * 310次（用户"查询卡片释义没有分拆"）：词典释义按词性段拆行展示。
+ * 词典单条 translation 内以 |（半/全角）分隔各词性段，如 letter：
+ *   "n. 信, 字母… | vt. 写字母于… | vi. 写印刷体字 | [计] 字母"
+ * 旧渲染每条 translation 一个 div，段内 | 不拆 → 整段挤一行。
+ * 本函数把 translations 数组展开为"行"数组：每条先过 cleanDictEntry，
+ * 再按 | ｜ 切分（保留各词性段完整，不按逗号切），空段丢弃。
+ * 文段翻译（整句译文）不在词典释义形态内，调用方自行区分，不走本函数。
+ * @param {string[]} translations 释义数组（每条可含多个 | 分隔的词性段）
+ * @returns {string[]} 行数组（每个元素一行）
+ */
+export function splitTransLines(translations) {
+  if (!Array.isArray(translations)) return [];
+  const lines = [];
+  for (const full of translations) {
+    if (!full) continue;
+    const segs = cleanDictEntry(full).split(/[|｜]/).map((s) => s.trim()).filter(Boolean);
+    if (segs.length === 0) continue;
+    lines.push(...segs);
+  }
+  return lines;
+}

@@ -315,7 +315,8 @@ input::placeholder { color: var(--g-muted); opacity: 1; }
 .sub-side-card .demo { min-height: 52px; flex-wrap: wrap; row-gap: 4px; }
 /* 307次：注释组预览卡＝池样品卡同构——demo 纵向（第一行样例 .demo-line，
    第二行样式名称 input 挪进框内），卡收窄 130px 且顶部对齐不随行拉伸 */
-#annCustomSideCard { flex: 0 0 130px; width: 130px; align-self: flex-start; }
+/* 308次（用户"右边的预览卡 居右， 上下居中"）：align-self flex-start→center（行高拉伸下垂直居中） */
+#annCustomSideCard { flex: 0 0 130px; width: 130px; align-self: center; }
 #annCustomSideCard .demo { flex-direction: column; justify-content: center; flex-wrap: nowrap; gap: 2px; min-height: 44px; padding: 3px 4px 5px; }
 #annCustomSideCard .demo-line { width: 100%; min-width: 0; display: flex; flex-wrap: wrap; justify-content: center; align-items: center; row-gap: 2px; padding-bottom: 2px; }
 #annCustomSideCard .card-label-input { width: 100%; font-size: 11px; }
@@ -488,12 +489,20 @@ input::placeholder { color: var(--g-muted); opacity: 1; }
 /* 反思（2026-08-20 第八十三次）：删除 margin:0 auto——列 flex 中 auto 水平外边距会让
    卡片收缩为内容宽并居中，导致字幕文字样式卡比其他三栏的 .demo 卡窄（尺寸不一致）。
    去掉后走默认 align-items:stretch 撑满整列，与前三个栏目一致。 */
+/* 309次第四轮（用户"字幕样式池中有些样式自带背景的，但样式卡没显现"）：根因——
+   样卡底是纯灰 #888，字幕底条全是半透明黑（none rgba(0,0,0,.75) / yt-box rgba(8,8,8,.75)
+   / hormozi .92 / karaoke .88），半透明黑×灰底 ≈ 深灰，视觉上显不出"自带背景"；
+   真实 overlay 中底条叠在视频画面上对比明显。改视频画面感深色渐变（无图片资源），
+   半透明底条边缘可辨，且保持白字可读（80 次口径）。 */
 .sub-stage.demo {
   position: relative;
   padding: 0;
   border-radius: 6px;
   overflow: hidden;
-  background: #888;
+  background:
+    radial-gradient(ellipse 60% 45% at 68% 30%, rgba(96,125,139,.55), transparent 70%),
+    radial-gradient(ellipse 50% 40% at 22% 72%, rgba(84,110,122,.5), transparent 70%),
+    linear-gradient(160deg, #22303c 0%, #17222c 55%, #2a2320 100%);
 }
 .sub-stage .sub-demo { white-space: nowrap; }
 
@@ -621,14 +630,20 @@ input::placeholder { color: var(--g-muted); opacity: 1; }
   white-space: pre;
 }
 .sub-css-row .sub-add-btn { margin-left: 0; align-self: center; width: 44px; height: 44px; font-size: 28px; }
-/* 306次：个性化行双 CSS 框（target/annotation 各一段纵排，原混一框靠 /* annotation */
-   标记切分难区分）；框内 min-height 收窄 120→64px，两框总高与原单框相当。
+/* 306次：个性化行双 CSS 框（target/annotation 各一段纵排，原混一框靠 annotation 标记
+   切分难区分）；框内 min-height 收窄 120→64px，两框总高与原单框相当。
    307次（用户"两种css 输入框加名字，太窄，跟右边的预览卡不限制同等尺寸"）：
    ①各框加常驻名称行 .ann-css-box-label（placeholder 输入即消失，名称常驻可辨）；
    ②textarea 显式 width:100%+border-box（防 UA cols 内在宽度回退）；
    ③预览卡 190→130px（#annCustomSideCard，见下方 307 规则），腾出的宽度全给
-   CSS 框（行内唯一 flex-grow 项） */
-.ann-css-boxes { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 6px; }
+   CSS 框（行内唯一 flex-grow 项）。
+   309次警示：CSS 注释不可嵌套——306 原注释内含字面量"斜杠星 annotation 斜杠星"，
+   第一个星斜杠即提前终止，strip 剥注释后残留裸文本，浏览器把下方 .ann-css-boxes
+   规则整条当无效丢弃 → flex-direction:row 失效 → 双框上下排列（用户实测复现）。
+   注释内严禁出现"斜杠星…星斜杠"字面量序列。 */
+.ann-css-boxes { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: row; gap: 8px; }
+/* 308次（用户"两种css 输入框加名字，应当左右并排"）：双框左右并排，各框名称行居上 */
+.ann-css-col { flex: 1 1 0; min-width: 0; display: flex; flex-direction: column; gap: 6px; }
 .ann-css-boxes textarea { width: 100%; min-height: 64px; box-sizing: border-box; }
 .ann-css-box-label { font-size: 12px; font-weight: 600; color: var(--g-text); }
 /* 307次：聚焦某框时其名称行同步高亮（ann-pool.js 联动选择器已泛化为 [data-css-zone]） */

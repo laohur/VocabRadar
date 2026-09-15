@@ -377,6 +377,45 @@ function stampBuild(distDir) {
   }
 }
 
+// 324次（用户裁定"图标输出到 data/radar.svg，以后从文件加载"）：雷达小图标注入——
+// 把 dist 内全部 .js（含 esbuild chunk）中的 __RADAR_SVG__ 占位符统一替换为
+// data/radar.svg 的内容（空白压缩为单行）。该 SVG 是搜索栏/侧栏顶行/图片翻译面板
+// 小图标的唯一来源（sidebar-topbar.js brandIconSVG 只持占位符）。
+// 为何构建期注入而非运行时 fetch svg 文件：不引入异步改造、不依赖
+// web_accessible_resources、无 <img> 拖拽问题、保 currentColor 主题自适应。
+// 占位符在 esbuild/terser 后仍是完整字符串字面量，此处替换安全。
+function injectRadarSvg(distDir) {
+  const svgPath = path.join(ROOT, 'data', 'radar.svg');
+  if (!fs.existsSync(svgPath)) {
+    throw new Error('data/radar.svg 不存在——brandIconSVG 占位符无法注入，不打静默包（不讳疾忌医）');
+  }
+  // 324次补充：terser 会把源码的 '__RADAR_SVG__' 重写为 "__RADAR_SVG__"（双引号风格），
+  //   SVG 属性里的双引号会提前终止字符串导致产物语法损坏（本批实测踩中，抽查 dist 才发现）。
+  //   注入前对反斜杠/双引号/单引号全部转义——JS 字符串中 \" 与 \' 无论外层是单引号
+  //   还是双引号均合法且值不变，与 terser 引号风格解耦。
+  const svg = fs.readFileSync(svgPath, 'utf8').replace(/\s+/g, ' ').trim()
+    .replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/'/g, "\\'");
+  let files = 0;
+  const walk = (dir) => {
+    for (const name of fs.readdirSync(dir)) {
+      const p = path.join(dir, name);
+      const st = fs.statSync(p);
+      if (st.isDirectory()) { walk(p); continue; }
+      if (!name.endsWith('.js')) continue;
+      const s = fs.readFileSync(p, 'utf8');
+      if (!s.includes('__RADAR_SVG__')) continue;
+      fs.writeFileSync(p, s.replace(/__RADAR_SVG__/g, svg));
+      files++;
+    }
+  };
+  walk(path.join(distDir, 'src'));
+  if (files === 0) {
+    console.log('[警告] RADAR_SVG 注入 0 命中：产物里没有占位符（sidebar-topbar.js 未随包或已被替换），请检查！');
+  } else {
+    console.log(`[图标] RADAR_SVG 注入（${svg.length} 字符，注入 ${files} 个文件）`);
+  }
+}
+
 // 272次（用户裁定"打包 zip 后缀要带版本号"）：读 data/manifest.json 的 version，
 // 拼进 zip 文件名（vocabradar-extension-<browser><suffix>-v<version>.zip）。
 function readAppVersion() {
@@ -647,6 +686,8 @@ async function buildBrowser(browser, mode) {
   stripHtmlCssComments(distDir);
   // 272次：BUILD_STAMP 注入构建时刻（stripHtmlCssComments 只动 HTML/CSS，互不影响）
   stampBuild(distDir);
+  // 324次：RADAR_SVG 注入（占位符来自 sidebar-topbar.js brandIconSVG，经 esbuild/terser 保留）
+  injectRadarSvg(distDir);
   makeZip(distDir, zipPath);
   console.log(`dist 目录: ${distDir}`);
   console.log(`zip 文件: ${zipPath}`);

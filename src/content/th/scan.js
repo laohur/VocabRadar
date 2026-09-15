@@ -94,6 +94,13 @@ export async function startHint(settings) {
       ? settings.annTemplate : DEFAULT_ANN_TEMPLATE;
     thState.colors = pickColors(settings);
     thState.enabled = true;
+    // 321次（用户"网页提示同样单词重复，识别了哪些单词难道你记不住吗"）：启动时清扫
+    //   旧版残留注释——扩展重载（chrome://extensions 刷新）不刷新页面，旧 content script
+    //   挂的 .beaver-side-ann 残留在页上；320 版起注释节点才带 data-word，旧版节点无该
+    //   属性，页级 [data-word] 兜底查不到 → 新脚本账本为空 → 同词再挂 → 重复。无
+    //   data-word 的节点已无法反查词名（模板渲染只有释义），留着只能作恶（重复/劫持），
+    //   直接删除；320+ 版节点带 data-word 不受影响，由页级兜底拦截。
+    purgeLegacySideAnnotations();
     // 第一百八十七次：panelHideDelay 的 config.json 读取**改为非阻塞**。
     //   实测（learn.microsoft.com）：startHint 入口 4021ms，而这段 await fetch 位于
     //   ensureReady() 词典调度之前，把「词典开始装载」硬性推后一个网络/磁盘往返；
@@ -209,6 +216,9 @@ export function stopHint() {
   //   （总线清空，侧栏同步清列表）；重启路径 startHint 会整页重扫重新包裹，无残留风险。
   unwrapAll();
   resetScan();
+  // 318次：停止＝269 次补拆高亮（注释宿主已不在）；不清账本会让重启后这些词
+  //   永远无法重挂注释。与 clearHighlights 同款清零。
+  thState.annSeenWords.clear();
   // w4：UI 模块未加载 = 无浮层/面板可藏，跳过；已加载才转发隐藏
   if (_uiMods) _uiMods.then((m) => m.tt.hideTooltip()).catch(() => {});
   if (_uiMods) _uiMods.then((m) => m.pp.hidePanel()).catch(() => {});
@@ -249,6 +259,8 @@ export function rescanNow() {
 export function clearHighlights() {
   unwrapAll();
   resetScan();
+  // 318次：高亮全拆＝注释宿主已不在，账本一并清零（重扫可重挂）
+  thState.annSeenWords.clear();
   console.log('[VocabRadar][text-hint] 已删除全部高亮');
 }
 
@@ -377,6 +389,8 @@ export function removeAllSideAnnotations() {
     if (el.closest && el.closest('#beaver-sidebar, #beaver-web-sidebar, #beaver-subtitle-overlay')) return;  // 跳过侧栏/overlay
     el.remove();
   });
+  // 318次：注释全移除＝账本清零（重挂不受历史拦截）
+  thState.annSeenWords.clear();
 }
 
 // === 扫描 ===
@@ -479,6 +493,19 @@ export function scanSubtree(root, onDone) {
       }
       // 已在我们高亮 span 内
       if (parent.classList && parent.classList.contains(HIGHLIGHT_CLASS)) {
+        return NodeFilter.FILTER_REJECT;
+      }
+      // 319次：本扩展插入页面的译文/注释节点也必须排除——否则 show in page 插入
+      //   含英文的译文瞬间经 observer 触发重扫，译文内英文被当正文再查词再高亮
+      //   再挂注释（"网页提示重复"的真正漏口，与 annSeenWords 账本无关的新路径；
+      //   kiss-translator 即把自身插入元素列入恒忽略清单 KISS_IGNORE_SELECTOR）。
+      //   classList 直判挡"文本直接在插入节点内"，closest 挡"包在插入节点里的
+      //   内层元素"（如译文里再嵌 span），双保险。
+      if (parent.classList && (parent.classList.contains('beaver-page-insert')
+        || parent.classList.contains(SIDE_ANN_CLASS))) {
+        return NodeFilter.FILTER_REJECT;
+      }
+      if (parent.closest && parent.closest('.beaver-page-insert, .beaver-side-ann')) {
         return NodeFilter.FILTER_REJECT;
       }
       // 防递归注释：跳过本扩展自身创建的元素（sidebar、overlay、tooltip、panel）
@@ -1021,6 +1048,47 @@ export function installDelegationGuard() {
 }
 
 /**
+ * 321次：清扫旧版残留的侧邻注释节点（无 data-word 属性的 .beaver-side-ann）
+ * 322次：扩展同词多注释去重——320+ 版节点带 data-word，扩展重载后新账本为空、
+ *   页面旧注释仍在，同词可再挂（用户"网页提示依旧重复提示"）。启动按文档序保留
+ *   每词首个、其余移除；重复模式开启时逐处注释是设计行为，不去重（见函数内）。
+ * 背景：data-word 是 320 版才挂的；扩展重载（不刷新页面）后旧版节点残留，
+ *   页级 [data-word] 兜底查不到它们 → 同词重复挂注释（用户报障根因之一）。
+ *   这类节点无法反查词名（模板渲染只有释义），保留只会作恶，直接删除。
+ * 跳过侧栏/字幕 overlay/诊断面板容器（内部渲染另有体系）。
+ */
+function purgeLegacySideAnnotations() {
+  try {
+    const stale = document.querySelectorAll('.beaver-side-ann:not([data-word])');
+    let n = 0;
+    stale.forEach((el) => {
+      if (el.closest && el.closest('#beaver-sidebar, #beaver-web-sidebar, #beaver-subtitle-overlay, #beaver-debug-panel')) return;
+      el.remove();
+      n++;
+    });
+    if (n > 0) console.log('[VocabRadar][text-hint] 清扫旧版残留注释 ' + n + ' 个（无 data-word）');
+    // 322次：同词多注释去重——按文档序保留每词首个，其余移除（容器内渲染不参与）；
+    //   重复模式开启时逐处注释是设计行为，跳过。与挂载自愈（appendSideAnnotation
+    //   322 段）同口径：重复不再依赖定位漏口即被消除。
+    if (!thState.annotateRepeat) {
+      const seen = new Set();
+      let d = 0;
+      document.querySelectorAll('.beaver-side-ann[data-word]').forEach((el) => {
+        if (el.closest && el.closest(
+          '#beaver-sidebar, #beaver-web-sidebar, #beaver-subtitle-overlay, #beaver-debug-panel')) return;
+        const w = String(el.dataset.word || '').toLowerCase();
+        if (!w) return;
+        if (seen.has(w)) { el.remove(); d++; }
+        else seen.add(w);
+      });
+      if (d > 0) console.log('[VocabRadar][text-hint] 启动清扫同词重复注释 ' + d + ' 个');
+    }
+  } catch (e) {
+    console.warn('[VocabRadar][text-hint] 清扫旧版残留注释失败:', e);
+  }
+}
+
+/**
  * 在 .beaver-word span 后插入/更新侧邻注释 (释义) 兄弟节点
  * 侧邻注释（2026-08-05）：半角括号，释义用独立配色（--beaver-ann-bg/fg）
  *   - 若 span 后已存在 .beaver-side-ann 兄弟，更新其文本（避免重复插入）
@@ -1041,21 +1109,92 @@ export function installDelegationGuard() {
  */
 export function appendSideAnnotation(span, translations) {
   if (!span || !translations || translations.length === 0) return;
+  // 318次：页级注释账本——seenWords 会被 rescanNow/setRankThreshold/setAnnotateOov/
+  //   setAnnotateRepeat/setAnnTemplate 清空（高亮语义需要），清空后同词新 span 误判
+  //   isFirst=true → FIRST 类绕过 LATER 拦截 → 同词挂第二处注释（用户报"网页提示
+  //   重复了"根因）。annSeenWords 只记"已挂注释的词"，不随上述清空翻转，仅注释
+  //   全移除时清空（removeAllSideAnnotations/clearHighlights/stopHint）。
+  const annWord = (span.dataset && span.dataset.word) ? String(span.dataset.word).toLowerCase() : '';
   // 第一百八十次：页级去重——非首次出现的词，未开开关时不注释
   if (!thState.annotateRepeat && span.classList && span.classList.contains(LATER_CLASS)) return;
+  // 318次：账本已记该词＝页面上已有它的注释——除非本 span 自带注释（更新路径：
+  //   模板变更/回填经兄弟复用重渲染），否则不再挂第二处
+  // 319次：return 前补取证埋点——若用户再报"提示重复"，console 可判别是账本拦截
+  //   失效（此处应打印）还是别的新路径，不再盲改
+  // 321次：豁免判据收紧——紧邻注释须 data-word 与本词一致才算"本 span 自带注释"。
+  //   旧判据只看 class，紧邻是别的词的注释时也放行，下方复用分支会把别人注释的
+  //   data-word/释义改写成本词（注释劫持：原词注释丢失且账本仍记，原词此后永久
+  //   无法重挂）。
+  const sibAnn = span.nextElementSibling;
+  const ownAnn = sibAnn && sibAnn.classList && sibAnn.classList.contains(SIDE_ANN_CLASS)
+    && (!annWord || sibAnn.dataset.word === annWord);
+  if (!thState.annotateRepeat && annWord && thState.annSeenWords.has(annWord) && !ownAnn) {
+    console.log('[VocabRadar][text-hint] 注释去重拦截（annSeenWords 已记该词）：', annWord);
+    return;
+  }
+  // 320次：页级 DOM 存在性兜底——annSeenWords 未记该词但页面上已有同词注释时
+  //   （账本被部分清理/历史节点无账本记录等），同样拦截。与上一条同口径：本 span
+  //   自带注释（兄弟复用更新路径）不拦，否则模板变更/回填会被误杀。
+  //   判据用 annSpan 的 data-word（下方挂载时写入；历史节点无该属性查不到，
+  //   但那些节点本就已被账本覆盖，无回归风险）。
+  if (!thState.annotateRepeat && annWord && !ownAnn) {
+    // 322次：查询排除容器——侧栏/字幕 overlay 等容器内部渲染的同词节点不该拦住
+    //   主文档挂载（容器渲染另有体系，与 purge/自愈同口径）
+    const dup = Array.from(document.querySelectorAll('.'
+      + SIDE_ANN_CLASS + '[data-word="' + CSS.escape(annWord) + '"]'))
+      .find((el) => !(el.closest && el.closest(
+        '#beaver-sidebar, #beaver-web-sidebar, #beaver-subtitle-overlay, #beaver-debug-panel')));
+    if (dup) {
+      console.log('[VocabRadar][text-hint] 注释去重拦截（页级 DOM 已有同词注释）：', annWord);
+      return;
+    }
+  }
   // 302次（用户"侧邻注释都用短释"）：全量 join 改短释单项（detail 卡片不受影响）
   const transText = pickCleanShortTrans(translations);
   if (!transText) return;
   // 检查是否已有侧邻注释兄弟节点（避免重复插入）
+  // 321次：复用须 data-word 与本词一致——紧邻是别的词的注释时新建节点插入本词后
+  //   （旧版直接复用＝改写别人注释，见上方劫持说明）。
   let annSpan = span.nextElementSibling;
-  if (!annSpan || !annSpan.classList || !annSpan.classList.contains(SIDE_ANN_CLASS)) {
+  if (!annSpan || !annSpan.classList || !annSpan.classList.contains(SIDE_ANN_CLASS)
+    || (annWord && annSpan.dataset.word !== annWord)) {
     annSpan = document.createElement('span');
     annSpan.className = SIDE_ANN_CLASS;
     span.parentNode.insertBefore(annSpan, span.nextSibling);
   }
+  // 320次：注释节点挂词名——页级 [data-word] 去重判据（含新建与兄弟复用两路，
+  //   复用旧节点缺属性时补挂）
+  if (annWord) annSpan.dataset.word = annWord;
   // 280次：注释文本由 annTemplate 模板渲染（{meaning} 前后字面量拼释义，
   //   {word} token 丢弃——生词 span 已独立存在，不重复输出）
   annSpan.textContent = renderAnnText(thState.annTemplate, transText);
+  // 318次：挂载/更新成功即记账（仅非重复模式——重复模式下注释本就逐处挂）
+  if (annWord && !thState.annotateRepeat) thState.annSeenWords.add(annWord);
+  // 322次：注释自愈兜底——LATER 拦截/账本拦截/页级兜底三道静态防线仍拦不住某条
+  //   未知路径的重复挂载（用户 322 次反馈"网页提示依旧重复提示"）。无论漏口在哪，
+  //   挂载成功后物理清扫页面上同词的多余注释：保留本 span 这份，其余（排除侧栏/
+  //   字幕/诊断容器内的渲染）移除并留取证——重复不再依赖定位漏口即被消除。
+  if (annWord && !thState.annotateRepeat) {
+    document.querySelectorAll('.'
+      + SIDE_ANN_CLASS + '[data-word="' + CSS.escape(annWord) + '"]').forEach((el) => {
+      if (el === annSpan) return;
+      if (el.closest && el.closest(
+        '#beaver-sidebar, #beaver-web-sidebar, #beaver-subtitle-overlay, #beaver-debug-panel')) return;
+      el.remove();
+      console.log('[VocabRadar][text-hint] 注释自愈：移除同词多余注释（' + annWord + '）');
+    });
+  }
+  // 324次：无条件取证日志（不受 _debug 门控）——用户 324 次反馈"网页提示依旧重复提示，是最新版"，
+  //   但其 console 中零防线输出（LATER 拦截/账本拦截/页级 DOM 拦截/自愈均无一条日志），
+  //   与"annotateRepeat=false＋防线全在本函数"矛盾：重复注入在逻辑上不可能经 appendSideAnnotation。
+  //   挂载成功留痕后，下次复现 console 四路对账（挂载/账本拦截/DOM 拦截/自愈）即可定位漏口；
+  //   同时打印是否落在排除容器内（侧栏/字幕/诊断容器内的重复属设计性无视，页级自愈不清扫）。
+  if (annWord) {
+    const exContainer = span.closest && span.closest(
+      '#beaver-sidebar, #beaver-web-sidebar, #beaver-subtitle-overlay, #beaver-debug-panel');
+    console.log('[VocabRadar][text-hint] 注释挂载成功（' + annWord + '）'
+      + (exContainer ? ' @排除容器:' + (exContainer.id || exContainer.className || exContainer.tagName) : ''));
+  }
   thMark('hint:firstAnn');   // 埋点：首条侧注释可见时刻
 }
 
@@ -1128,6 +1267,12 @@ export function unwrapSingle(el) {
   const annSibling = el.nextElementSibling;
   if (annSibling && annSibling.classList && annSibling.classList.contains(SIDE_ANN_CLASS)) {
     annSibling.remove();
+    // 319次：删注释须同步清账本——annSeenWords 记"页面已有该词注释"，注释随
+    //   span 失效被拆后若不清，该词在页面上永久无法再挂注释（318 账本反向缺口）。
+    //   cleanupStaleSpans / observer characterData 分支均经 unwrapSingle 调用，
+    //   此处一并覆盖。
+    const w = el.dataset && el.dataset.word;
+    if (w) thState.annSeenWords.delete(String(w).toLowerCase());
   }
   while (el.firstChild) parent.insertBefore(el.firstChild, el);
   parent.removeChild(el);
@@ -1236,6 +1381,12 @@ export function startObserver() {
         if (n.id === 'beaver-subtitle-overlay' || (n.closest && n.closest('#beaver-subtitle-overlay'))) continue;
         // 跳过 beaver-word 和 beaver-side-ann 自身（防止重复扫描已包裹的内容）
         if (n.classList && (n.classList.contains(HIGHLIGHT_CLASS) || n.classList.contains(SIDE_ANN_CLASS))) continue;
+        // 319次：跳过本扩展插入页面的译文节点（.beaver-page-insert）——插入含英文
+        //   译文会经此处 scheduleScan 触发重扫，译文内英文被再高亮再注释（"网页
+        //   提示重复"漏口之二，walker acceptNode 已同步排除）。classList 直判＋
+        //   closest 双保险。
+        if (n.classList && n.classList.contains('beaver-page-insert')) continue;
+        if (n.closest && n.closest('.beaver-page-insert')) continue;
         scheduleScan(n);
       }
       // 文本变化：若发生在 beaver-word span 内，span 内容已被框架改动 → 清理失效 span

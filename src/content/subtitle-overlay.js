@@ -48,7 +48,7 @@ import { pickCleanShortTrans } from '../lib/dict-clean.js';
 // 282次：SUB_FONTS/subFontFamily/subFxDecl/buildUserStyleDecl 收敛到共享层 styles.js——
 //   字体栈、特效声明、用户样式声明与 guide 页预览同源（预览=真实渲染），删除本文件
 //   本地 SUB_FONTS 常量（旧三栈与共享层重复，字体扩列后必然脱节）。
-import { SUBTITLE_TEXT_STYLES, SUBTITLE_POSITIONS, POOL_STYLES, SUB_FONTS, findStyle, annDecl, splitAnnTemplate, DEFAULT_ANN_TEMPLATE, BUILD_STAMP, subFontFamily, subFxDecl, buildUserStyleDecl, pxToSizePct, subFontSizePct } from '../lib/styles.js';
+import { SUBTITLE_TEXT_STYLES, SUBTITLE_POSITIONS, POOL_STYLES, SUB_FONTS, findStyle, annDecl, splitAnnTemplate, DEFAULT_ANN_TEMPLATE, BUILD_STAMP, subFontFamily, subFxDecl, buildUserStyleDecl, pxToSizePct, subFontSizePct, ANN_DEFAULT_STYLE, SUB_DEFAULT_STYLE } from '../lib/styles.js';
 
 let _overlay = null;
 let _video = null;
@@ -65,8 +65,8 @@ let _annTemplate = DEFAULT_ANN_TEMPLATE;
 let _lastKey = '';               // 避免重复渲染
 let _scrollHandler = null;       // scroll/resize 监听器
 let _mode = 'side';              // 'side'（侧邻注释）或 'detail'（详细注释）
-let _styleId = 'none';           // 当前字幕文字样式 id（'custom'=个性化；注释布局由 _mode 决定）
-let _posId = 'b20';              // 当前字幕位置样式 id（距视频底部比例）
+let _styleId = SUB_DEFAULT_STYLE; // 当前字幕文字样式 id（'custom'=个性化；注释布局由 _mode 决定；318次：初值=默认代指常量 SUB_DEFAULT_STYLE）
+let _posId = 'b10';              // 当前字幕位置样式 id（距视频底部比例；314次：默认改贴底 1/10，用户裁定推翻 b20）
 let _storageListener = null;     // storage 变化监听器（同步详略模式）
 let _fullscreenHandler = null;   // fullscreenchange 监听器（全屏时移动 overlay）
 let _userStyleSheet = null;      // 282次：用户样式动态 <style> 元素（style-user-* 规则重建用）
@@ -203,6 +203,7 @@ ${buildSubtitleStyleCss()}
 // 293次：当前样式的字号百分比（字号=视频高×pct；custom/用户样式各取其值）。
 // 297次缺省默认 5%（298次：基线改回统一视频高，短边作废）。
 let _sizePct = 5;
+let _diagLastFs = null;   // 309次第四轮：字号诊断日志限频（fs 变化才打一条，防 timeupdate 刷屏）
 let _customPct = 5;
 function sizePctOfStyle(id) {
   if (id === 'custom') return _customPct;
@@ -210,7 +211,11 @@ function sizePctOfStyle(id) {
     const st = _userStylesCache.find((s) => s.id === id);
     if (st) return subFontSizePct(st);
   }
-  if (id && id !== 'none') {
+  // 309次第五轮（用户"默认的字幕样式字号非常大，其他样式正常"）根因实锤：
+  //   旧条件 id !== 'none' 把默认样式（none 条目，fontSizePct:5）跳过，掉到兜底 7——
+  //   默认 7% vs 其他样式 4-6%，恰是"默认偏大、比值看着差不多"（设定 UI 显示同表 pct）。
+  //   去掉排除条件：findStyle 对 'none' 同样命中条目，返回其自带 fontSizePct。
+  if (id) {
     const s = findStyle(SUBTITLE_TEXT_STYLES, id);
     if (s) return subFontSizePct(s);
   }
@@ -259,7 +264,7 @@ function buildSubtitleStyleCss() {
   // 281次：注释行样式规则（第四栏池 annstyle-{id}）——annDecl 输出过滤 font-size
   //  （池条目 12-15px 是侧栏语境，字幕注释行统一 0.9em 基准），词头加粗 600 与基础层一致
   const annRules = POOL_STYLES
-    .filter((s) => s.id && s.id !== 'none')
+    .filter((s) => s.id)
     .map((s) => {
       const decl = annDecl(s).filter((d) => !d.startsWith('font-size')).join(';');
       if (!decl) return '';
@@ -341,6 +346,15 @@ function updateOverlayPosition() {
     const pct = (typeof _sizePct === 'number' && isFinite(_sizePct)) ? _sizePct : 5;
     const fs = Math.round(rect.height * pct / 100);
     _overlay.style.setProperty('--beaver-sub-fs', fs + 'px');
+    // 309次第四轮诊断（用户"字幕字体比设定大很多"）：静态链路无错（YouTube/Netflix/WebVTT
+    //   ::cue 默认同为"显示高度×百分比"口径），加限频日志实测定案——仅在算出的 fs 变化时
+    //   打一条（timeupdate/scroll 高频路径不刷屏，302 次教训），输出三要素：
+    //   视频显示高 rect.height、百分比 pct 及来源样式 id。用户贴日志即可判别
+    //   "显示高异常（选错 video 元素）/ pct 未随设定更新 / 纯比例观感问题"。
+    if (fs !== _diagLastFs) {
+      _diagLastFs = fs;
+      console.log(`[VocabRadar][overlay] 字号: ${fs}px = 视频显示高 ${Math.round(rect.height)}px × ${pct}%（样式=${_styleId}）`);
+    }
   }
   const h = _overlay.offsetHeight || 0;
   _overlay.style.top = (rect.bottom - rect.height * ratio - h / 2) + 'px';
@@ -664,8 +678,11 @@ export function startOverlay(video, subtitles, options = {}) {
         setSubtitlePosition(changes.subtitlePosition.newValue);
       }
       // 281次：注释样式（第四栏池指派）与个性化字幕热更新——引导页改动即时生效
+      // 318次：newValue 若为 'none'（旧端残留写入）清洗回落默认代指常量
+      //   ANN_DEFAULT_STYLE（注释样式默认由该常量锚定）
       if (changes.videoOverlayAnnStyle) {
-        setVideoOverlayAnnStyle(changes.videoOverlayAnnStyle.newValue);
+        const nv = changes.videoOverlayAnnStyle.newValue;
+        setVideoOverlayAnnStyle(nv === 'none' ? ANN_DEFAULT_STYLE : nv);
       }
       // 301次：个性化/用户注释规则热更新（类名不变即时生效）
       if (changes.annotationCustom || changes.annotationUserStyles) {
@@ -677,13 +694,13 @@ export function startOverlay(video, subtitles, options = {}) {
         setSubtitleCustom(changes.subtitleCustom.newValue);
       }
       // 282次：用户字幕正文样式（大加号保存/删除）热更新——整表重建 style-user-* 规则；
-      //   若当前激活样式被删除则回落默认（guide 端删除选中项时会写 subtitleStyle:'none'，
+      //   若当前激活样式被删除则回落默认（guide 端删除选中项时会写 subtitleStyle，
       //   此处兜底防其他入口删除时激活类悬空）。
       if (changes.subtitleUserStyles) {
         syncUserStyleRules(changes.subtitleUserStyles.newValue);
         if (_styleId && _styleId.indexOf('user-') === 0 &&
             !_userStylesCache.some((s) => s.id === _styleId)) {
-          setSubtitleStyle('none');
+          setSubtitleStyle(SUB_DEFAULT_STYLE);   // 318次：回落默认代指常量（版本变化才改常量值）
         }
       }
       // 280次：注释模板热更新——前后缀变化需强制重渲染（原 annBrackets）
@@ -712,12 +729,17 @@ export function startOverlay(video, subtitles, options = {}) {
     // 281次：初始读取补个性化字幕（subtitleCustom）与注释样式（videoOverlayAnnStyle）
     // 282次：再补用户样式表（subtitleUserStyles）——须先重建 style-user-* 规则，
     //   再应用激活样式（激活值可能是 user-*，规则就绪后类一挂即生效）
-    chrome.storage.local.get({ subtitleStyle: 'none', subtitlePosition: 'b20', subtitleCustom: null, videoOverlayAnnStyle: 'none', subtitleUserStyles: [] }, (res) => {
+    // 309次第五轮（用户四栏统一裁定）：videoOverlayAnnStyle 兜底默认
+    // 318次：兜底/回落改默认代指常量（317 次的 annDefaultStyle/subDefaultStyle 指针键撤销）
+    chrome.storage.local.get({ subtitleStyle: SUB_DEFAULT_STYLE, subtitlePosition: 'b10', subtitleCustom: null, videoOverlayAnnStyle: ANN_DEFAULT_STYLE, subtitleUserStyles: [] }, (res) => {
       syncUserStyleRules(res.subtitleUserStyles);
-      setSubtitleStyle(res.subtitleStyle || 'none');
-      setSubtitlePosition(res.subtitlePosition || 'b20');
+      setSubtitleStyle(res.subtitleStyle || SUB_DEFAULT_STYLE);
+      // 316次：videoOverlayAnnStyle 读数清洗——池中 none 卡已删，残留 'none' 统一落
+      //   默认代指常量 ANN_DEFAULT_STYLE（与引导页口径一致）；subtitlePosition 的
+      //   旧 't10' 残留由 setSubtitlePosition 内迁移为 b90（见该函数）。
+      setSubtitlePosition(res.subtitlePosition || 'b10');   // 314次：默认贴底 1/10（用户裁定推翻 b20）
       if (res.subtitleCustom) setSubtitleCustom(res.subtitleCustom);
-      setVideoOverlayAnnStyle(res.videoOverlayAnnStyle || 'none');
+      setVideoOverlayAnnStyle(res.videoOverlayAnnStyle === 'none' ? ANN_DEFAULT_STYLE : (res.videoOverlayAnnStyle || ANN_DEFAULT_STYLE));
     });
     // 301次：个性化/用户注释规则初始同步（与正文用户样式表同构，独立键）
     chrome.storage.local.get({ annotationCustom: null, annotationUserStyles: [] }, (res) => {
@@ -816,12 +838,14 @@ export function setRankThreshold(v) {
 /**
  * 应用字幕文字样式
  * 反思（2026-08-13 第五十次）：用户要求"字幕样式选择，选中后样例字幕叠加在视频上"。
- *   storage key: subtitleStyle（'none' 或其他样式名，与 style-{name} 类对应）。
+ *   storage key: subtitleStyle（值=池内样式 id，与 style-{name} 类对应；318次：
+ *   旧 'none' 存量非法，入参处统一迁移为默认代指样式，见下方 856 行注释）。
  * 反思（2026-08-15 第六十五次）：样式校验——storage 中的样式 id 若已在
  *   SUBTITLE_TEXT_STYLES 中被移除（旧版本曾删 right-vertical/center-vertical，导致旧选中
- *   值挂死类 → 回落黑底，用户看到"透明当黑色"），现未知 id 优雅回退 'none' 并写回 storage
+ *   值挂死类 → 回落黑底，用户看到"透明当黑色"），现未知 id 优雅回落并写回 storage
  *   清理，杜绝死类。
- * @param {string} style 文字样式名，'none' 表示默认（深色半透明条）
+ * 318次：回落目标为默认代指常量 SUB_DEFAULT_STYLE（317 次指针撤销，版本变化才改常量值）。
+ * @param {string} style 文字样式名（样式池 id；空值/旧 'none' 迁移为默认样式）
  */
 export function setSubtitleStyle(style) {
   if (!_overlay) return;
@@ -830,22 +854,26 @@ export function setSubtitleStyle(style) {
   for (const cls of Array.from(_overlay.classList)) {
     if (cls.indexOf('style-') === 0) _overlay.classList.remove(cls);
   }
-  let id = (style && style !== 'none') ? style : 'none';
+  // 318次：存量 'none'（旧白字贴底 id，用户裁定非法全清）一次性迁移为实名
+  //   'white-bottom'（SUB_DEFAULT_STYLE 常量锚定）；空值同落默认常量。
+  let id = (style === 'none' || !style) ? SUB_DEFAULT_STYLE : style;
   // 281次：'custom'（个性化字幕，CSS 变量驱动）为合法 id，不参与存在性校验
   // 282次：user-* 前缀（guide 页大加号保存的用户样式，规则由 syncUserStyleRules 重建）
   //   同为合法 id——CSS 表动态生成，无法用 findStyle 校验，直接放行
   const isUserStyle = typeof id === 'string' && id.indexOf('user-') === 0;
-  if (id !== 'none' && id !== 'custom' && !isUserStyle && !findStyle(SUBTITLE_TEXT_STYLES, id)) {
+  if (id !== 'custom' && !isUserStyle && !findStyle(SUBTITLE_TEXT_STYLES, id)) {
     console.warn(`[VocabRadar][overlay] 字幕样式 "${id}" 已不存在，回退默认样式并清理 storage`);
-    id = 'none';
+    // 318次：回落默认代指常量 SUB_DEFAULT_STYLE（白字贴底，版本变化才改常量值）
+    id = SUB_DEFAULT_STYLE;
     try {
-      chrome.storage.local.set({ subtitleStyle: 'none' });
+      chrome.storage.local.set({ subtitleStyle: id });
     } catch (e) { /* 清理失败忽略 */ }
   }
   _styleId = id;
   refreshActivePct();   // 293次：切换样式即刷新字号百分比（随后 onTimeUpdate 经 updateOverlayPosition 落 px）
-  // 反思（2026-08-16 第七十一次）：④ 恒加类——'none' 也加 .style-none（显式黑底条）、
-  //   不再依赖基础规则隐式兜底，避免"选了透明样式却仍显示黑底"。
+  // 反思（2026-08-16 第七十一次）：④ 恒加类——默认样式也显式加 .style-white-bottom
+  //   （318 次前为 .style-none，显式黑底条），不再依赖基础规则隐式兜底，
+  //   避免"选了透明样式却仍显示黑底"。
   _overlay.classList.add('style-' + _styleId);
   // 反思（2026-08-16 第七十一次）：④ 应用后打印计算样式取证——computed backgroundColor
   //   若为 transparent/rgba(0,0,0,0.75) 即与所选样式一致；若出现未选样式值即类未生效，
@@ -866,16 +894,20 @@ export function setSubtitleStyle(style) {
  * 应用字幕位置样式（距视频底部比例）
  * 反思（2026-08-16 第六十九次）：位置与文字样式解耦。位置由 SUBTITLE_POSITIONS 元数据
  *   （ratio 字段）驱动，updateOverlayPosition 据此计算 top；本函数只更新 _posId 并刷新位置。
- *   storage key: subtitlePosition（'b20' 默认贴底，其他见 SUBTITLE_POSITIONS）。
+ *   storage key: subtitlePosition（'b10' 默认贴底，其他见 SUBTITLE_POSITIONS）。
  * @param {string} posId 位置样式 id
  */
 export function setSubtitlePosition(posId) {
-  let id = posId || 'b20';
+  let id = posId || 'b10';
+  // 316次：'t10'（原顶部 1/10，316 次改名 b90 延续 b 系列命名）存量迁移——
+  //   落 b90 保持视觉位置不变；不迁的话 b90 已入池、t10 查不到会被当未知 id 回落 b10，
+  //   用户选好的"顶部 1/10"会无端跳回贴底。
+  if (id === 't10') id = 'b90';
   if (!findStyle(SUBTITLE_POSITIONS, id)) {
     console.warn(`[VocabRadar][overlay] 字幕位置 "${id}" 已不存在，回退默认位置并清理 storage`);
-    id = 'b20';
+    id = 'b10';
     try {
-      chrome.storage.local.set({ subtitlePosition: 'b20' });
+      chrome.storage.local.set({ subtitlePosition: 'b10' });
     } catch (e) { /* 清理失败忽略 */ }
   }
   _posId = id;
@@ -962,7 +994,9 @@ export function syncAnnCustomRules(customObj, userList) {
  * 注释行外观由 annstyle-{id} 类统一控制（规则见 buildSubtitleStyleCss），
  * 纯外观切换，CSS 即时作用于现有 DOM，无需重渲染字幕。
  * 301次：ann-custom/ann-user-* 同样挂类（规则由 syncAnnCustomRules 提供）。
- * @param {string} id 池样式 id，'none' 表示不启用（回退基础透明白字）
+ * 316次：池中 none 卡已删；'none' 入参仅作防御（视为未知值回退基础外观），
+ *   正常调用方（初始读取/onChanged）已先把 'none' 清洗为默认代指样式。
+ * @param {string} id 池样式 id
  */
 export function setVideoOverlayAnnStyle(id) {
   if (!_overlay) return;
@@ -972,7 +1006,9 @@ export function setVideoOverlayAnnStyle(id) {
   const known = (id === 'ann-custom') || (id && id.indexOf('ann-user-') === 0);
   const s = (id && id !== 'none') ? (known ? { id } : findStyle(POOL_STYLES, id)) : null;
   if (id && id !== 'none' && !s) {
-    console.warn(`[VocabRadar][overlay] 字幕注释样式 "${id}" 已不存在，回退基础注释外观`);
+    console.warn(`[VocabRadar][overlay] 字幕注释样式 "${id}" 已不存在，回落默认样式 "${ANN_DEFAULT_STYLE}"`);
+    setVideoOverlayAnnStyle(ANN_DEFAULT_STYLE);   // 318次：回落默认代指常量（版本变化才改常量值，递归深度 1）
+    return;
   }
   if (s) _overlay.classList.add('annstyle-' + id);
 }

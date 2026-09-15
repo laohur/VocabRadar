@@ -597,7 +597,8 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       // image → 复用 OCR_RECOGNIZE 链路（Tesseract/LLM 引擎按用户设定）；
       // 视频站链接 → 引导走扩展自身字幕/转写工作流（code:'video-link'）；
       // document → offscreen parse-doc 解析（B2：pdf/docx/epub，文件字节 b64 透传）；
-      // 音频/视频 kind → 网站编排器已占位拦截，这里兜底明示错误（不静默）。
+      // 音频 kind → asr 分支实装（P 批起本地推理；312 批在线转写失败自动降级本地）。
+      // 视频 kind → 引导走扩展字幕/转写工作流（code:'video-link'）；其余类型这里兜底明示错误（不静默）。
       handleParseMaterial(msg.kind, msg.payload)
         .then((r) => sendResponse(r))
         .catch((e) => sendResponse({ ok: false, error: String(e.message || e) }));
@@ -807,13 +808,28 @@ async function handleParseMaterial(kind, payload) {
     // 'local'（默认）→ offscreen 本地 whisper 模型推理（OFFSCREEN_ASR_WEBM，解码重采样
     // 16k 在 offscreen 做，识别同步响应回 SW）；'api'/'llm' → 在线 LLM 转写
     // （resolveLlmEngineCfg('asr') + llmTranscribeBlob）。协议见桥接扩展.md §2.2。
+    // 312 批（2026-09-14 用户指令「解析音频，说过网络不好的时候改用模型推理」）：
+    //   api/llm 在线转写失败（网络不好等）自动降级本地 whisper 模型推理，降级也失败
+    //   才报错（两级错误都如实透出，不遮蔽）。顺带补做 310 批声称但未落盘的 mime 修复：
+    //   从 dataURL 头解析真实 mime，extMap 反查扩展名——blob type 与 fileName 不再
+    //   硬编码 audio/webm/audio.webm。
     const audioDataUrl = String((payload && payload.audioDataUrl) || '');
     const lang = String((payload && payload.lang) || 'en');
     if (!audioDataUrl) return { ok: false, error: 'asr payload missing audioDataUrl' };
     let asrEngine = 'local';
     try { asrEngine = (await new Promise((r) => chrome.storage.local.get({ asrEngine: 'local' }, r))).asrEngine || 'local'; } catch (_) { }
     const b64Part = audioDataUrl.replace(/^data:[^;]+;base64,/, '');
-    if (asrEngine === 'local') {
+    // 312 批补做 310 丢失修复：dataURL 头解析 mime → 扩展名映射
+    const mimeMatch = audioDataUrl.match(/^data:([^;,]+)/i);
+    const mime = (mimeMatch && mimeMatch[1]) || 'audio/webm';
+    const EXT_BY_MIME = {
+      'audio/webm': 'webm', 'audio/wav': 'wav', 'audio/x-wav': 'wav',
+      'audio/mp3': 'mp3', 'audio/mpeg': 'mp3', 'audio/mp4': 'm4a', 'audio/m4a': 'm4a',
+      'audio/ogg': 'ogg', 'audio/flac': 'flac', 'audio/x-flac': 'flac', 'audio/aac': 'aac',
+    };
+    const ext = EXT_BY_MIME[mime] || 'bin';
+    // 本地 whisper 模型推理：offscreen 解码重采样 16k 后识别（抽辅助函数，api 失败降级复用）
+    async function runLocalAsr() {
       const host = await ensureOffscreenHost();
       if (!host.ok) throw new Error('offscreen 宿主不可用：' + (host.error || 'unknown'));
       const resp = await chrome.runtime.sendMessage({
@@ -824,12 +840,81 @@ async function handleParseMaterial(kind, payload) {
       if (!resp || !resp.ok) return { ok: false, error: (resp && resp.error) || 'offscreen no response' };
       return { ok: true, text: resp.text || '' };
     }
-    const blob = new Blob([b64ToUint8(b64Part)], { type: 'audio/webm' });
+    if (asrEngine === 'local') return runLocalAsr();
+    // api/llm 在线转写：失败（网络不好/端点错/配额）→ 降级本地模型推理（312 批用户令）
     let learn = lang;
     try { learn = (await new Promise((r) => chrome.storage.local.get({ learnLanguage: lang }, r))).learnLanguage || lang; } catch (_) { }
-    const cfg = await resolveLlmEngineCfg('asr');
-    const text = await llmTranscribeBlob(blob, cfg, learn, 'audio.webm');
-    return { ok: true, text: String(text || '') };
+    try {
+      const cfg = await resolveLlmEngineCfg('asr');
+      // 316次（用户"送入模型之前应当转换，包括网页送入"）：网页送入的录音在送在线
+      //   LLM 转写引擎前先客户端转换——原始 webm/opus 裸送既有模型端兼容性风险又
+      //   浪费带宽；先经 offscreen 解码+重采样 16k 单声道（对齐本地 whisper 口径，
+      //   与分片路径 handleSegmentByLlm 的 pcmF32ToWavBlob(pcm,16000) 同款），再编码
+      //   WAV 送转写。转换失败 console.warn 后回退原始 blob 直送（保底不阻断，
+      //   错误如实透出不遮蔽）。本地 whisper 路径本就 16k（runLocalAsr），无需改。
+      // 317次（用户"只压缩，不扩增"）：转换不得让体积变大——16k 16bit WAV 恒定
+      //   256kbps，原始低码率 webm/opus 常见约 32kbps，长录音转完反而扩增约 8 倍。
+      //   编码前先估算（44 头 + pcm×2 字节，16bit；与 pcmF32ToWavBlob 产物严格一致）
+      //   ≥ 原始字节数（base64 还原近似）则返回 null 省掉编码 CPU，外层回退原始
+      //   直送；只有真变小时才送 WAV。
+      async function toWavBlob() {
+        const host = await ensureOffscreenHost();
+        if (!host.ok) throw new Error('offscreen 宿主不可用：' + (host.error || 'unknown'));
+        const resp = await chrome.runtime.sendMessage({
+          type: 'OFFSCREEN_AUDIO_DECODE',
+          webmB64: b64Part
+        }).catch((e) => ({ ok: false, error: String(e.message || e) }));
+        if (!resp || !resp.ok) throw new Error((resp && resp.error) || 'offscreen decode no response');
+        const pcm = new Float32Array(b64ToUint8(resp.pcmB64).buffer);
+        const wavEst = 44 + pcm.length * 2;                  // 16bit 单声道 WAV 总字节
+        const rawLen = Math.floor(b64Part.length * 3 / 4);   // base64 还原原始字节近似
+        if (wavEst >= rawLen) return null;                   // 317次：转了更大 → 不转
+        return pcmF32ToWavBlob(pcm, resp.sampleRate || 16000);
+      }
+      // 318次（用户"asr送入模型之前，先判定后转而不是反过来"）：mime 先判定是否值得
+      //   转，判定不过就不解码——16k 16bit WAV 恒定 256kbps，有损格式（webm/opus/
+      //   mp3/m4a/aac/ogg）码率远低于此，转完几乎必扩增，317 次的 wavEst≥rawLen
+      //   校验却要解码完才能算（顺序反了）。故仅无损大格式（wav/flac，源码率恒高，
+      //   降 16k 单声道几乎必变小）走解码+转换；有损一律原始直送。wavEst 校验保留
+      //   在 toWavBlob 内作二次防线（防"高码率有损"等边缘）。
+      const LOSSLESS_MIMES = new Set(['audio/wav', 'audio/x-wav', 'audio/flac', 'audio/x-flac']);
+      const worthConverting = LOSSLESS_MIMES.has(mime);
+      let blob;
+      let fileName = 'audio.' + ext;
+      try {
+        blob = worthConverting ? await toWavBlob() : null;
+        if (blob) {
+          fileName = 'segment.wav';
+        } else {
+          // 317次：只压缩不扩增——转换产物不小于原始字节（或 mime 判定不值得转），回退原始直送
+          console.info(`[VocabRadar][sw] mime=${mime} 不转 16k WAV（${worthConverting ? '预估不小于原始' : '有损格式不解码'}），原始直送`);
+          blob = new Blob([b64ToUint8(b64Part)], { type: mime });
+        }
+      } catch (eConv) {
+        console.warn('[VocabRadar][sw] 音频预转换（解码+16k WAV）失败，回退原始直送:', eConv);
+        blob = new Blob([b64ToUint8(b64Part)], { type: mime });
+      }
+      // 313 批（2026-09-14 用户报「Network is slow — 持续了很久，不报错也不转入本地
+      // 推理」）：在线转写加 90s 超时——此前 fetch 无 signal，网络慢时无限挂起永不进
+      // catch，312 批的降级分支形同虚设。AbortController 中断后 AbortError 转可读
+      // 文案，与其它失败同样进外层 catch 降级 runLocalAsr
+      const ctrl = new AbortController();
+      const timer = setTimeout(() => ctrl.abort(), 90000);
+      let text;
+      try {
+        text = await llmTranscribeBlob(blob, cfg, learn, fileName, ctrl.signal);
+      } catch (err) {
+        if (err && err.name === 'AbortError') throw new Error('在线转写超时（90 秒）：网络过慢或端点无响应，改试本地模型推理');
+        throw err;
+      } finally {
+        clearTimeout(timer);
+      }
+      return { ok: true, text: String(text || '') };
+    } catch (e) {
+      const local = await runLocalAsr();
+      if (local.ok) return local;
+      return { ok: false, error: '在线转写失败（' + String(e.message || e) + '）；本地模型推理也失败（' + (local.error || 'unknown') + '）' };
+    }
   }
   if (kind === 'document') {
     // B2（2026-09-10）：文档解析——offscreen 侧 parse-doc.js（与 guide/parser.js 同源，
@@ -861,7 +946,8 @@ async function handleParseMaterial(kind, payload) {
     if (!out.ok) return { ok: false, error: out.error };
     return { ok: true, text: String(out.content || '').trim() };
   }
-  // 音频/视频：网站编排器已占位拦截，兜底明示（不静默成功）
+  // 312 批注：音频走上方 kind === 'asr' 分支（本地推理 / 在线失败自动降级本地）；
+  // 此处兜底=其余未支持类型明示报错（不静默成功）
   return { ok: false, error: 'kind not supported: ' + kind };
 }
 
@@ -903,8 +989,10 @@ function pcmF32ToWavBlob(f32, sampleRate) {
   return new Blob([buf], { type: 'audio/wav' });
 }
 
-async function llmTranscribeBlob(blob, cfg, lang, fileName) {
+async function llmTranscribeBlob(blob, cfg, lang, fileName, signal) {
   // 第二百一十六次：cfg 由调用方传入（ASR-LLM 独立配置 resolveLlmEngineCfg('asr') 产物）
+  // 313 批：新增第 5 形参 signal（AbortSignal，调用方可选）——fetch 透传，超时中断在线
+  // 请求；不传（在线分片 handleSegmentByLlm）行为不变
   if (cfg.format === 'anthropic') throw new Error('Anthropic 无音频转写端点，请改用 OpenAI 兼容来源');
   if (!cfg.baseUrl) throw new Error('Base URL 未配置');
   const url = cfg.baseUrl.replace(/\/+$/, '') + '/audio/transcriptions';
@@ -915,7 +1003,7 @@ async function llmTranscribeBlob(blob, cfg, lang, fileName) {
   fd.append('response_format', 'json');
   const headers = {};
   if (cfg.format !== 'free' && cfg.apiKey) headers['Authorization'] = 'Bearer ' + cfg.apiKey;
-  const resp = await fetch(url, { method: 'POST', headers, credentials: 'omit', cache: 'no-store', body: fd });
+  const resp = await fetch(url, { method: 'POST', headers, credentials: 'omit', cache: 'no-store', body: fd, signal });
   const raw = await resp.text();
   if (!resp.ok) throw new Error('HTTP ' + resp.status + ' ' + raw.slice(0, 300));
   try {

@@ -19,12 +19,12 @@
 // 第二百四十三次：补 primeTranslator——onWordHover 是 hover/点击高亮词两条翻译链的汇聚点。
 import { translate, primeTranslator } from '../../lib/translator.js';
 import { t } from '../../lib/i18n.js';
-import { isBalancedParens } from '../../lib/dict-clean.js';
+import { isBalancedParens, pickCleanShortTrans, splitTransLines } from '../../lib/dict-clean.js';
 import { getPhonetic } from '../../lib/phonetics.js';
 import {
-  thState, TOOLTIP_ID, formatStage, isContextValid, syncBodyFontSize, speak
+  thState, TOOLTIP_ID, formatStage, isContextValid, speak
 } from './core.js';
-import { buildPanelHTML, hidePanel, queryWordForPanel, renderLemmaInto, bindLemmaChipClick } from './panel.js';
+import { buildPanelHTML, hidePanel, queryWordForPanel, renderLemmaInto, bindLemmaChipClick, showInsertFeedback } from './panel.js';
 import { validateSpan, unwrapSingle, backfillSideAnnotation } from './scan.js';
 // 第一百七十一次：悬浮提示卡片底部 chat 按钮（结构复用 buildPanelHTML，故此处也需绑定）
 import { openChatPanel } from '../../lib/chat.js';
@@ -61,7 +61,9 @@ export function ensureTooltip() {
     max-width: 400px !important;
     padding: 0 !important;
     font-family: -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif !important;
-    font-size: inherit;
+    /* 309次第四轮：同 panel.js——hover 飘窗也挂 documentElement，inherit=16px 偏大，
+       定死 14px 与侧栏正文/右键面板同基准 */
+    font-size: 14px !important;
     line-height: 1.5 !important;
     display: none !important;
     pointer-events: auto !important;
@@ -92,7 +94,8 @@ export function ensureTooltip() {
 
 export function showTooltip(data, anchorRect, opts) {
   ensureTooltip();
-  syncBodyFontSize(thState.tooltip);
+  // 310次（用户"查询窗固定字号"）：删 syncBodyFontSize——同 panel.js，body 字号同步
+  //   会覆盖 ensureTooltip 的 14px !important，查询窗字号恒为 14px 基准。
   const shadow = thState.tooltip.shadowRoot;
   // 单词（正文显示；header 固定显示品牌，词阶在 header 右侧）
   shadow.querySelector('.word').textContent = data.word;
@@ -145,7 +148,8 @@ export function showTooltip(data, anchorRect, opts) {
   const trans = data.translations || [];
   const pending = !!(opts && opts.pending);
   if (trans.length > 0) {
-    shadow.querySelector('.trans-row').innerHTML = trans.map(tr => `<div>${tr}</div>`).join('');
+    // 310次（用户"查询卡片释义没有分拆"）：单条释义内按 | 词性段拆行（与 panel.js 同口径）
+    shadow.querySelector('.trans-row').innerHTML = splitTransLines(trans).map(row => `<div>${row}</div>`).join('');
   } else if (pending) {
     shadow.querySelector('.trans-row').innerHTML = '<span class="dots"><i></i><i></i><i></i></span>';
   } else {
@@ -167,6 +171,18 @@ export function showTooltip(data, anchorRect, opts) {
       console.warn('[VocabRadar][th-tooltip] 取网页正文失败，上下文退回单词:', err);
     }
     openChatPanel(data.word, 'word', ctxBody || data.word);
+  };
+  // 309次第二轮（用户"🗒️标签按钮没反应，无日志"根因修复）：悬浮提示与右键面板共用
+  //   卡片结构（buildPanelHTML → footer 含 .show-page 🗒️），但本函数此前只绑
+  //   .speak/.chat——🗒️ 在 hover 飘窗里可见却从未绑定 onclick（308 次引入的遗漏），
+  //   点击无任何反应也无 console 日志（用户实测症状）。现绑定插入：锚点 = 当前
+  //   hover 生词 span（thState.tooltipTargetEl，hover/click 入口均已 validateSpan 校验），
+  //   释义读本卡 .trans-row，插入结果走 showInsertFeedback 反馈行。
+  const showPageBtn = shadow.querySelector('.show-page');
+  if (showPageBtn) showPageBtn.onclick = (e) => {
+    e.stopPropagation();
+    // 309次第三轮：传当次 data.translations（每次 showTooltip 重绑，闭包捕获最新释义数组）
+    insertMeaningAfterTarget(data.translations);
   };
 
   thState.tooltip.style.display = 'block';
@@ -197,6 +213,81 @@ export function showTooltip(data, anchorRect, opts) {
   }
   thState.tooltip.style.left = tx + 'px';
   thState.tooltip.style.top = ty + 'px';
+}
+
+/**
+ * 309次第二轮：悬浮提示语境的 show in page——把本卡释义插回页面。
+ * 与 panel.js insertMeaningIntoPage（右键面板）的差异仅在锚点来源：
+ *   右键面板用 showContextPanel 保存的选区 Range；本函数用当前 hover 的
+ *   生词 span（thState.tooltipTargetEl，hover/click 入口 validateSpan 校验过），
+ *   单词 → 行内 span 续接在生词后（el.after），多词/长文（hover 场景几乎不出现）
+ *   → 块级 div 新起一行。插入节点带主题绿字色，与 panel.js 口径一致。
+ * 309次第三轮（用户"插入的释义应当是短释义"+"不要Inserted into page提示"）：
+ *   插入文本改取 translations 经 pickCleanShortTrans 的首条短义项（与侧邻注释
+ *   同口径），回退 .trans-row 首行；成功不再显示反馈行（console 可查），失败保留。
+ * @param {string[]} [translations] 当次查询释义数组（showTooltip 闭包捕获）
+ */
+function insertMeaningAfterTarget(translations) {
+  const shadow = (thState.tooltip && thState.tooltip.shadowRoot) || null;
+  if (!shadow) return;
+  const q = (sel) => shadow.querySelector(sel);
+  // 310次（用户裁定）：回滚为短释义首条——pickCleanShortTrans（同 panel.js 口径，
+  //   "只插一段翻译的前几个字"即短释义口径，是预期行为非截断 bug）。
+  let text = pickCleanShortTrans(translations);
+  if (!text) {
+    const transRow = q('.trans-row');
+    const firstLine = transRow && transRow.firstElementChild ? transRow.firstElementChild.textContent : '';
+    text = String(firstLine || (transRow ? transRow.textContent : '') || '').trim();
+  }
+  if (!text) {
+    console.warn('[VocabRadar][th-tooltip] show in page：释义未就绪，跳过插入');
+    showInsertFeedback(q, false, t('th.insertNoDef'));
+    return;
+  }
+  const el = thState.tooltipTargetEl;
+  if (!el || !el.isConnected) {
+    console.warn('[VocabRadar][th-tooltip] show in page：生词锚点已失效，跳过插入');
+    showInsertFeedback(q, false, t('th.insertNoAnchor'));
+    return;
+  }
+  try {
+    const word = String(el.dataset.word || '');
+    const tokens = word.split(/[\s\u3000]+/).filter((s) => /[A-Za-z\u00C0-\u024F]/.test(s));
+    const isMultiWord = tokens.length > 1 || word.length > 24;
+    const node = document.createElement(isMultiWord ? 'div' : 'span');
+    node.className = 'beaver-page-insert';
+    // 318次：插入翻译沿用"原文"样式（用户裁定）——317 次的"纯继承"继承的是插入点
+    //   后文样式，原文与后文字体/字色不同时会错。改为锁定 el 父元素（原文容器，
+    //   标注 span 之外）computedStyle 五项（字色/字族/字号/斜体/粗细）内联。
+    //   （panel.js show in page 同款逻辑，锁选区起点）
+    node.style.cssText = (isMultiWord ? 'margin-top:4px;' : 'margin-left:2px;');
+    const srcEl = el.parentElement;
+    if (srcEl && srcEl.isConnected) {
+      const cs = getComputedStyle(srcEl);
+      node.style.color = cs.color;
+      node.style.fontFamily = cs.fontFamily;
+      node.style.fontSize = cs.fontSize;
+      node.style.fontStyle = cs.fontStyle;
+      node.style.fontWeight = cs.fontWeight;
+    }
+    node.textContent = isMultiWord ? text : ` ${text}`;
+    // 319次：el.after 会把译文插进"词 span 与紧邻注释（.beaver-side-ann）"中间，
+    //   形成夹心（词-新译文-旧注释）重复观感。紧邻是注释时排到注释之后，与
+    //   panel.js 路径 A 同规则。
+    const annSib = el.nextElementSibling;
+    if (annSib && annSib.classList && annSib.classList.contains('beaver-side-ann')) {
+      annSib.parentNode.insertBefore(node, annSib.nextSibling);
+    } else {
+      el.after(node);
+    }
+    console.log(`[VocabRadar][th-tooltip] show in page：已插入 "${word}" 短释 → ${text.slice(0, 40)}`);
+    // 309次第四轮：成功不显示反馈行（用户裁定），失败保留。
+    // 315次（用户"撤销任何禁止插入"）：309 次第五轮"成功后禁用本卡按钮"撤销——
+    //   按钮永远可点，允许重复插入（与 panel.js 同口径，不做任何阻断）。
+  } catch (e) {
+    console.error('[VocabRadar][th-tooltip] show in page 插入失败:', e);
+    showInsertFeedback(q, false, `${t('th.insertFail')}${e && e.message ? `：${e.message}` : ''}`);
+  }
 }
 
 // 反思（2026-07-14 #98 → 2026-07-26 修正）：

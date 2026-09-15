@@ -29,7 +29,9 @@ import { getBilibiliAudioInfo } from '../../lib/bilibili-audio.js';
 import { b64ToU8 } from '../../lib/b64.js';
 import { log } from './logger.js';
 
-// ⬇️下载音频按钮（第九十六次，替代弹幕按钮）：保存当前视频最高音质原格式音轨文件
+// ⬇️下载音频按钮（第九十六次，替代弹幕按钮）：保存当前视频原格式音轨文件
+// 315次（用户"音频下载识别只需要模型支持的精度"）：音轨选择由最高音质改最低带宽——
+//   下载即用于识别（Whisper 16kHz 重采样），低码率不影响精度，体积/耗时大幅下降。
 // B站：getBilibiliAudioInfo() 取 urls[]（主+备用）；YouTube：youtube-audio.js（ytdl 式）按需动态 import；
 // 经 SW FETCH_AUDIO_META + FETCH_AUDIO_RANGE 分块下载（进度条显示百分比），Blob + <a download>
 // 锚点保存——无需 chrome.downloads 权限。文件名=视频标题+原容器扩展名。

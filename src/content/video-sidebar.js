@@ -289,8 +289,12 @@ async function loadSettings() {
       annotateRepeat: false,
       // 反思（2026-08-13 第五十次）：引导页侧栏注释样式默认 none
       // 280次：videoAnnotationStyle 复活——三功能独立选样式（多对多），与共享池同 id 集
-      annotationStyle: 'none',
-      videoAnnotationStyle: 'none',
+      // 309次第五轮（用户四栏统一裁定）：兜底默认改 'green-background'（storage 空时生效）
+      // 318次：'green-background' 是代指常量 ANN_DEFAULT_STYLE 的镜像兜底（classic
+      //   script 不便 import styles.js；代指=常量锚定无指针键，版本变化才改常量值，
+      //   锚点见 lib/styles.js）
+      annotationStyle: 'green-background',
+      videoAnnotationStyle: 'green-background',
       // 301次：个性化/用户条目缓存（规则表刷新用）
       annotationCustom: null,
       annotationUserStyles: [],
@@ -798,10 +802,10 @@ function bindEvents(options = {}) {
   };
   overlayToggleBtn.addEventListener('click', (e) => {
     e.stopPropagation();
-    // 反思（2026-08-21 第九十次）：默认不选——277次（用户"视频叠加字幕默认选中"）改默认开：
-    //   未设置视为开启（!== false），与引导页默认一致，勾选态不再不同步
-    chrome.storage.local.get({ overlayEnabled: true }, (res) => {
-      const next = res.overlayEnabled !== false;
+    // 反思（2026-08-21 第九十次）：默认不选——277次（用户"视频叠加字幕默认选中"）改默认开；
+    //   308次（用户"视频叠加字幕默认关"）改回默认关：未设置视为关闭（=== true）
+    chrome.storage.local.get({ overlayEnabled: false }, (res) => {
+      const next = res.overlayEnabled === true;
       const toggled = !next;
       // 第二百七十次：停用规则否决——全局偏好照写 storage，但本页生效值被
       //   「视频叠加字幕」停用规则压制（按钮态按生效值显示，忠实反映现状）
@@ -815,8 +819,13 @@ function bindEvents(options = {}) {
     });
   });
   // 恢复上次叠加字幕开关（第二百七十次：生效值 AND 停用规则否决位）
+  // 309次第四轮（用户"默认视频叠加字幕关着，但播放时候发现依旧开启"）根因实锤：
+  //   308 次默认关口径（未设置视为关闭 === true）只改了 toggle/停用规则监听两处，
+  //   本处恢复上次开关仍是旧口径 res.overlayEnabled !== false——chrome.storage.local.get
+  //   不带默认值对象时，storage 无键返回 undefined，undefined !== false === true → 默认开。
+  //   修为 === true（与 guide.js:461 / video-sidebar.js:804/908 同口径）。
   chrome.storage.local.get('overlayEnabled', (res) => {
-    const on = res.overlayEnabled !== false && !_overlayRuleSup;
+    const on = res.overlayEnabled === true && !_overlayRuleSup;
     _overlayEnabled = on;
     overlaySetEnabled(on);
     applyOverlayToggleBtn(on);
@@ -885,10 +894,11 @@ try {
       _videoLearnLang = changes.learnLanguage.newValue || 'en';
     }
     // 反思（2026-08-13 第五十二次）：视频叠加字幕开关跨标签同步（引导页/其它标签切换时更新按钮态）
-    // 反思（2026-08-21 第九十次）：默认不选——277次改默认开（!== false），与引导页一致
+    // 反思（2026-08-21 第九十次）：默认不选——277次改默认开（!== false）；
+    //   308次（用户"视频叠加字幕默认关"）改回默认关（=== true），与引导页一致
     // 第二百七十次：生效值 AND 停用规则否决位（规则命中时 storage 开关值仅作偏好保存）
     if (area === 'local' && changes.overlayEnabled) {
-      const on = changes.overlayEnabled.newValue !== false && !_overlayRuleSup;
+      const on = changes.overlayEnabled.newValue === true && !_overlayRuleSup;
       _overlayEnabled = on;
       overlaySetEnabled(on);
       const btn = _root.querySelector('#beaver-overlay-toggle');
@@ -902,10 +912,9 @@ try {
         _overlayRuleSup = sup.overlay === true;
         if (was === _overlayRuleSup) return;
         chrome.storage.local.get('overlayEnabled', (res) => {
-          // 300次（用户"Subtitle Hints on Video默认应当是开"）：与本文件 798/813/885 行
-          //   同口径，未设置视为开（!== false）；此前此处误用 === true，未设置用户一切
-          //   停用规则就被关叠加字幕
-          const on = res.overlayEnabled !== false && !_overlayRuleSup;
+          // 300次：与本文件 toggle/启动/监听三处同口径；308次（用户"视频叠加字幕默认关"）
+          //   全链路改回"未设置视为关"（=== true）——300次注已失效，历史见本段注释
+          const on = res.overlayEnabled === true && !_overlayRuleSup;
           _overlayEnabled = on;
           overlaySetEnabled(on);
           const btn = _root.querySelector('#beaver-overlay-toggle');
@@ -2060,8 +2069,11 @@ async function runVideoQuery(text) {
   const host = document.createElement('div');
   box.appendChild(host);
   const shadow = host.attachShadow({ mode: 'open' });
+  // 309次第六轮（用户"查询窗口只有 https://localhost:3001 字号才会偏大"）：本内嵌卡
+  //   与文本侧栏 query 标签同构——嵌套 host 被 `#beaver-sidebar * { font-size: inherit }`
+  //   锁死继承侧栏宿主 16px，卡根节点写死 14px 与右键面板/tooltip 同基准（同修详见 ws/ui.js）
   shadow.innerHTML = '<style>' + buildPanelCss() + '</style>'
-    + '<div class="beaver-query-card" style="padding:10px 12px;background:#fbfdf9;border-radius:8px;">'
+    + '<div class="beaver-query-card" style="padding:10px 12px;background:#fbfdf9;border-radius:8px;font-size:14px;line-height:1.5;">'
     + buildCardInnerHTML() + '</div>';
   bindLemmaChipClick(shadow);
   try {

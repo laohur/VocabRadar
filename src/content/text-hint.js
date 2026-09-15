@@ -198,8 +198,9 @@ async function _hintBoot() {
       },
       applyStyle: (id) => {
         markManual();
-        chrome.storage.local.set({ textStyle: id || 'none' });
-        if (_impl) _impl.applyTextStyleClass(id || 'none');
+        // 318次：'none' 哨兵非法——空串表示未启用文本样式。
+        chrome.storage.local.set({ textStyle: id || '' });
+        if (_impl) _impl.applyTextStyleClass(id || '');
       }
     };
 
@@ -335,7 +336,7 @@ async function _hintBoot() {
     window.__beaverHintBoot = {
       at: Date.now(),
       textHintEnabled: !!settings.textHintEnabled,
-      textStyle: settings.textStyle || 'none',
+      textStyle: settings.textStyle || '',
       ok: null,
       error: null
     };
@@ -345,7 +346,8 @@ async function _hintBoot() {
       console.log('[VocabRadar][text-hint] init: 停用规则命中（网页提示），不启动提示');
     }
     // 文本样式差异化（粗细/斜体/下划线/阴影等）单独应用
-    if (settings.textStyle && settings.textStyle !== 'none') {
+    // 318次：哨兵 'none' 改 truthy 判定（空串=未启用）。
+    if (settings.textStyle) {
       _impl.applyTextStyleClass(settings.textStyle);
     }
     // 301次：个性化/用户条目文本规则初始刷新（提示被停用规则拦下时也刷新，查询面板同样式）
@@ -536,6 +538,24 @@ async function _hintBoot() {
       _lastClickY = e.clientY;
     }, true);
 
+    // 320次：选区文本净化——右键菜单 msg.text 来自 SW 的 selectionText，会把已插入
+    //   页面的 .beaver-page-insert 译文 / .beaver-side-ann 注释文本一并囊括（用户反馈
+    //   "先翻译一个词再选中一段翻译会让之前翻译囊括进来污染"）。从实时选区
+    //   cloneContents 复制到离屏容器，剔除扩展插入节点后取 textContent；选区已丢失
+    //   或剔除后为空则返回 ''，由调用方回落 msg.text。
+    function _cleanSelectionText() {
+      try {
+        const sel = window.getSelection();
+        if (!sel || sel.rangeCount === 0) return '';
+        const range = sel.getRangeAt(0);
+        if (!range.startContainer || !range.startContainer.isConnected) return '';
+        const holder = document.createElement('div');
+        holder.appendChild(range.cloneContents());
+        holder.querySelectorAll('.beaver-page-insert, .beaver-side-ann').forEach((n) => n.remove());
+        return String(holder.textContent || '').replace(/\s+/g, ' ').trim();
+      } catch (_) { return ''; }
+    }
+
     // 右键菜单查词消息
     // 272次：SHOW_CONTEXT_PANEL 由 Query 可用性门控，不再由网页提示负责——提示停了查询仍可用；
     //   OPEN_QUERY_BAR——右键菜单无选中文本时弹查询栏输入（转发 window 事件给文本侧栏 UI）。
@@ -547,8 +567,11 @@ async function _hintBoot() {
             console.log('[VocabRadar][text-hint] 右键查询被开关/停用规则关闭，忽略');
             return;
           }
+          // 320次：净化后查询——剥离已插入译文/注释，避免污染查询文本；净化为空
+          //   （选区已丢/全被剔除）回落原始 msg.text，保证功能不中断
+          const cleanText = _cleanSelectionText() || msg.text;
           // w4：panel.js 已改动态转发，catch 打日志防加载失败被静默吞掉
-          _impl.showContextPanel(msg.text, _lastClickX, _lastClickY)
+          _impl.showContextPanel(cleanText, _lastClickX, _lastClickY)
             .catch((e) => console.error('[VocabRadar][text-hint] 查词面板加载失败', e));
         });
       }
@@ -632,10 +655,18 @@ function _hintGetSettings() {
     hintSideAnnotation: false,
     hintAnnotationBg: '#ffffff',
     hintAnnotationFg: '#2e6b43',
-    // 文本样式预设（第五十一次）：'none' 或 TEXT_STYLES 中的 id
-    textStyle: 'none',
+    // 文本样式预设（第五十一次）：TEXT_STYLES 中的 id（318次：'none' 非法，未启用=空串）
+    // 308次：默认改绿色下划线样式（与 guide.js defaults 同步，网页提示端兜底须一致）
+    // 309次第二轮：名字定稿 'green-underline'（Green Underline，用户裁定），颜色主题化不变
+    // 309次第五轮（用户四栏统一裁定）：默认改 'green-background'（生词绿底白字），与 guide.js 一致
+    // 318次：默认语义=代指常量 ANN_DEFAULT_STYLE 的锚定（styles.js 唯一真源，版本变化才改
+    //   常量值，无 storage 指针键）；本文件 classic script 不便 import styles.js，此字面量
+    //   是常量的镜像兜底（仅 storage 全空时生效），真值锚点见 lib/styles.js
+    textStyle: 'green-background',
     // 279次：注释样式候选池（三处共享）
-    annotationStyle: 'none',
+    // 309次第五轮（用户四栏统一裁定）：默认 'green-background'，与 guide.js defaults 同步
+    // 318次：同上——'green-background' 是 ANN_DEFAULT_STYLE 常量的镜像兜底，非写死绝对回落
+    annotationStyle: 'green-background',
     // 280次：侧邻注释模板（annBrackets 布尔退役；
     //   classic script 不便 import styles.js，默认值/迁移字面量与 lib/styles.js 保持一致）
     // 284次：默认组合 {target} {annotation}（空格分隔，与 styles.js DEFAULT_ANN_TEMPLATE 同步）

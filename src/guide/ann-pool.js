@@ -10,7 +10,7 @@ import { $, m, getLangState, markOwnWrite, log, sanitizeStyleId } from './shared
 import {
   POOL_STYLES, VANN_TO_ANN_MIGRATION, wordDecl, annDecl,
   DEFAULT_ANN_TEMPLATE, splitAnnTemplate, styleLabel, resolveAnnEntry,
-  annCustomCssSections, poolPaint
+  annCustomCssSections, poolPaint, ANN_DEFAULT_STYLE
 } from '../lib/styles.js';
 import { getAnnotations } from '../lib/annotator.js';
 import { ensureReady } from '../lib/dictionary.js';
@@ -42,7 +42,8 @@ export function bindAnnTemplate() {
 
 // 280 次：候选池当前选择缓存（四键指派状态 + 注释模板；renderAll 回填）。
 //   281次：新增第四键 videoOverlayAnnStyle（视频中字幕的注释行样式）。
-//   textStyle/annotationStyle/videoAnnotationStyle/videoOverlayAnnStyle 均指向 POOL_STYLES 的样式 id（'none'=默认配色）。
+//   318次：四键初值=默认代指常量 ANN_DEFAULT_STYLE（default 是代指，绝对值唯一真源
+//   在常量，版本变化才改常量值；317 次的 storage 指针键 annDefaultStyle 撤销）。
 // 283次：注释模板分键——annTemplate 只归 textStyle 栏（text-hint.js 消费），其余三栏各用
 //   独立键（webAnnTemplate=文本侧栏、videoAnnTemplate=视频侧栏、videoOverlayAnnTemplate=
 //   叠加字幕注释行），"Annotation template 只会影响当前选中的注释栏目"。
@@ -53,7 +54,8 @@ const ANN_TPL_KEYS = {
   videoOverlayAnnStyle: 'videoOverlayAnnTemplate'
 };
 const _poolSel = {
-  textStyle: 'none', annotationStyle: 'none', videoAnnotationStyle: 'none', videoOverlayAnnStyle: 'none',
+  textStyle: ANN_DEFAULT_STYLE, annotationStyle: ANN_DEFAULT_STYLE,
+  videoAnnotationStyle: ANN_DEFAULT_STYLE, videoOverlayAnnStyle: ANN_DEFAULT_STYLE,
   annTemplate: DEFAULT_ANN_TEMPLATE,
   webAnnTemplate: DEFAULT_ANN_TEMPLATE, videoAnnTemplate: DEFAULT_ANN_TEMPLATE, videoOverlayAnnTemplate: DEFAULT_ANN_TEMPLATE
 };
@@ -124,8 +126,10 @@ export function renderPoolGrid() {
     { id: 'reflow', key: 'poolPaintReflow' }
   ];
   const entries = [];
+  // 316次（用户"删除none default样式。都已经指定了默认样式，回落至此，你咋还能回落到其他样式"）：
+  //   none（Default）卡删除——默认指派即 green-background（老默认绿底），指派/取消/
+  //   脏值回落全部落它，无独立的"默认配色态"卡。315 次的恢复说明作废。
   for (const item of POOL_STYLES) {
-    if (item.id === 'none') continue;
     entries.push({ item, kind: 'builtin' });
   }
   // 301次：个性化卡（Custom 行参数的实时样例；点击选中 custom，与内置卡同逻辑）
@@ -138,6 +142,10 @@ export function renderPoolGrid() {
     head.textContent = m(g.key);
     grid.appendChild(head);
     const inGroup = entries.filter(({ item }) => poolPaint(item) === g.id);
+    // 316次（用户"样式池组内样式顺序改为名称排列"）：组内按当前语言名称排序
+    //   （zh→拼音序 / en→字母序，Intl.Collator 地区感知；custom/用户卡用其 label 一起排）。
+    const coll = new Intl.Collator(getLangState() === 'zh' ? 'zh' : 'en');
+    inGroup.sort((a, b) => coll.compare(styleLabel(a.item, getLangState()), styleLabel(b.item, getLangState())));
     if (!inGroup.length) {
       const em = document.createElement('div');
       em.className = 'pool-group-empty';
@@ -205,7 +213,7 @@ export function renderPoolNote() {
 }
 
 // 281次：左栏内联复制卡（用户裁定"选中之后，直接把卡片复制过去"）——把池卡（样例+名称）
-//   原样复制进左栏选中项的 .pool-item-demo（未指派/回落 none 时清空显示占位）。
+//   原样复制进左栏选中项的 .pool-item-demo（未指派时清空显示占位）。
 //   复制实现：从池网格中找同 id 卡，cloneNode 其 demo 与 label（"直接把卡片复制过去"）。
 export function renderPoolSideDemos() {
   const grid = $('poolStyleGrid');
@@ -214,7 +222,9 @@ export function renderPoolSideDemos() {
     if (!box) return;
     box.innerHTML = '';
     const id = _poolSel[item.dataset.target];
-    if (!id || id === 'none') return;
+    // 318次：none 卡已于 316 次删除（'none' 作为样式值非法）；当前语义=指派任何具体
+    //   样式即复制池卡，仅未指派（!id）时保持占位空显示。
+    if (!id) return;
     const src = grid ? grid.querySelector('.style-card[data-style="' + id + '"]') : null;
     if (!src) return;
     // 307次：demo 内已含名称行（.card-label/.card-label-input），clone 后剥除——
@@ -351,7 +361,9 @@ async function refreshAnnSample() {
   }
 }
 
-// 281次：池卡点击指派——点池卡=指派给左栏选中栏（再点同卡取消，回落 'none'）。
+// 281次：池卡点击指派——点池卡=指派给左栏选中栏。
+//   318次：再点同卡取消，回落默认代指常量 ANN_DEFAULT_STYLE（default 是代指，绝对值
+//   唯一真源在常量，版本变化才改常量值）。
 //   Web（textStyle）联动写 hintFirstBg/hintFirstFg（池条目 wordBg/wordFg 或默认绿白配色）。
 //   更新策略（用户要求"不重渲染"）：只切该卡 active 类 + 刷新左栏复制卡，不重建网格。
 export function bindPoolGrid() {
@@ -362,13 +374,14 @@ export function bindPoolGrid() {
     const card = e.target.closest('.style-card');
     if (!card) return;
     const feat = _poolTarget;
-    const next = (_poolSel[feat] === card.dataset.style) ? 'none' : card.dataset.style;
+    const next = (_poolSel[feat] === card.dataset.style) ? ANN_DEFAULT_STYLE : card.dataset.style;
     _poolSel[feat] = next;
     // 301次：指派写 storage 即打回声戳——本页已即时切类，跳过回声全量重建（281"不重渲染"本意）。
     markOwnWrite();
     if (feat === 'textStyle') {
       // 301次：联动解析改统一入口（custom/用户条目亦可派生前后景）
-      const st = next === 'none' ? null : resolveAnnEntry(next, buildAnnCustomObj(), _annUserStyles);
+      // 318次：恢复三参签名；池外 id 回落由 resolveAnnEntry 内部锚定 ANN_DEFAULT_STYLE
+      const st = resolveAnnEntry(next, buildAnnCustomObj(), _annUserStyles);
       chrome.storage.local.set({
         textStyle: next,
         hintFirstBg: (st && st.wordBg) || '#2e6b43',
@@ -378,7 +391,7 @@ export function bindPoolGrid() {
       chrome.storage.local.set({ [feat]: next }, () => log(feat + '=', next));
     }
     // 301次：点用户卡回填个性化行（仿字幕；custom 卡即当前控件参数，无需回填）
-    if (next !== 'none' && next !== 'ann-custom') {
+    if (next !== 'ann-custom') {
       const us = _annUserStyles.find((s) => s && s.id === next);
       if (us) backfillAnnCustomFrom(us);
     }
@@ -790,14 +803,16 @@ function doAnnCustomBackfill(res) {
   updateAnnCustomSideCard();
 }
 
-// 301次：删除用户自建注释样式（选中它时回落 'none'）。
+// 301次：删除用户自建注释样式（选中它时回落默认卡）。
+//   318次：回落改默认代指常量 ANN_DEFAULT_STYLE（317 次的指针重置块撤销——default 是
+//   代指不是指针，没有"被删卡恰是默认指向"一说，常量本身永在池内）。
 function deleteAnnUserStyle(id) {
   _annUserStyles = _annUserStyles.filter((s) => s && s.id !== id);
   const patch = { annotationUserStyles: _annUserStyles };
   for (const k of ['textStyle', 'annotationStyle', 'videoAnnotationStyle', 'videoOverlayAnnStyle']) {
     if (_poolSel[k] === id) {
-      _poolSel[k] = 'none';
-      patch[k] = 'none';
+      _poolSel[k] = ANN_DEFAULT_STYLE;
+      patch[k] = _poolSel[k];
     }
   }
   markOwnWrite();
@@ -808,22 +823,29 @@ function deleteAnnUserStyle(id) {
 
 // 302次：池设定同步（renderAll 调用；清洗＋模板＋样例＋个性化回填＋绑定）。
 export function syncPoolSettings(res) {
+  // 309次第二轮（用户"Theme Underline命名错了，正确是Green Underline"）：
+  //   名字定稿回 'green-underline'——上一轮曾向 'theme-underline' 迁移是错误方向，
+  //   已升级实测版用户的 storage 可能已被洗成 'theme-underline'，此处反向迁回，
+  //   保已选样式不丢；原生 'green-underline' 直通无需迁移。
+  if (res.textStyle === 'theme-underline') res.textStyle = 'green-underline';
   // 281次：共享池四键回填（textStyle/annotationStyle/videoAnnotationStyle/videoOverlayAnnStyle）——
-  //   sanitizeStyleId 洗脏值（池外 id 回落 'none' 并回写）；videoAnnotationStyle 特殊：
+  //   sanitizeStyleId 洗脏值（池外 id 回落并回写）；videoAnnotationStyle 特殊：
   //   旧残留若不在池内，经 VANN_TO_ANN_MIGRATION 映射后写回自身（280 次复活语义：
   //   池内同名保留，池外经映射表回落，不再并入 annotationStyle、不再 remove 键）。
   //   第四键 videoOverlayAnnStyle：视频中字幕的注释行样式（无迁移，残留即回落）。
+  // 318次：回落目标统一为默认代指常量 ANN_DEFAULT_STYLE（sanitizeStyleId 第三参 +
+  //   映射表 miss 兜底 + 回写差值判断；default 是代指，317 次的指针键撤销）。
   // 301次：用户自建注释样式载入（非法条目过滤；残留 custom/用户 id 放行，见下）
   _annUserStyles = Array.isArray(res.annotationUserStyles)
     ? res.annotationUserStyles.filter((s) => s && typeof s.id === 'string' && s.id.indexOf('ann-user-') === 0)
     : [];
   const annStyleOk = (id) => id === 'ann-custom' || _annUserStyles.some((s) => s.id === id);
   for (const key of ['textStyle', 'annotationStyle', 'videoAnnotationStyle', 'videoOverlayAnnStyle']) {
-    let val = (res[key] && annStyleOk(res[key])) ? res[key] : sanitizeStyleId(POOL_STYLES, res[key] || 'none');
+    let val = (res[key] && annStyleOk(res[key])) ? res[key] : sanitizeStyleId(POOL_STYLES, res[key], ANN_DEFAULT_STYLE);
     if (key === 'videoAnnotationStyle' && res[key] && !POOL_STYLES.some((s) => s.id === res[key]) && !annStyleOk(res[key])) {
-      val = VANN_TO_ANN_MIGRATION[res[key]] || 'none';
+      val = VANN_TO_ANN_MIGRATION[res[key]] || ANN_DEFAULT_STYLE;
       chrome.storage.local.set({ videoAnnotationStyle: val });
-    } else if (val !== (res[key] || 'none')) {
+    } else if (val !== (res[key] || ANN_DEFAULT_STYLE)) {
       chrome.storage.local.set({ [key]: val });
     }
     _poolSel[key] = val;

@@ -26,7 +26,8 @@
 // 路径 B — captureStream 回退（非 B站）：
 //   1. video.captureStream() 获取 MediaStream
 //   2. AudioContext + ScriptProcessorNode 直接提取原始 PCM（无编码/解码）
-//   3. setInterval 按 _segmentSec 截取段，OfflineAudioContext 重采样到 16kHz
+//   3. setInterval 按 _realtimeSegSec 截取段（324次：原共用 _segmentSec，实时路径拆分恢复 10s），
+//      OfflineAudioContext 重采样到 16kHz
 //   4. 送 Whisper 识别（实时采集，音频完整无间隙）
 //   反思（2026-07-05）：MediaRecorder 编码 webm/opus 后再 decodeAudioData 解码，
 //   仅首段含容器头，后续段无头导致 EncodingError。改用 ScriptProcessorNode 直接取 PCM。
@@ -64,7 +65,15 @@ let _currentVideoKey = null;
 let _running = false;
 
 // === 配置 ===
-let _segmentSec = 10;              // 识别分段长度（秒），从 config asrSegmentSec 读取。控制每次送 Whisper 的音频段长
+// 320次（用户："每30秒送入识别"）：默认 10→30。config.json asrSegmentSec 本就是 30，
+//   真漏口是这里默认 10＋storage 遗留覆盖（loadSegmentConfig 已同步删除覆盖，
+//   循 102 次 asrFirstChunkSec config-only 先例）。
+let _segmentSec = 30;              // 识别分段长度（秒），从 config asrSegmentSec 读取。控制每次送 Whisper 的音频段长
+// 324次（用户："能下载音频的时候你30秒送入模型推理，实时识别的时候还是录10秒就送"）：
+//   _segmentSec 是下载/预识别路径的段长（保持 30s）；captureStream 回退路径（实时录制）
+//   曾与它共用同一变量，320 次把默认 10→30 时误伤了实时节奏——现拆出独立常量恢复 10s。
+//   实时路径段长硬编码 10s 不读 config（如需可配再议）。
+let _realtimeSegSec = 10;          // 实时录制（captureStream 回退）路径的识别分段长度（秒）
 let _cacheSegmentSec = 60;          // 缓存分段长度（秒），从 config asrCacheSegmentSec 读取。控制缓存写入粒度
 let _cacheAsr = false;              // 是否缓存 ASR 结果
 // 第九十五次：首段快速处理时长（秒）。借鉴 videoseek processVideo 的 segmentDuration=30——
@@ -82,11 +91,30 @@ let _firstChunkSec = 30;
 let _biliDuration = 0;             // 已就绪音频可连续覆盖的时长终点（视频秒）。流式时随批推进
 let _biliAudioCtx = null;          // 用于解码的 AudioContext
 let _biliLoopAborted = false;      // B站识别/下载循环中止标志
-let _biliPcmMap = [];              // [{mediaTime:number, pcm:Float32Array|null}] 按 mediaTime 升序；pcm=null 表示已释放
+// 320次：entry 扩展为 {mediaTime, pcm, u8, dur}——pcm=解码缓存（16k 单声道，释放后置 null）；
+//   u8=压缩片段字节（fMP4 moof 片段，可按需再解码，不随释放丢失）；dur=几何时长（秒，
+//   释放后仍参与覆盖/衔接计算，替代旧版按 pcm 长度反推）。
+let _biliPcmMap = [];              // [{mediaTime,pcm,u8,dur}] 按 mediaTime 升序
 let _biliPcmLen = 0;               // 已就绪 PCM 总采样数（诊断用）
 let _biliStreamDone = false;       // 后台下载是否已结束（EOF/失败/中止）
 let _biliInitBlock = null;         // fMP4 初始化块（Uint8Array，第一个 moof 之前的字节）
 let _biliTimescale = 0;            // mdhd 时标（刻度/秒），tfdt 换算用
+// 320次：压缩缓存复用与方法记忆（用户指令："压缩为opus 16k单声道缓存，每30秒送入识别。
+//   会话中应当记住各种方法结果，失败的方法后置，用未失败的方法"）
+//   - 压缩缓存：映射表 entry 增加压缩片段字节 u8 与几何时长 dur；已识别段释放解码 PCM
+//     （releaseBiliPcmBelow）后仍可由 u8 按需再解码（重新识别不重下载不重解码全量）。
+//     B站音轨本身即压缩编码（AAC/Opus），缓存原始压缩字节即"压缩缓存"，按需解码为
+//     16kHz 单声道送识别，无需二次编码。
+//   - _compVideoKey/_biliFullyCached/_hasVolatilePcm：复用判据三标志（同视频＋整部已
+//     缓存＋无易失 PCM）。易失＝条目只有 pcm 没有 u8（仅录制路径；322 次起非 fMP4 整
+//     文件整解带 u8Whole 条目可按需再解，不再易失），释放后不可恢复，复用会导致取到
+//     全零样本，必须阻断。
+//   - _methodFails：本会话各准备方法失败计数，prepareBilibiliAudio 按升序尝试（失败
+//     方法后置），成功清零。
+let _compVideoKey = null;
+let _biliFullyCached = false;
+let _hasVolatilePcm = false;
+const _methodFails = { stream: 0, legacy: 0, capture: 0 };
 // 第九十六次：播放闸门状态。_recogFrontier = 主方向已识别终点（视频秒）；
 // sidebar 的 timeupdate 检查 video.currentTime >= frontier - ε 时暂停并显示缓冲，
 // frontier 推进越过 currentTime 后自动续播。字幕永远≥播放位置。
@@ -211,7 +239,7 @@ export async function startASR(opts) {
         // 处理识别结果：提取 chunks 并调用 onText
         handleASRResponse(msg);
         // 第一百零二次：段结果诊断入时间线（ch=音频到达通道 samples=样本数 peak=振幅）
-        pushStatusLocal('seg-recv', '段[' + Math.round(msg.start) + '-' + Math.round(msg.end) + 's] ch=' + (msg.ch || '?') +
+        pushStatusLocal('seg-recv', 'seg[' + Math.round(msg.start) + '-' + Math.round(msg.end) + 's] ch=' + (msg.ch || '?') +
           ' samples=' + (msg.samples ?? '?') + ' peak=' + (typeof msg.peak === 'number' ? msg.peak.toFixed(3) : '?') +
           ' textLen=' + ((msg.text || '').length));
         // 缓存：合并/新增段，累积超 _cacheSegmentSec 阈值时写入 storage
@@ -279,16 +307,19 @@ export async function startASR(opts) {
     // 修复旧版「模型加载+下载期间视频照常跑几十秒 → 字幕永远追不上」。
     _recogDoneAll = false;
     _recogFrontier = Math.floor(audioInfo.startSec / _segmentSec) * _segmentSec;
-    pushStatusLocal('gate', '先识别 ' + _firstChunkSec + 's 再播放', { frontier: _recogFrontier });
+    pushStatusLocal('gate', 'recognize ' + _firstChunkSec + 's before playback', { frontier: _recogFrontier });
     biliRecognizeLoop(audioInfo.startSec, audioInfo.totalRecogSegs).catch((e) => {
       console.warn('[VocabRadar][asr-client][' + _ts() + '] B站识别循环异常:', e);
       if (_onError) { try { _onError(e); } catch (e2) { /* ignore */ } }
     });
   } else {
-    pushStatusLocal('fallback', 'B站预识别不可用，回退到 captureStream');
+    pushStatusLocal('fallback', 'Bili pre-recognition unavailable, falling back to captureStream');
+    // 320次：capture 计数入 _methodFails（诊断用——capture 无同层替代方法，仅记录成败）。
     try {
       await startFallbackCapture(videoEl);
+      _methodFails.capture = 0;
     } catch (e) {
+      _methodFails.capture++;
       stopASR();
       throw new Error('音频采集启动失败: ' + String(e.message || e));
     }
@@ -344,12 +375,17 @@ export function stopASR() {
 
   // 停止 B站路径（第九十五次：清流式 PCM 映射与下载状态，后台循环经 _biliLoopAborted 退出；
   //   第九十六次：闸门状态一并复位，sidebar 收到 frontier=-1 即解除缓冲逻辑）
-  _biliPcmMap = [];
-  _biliPcmLen = 0;
-  _biliDuration = 0;
+  // 320次：stop 不再清空映射表/init 块/timescale/复用三标志——压缩片段字节 u8 是可恢复
+  //   的「压缩缓存」，重新识别时 prepareBilibiliAudio 命中复用判据直接复用（不重下载）；
+  //   仅释放已解码 PCM（内存大头），u8/dur 保留。_hasVolatilePcm=true 的易失路径（仅
+  //   录制，条目无 u8）由复用判据自行阻断。
   _biliStreamDone = true;
-  _biliInitBlock = null;
-  _biliTimescale = 0;
+  for (const en of _biliPcmMap) {
+    if (en.pcm) {
+      _biliPcmLen -= en.pcm.length;
+      en.pcm = null;
+    }
+  }
   _recogFrontier = -1;
   _recogDoneAll = false;
   // 第九十七次：统计一并复位（新会话从零计量）
@@ -442,10 +478,10 @@ async function loadSegmentConfig() {
     _cacheAsr = fileCfg.cacheAsr === true;
     _debug = fileCfg.debug === true;
     if (chrome?.storage?.local) {
-      const stored = await new Promise((r) => chrome.storage.local.get(['asrSegmentSec', 'cacheAsr', 'asrModelSize'], r));
-      if (stored.asrSegmentSec && stored.asrSegmentSec > 0) {
-        _segmentSec = stored.asrSegmentSec;
-      }
+      // 320次：asrSegmentSec 不再读 storage（与第一百零二次 asrFirstChunkSec 同理，唯一来源
+      //   =config.json；历史遗留的 storage 键自然失效）——分段长度参与压缩缓存复用判据与
+      //   分批几何计算，必须全局一致，不允许 popup 侧配置漂移。
+      const stored = await new Promise((r) => chrome.storage.local.get(['cacheAsr', 'asrModelSize'], r));
       if (typeof stored.cacheAsr === 'boolean') {
         _cacheAsr = stored.cacheAsr;
       }
@@ -485,6 +521,10 @@ async function prepareBilibiliAudio(videoEl) {
       const ab = await blob.arrayBuffer();
       const audioBuffer = await _biliAudioCtx.decodeAudioData(ab);
       resetBiliStreamState();
+      // 320次：录制条目只有解码 PCM 无压缩字节（录音 Blob 整体解码），PCM 释放后不可
+      //   恢复 → 标记易失，阻断压缩缓存复用（避免复用后取到全零样本）。
+      _compVideoKey = _currentVideoKey;
+      _hasVolatilePcm = true;
       const pcm = await resampleTo16kMono(audioBuffer);
       appendBiliBatch({ pcm, duration: audioBuffer.duration, mediaTime: 0 }, 0);
       _biliStreamDone = true;
@@ -496,12 +536,26 @@ async function prepareBilibiliAudio(videoEl) {
       console.warn('[VocabRadar][asr-client][' + _ts() + '] 录音解码失败，转常规路径:', e && e.message);
     }
   }
+  // 320次：压缩缓存复用——同视频且整部已缓存（下载完整成功过）且 PCM 非易失时，直接
+  //   复用 stopASR 保留的映射表，不重下载不重解码（用户："重新识别你又重新下载重复失败
+  //   过程"）。必须置于各准备路径之前：各路径内部 resetBiliStreamState 会清空映射表，
+  //   提前 return 才能保住缓存。
+  if (_compVideoKey === _currentVideoKey && !_hasVolatilePcm
+    && _biliFullyCached && _biliPcmMap.length > 0 && _biliDuration > 0) {
+    _biliStreamDone = true;
+    const curTime = (isFinite(videoEl.currentTime)) ? videoEl.currentTime : 0;
+    const startSec = Math.floor(curTime / _cacheSegmentSec) * _cacheSegmentSec;
+    const totalRecogSegs = Math.ceil(_biliDuration / _segmentSec);
+    pushStatusLocal('bili-reuse', Math.round(_biliDuration) + 's cached');
+    console.log('[VocabRadar][asr-client][' + _ts() + '] 压缩缓存复用：从 ' + startSec + 's 开始，共 ' + totalRecogSegs + ' 段（' + _biliPcmMap.length + ' entries）');
+    return { startSec, totalRecogSegs, reused: true };
+  }
   // YouTube 路径（第九十六次）：youtubei.js（内容脚本世界动态 import，decipher 需隔离世界 eval）
   if (/youtube\.com$/.test(location.hostname)) {
     try {
       const m = await import(chrome.runtime.getURL('src/lib/youtube-audio.js'));
       const info = await m.getYoutubeAudioInfo();
-      pushStatusLocal('yt-audio', info ? ('YouTube 音频就绪：' + (info.title || '')) : 'YouTube 音频获取失败');
+      pushStatusLocal('yt-audio', info ? ('YouTube audio ready: ' + (info.title || '')) : 'YouTube audio fetch failed');
       if (!info || !info.url) return null;
       return await legacyPrepareFromUrl([info.url], videoEl);
     } catch (e) {
@@ -522,10 +576,10 @@ async function prepareBilibiliAudio(videoEl) {
     } catch (e) { /* ignore */ }
     return null;
   }
-  pushStatusLocal('bili-audio-url', '已获取音频 URL' + (info.title ? '：' + info.title : ''));
+  pushStatusLocal('bili-audio-url', 'audio URL ready' + (info.title ? ': ' + info.title : ''));
 
   // 2. 元数据：总字节数（切 Range 窗口的前提，借鉴 videoseek 先取 content-length）
-  pushStatusLocal('bili-meta', '探测音频元数据...');
+  pushStatusLocal('bili-meta', 'probing audio metadata...');
   const urls = [info.url, ...(info.backupUrls || [])];
   const meta = await Promise.race([
     sendMessage({ type: 'FETCH_AUDIO_META', url: info.url, urls }),
@@ -536,14 +590,30 @@ async function prepareBilibiliAudio(videoEl) {
     return await legacyPrepareFromUrl(urls, videoEl);
   }
 
-  // 3. 流式准备；任何异常都落回整文件旧路径（与线上旧行为一致，保证可用性）
-  try {
-    return await streamPrepare(info, meta.size, videoEl);
-  } catch (e) {
-    console.warn('[VocabRadar][asr-client][' + _ts() + '] 流式准备失败，整文件回退:', e.message || e);
-    pushStatusLocal('bili-stream-fail', '流式不可用(' + String(e.message || e).slice(0, 50) + ')，整文件回退');
-    return await legacyPrepareFromUrl(urls, videoEl);
+  // 3. 流式准备；320次方法记忆：按本会话失败计数升序尝试（JS sort 稳定——计数相等时
+  //    stream 保持在先），失败的方法后置（用户："会话中应当记住各种方法结果，失败的
+  //    方法后置，用未失败的方法"）。成功清零计数；throw 或返回 null 均 +1。
+  const order = ['stream', 'legacy'].sort((a, b) => _methodFails[a] - _methodFails[b]);
+  for (const method of order) {
+    try {
+      const r = (method === 'stream')
+        ? await streamPrepare(info, meta.size, videoEl)
+        : await legacyPrepareFromUrl(urls, videoEl);
+      if (method === 'stream') _methodFails.stream = 0;
+      else if (r) _methodFails.legacy = 0;
+      else _methodFails.legacy++;
+      if (r) return r;
+    } catch (e) {
+      _methodFails[method]++;
+      if (method === 'stream') {
+        console.warn('[VocabRadar][asr-client][' + _ts() + '] 流式准备失败，整文件回退:', e.message || e);
+        pushStatusLocal('bili-stream-fail', 'streaming unavailable(' + String(e.message || e).slice(0, 50) + '), fallback to whole-file');
+      } else {
+        console.warn('[VocabRadar][asr-client][' + _ts() + '] 整文件回退失败:', e.message || e);
+      }
+    }
   }
+  return null;
 }
 
 /**
@@ -581,7 +651,7 @@ async function streamPrepare(info, totalSize, videoEl) {
       if (headLen > 16 * 1024 * 1024) break;
     }
     if (!_biliInitBlock) throw new Error('未找到 fMP4 初始化块(moof/moov)');
-    pushStatusLocal('bili-init', '初始化块就绪 ' + Math.round(_biliInitBlock.length / 1024) + 'KB timescale=' + _biliTimescale);
+    pushStatusLocal('bili-init', 'init block ready ' + Math.round(_biliInitBlock.length / 1024) + 'KB timescale=' + _biliTimescale);
   }
 
   // ② 防丢首窗：winStart=seekByte-768KB；解析窗口内完整片段 tfdt，
@@ -638,13 +708,19 @@ async function streamPrepare(info, totalSize, videoEl) {
   if (!chosen) throw new Error('首窗未取得可解码片段');
 
   // ③ 解码首批（initBlock+连续片段 ⇒ 最小合法 fMP4，见 fmp4.js 头注）
-  pushStatusLocal('bili-decode', '解码首段...');
+  pushStatusLocal('bili-decode', 'decoding first window...');
   const winU8 = new Uint8Array(chosen.ab);
-  const batch = await decodeFmp4To16k(_biliInitBlock, winU8.subarray(chosen.decodeFrom, chosen.decEndRel));
+  // 320次：slice 独立副本作为压缩缓存——subarray 只是引用切片，缓存字节必须自持
+  //   （防上层缓冲后续被复用/释放后缓存变全零）。解码传副本即可（decodeFmp4To16k 内部
+  //   拼接时本就拷贝）。
+  const fragU8 = winU8.slice(chosen.decodeFrom, chosen.decEndRel);
+  const batch = await decodeFmp4To16k(_biliInitBlock, fragU8);
 
   // ④ 首批 PCM 入映射表（tfdt 锚定真实媒体时间），启动双区间后台下载
   resetBiliStreamState();
-  appendBiliBatch({ ...batch, mediaTime: chosen.t0 }, chosen.t0);
+  // 320次：stream 路径置复用键（压缩字节 u8 随条目入表）
+  _compVideoKey = _currentVideoKey;
+  appendBiliBatch({ pcm: batch.pcm, u8: fragU8, duration: batch.duration, mediaTime: chosen.t0 }, chosen.t0);
   recordDlBytes(chosen.decEndRel - chosen.decodeFrom); // 第九十七次：下载速率统计含首批
   // 第一百零一次诊断：首批振幅——区分「解码出全零/近静音（fMP4 窗口或解码问题）」与
   // 「PCM 有声但 Whisper 回空（offscreen/模型侧问题）」。抽样步长防大数组扫描开销。
@@ -689,12 +765,18 @@ async function streamPrepare(info, totalSize, videoEl) {
 async function startBiliBackgroundDownload(ctx) {
   await biliDownloadPhase(ctx, true);
   if (_running && !_biliLoopAborted && ctx.backfillBoundary > 0) {
-    pushStatusLocal('bili-backfill', '回填开头音频（0→' + Math.round(ctx.backfillBoundary / 1024) + 'KB）');
+    pushStatusLocal('bili-backfill', 'backfilling audio head (0→' + Math.round(ctx.backfillBoundary / 1024) + 'KB)');
     await biliDownloadPhase(ctx, false);
   }
   _biliStreamDone = true;
+  // 320次：两区间均完整跑完（主队列到 EOF＋回填到首窗起点都成功）才算整部已缓存，
+  //   防部分下载（中途失败/中止）被误标导致复用后尾部静音跳过。
+  if (!_biliLoopAborted && ctx.mainPos >= ctx.totalSize
+    && (ctx.backfillBoundary <= 0 || ctx.backfillPos >= ctx.backfillBoundary)) {
+    _biliFullyCached = true;
+  }
   if (_running && !_biliLoopAborted) {
-    pushStatusLocal('bili-dl-ok', '音频全部就绪');
+    pushStatusLocal('bili-dl-ok', 'audio fully ready');
     console.log('[VocabRadar][asr-client][' + _ts() + '] 双区间下载完成');
   }
 }
@@ -718,11 +800,11 @@ async function biliDownloadPhase(ctx, isMain) {
       fails++;
       if (fails >= 5) {
         console.warn('[VocabRadar][asr-client][' + _ts() + '] ' + (isMain ? '主' : '回填') + '队列连续失败5次，终止该队列:', r.error || 'unknown');
-        pushStatusLocal('bili-dl-fail', (isMain ? '主' : '回填') + '队列下载失败终止（已就绪部分不受影响）');
+        pushStatusLocal('bili-dl-fail', (isMain ? 'main' : 'backfill') + ' queue download failed, giving up (ready portion unaffected)');
         break;
       }
       const waitMs = Math.min(30000, 1000 * Math.pow(2, fails));
-      pushStatusLocal('bili-dl-retry', (isMain ? '主' : '回填') + '队列下载失败，' + Math.round(waitMs / 1000) + 's后重试（已就绪 ' + _biliDuration.toFixed(0) + 's 不受影响）');
+      pushStatusLocal('bili-dl-retry', (isMain ? 'main' : 'backfill') + ' queue download failed, retry in ' + Math.round(waitMs / 1000) + 's (ready ' + _biliDuration.toFixed(0) + 's unaffected)');
       await new Promise((res) => setTimeout(res, waitMs));
       continue;
     }
@@ -743,7 +825,7 @@ async function biliDownloadPhase(ctx, isMain) {
       fails++;
       if (fails >= 5) {
         console.warn('[VocabRadar][asr-client][' + _ts() + '] 批次处理连续失败5次，终止该队列:', e.message || e);
-        pushStatusLocal('bili-dl-fail', '批次解码失败终止(' + String(e.message || e).slice(0, 40) + ')');
+        pushStatusLocal('bili-dl-fail', 'batch decode failed, giving up(' + String(e.message || e).slice(0, 40) + ')');
         break;
       }
       console.warn('[VocabRadar][asr-client][' + _ts() + '] 批次处理失败，2s 后重试:', e.message || e);
@@ -767,8 +849,10 @@ async function processBiliWindow(ab, ctx, isMain) {
   const fragsInComp = boxes.filter((b) => b.type === 'moof' && !b.truncated && b.end <= compEnd).map((b) => b.start);
   if (fragsInComp.length === 0) return false;
   const decEnd = compEnd; // 取全部完整内容（含末尾完整片段）
-  const batch = await decodeBatchAnchored(u8.subarray(fragsInComp[0], decEnd), isMain ? ctx.mainMediaTime : ctx.backfillMediaTime);
-  appendBiliBatch(batch, batch.mediaTime);
+  // 320次：slice 独立压缩字节副本随条目缓存（同 streamPrepare ⑧ 理由：缓存字节自持）
+  const fragU8 = u8.slice(fragsInComp[0], decEnd);
+  const batch = await decodeBatchAnchored(fragU8, isMain ? ctx.mainMediaTime : ctx.backfillMediaTime);
+  appendBiliBatch({ pcm: batch.pcm, u8: fragU8, duration: batch.duration, mediaTime: batch.mediaTime });
   if (isMain) {
     ctx.mainPos += decEnd;
     ctx.mainMediaTime = batch.mediaTime + batch.duration;
@@ -782,7 +866,7 @@ async function processBiliWindow(ab, ctx, isMain) {
   const pct = Math.round((pos / ctx.totalSize) * 100);
   if (pct !== processBiliWindow._lastPct) {
     processBiliWindow._lastPct = pct;
-    pushStatusLocal('bili-dl', (isMain ? '后台下载 ' : '回填 ') + pct + '%（就绪 ' + _biliDuration.toFixed(0) + 's）');
+    pushStatusLocal('bili-dl', (isMain ? 'background dl ' : 'backfill ') + pct + '% (ready ' + _biliDuration.toFixed(0) + 's)');
   }
   return true;
 }
@@ -836,38 +920,63 @@ function resetBiliStreamState() {
   _biliDuration = 0;
   _biliStreamDone = false;
   processBiliWindow._lastPct = -1;
+  // 320次：复用判据三标志随映射表一并失效（防陈旧 _biliFullyCached/_hasVolatilePcm 致误
+  //   复用——例如 fMP4 整缓存后改走录制/流式路径，陈旧标志＋部分映射表 → 复用后尾部
+  //   静音跳过）。各准备路径成功后在 reset 之后重新置位：stream/legacy-fMP4 置
+  //   _compVideoKey（fMP4 路径再置 _biliFullyCached），录制置 _hasVolatilePcm；非 fMP4
+  //   整文件整解置 _compVideoKey＋_biliFullyCached（u8Whole 条目可恢复，322 次起）。
+  _compVideoKey = null;
+  _biliFullyCached = false;
+  _hasVolatilePcm = false;
   // 第九十七次：下载计量随新一次准备重置（识别倍速跨准备保留更有参考性，仅清下载侧）
   _stats.dlBytes = 0; _stats.dlPending = 0; _stats.dlSpeedKBps = 0; _stats._lastDlTs = 0;
 }
 
 /**
- * 追加一批 PCM 到映射表并推进可用时长终点（第九十六次重写）
+ * 追加一批音频到映射表并推进可用时长终点（第九十六次重写；320次扩展压缩缓存）
  * - 映射表按 mediaTime 升序插入（回填批次媒体时间小于主队列批次，倒序扫到插入点）；
  * - 与前一 entry 衔接处缺口 >0.25s 时插静音占位：时间轴保持连续可取样本，
  *   字幕在该区间自然为空而不是整体错位（修复旧版「流出现时间洞」后样本错位/丢失）；
  * - _biliDuration 只增不减（回填批次不得收缩终点，旧版会错误地把终点拉回去）。
- * @param {{pcm:Float32Array, duration:number, mediaTime:number}} batch
+ * 320次：entry={mediaTime,pcm,u8,dur}——u8=压缩片段字节（按需再解码的缓存，可 null）；
+ *   dur 优先取 batch.duration（几何时长，pcm 释放后仍参与覆盖/衔接计算），退回按 pcm
+ *   长度反推；仅静音占位条目 u8=null（纯填充无原始字节）；dur<=0 的批次丢弃。
+ * 322次：u8Whole=true 表示 u8 是整文件原始字节（无 init 块、非 fMP4，YouTube/legacy
+ *   回退路径），ensureEntryPcm 走 decodeAudioData 整解；未标记则按 fMP4 片段解码。
+ * @param {{pcm?:Float32Array, u8?:Uint8Array, u8Whole?:boolean, duration?:number, mediaTime?:number}} batch
  */
 function appendBiliBatch(batch, mediaTimeOverride) {
   const t0 = (mediaTimeOverride !== undefined) ? mediaTimeOverride : batch.mediaTime;
-  if (!batch.pcm || batch.pcm.length === 0) return;
+  const dur = (batch.duration && batch.duration > 0) ? batch.duration
+    : (batch.pcm ? batch.pcm.length / SAMPLE_RATE : 0);
+  if (!dur || dur <= 0) return;
+  if ((!batch.pcm || batch.pcm.length === 0) && !batch.u8) return;
   let idx = _biliPcmMap.length;
   while (idx > 0 && _biliPcmMap[idx - 1].mediaTime > t0) idx--;
   if (idx > 0) {
     const prev = _biliPcmMap[idx - 1];
-    if (prev.pcm) {
-      const prevEnd = prev.mediaTime + prev.pcm.length / SAMPLE_RATE;
-      const gap = t0 - prevEnd;
-      if (gap > 0.25) {
-        console.warn('[VocabRadar][asr-client][' + _ts() + '] 流空洞 ' + gap.toFixed(2) + 's（' + prevEnd.toFixed(2) + '→' + t0.toFixed(2) + '），插静音占位');
-        _biliPcmMap.splice(idx, 0, { mediaTime: prevEnd, pcm: new Float32Array(Math.round(gap * SAMPLE_RATE)) });
-        idx++;
-      }
+    // 320次：衔接判据无条件按 dur 几何计算（旧版 prev.pcm 为 null 即跳过——释放过的
+    //   条目不再暴露缺口，复用场景下时间洞会悄悄丢失导致字幕错位）
+    const prevEnd = prev.mediaTime + prev.dur;
+    const gap = t0 - prevEnd;
+    // 321次：真实解码时长可能大于 fMP4 分段几何间隔（batch.duration 按容器估算），
+    //   相邻条目时间轴重叠会让 getSamplesForRange 的 Σ(to-from) 超出请求区间，
+    //   out.set 越界抛 RangeError: offset is out of bounds。这里截短前条目 dur
+    //   恢复时间轴单调（pcm 不动，取样本时 s1 映射天然截断），衔接判据恢复一致。
+    if (gap < -0.01) {
+      console.warn('[VocabRadar][asr-client][' + _ts() + '] 条目重叠 ' + (-gap).toFixed(2) + 's（前条目 ' + prev.mediaTime.toFixed(2) + '+' + prev.dur.toFixed(2) + 's vs 新条目 ' + t0.toFixed(2) + 's），截短前条目 dur');
+      prev.dur = Math.max(0, t0 - prev.mediaTime);
+    } else if (gap > 0.25) {
+      console.warn('[VocabRadar][asr-client][' + _ts() + '] 流空洞 ' + gap.toFixed(2) + 's（' + prevEnd.toFixed(2) + '→' + t0.toFixed(2) + '），插静音占位');
+      const silent = new Float32Array(Math.round(gap * SAMPLE_RATE));
+      _biliPcmMap.splice(idx, 0, { mediaTime: prevEnd, pcm: silent, u8: null, dur: gap });
+      _biliPcmLen += silent.length;
+      idx++;
     }
   }
-  _biliPcmMap.splice(idx, 0, { mediaTime: t0, pcm: batch.pcm });
-  _biliPcmLen += batch.pcm.length;
-  const batchEnd = t0 + batch.duration;
+  _biliPcmMap.splice(idx, 0, { mediaTime: t0, pcm: batch.pcm || null, u8: batch.u8 || null, u8Whole: !!batch.u8Whole, dur });
+  if (batch.pcm) _biliPcmLen += batch.pcm.length;
+  const batchEnd = t0 + dur;
   if (batchEnd > _biliDuration) _biliDuration = batchEnd;
 }
 
@@ -881,7 +990,9 @@ function releaseBiliPcmBelow(sec) {
   let freed = 0;
   for (const entry of _biliPcmMap) {
     if (!entry.pcm) continue;
-    const eDur = entry.pcm.length / SAMPLE_RATE;
+    // 320次：优先按 dur 几何时长判界（pcm 长度反推对静音占位/近似条目有舍入偏差）；
+    //   只释放解码 PCM，压缩字节 u8 保留供按需再解码（复用场景不重下载）。
+    const eDur = (entry.dur && entry.dur > 0) ? entry.dur : entry.pcm.length / SAMPLE_RATE;
     if (entry.mediaTime + eDur <= sec + 0.01) {
       freed += entry.pcm.length;
       entry.pcm = null;
@@ -891,14 +1002,24 @@ function releaseBiliPcmBelow(sec) {
 }
 
 /**
- * 按视频秒区间取 PCM 样本（跨批次拼接）
- * 第九十六次：映射表按 mediaTime 升序；pcm=null 的已释放 entry 跳过（该区间返回零填充，
- * 仅发生在重复识别场景，正常流程先取样本后释放不冲突）。
+ * 按视频秒区间取 PCM 样本（跨批次拼接；320次：async——先按需解码压缩缓存条目）
+ * 第九十六次：映射表按 mediaTime 升序。
+ * 320次：几何相交且已释放（pcm=null）但仍有压缩字节（u8）的 entry 先按需再解码并缓存
+ *   回 entry.pcm——重新识别复用缓存时不返回全零样本，也无需重新下载。
  * @param {number} startSec 起始（含）
  * @param {number} endSec 结束（不含）
- * @returns {Float32Array|null} 无覆盖返回 null
+ * @returns {Promise<Float32Array|null>} 无覆盖返回 null
  */
-function getSamplesForRange(startSec, endSec) {
+async function getSamplesForRange(startSec, endSec) {
+  // 320次：按需解码——仅解码与请求区间几何相交且缺解码缓存的条目（逐个 await，
+  //   避免并发 decodeAudioData 叠加内存峰值）
+  for (const entry of _biliPcmMap) {
+    if (entry.pcm || !entry.u8) continue;
+    const eEnd = entry.mediaTime + entry.dur;
+    if (eEnd <= startSec) continue;
+    if (entry.mediaTime >= endSec) break;
+    await ensureEntryPcm(entry);
+  }
   const sr = SAMPLE_RATE;
   let out = null, filled = 0;
   for (const entry of _biliPcmMap) {
@@ -912,14 +1033,108 @@ function getSamplesForRange(startSec, endSec) {
     if (to <= from) continue;
     const s0 = Math.floor((from - entry.mediaTime) * sr);
     const s1 = Math.ceil((to - entry.mediaTime) * sr);
-    const piece = entry.pcm.subarray(s0, s1);
+    // 321次：let（room clamp 截断分支需重指子区间）
+    let piece = entry.pcm.subarray(s0, s1);
     if (!out) out = new Float32Array(Math.ceil((endSec - startSec) * sr));
+    // 321次：room clamp 双保险——即使 appendBiliBatch 已截短重叠，舍入误差仍可能
+    //   让 piece 超出 out 剩余空间（旧版 out.set 直接越界抛 RangeError: offset
+    //   is out of bounds）。只取放得下的部分，超出样本丢弃并告警。
+    const room = out.length - filled;
+    if (room <= 0) break;
+    if (piece.length > room) {
+      // 322次：溢出告警降噪——小溢出是 floor/ceil 舍入（1 样本=62.5µs@16k），截断
+      //   无感知且上方 room clamp 本就兜底（用户问"部分提示，重要吗？"：不重要，
+      //   恰是 321 次兜底生效的表现）；仅溢出超过 10ms 音频量级（sr×0.01≈160 样本）
+      //   才值得刷 warn，小溢出静默截断。
+      const excess = piece.length - room;
+      if (excess > Math.ceil(sr * 0.01)) {
+        console.warn('[VocabRadar][asr-client][' + _ts() + '] 拼接区间溢出：条目 ' + entry.mediaTime.toFixed(2) + 's 提供 ' + piece.length + ' 样本仅容纳 ' + room + '，截断（溢出 ' + excess + ' 样本）');
+      }
+      piece = piece.subarray(0, room);
+    }
     out.set(piece, filled);
     filled += piece.length;
     if (filled >= out.length) break;
   }
   if (!out || filled === 0) return null;
   return filled === out.length ? out : out.subarray(0, filled);
+}
+
+/**
+ * 320次：按需解码单个条目的压缩字节为 16k PCM 并缓存回 entry.pcm
+ * - !_biliInitBlock（init 块缺失，正常 fMP4 条目不应发生）：放弃并置 u8=null 防反复触发
+ * - 连续解码失败 ≥3 次：放弃置 u8=null（坏片段反复解码无意义，避免每次取样本都重试）
+ * @param {{mediaTime:number, pcm:Float32Array|null, u8:Uint8Array|null, u8Whole?:boolean, dur:number}} entry
+ */
+async function ensureEntryPcm(entry) {
+  if (entry.pcm || !entry.u8) return;
+  // 322次：u8Whole 条目＝整文件原始字节（无 init 块、非 fMP4，YouTube/legacy 回退路径），
+  //   走 AudioContext.decodeAudioData 整解再重采样。传 u8.slice().buffer 副本防 detach
+  //   毁掉原始字节（复用场景可能多次触发解码）；失败计数与 fMP4 条目同规（连败 3 次放弃）
+  if (entry.u8Whole) {
+    entry._decFails = entry._decFails || 0;
+    try {
+      if (!_biliAudioCtx) {
+        _biliAudioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      }
+      const abuf = await _biliAudioCtx.decodeAudioData(entry.u8.slice().buffer);
+      entry.pcm = await resampleTo16kMono(abuf);
+      _biliPcmLen += entry.pcm.length;
+      entry._decFails = 0;
+    } catch (e) {
+      entry._decFails++;
+      console.warn('[VocabRadar][asr-client][' + _ts() + '] 整文件条目 ' + entry.mediaTime.toFixed(2) + 's 按需解码失败(' + entry._decFails + '):', e.message || e);
+      if (entry._decFails >= 3) {
+        console.warn('[VocabRadar][asr-client][' + _ts() + '] 条目 ' + entry.mediaTime.toFixed(2) + 's 连续解码失败 3 次，放弃（u8 置 null）');
+        entry.u8 = null;
+      }
+    }
+    return;
+  }
+  if (!_biliInitBlock) {
+    console.warn('[VocabRadar][asr-client][' + _ts() + '] 按需解码失败：init 块缺失，放弃条目 ' + entry.mediaTime.toFixed(2) + 's');
+    entry.u8 = null;
+    return;
+  }
+  entry._decFails = entry._decFails || 0;
+  try {
+    const b = await decodeFmp4To16k(_biliInitBlock, entry.u8);
+    entry.pcm = b.pcm;
+    // 321次：不再用真实解码时长覆盖 entry.dur——真实时长可能大于容器几何间隔，
+    //   覆盖后与相邻条目时间轴重叠，getSamplesForRange 拼接 out.set 越界抛
+    //   RangeError。保留几何 dur（与衔接/覆盖判据同源），解码样本长度差异由
+    //   getSamplesForRange 的 room clamp 双保险兜底。
+    _biliPcmLen += entry.pcm.length;
+    entry._decFails = 0;
+  } catch (e) {
+    entry._decFails++;
+    console.warn('[VocabRadar][asr-client][' + _ts() + '] 按需解码条目 ' + entry.mediaTime.toFixed(2) + 's 失败(' + entry._decFails + '):', e.message || e);
+    if (entry._decFails >= 3) {
+      console.warn('[VocabRadar][asr-client][' + _ts() + '] 条目 ' + entry.mediaTime.toFixed(2) + 's 连续解码失败 3 次，放弃（u8 置 null）');
+      entry.u8 = null;
+    }
+  }
+}
+
+/**
+ * 320次：按媒体时间区间统计已缓存覆盖时长（纯几何，不解码不分配内存）
+ * 识别循环等待下载时用——旧版等待循环每 250ms 调 getSamplesForRange 整段拼接，
+ *   两小时视频每轮分配数十 MB 临时内存；本函数 O(条目数) 只读几何。
+ * @param {number} startSec 起始（含）
+ * @param {number} endSec 结束（不含）
+ * @returns {number} 覆盖秒数（各条目与区间交时长之和）
+ */
+function getBiliCoverage(startSec, endSec) {
+  let cov = 0;
+  for (const entry of _biliPcmMap) {
+    const eEnd = entry.mediaTime + entry.dur;
+    if (eEnd <= startSec) continue;
+    if (entry.mediaTime >= endSec) break;
+    const from = Math.max(startSec, entry.mediaTime);
+    const to = Math.min(endSec, eEnd);
+    if (to > from) cov += to - from;
+  }
+  return cov;
 }
 
 // === P2（第一百零七次）：内容脚本同源下载通道 ===
@@ -1007,7 +1222,7 @@ function fetchRangeWithTimeout(urls, start, end, timeoutMs) {
         return c;
       }
       _contentChanFails++;
-      pushStatusLocal('diag', '内容通道失败(' + String(c.error || '').slice(0, 40) + ')，转SW通道');
+      pushStatusLocal('diag', 'content channel failed(' + String(c.error || '').slice(0, 40) + '), switching to SW channel');
     }
     // 2026-09-08 第二百四十次：SW 通道返回 base64（chrome.runtime 消息默认 JSON
     //   序列化，ArrayBuffer 直传变 {}），解码后统一为 { ok, arrayBuffer } 与内容通道对齐
@@ -1023,15 +1238,19 @@ function fetchRangeWithTimeout(urls, start, end, timeoutMs) {
 }
 
 /**
- * 整文件旧路径（保留为回退）：全量下载→解码→单批入映射表。
+ * 整文件旧路径（保留为回退）：全量下载→解码→入映射表。
  * 行为与 2026-07-04 版一致；流式链路任何环节失败都落到这里，保证功能不倒退。
  * 第九十六次：支持多候选 URL；闸门同样生效（识别循环共用）。
+ * 320次：B站音轨（fMP4）改为分批压缩缓存（legacyPrepareFmp4Runs）——按 moof 片段分
+ *   ~30s run，全部压缩字节入表、仅末 run 解码取精确时长，准备阶段不再整段解码两小时
+ *   音频；非 fMP4（YouTube webm/普通 m4a）保留整文件 decodeAudioData（条目无 u8 →
+ *   置易失标志阻断复用）。
  * @param {string[]} urls 音频 URL 列表
  * @param {HTMLVideoElement} videoEl
  * @returns {Promise<{startSec:number,totalRecogSegs:number}|null>}
  */
 async function legacyPrepareFromUrl(urls, videoEl) {
-  pushStatusLocal('bili-download', '下载音频文件...');
+  pushStatusLocal('bili-download', 'downloading audio file...');
   console.log('[VocabRadar][asr-client][' + _ts() + '] B站路径：请求 SW 下载音频(整文件)');
   // 第一百零七次 P2：先试内容脚本同源整文件（referer 正确），失败再走 SW 中继。
   const dlResp = await (async () => {
@@ -1039,7 +1258,7 @@ async function legacyPrepareFromUrl(urls, videoEl) {
       const c = await contentWholeFetch(urls, 110000);
       if (c.ok) {
         _contentChanFails = 0;
-        pushStatusLocal('bili-download-ok', '同源整文件 ' + Math.round(c.arrayBuffer.byteLength / 1024) + 'KB');
+        pushStatusLocal('bili-download-ok', 'same-origin whole file ' + Math.round(c.arrayBuffer.byteLength / 1024) + 'KB');
         return c;
       }
       _contentChanFails++;
@@ -1057,35 +1276,120 @@ async function legacyPrepareFromUrl(urls, videoEl) {
   })();
   if (!dlResp || !dlResp.ok || !dlResp.arrayBuffer) {
     console.warn('[VocabRadar][asr-client][' + _ts() + '] B站路径：音频下载失败', dlResp?.error);
-    pushStatusLocal('bili-download-fail', '音频下载失败: ' + (dlResp?.error || 'unknown'));
+    // 320次（t3）：提示正文只留原文细节，标题由侧栏按界面语言组装（去掉中文前缀避免双语混杂）
+    pushStatusLocal('bili-download-fail', String(dlResp?.error || 'unknown'));
     return null;
   }
-  pushStatusLocal('bili-download-ok', '音频下载完成 ' + Math.round(dlResp.arrayBuffer.byteLength / 1024) + 'KB');
+  pushStatusLocal('bili-download-ok', 'audio download complete ' + Math.round(dlResp.arrayBuffer.byteLength / 1024) + 'KB');
 
-  pushStatusLocal('bili-decode', '解码音频...');
+  // 320次：fMP4 检测——有完整 moof 片段走分批压缩缓存（两小时音频不再整段解码）
+  const ab = dlResp.arrayBuffer;
+  const boxes = walkBoxes(ab);
+  let moofIdx = -1;
+  for (let i = 0; i < boxes.length; i++) {
+    if (boxes[i].type === 'moof' && !boxes[i].truncated) { moofIdx = i; break; }
+  }
+  if (moofIdx >= 1) {
+    return await legacyPrepareFmp4Runs(ab, boxes, moofIdx, videoEl);
+  }
+  console.log('[VocabRadar][asr-client][' + _ts() + '] 整文件无完整 fMP4 片段，走整文件解码');
+
+  pushStatusLocal('bili-decode', 'decoding audio...');
   try {
     if (!_biliAudioCtx) {
       _biliAudioCtx = new (window.AudioContext || window.webkitAudioContext)();
     }
-    const audioBuffer = await _biliAudioCtx.decodeAudioData(dlResp.arrayBuffer);
-    pushStatusLocal('bili-decode-ok', '解码完成 duration=' + audioBuffer.duration.toFixed(1) + 's channels=' + audioBuffer.numberOfChannels);
+    // 322次：decodeAudioData 会 detach 传入 ArrayBuffer——先复制一份原始压缩字节
+    //   （u8all）存入映射表条目，复用时按需再解（届时同样传副本防 detach）；
+    //   原始字节是视频原生编码（webm/opus、m4a/aac），体积约为 PCM 的十分之一
+    const u8all = new Uint8Array(ab.slice(0));
+    const audioBuffer = await _biliAudioCtx.decodeAudioData(ab);
+    pushStatusLocal('bili-decode-ok', 'decode done duration=' + audioBuffer.duration.toFixed(1) + 's channels=' + audioBuffer.numberOfChannels);
 
     resetBiliStreamState();
+    // 322次：整文件解码条目带原始压缩字节 u8（u8Whole 标记：无 init 块、非 fMP4），
+    //   PCM 释放后可由 u8 按需再解码恢复 → 不再置易失标志，改置 _biliFullyCached
+    //   参与复用判据（YouTube 与 B站 legacy 回退同路径受益）
+    _compVideoKey = _currentVideoKey;
+    _biliFullyCached = true;
     const pcm = await resampleTo16kMono(audioBuffer);
-    // 整文件解码：媒体时间 0 即视频时间 0，单批入表
-    appendBiliBatch({ pcm, duration: audioBuffer.duration, mediaTime: 0 }, 0);
+    // 整文件解码：媒体时间 0 即视频时间 0，单批入表（u8=u8all 供复用按需解码）
+    appendBiliBatch({ pcm, u8: u8all, u8Whole: true, duration: audioBuffer.duration, mediaTime: 0 }, 0);
     _biliStreamDone = true;
-    pushStatusLocal('bili-pcm', 'PCM 就绪 samples=' + _biliPcmLen + ' duration=' + _biliDuration.toFixed(1) + 's');
+    pushStatusLocal('bili-pcm', 'PCM ready samples=' + _biliPcmLen + ' duration=' + _biliDuration.toFixed(1) + 's');
   } catch (e) {
     console.warn('[VocabRadar][asr-client][' + _ts() + '] B站路径：音频解码失败:', e);
-    pushStatusLocal('bili-decode-fail', '解码失败: ' + String(e.message || e));
+    // 320次（t3）：同上，去掉中文前缀
+    pushStatusLocal('bili-decode-fail', String(e.message || e));
     return null;
   }
 
   const startSec = Math.floor(((isFinite(videoEl.currentTime)) ? videoEl.currentTime : 0) / _cacheSegmentSec) * _cacheSegmentSec;
   const totalRecogSegs = Math.ceil(_biliDuration / _segmentSec);
   console.log('[VocabRadar][asr-client][' + _ts() + '] B站路径(整文件回退)：从 ' + startSec + 's 开始，共 ' + totalRecogSegs + ' 段');
-  pushStatusLocal('bili-start', '从' + startSec + 's开始识别（共' + totalRecogSegs + '段×' + _segmentSec + 's）');
+  pushStatusLocal('bili-start', 'recognize from ' + startSec + 's (' + totalRecogSegs + ' segs × ' + _segmentSec + 's)');
+  return { startSec, totalRecogSegs };
+}
+
+/**
+ * 320次：整文件 fMP4 分批压缩缓存（legacyPrepareFromUrl 的 B站音轨分支）
+ * 首个完整 moof 之前 = init 块；全部完整 moof 的 tfdt 分组为 ~30s run（分组阈值
+ * asrSegmentSec-0.25s，tfdt 缺失按前段+4s 兜底）；每个 run 的压缩字节整体入映射表
+ * （u8），仅末 run 解码（取精确时长＋缓存其 PCM）——其余 run 的 PCM 由识别循环按需
+ * 解码（getSamplesForRange → ensureEntryPcm）。两小时音频准备阶段只解码末段 30s。
+ * @param {ArrayBuffer} ab 整文件
+ * @param {Array<{type:string,start:number,end:number,truncated?:boolean}>} boxes walkBoxes 结果
+ * @param {number} moofIdx 首个完整 moof 的 boxes 索引
+ * @param {HTMLVideoElement} videoEl
+ * @returns {Promise<{startSec:number,totalRecogSegs:number}>}
+ */
+async function legacyPrepareFmp4Runs(ab, boxes, moofIdx, videoEl) {
+  const initEnd = boxes[moofIdx].start;
+  _biliInitBlock = new Uint8Array(ab.slice(0, initEnd));
+  _biliTimescale = parseMdhdTimescale(ab.slice(0, initEnd)) || 0;
+  const u8all = new Uint8Array(ab);
+  // 收集全部完整片段起点与 tfdt 媒体时间
+  const frags = [];
+  let lastT = null;
+  for (let k = moofIdx; k < boxes.length; k++) {
+    const b = boxes[k];
+    if (b.type !== 'moof' || b.truncated) continue;
+    let t = parseTfdtSeconds(u8all.subarray(b.start, b.end), _biliTimescale);
+    if (t === null || !isFinite(t)) t = (lastT !== null) ? lastT + 4 : 0;
+    frags.push({ from: b.start, t });
+    lastT = t;
+  }
+  if (frags.length === 0) throw new Error('整文件未解析出完整片段(moof)');
+  // 按 ~30s 分组为 run（to=下一 run 首片段起点=字节边界；末 run 到文件尾）
+  const runs = []; // {from,to,t0,dur}
+  let cur = null;
+  for (const f of frags) {
+    if (!cur) { cur = { from: f.from, t0: f.t }; }
+    else if (f.t - cur.t0 >= _segmentSec - 0.25) { cur.to = f.from; runs.push(cur); cur = { from: f.from, t0: f.t }; }
+  }
+  cur.to = u8all.length;
+  runs.push(cur);
+  for (let r = 0; r < runs.length; r++) {
+    runs[r].dur = (r + 1 < runs.length) ? (runs[r + 1].t0 - runs[r].t0) : 0;
+  }
+  resetBiliStreamState();
+  // 320次：本路径条目带压缩字节（可复用）；整文件必然完整下载 → 直接置整部已缓存
+  _compVideoKey = _currentVideoKey;
+  for (let r = 0; r < runs.length; r++) {
+    const run = runs[r];
+    const fragU8 = u8all.slice(run.from, run.to);
+    const isLast = (r === runs.length - 1);
+    const batch = isLast ? await decodeFmp4To16k(_biliInitBlock, fragU8) : null;
+    if (isLast) run.dur = batch.duration;
+    appendBiliBatch({ pcm: batch ? batch.pcm : null, u8: fragU8, duration: run.dur, mediaTime: run.t0 }, run.t0);
+  }
+  _biliStreamDone = true;
+  _biliFullyCached = true;
+  pushStatusLocal('bili-pcm', 'runs=' + runs.length + ' duration=' + _biliDuration.toFixed(1) + 's (compressed, samples=' + _biliPcmLen + ')');
+  const startSec = Math.floor(((isFinite(videoEl.currentTime)) ? videoEl.currentTime : 0) / _cacheSegmentSec) * _cacheSegmentSec;
+  const totalRecogSegs = Math.ceil(_biliDuration / _segmentSec);
+  console.log('[VocabRadar][asr-client][' + _ts() + '] B站路径(fMP4分批)：从 ' + startSec + 's 开始，共 ' + totalRecogSegs + ' 段（' + runs.length + ' runs 压缩缓存）');
+  pushStatusLocal('bili-start', 'recognize from ' + startSec + 's (' + totalRecogSegs + ' segs × ' + _segmentSec + 's)');
   return { startSec, totalRecogSegs };
 }
 
@@ -1120,7 +1424,7 @@ async function biliRecognizeLoop(startSec, totalRecogSegs) {
   // 回填方向：0 → startSegIdx（第九十六次：主方向完成后自动补齐开头，
   //   全片字幕完整，「拖回点击前的位置也有字幕」；增量缓存自动跳过已听段）
   if (_running && !_biliLoopAborted && startSegIdx > 0) {
-    pushStatusLocal('bili-backfill-recog', '回填识别开头 0→' + startSegIdx * _segmentSec + 's');
+    pushStatusLocal('bili-backfill-recog', 'backfill recognition 0→' + startSegIdx * _segmentSec + 's');
     for (let i = 0; i < startSegIdx; i++) {
       if (_biliLoopAborted || !_running) break;
       const ok = await recognizeBiliSegment(i, totalRecogSegs, listenedRanges);
@@ -1142,8 +1446,8 @@ async function biliRecognizeLoop(startSec, totalRecogSegs) {
   if (!_biliLoopAborted && _running) {
     // 第九十六次：全部完成——解除播放闸门
     _recogDoneAll = true;
-    pushStatusLocal('gate-done', '全部识别完成，闸门解除', { frontier: Infinity });
-    pushStatusLocal('bili-done', '所有段识别完成');
+    pushStatusLocal('gate-done', 'all recognition done, gate released', { frontier: Infinity });
+    pushStatusLocal('bili-done', 'all segments recognized');
     console.log('[VocabRadar][asr-client][' + _ts() + '] B站识别循环完成');
   }
 }
@@ -1193,11 +1497,15 @@ function recordDlBytes(n) {
  */
 async function recognizeBiliSegment(i, totalRecogSegs, listenedRanges) {
   const segStart = i * _segmentSec;
-  // 等待本段 PCM 就绪：优先按样本可用性判断（回填区间不能看 _biliDuration），
-  // 下载终结（EOF/失败/中止）后不再等待。
+  // 等待本段 PCM 就绪（回填区间不能看 _biliDuration），下载终结（EOF/失败/中止）后
+  //   不再等待。
+  // 320次：等待判据改纯几何覆盖（getBiliCoverage，不解码不分配内存——旧版每 250ms
+  //   整段拼接 PCM 判就绪，两小时视频场景每轮浪费数十 MB 临时内存）；wantEnd 每轮重算
+  //   （不能按循环外快照算一次——快照时段未推进到时会立即 break，误跳过稍后会到达的段），
+  //   覆盖≥可用区间的 99% 即视为就绪（与旧版语义一致）。
   while (_running && !_biliLoopAborted && !_biliStreamDone) {
-    const readyPcm = getSamplesForRange(segStart, segStart + _segmentSec);
-    if (readyPcm && readyPcm.length >= (Math.min(segStart + _segmentSec, _biliDuration) - segStart) * SAMPLE_RATE * 0.99) break;
+    const wantEnd = Math.min(segStart + _segmentSec, _biliDuration);
+    if (wantEnd > segStart && getBiliCoverage(segStart, segStart + _segmentSec) >= (wantEnd - segStart) * 0.99) break;
     await new Promise((r) => setTimeout(r, 250));
   }
   if (_biliLoopAborted || !_running) return null;
@@ -1211,12 +1519,13 @@ async function recognizeBiliSegment(i, totalRecogSegs, listenedRanges) {
   if (isInRange(segStart, segEnd, listenedRanges)) return 'skipped';
 
   // 提取 [segStart,segEnd) 的 PCM（流式映射表按媒体时间跨批拼接）
-  const pcm = getSamplesForRange(segStart, segEnd);
+  // 320次：async——复用场景下此处触发按需解码（ensureEntryPcm）
+  const pcm = await getSamplesForRange(segStart, segEnd);
   if (!pcm || pcm.length === 0) {
     console.warn('[VocabRadar][asr-client][' + _ts() + '] 段 ' + segStart.toFixed(0) + '-' + segEnd.toFixed(0) + 's 无 PCM 可用，跳过');
     return 'skipped';
   }
-  pushStatusLocal('bili-seg', '段' + i + ': ' + segStart.toFixed(0) + 's-' + segEnd.toFixed(0) + 's',
+  pushStatusLocal('bili-seg', 'seg ' + i + ': ' + segStart.toFixed(0) + 's-' + segEnd.toFixed(0) + 's',
     { segIdx: i, totalSegs: totalRecogSegs, segStart, segEnd });
 
   // 发送 offscreen 识别；失败重试 ×2（修复旧版超时即永久丢段）
@@ -1225,14 +1534,14 @@ async function recognizeBiliSegment(i, totalRecogSegs, listenedRanges) {
   let response = null;
   for (let attempt = 0; attempt <= 2; attempt++) {
     if (_biliLoopAborted || !_running) return null;
-    if (attempt > 0) pushStatusLocal('bili-seg-retry', '段' + i + ' 第' + attempt + '次重试', { segIdx: i, totalSegs: totalRecogSegs });
+    if (attempt > 0) pushStatusLocal('bili-seg-retry', 'seg ' + i + ' retry #' + attempt, { segIdx: i, totalSegs: totalRecogSegs });
     response = await sendSegmentAndWait(pcm, segStart, segEnd);
     if (response) break;
     if (_biliLoopAborted || !_running) return null;
   }
 
   if (!response) {
-    pushStatusLocal('bili-seg-skip', '段' + i + ' 重试后仍失败，跳过', { segIdx: i, totalSegs: totalRecogSegs });
+    pushStatusLocal('bili-seg-skip', 'seg ' + i + ' failed after retries, skipping', { segIdx: i, totalSegs: totalRecogSegs });
     return true;
   }
 
@@ -1242,7 +1551,7 @@ async function recognizeBiliSegment(i, totalRecogSegs, listenedRanges) {
   const instX = Math.min(100, mediaSec / wallSec);
   _stats.recSpeedX = _stats.recSpeedX ? (_stats.recSpeedX * 0.7 + instX * 0.3) : instX;
 
-  pushStatusLocal('bili-seg-ok', '段' + i + ' 识别完成: ' + (response.text || '(空)').slice(0, 50),
+  pushStatusLocal('bili-seg-ok', 'seg ' + i + ' recognized: ' + (response.text || '(empty)').slice(0, 50),
     { segIdx: i, totalSegs: totalRecogSegs });
   // 主方向成功：推进前沿 + 释放已持久化段的 PCM
   if (i >= Math.floor(_recogFrontier / _segmentSec) || segEnd > _recogFrontier) {
@@ -1344,8 +1653,9 @@ function sendSegmentAndWait(pcm, videoStart, videoEnd) {
  *      后续段无头导致 decodeAudioData 抛 EncodingError（用户日志可见）。
  *   2. 改用 AudioContext + ScriptProcessorNode 直接提取原始 PCM，跳过编码/解码。
  *      ScriptProcessorNode 虽已废弃但仍可靠工作；AudioWorklet 是现代替代但需额外 worklet 文件。
- *   3. 段长由 setInterval 定时器控制（_segmentSec），音频完整无间隙。
- *   4. 识别段长 = _segmentSec(10s)，缓存段长 = _cacheSegmentSec(60s)。
+ *   3. 段长由 setInterval 定时器控制（_realtimeSegSec），音频完整无间隙。
+ *   4. 识别段长 = _realtimeSegSec(10s)，缓存段长 = _cacheSegmentSec(60s)。
+ *      324次：原共用 _segmentSec，用户裁定实时录制保持 10s、下载路径 30s，故拆分。
  *
  * 设计原则：音频收集与识别分离——收集不等模型就绪。
  * @param {HTMLVideoElement} videoEl
@@ -1405,10 +1715,10 @@ async function startFallbackCapture(videoEl) {
   // 反思（2026-07-09 #47）：用户要求「按照参数段落自动吸附，例如视频3秒处才开始点击识别，
   //   应当模型加载完成后移动到0秒录音」。
   //   旧版 _fallbackVideoStart = videoEl.currentTime（如 3s），导致 0-3s 内容未识别。
-  //   修正：snap 到 _segmentSec 段起始（3s → 0s，15s → 10s），
+  //   修正：snap 到 _realtimeSegSec 段起始（3s → 0s，15s → 10s）（324次：原 _segmentSec），
   //   AudioWorklet 连接完成后 seek 视频到段起始，确保整段内容被录制。
   const clickedTime = (isFinite(videoEl.currentTime)) ? videoEl.currentTime : 0;
-  const segSnapStart = Math.floor(clickedTime / _segmentSec) * _segmentSec;
+  const segSnapStart = Math.floor(clickedTime / _realtimeSegSec) * _realtimeSegSec;
   _fallbackVideoStart = segSnapStart;
 
   // AudioWorklet 通过 port.postMessage 发送 PCM 块（每 4096 帧一次）
@@ -1432,13 +1742,13 @@ async function startFallbackCapture(videoEl) {
     try {
       videoEl.currentTime = segSnapStart;
       console.log('[VocabRadar][asr-client][' + _ts() + '] 自动吸附：从 ' + clickedTime.toFixed(1) + 's seek 到段起始 ' + segSnapStart + 's');
-      pushStatusLocal('fallback-snap', '自动吸附到 ' + segSnapStart + 's（从 ' + clickedTime.toFixed(1) + 's 回退）');
+      pushStatusLocal('fallback-snap', 'snapped to ' + segSnapStart + 's (from ' + clickedTime.toFixed(1) + 's)');
     } catch (e) {
       console.warn('[VocabRadar][asr-client][' + _ts() + '] 自动吸附 seek 失败:', e.message);
     }
   }
 
-  // 段截取定时器：每 _segmentSec 秒取走累积的 PCM，录制不中断
+  // 段截取定时器：每 _realtimeSegSec 秒取走累积的 PCM，录制不中断（324次：原 _segmentSec）
   _fallbackTimer = setInterval(() => {
     if (!_running) return;
     // 反思（2026-07-09）：用户反馈"fallback-paused 日志一直出现，时间为啥那么长还一直暂停"。
@@ -1480,7 +1790,7 @@ async function startFallbackCapture(videoEl) {
       const isEnded = (curVideo && curVideo.ended) ||
         (isFinite(dur) && dur > 0 && isFinite(curTime) && curTime >= dur - 1);
       if (isEnded) {
-        // 刷新剩余 PCM（最后一段可能不足 _segmentSec，但仍有音频数据）
+        // 刷新剩余 PCM（最后一段可能不足 _realtimeSegSec，但仍有音频数据）
         if (_fallbackPcmBuffer.length > 0 && _fallbackPcmLength > 0) {
           const remainChunks = _fallbackPcmBuffer;
           const remainLen = _fallbackPcmLength;
@@ -1493,8 +1803,8 @@ async function startFallbackCapture(videoEl) {
         }
         if (_fallbackTimer) { clearInterval(_fallbackTimer); _fallbackTimer = null; }
         _wasFallbackPaused = false;
-        const totalSegs = (isFinite(dur) && dur > 0) ? Math.ceil(dur / _segmentSec) : 0;
-        pushStatusLocal('fallback-done', '视频已结束，停止采集',
+        const totalSegs = (isFinite(dur) && dur > 0) ? Math.ceil(dur / _realtimeSegSec) : 0;
+        pushStatusLocal('fallback-done', 'video ended, capture stopped',
           { segIdx: _fallbackSegCount, totalSegs, segStart: _fallbackVideoStart, segEnd: _fallbackVideoStart, duration: dur || 0 });
         return;
       }
@@ -1506,7 +1816,7 @@ async function startFallbackCapture(videoEl) {
       // 修正：按视频真实前进量推进段起点（仅本窗口内的推进量，clamp 防异常跳变）。
       {
         const progressed = Math.max(0, curTime - _fallbackVideoStart);
-        if (progressed > 0.25 && progressed <= _segmentSec * 2) {
+        if (progressed > 0.25 && progressed <= _realtimeSegSec * 2) {
           pushStatusLocal('fallback-skip',
             'partial-window advanced ' + progressed.toFixed(1) + 's (paused drop), timeline aligned',
             { segIdx: _fallbackSegCount, segStart: _fallbackVideoStart, segEnd: _fallbackVideoStart + progressed });
@@ -1517,7 +1827,7 @@ async function startFallbackCapture(videoEl) {
         _wasFallbackPaused = true;
         // 第一百零二次：文案如实标注依赖关系与成因（用户质疑"识别为何依赖播放"——
         // 仅直连不可用落入本回退时才会出现；根因定位靠时间线的 bili-none/bili-stream-fail 行）
-        pushStatusLocal('fallback-paused', '回退实时模式：识别跟随播放（直连下载不可用），视频暂停即暂停');
+        pushStatusLocal('fallback-paused', 'fallback realtime mode: recognition follows playback (direct download unavailable), pauses with video');
       }
       // 视频暂停时 AudioContext 可能因浏览器策略被挂起，
       // 主动尝试 resume（无副作用，AudioContext 在 paused 状态下 resume 是 no-op），
@@ -1529,7 +1839,7 @@ async function startFallbackCapture(videoEl) {
     }
     if (_wasFallbackPaused) {
       _wasFallbackPaused = false;
-      pushStatusLocal('fallback-resumed', '视频恢复，继续识别');
+      pushStatusLocal('fallback-resumed', 'video resumed, continuing recognition');
     }
     // PCM 缓冲为空时仍推进段计数（AudioContext 可能被挂起，但不跳过时间段）
     // 反思（2026-07-28 #需求1）：用户要求"录音且识别才算片段成功，光录音不可"。
@@ -1542,11 +1852,11 @@ async function startFallbackCapture(videoEl) {
       }
       const segStart = _fallbackVideoStart;
       // 暂停/无音频时按段长推进时间，不用 currentTime（可能未变）
-      _fallbackVideoStart = segStart + _segmentSec;
+      _fallbackVideoStart = segStart + _realtimeSegSec;
       _fallbackSegCount++;
       const dur = curVideo ? curVideo.duration : NaN;
-      const totalSegs = (isFinite(dur) && dur > 0) ? Math.ceil(dur / _segmentSec) : 0;
-      pushStatusLocal('fallback-silent', '段 ' + _fallbackSegCount + ' 无 PCM（AudioContext 可能挂起）',
+      const totalSegs = (isFinite(dur) && dur > 0) ? Math.ceil(dur / _realtimeSegSec) : 0;
+      pushStatusLocal('fallback-silent', 'seg ' + _fallbackSegCount + ' no PCM (AudioContext may be suspended)',
         { segIdx: _fallbackSegCount, totalSegs, segStart, segEnd: _fallbackVideoStart, duration: dur || 0 });
       return;
     }
@@ -1577,17 +1887,17 @@ async function startFallbackCapture(videoEl) {
     _fallbackVideoStart = segEnd;
     _fallbackSegCount++;
     const dur2 = curVideo ? curVideo.duration : NaN;
-    const totalSegs = (isFinite(dur2) && dur2 > 0) ? Math.ceil(dur2 / _segmentSec) : 0;
-    pushStatusLocal('fallback-seg', '音频段 ' + _fallbackSegCount + ' ' + Math.round(actualDuration) + 's',
+    const totalSegs = (isFinite(dur2) && dur2 > 0) ? Math.ceil(dur2 / _realtimeSegSec) : 0;
+    pushStatusLocal('fallback-seg', 'audio seg ' + _fallbackSegCount + ' ' + Math.round(actualDuration) + 's',
       { segIdx: _fallbackSegCount, totalSegs, segStart, segEnd, duration: dur2 || 0 });
     // 异步处理（不阻塞定时器，采集继续）
     processFallbackSegment(pcmChunks, pcmLength, segStart).catch((e) => {
       console.warn('[VocabRadar][asr-client][' + _ts() + '] 回退路径处理段失败:', e);
     });
-  }, _segmentSec * 1000);
+  }, _realtimeSegSec * 1000);
 
-  pushStatusLocal('fallback-start', 'captureStream+AudioWorklet PCM 采集, 段长=' + _segmentSec + 's');
-  console.log('[VocabRadar][asr-client][' + _ts() + '] 回退路径：captureStream + AudioWorkletNode（音频线程采集），段长 ' + _segmentSec + 's');
+  pushStatusLocal('fallback-start', 'captureStream+AudioWorklet PCM capture, segLen=' + _realtimeSegSec + 's');
+  console.log('[VocabRadar][asr-client][' + _ts() + '] 回退路径：captureStream + AudioWorkletNode（音频线程采集），段长 ' + _realtimeSegSec + 's');
 
   // 反思（2026-07-05）：用户反馈"开头识别四分钟，之后就没了"。
   // 根因：标签页切到后台时 Chrome 自动挂起 AudioContext，onaudioprocess 停止触发，
@@ -1635,19 +1945,19 @@ async function processFallbackSegment(pcmChunks, pcmLength, segStart) {
 
   // 检查是否全静音（视频暂停/无音轨）
   // 反思（2026-07-06）：用户问"段 31s 是 0-31s 还是 31.0-31.99s？"。
-  // 明确日志格式：段 start-end 表示从 start 开始的一段（长度 _segmentSec），
+  // 明确日志格式：段 start-end 表示从 start 开始的一段（长度 _realtimeSegSec）（324次：原 _segmentSec），
   // 例如"段 31-41s"表示 31.0s ~ 41.0s 的 10 秒片段。
   let hasAudio = false;
   for (let i = 0; i < pcm.length; i += 100) {
     if (Math.abs(pcm[i]) > 0.001) { hasAudio = true; break; }
   }
-  let segEnd = segStart + _segmentSec;
+  let segEnd = segStart + _realtimeSegSec;
   if (!hasAudio) {
-    pushStatusLocal('fallback-skip', '段 ' + segStart.toFixed(0) + '-' + segEnd.toFixed(0) + 's 全静音，跳过');
+    pushStatusLocal('fallback-skip', 'seg ' + segStart.toFixed(0) + '-' + segEnd.toFixed(0) + 's all-silent, skipping');
     return;
   }
 
-  pushStatusLocal('fallback-pcm', '段 ' + segStart.toFixed(0) + '-' + segEnd.toFixed(0) + 's ' + pcmLength + ' samples');
+  pushStatusLocal('fallback-pcm', 'seg ' + segStart.toFixed(0) + '-' + segEnd.toFixed(0) + 's ' + pcmLength + ' samples');
 
   // 重采样到 16kHz 单声道
   const sr = _fallbackAudioCtx.sampleRate;

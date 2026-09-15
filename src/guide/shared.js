@@ -8,7 +8,8 @@
 //   （界面语言）归属本文件唯一一份，其他模块经 get/set 接缝访问，绝不另存副本。
 
 import { t } from '../lib/i18n.js';
-import { SUBTITLE_TEXT_STYLES, SUBTITLE_POSITIONS } from '../lib/styles.js';
+// 317次：sanitizeStyleId 缺省兜底改引字幕默认代指常量（styles.js 唯一写死处）
+import { SUBTITLE_TEXT_STYLES, SUBTITLE_POSITIONS, SUB_DEFAULT_STYLE } from '../lib/styles.js';
 
 export const $ = (id) => document.getElementById(id);
 
@@ -299,17 +300,26 @@ let _ownWriteAt = 0;
 export function markOwnWrite() { _ownWriteAt = Date.now(); }
 export function ownWriteAt() { return _ownWriteAt; }
 
-// 样式 id 清洗：不在对应样式列表内的（旧版已删除/写坏）回退 'none'，保证网格恒有选中卡
+// 样式 id 清洗：不在对应样式列表内的（旧版已删除/写坏）回退 fallback，保证网格恒有选中卡
 // 反思（2026-08-16 第六十八次）：解决"实际有样式，但设定栏一个都没选"——
 //   storage 残留已删样式 id 时 renderStyleGrid 无匹配卡。textStyle 的特殊 'custom'
 //   分支（用户在弹窗改过配色）不在本清洗范围（仍是有效显示态）。
-export function sanitizeStyleId(items, id) {
+// 316次：加第三参 fallback——生词池（POOL_STYLES）删 none 卡后调用方传默认回落；
+//   字幕池（SUBTITLE_TEXT_STYLES）不传仍落默认卡。
+// 318次：fallback 口径定稿——调用方传默认代指常量（ANN_DEFAULT_STYLE/SUB_DEFAULT_STYLE，
+//   styles.js 唯一允许缺省字面量处，版本变化才改常量值）；317 次的"指针现值"口径撤销。
+//   subtitleStyle 存量 'none' 不在池内 → 自动回落 SUB_DEFAULT_STYLE（'white-bottom'）并写盘，
+//   存量迁移就地完成。本函数不出现其他绝对样式字面量。
+export function sanitizeStyleId(items, id, fallback) {
   if (id && Array.isArray(items) && items.some((it) => it.id === id)) return id;
-  return 'none';
+  return fallback || SUB_DEFAULT_STYLE;
 }
 
-// 位置样式 id 清洗：不在 SUBTITLE_POSITIONS 内的回退默认 'b20'（下 1/5，与 storage/overlay 默认一致；
-// 第二百二十三次：原回退 'b10' 与默认值链不一致，残留非法值时会显示成下 1/10）
+// 位置样式 id 清洗：不在 SUBTITLE_POSITIONS 内的回退默认 'b10'（贴底 1/10，与 storage/overlay
+// 出厂默认一致；314次：用户裁定默认位置改贴底 10%，推翻 223 次的 'b20'——
+// 'b10' 档一直存在，无显示兼容问题）
+// 316次：'t10'（原顶部 1/10，316 次改名 b90 延续 b 系列命名）存量一次性迁移。
 export function sanitizePositionId(id) {
-  return (id && SUBTITLE_POSITIONS.some((p) => p.id === id)) ? id : 'b20';
+  if (id === 't10') return 'b90';
+  return (id && SUBTITLE_POSITIONS.some((p) => p.id === id)) ? id : 'b10';
 }
