@@ -17,7 +17,7 @@
 import { t } from '../lib/i18n.js';
 // 317次：文本侧栏 annotationStyle 兜底改引默认代指常量（回落不写死绝对 id）
 import { ANN_DEFAULT_STYLE } from '../lib/styles.js';
-import { getAnnotations } from '../lib/annotator.js';
+import { getAnnotations, setRankMax } from '../lib/annotator.js';
 // 第二百二十五次：短义项选取统一收敛到 lib 版（原本地独立实现已漂移，见下方删除说明）
 import { pickCleanShortTrans } from '../lib/dict-clean.js';
 // 反思（2026-08-21 第九十二次）：引导页没有 startHint 等 await ensureReady 的入口，
@@ -188,6 +188,7 @@ export const S = {
   asrAnnWords: new Map(),
   ocrAnnWords: new Map(),
   rankThreshold: 5000,
+  rankThresholdMax: 0,   // 词频范围上界（0=不限制）
   annotateOov: false,
   learnLang: 'en'
 };
@@ -568,13 +569,18 @@ export function initAsrCommon() {
   //   改为点击「录制」按钮时（用户手势内）在主文档直接 getUserMedia（acquireMediaStream，见 asr.js）。
   //   前提：manifest 保留 audioCapture/videoCapture 权限（v82 已恢复）。
 
-  // 读取运行参数（rank 阈值 / 注释开关 / 源语言）
+  // 读取运行参数（rank 阈值范围 / 注释开关 / 源语言）
   chrome.storage.local.get({
     rankThreshold: 5000,
+    rankThresholdMax: 0,   // 词频范围上界，0/缺省=不限制
     annotateOov: false,
     learnLanguage: 'en'
   }, (res) => {
     S.rankThreshold = (typeof res.rankThreshold === 'number' && !isNaN(res.rankThreshold)) ? res.rankThreshold : 5000;
+    S.rankThresholdMax = (typeof res.rankThresholdMax === 'number' && !isNaN(res.rankThresholdMax))
+      ? res.rankThresholdMax : 0;
+    // 词频上界同步到 annotator 模块级（识别注释走 getAnnotations 内部过滤）
+    setRankMax(S.rankThresholdMax);
     S.annotateOov = res.annotateOov === true;
     S.learnLang = res.learnLanguage || 'en';
   });
@@ -587,6 +593,11 @@ export function initAsrCommon() {
       if (changes.rankThreshold && typeof changes.rankThreshold.newValue === 'number') {
         S.rankThreshold = changes.rankThreshold.newValue;
         log('词频阈值已同步:', S.rankThreshold);
+      }
+      if (changes.rankThresholdMax && typeof changes.rankThresholdMax.newValue === 'number') {
+        S.rankThresholdMax = changes.rankThresholdMax.newValue;
+        setRankMax(S.rankThresholdMax);
+        log('词频上界已同步:', S.rankThresholdMax);
       }
       if (changes.annotateOov && typeof changes.annotateOov.newValue === 'boolean') {
         S.annotateOov = changes.annotateOov.newValue;

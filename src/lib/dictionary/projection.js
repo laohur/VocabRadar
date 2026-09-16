@@ -144,9 +144,12 @@ export async function _loadDict(lang) {
       // ranks 命中且完整：建 rank-only Map，resolve ranks，先出高亮
       _t0 = performance.now();
       dictState.dictMap = new Map();
+      dictState.maxRank = 0;
       const _pr = ranksProj.ranks || {};
       for (const word in _pr) {
-        dictState.dictMap.set(word, { rank: _pr[word], tags: [], lemma: null, translation: undefined, translationLang: undefined, phonetic: undefined });
+        const _r = _pr[word];
+        if (typeof _r === 'number' && _r > dictState.maxRank) dictState.maxRank = _r;
+        dictState.dictMap.set(word, { rank: _r, tags: [], lemma: null, translation: undefined, translationLang: undefined, phonetic: undefined });
       }
       dictState.ranksReadyLang = meaningLang;
       _seg.map = Math.round(performance.now() - _t0);
@@ -199,8 +202,11 @@ export async function _loadDict(lang) {
       const projLemmas = proj.lemmas || {};
       _t0 = performance.now();   // 第一百八十八次：Map 构建段计时
       dictState.dictMap = new Map();
+      dictState.maxRank = 0;
       for (const word in projRanks) {
-        dictState.dictMap.set(word, { rank: projRanks[word], tags: projTags[word] || [], lemma: projLemmas[word] || null, translation: undefined, translationLang: undefined, phonetic: undefined });
+        const _r = projRanks[word];
+        if (typeof _r === 'number' && _r > dictState.maxRank) dictState.maxRank = _r;
+        dictState.dictMap.set(word, { rank: _r, tags: projTags[word] || [], lemma: projLemmas[word] || null, translation: undefined, translationLang: undefined, phonetic: undefined });
       }
       for (const word in projTags) {
         if (dictState.dictMap.has(word)) continue;
@@ -286,7 +292,9 @@ async function _rebuildFromSources(lang) {
   //   wf.size 就是远程数据解码后的动态实际词数，直接作为 expected 基准写库。
   // 两个源文件是同一词典的字段：wordfreq 给 rank、wordlists 给 tags，合为一张全属性词条表
   dictState.dictMap = new Map();
+  dictState.maxRank = 0;
   for (const [word, rank] of wf) {
+    if (typeof rank === 'number' && rank > dictState.maxRank) dictState.maxRank = rank;
     dictState.dictMap.set(word, { rank, tags: [], lemma: null, translation: undefined, translationLang: undefined, phonetic: undefined });
   }
   for (const [word, tags] of wl) {

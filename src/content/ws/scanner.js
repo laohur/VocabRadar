@@ -5,7 +5,7 @@
 // 说明：由 web-sidebar-impl.js 机械拆分而来，代码逐字保留，未改动任何逻辑。
 //       跨模块共享状态一律来自 ./core.js，写入走 core 导出的 set_xxx 接缝，绝不另存副本。
 
-import { getAnnotations, rankToStage } from '../../lib/annotator.js';
+import { getAnnotations, getRankMax, rankToStage } from '../../lib/annotator.js';
 // 第二百四十七次：兜底扫描前等待词典词频就绪（ensureRanksReady，防冷装载期间把词
 //   写入 _seenWords 造成同会话 skip(seen) 永久无提示；web-sidebar-impl 已 ensureReady 预热）。
 import { ensureRanksReady } from '../../lib/dictionary.js';
@@ -946,10 +946,11 @@ function collectToWordPanel(anns, sentIdx, seqBase) {
   const newAnns = anns.filter((a) => {
     // 表外词且未开启注释表外词时，不收集
     if (a.rank === null && !_annotateOov) { _wsDiag.blockedOov++; return false; }
-    // 高频词（rank <= 阈值）不收集
+    // 高频词（rank <= 阈值）或超上界（极生僻）不收集
     if (typeof a.rank === 'number' && isFinite(a.rank)
         && typeof _rankThreshold === 'number' && isFinite(_rankThreshold)
         && a.rank <= _rankThreshold) { _wsDiag.blockedHighRank++; return false; }
+    if (typeof a.rank === 'number' && isFinite(a.rank) && a.rank > getRankMax()) { _wsDiag.blockedHighRank++; return false; }
     const aKey = wordDedupKey(a.word);
     if (!aKey || batchSeen.has(aKey)) { _wsDiag.blockedBatch++; return false; }
     // 键集登记即占位：返回 false 说明别处已收该词

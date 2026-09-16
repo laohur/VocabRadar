@@ -14,7 +14,7 @@ import {
   SUBTITLE_REF_H, pxToSizePct, sizePctToPx, subFontSizePct,
   DEFAULT_ANN_TEMPLATE, splitAnnTemplate, SUB_DEFAULT_STYLE
 } from '../lib/styles.js';
-import { getAnnotations } from '../lib/annotator.js';
+import { getAnnotations, setRankMax } from '../lib/annotator.js';
 import { ensureReady } from '../lib/dictionary.js';
 import { pickCleanShortTrans } from '../lib/dict-clean.js';
 
@@ -45,10 +45,12 @@ async function refreshPreviewAnns() {
     try { await ensureReady(); } catch (_) { /* 降级：用缓存/空注释 */ }
     if (snap !== _subSample) return;
     const th = await new Promise((resolve) => {
-      try { chrome.storage.local.get({ rankThreshold: 5000 }, (r) => resolve(r.rankThreshold)); }
-      catch (_) { resolve(5000); }
+      try { chrome.storage.local.get({ rankThreshold: 5000, rankThresholdMax: 0 }, (r) => resolve({ low: r.rankThreshold, max: r.rankThresholdMax })); }
+      catch (_) { resolve({ low: 5000, max: 0 }); }
     });
-    const anns = await getAnnotations(snap, th, new Set(), null, false);
+    // 词频上界同步到 annotator 模块级（预览走 getAnnotations 内部过滤）
+    setRankMax(th.max);
+    const anns = await getAnnotations(snap, th.low, new Set(), null, false);
     if (snap !== _subSample) return;
     const map = new Map();
     for (const a of anns) {

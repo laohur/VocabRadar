@@ -39,7 +39,9 @@ export const dictState = {
   quietBatch: false,                   // 原 _quietBatch
   ranksReadyLang: null,                // 分阶段 Stage 1 就绪语言（rank-only 可扫）
   ranksPromise: null,                  // 分阶段 Stage 1 承诺（同语言复用）
-  _settleRanks: null                   // ranks 承诺 resolve 暂存（异常兜底用）
+  _settleRanks: null,                  // ranks 承诺 resolve 暂存（异常兜底用）
+  maxRank: 0                           // 词频表上界（当前语言 wordfreq 最大 rank = 词数），
+                                       //   词频范围上界默认值来源；装载/投影构建时维护
 };
 
 /** 设置/取消词典逐词日志静音（批量处理期间置 true，结束置 false）
@@ -79,6 +81,7 @@ if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.local) {
       dictState.ranksReadyLang = null;
       dictState.ranksPromise = null;
       dictState._settleRanks = null;
+      dictState.maxRank = 0;
     }
   });
 }

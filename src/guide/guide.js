@@ -115,7 +115,7 @@ import {
 } from '../lib/llm.js';
 // 第二百四十八次：词典装载状态行——ensureReady 幂等（IDB 已构建走投影快通道秒回，
 //   缺数据才就地从源装载 = 更新/安装后引导页静默初始化的点名入口），getDiagState 读装载态。
-import { ensureReady, getDiagState } from '../lib/dictionary.js';
+import { ensureReady, getDiagState, getMaxRank } from '../lib/dictionary.js';
 
 // 第二百二十三次：LLM 翻译渠道提示词默认模板（{text}=原文，{lang}=释义语言）。
 // 2026-09-02 修正占位为 {text}（用户裁定：Please translate "{text}" in {lang}.）
@@ -306,6 +306,7 @@ function renderDictStatus() {
       el.textContent = statusReady(m.size);
       el.classList.add('ok');
       el.classList.remove('fail');
+      refreshRankMaxPlaceholder();
     } else {
       el.textContent = zh ? '词典装载失败：网页将按无词典降级运行（详见控制台）' : 'Dictionary load failed: pages fall back to no-dictionary mode (see console)';
       el.classList.add('fail');
@@ -343,6 +344,7 @@ async function loadSettings() {
     meaningLanguage: 'zh',
     rankThreshold: 5000,
     annotateOov: false,
+    rankThresholdMax: 0,   // 词频范围上界（0=不限制）
     annotateRepeat: false,
     // 327次：引导页新增复选框回填默认（与 popup.hintLaterEnabled 同键，默认空即仅首次高亮）
     hintLaterEnabled: false,
@@ -446,12 +448,22 @@ async function loadSettings() {
   });
 }
 
+// 词频上界占位提示：词典就绪后显示词频表上界实际值（用户「是几就是几」），未就绪显示 ∞
+function refreshRankMaxPlaceholder() {
+  const maxHint = getMaxRank();
+  $('rankThresholdMax').placeholder = (maxHint > 0) ? String(maxHint) : '∞';
+}
+
 function renderAll(res) {
   // 语言控件（2026-09-02 释义语言统一英文名称：meaningLanguage 固定用 LANG_NAMES_EN）
   renderLangSelect($('uiLang'), UI_LANGS, res.uiLanguage);
   renderLangSelect($('learnLanguage'), TRANSLATE_LANGS, res.learnLanguage);
   renderLangSelect($('meaningLanguage'), TRANSLATE_LANGS, res.meaningLanguage, LANG_NAMES_EN);
   $('rankThreshold').value = res.rankThreshold;
+  // 词频上界：0/缺省=回退到词典词频表上界（用户「是几就是几」；词典未就绪时显示 ∞）
+  $('rankThresholdMax').value = (typeof res.rankThresholdMax === 'number' && isFinite(res.rankThresholdMax) && res.rankThresholdMax > 0)
+    ? res.rankThresholdMax : '';
+  refreshRankMaxPlaceholder();
   $('annotateOov').checked = !!res.annotateOov;
   // 第二百二十五次：引擎存储值定名 'api'（与 UI 词、语义一致，《命名清查》裁定）。
   // 兼容读旧残留：223~224 次存过 'llm'，读侧归一化为 'api' 并回写一次（同样式 id 清洗模式）。
@@ -756,6 +768,17 @@ async function init() {
     const v = parseInt(e.target.value, 10);
     chrome.storage.local.set({ rankThreshold: isFinite(v) ? v : 5000 }, () => log('词频阈值=', v));
   });
+  // 词频上界（0/空=回退到词典词频表上界；下界必须小于上界，冲突时清空回退表上界）
+  $('rankThresholdMax').addEventListener('change', (e) => {
+    const v = parseInt(e.target.value, 10);
+    const low = parseInt($('rankThreshold').value, 10);
+    if (!isFinite(v) || v <= 0 || (isFinite(low) && v <= low)) {
+      $('rankThresholdMax').value = '';
+      chrome.storage.local.set({ rankThresholdMax: 0 }, () => { refreshRankMaxPlaceholder(); log('词频上界重置为词频表上界'); });
+      return;
+    }
+    chrome.storage.local.set({ rankThresholdMax: v }, () => log('词频上界=', v));
+  });
   $('annotateOov').addEventListener('change', (e) => {
     chrome.storage.local.set({ annotateOov: e.target.checked }, () => log('注释表外词=', e.target.checked));
   });
@@ -932,7 +955,7 @@ async function init() {
        || changes.videoOverlayAnnStyle || changes.subtitleCustom || changes.subtitleUserStyles
        || changes.subtitleSample || changes.videoOverlayAnnMode
        // 291次：阈值/表外开关影响预览动态注释，布局键跨页同步预览
-       || changes.rankThreshold || changes.annotateOov
+       || changes.rankThreshold || changes.rankThresholdMax || changes.annotateOov
        // 301次：注释个性化三键（与字幕流同分支，共享回声抑制）
        || changes.annotationCustom || changes.annotationUserStyles || changes.annotationSample) {
       // 292次回声抑制：本页刚写入（即时渲染已是最终态），1200ms 内回声跳过

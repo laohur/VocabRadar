@@ -461,6 +461,15 @@ export function isLoaded() {
 }
 
 /**
+ * 词频表上界（当前语言 wordfreq 最大 rank = 词数，装载/投影构建时维护）
+ * 供词频范围上界默认值：词典未就绪返回 0，引导页据此回退到词频表上界。
+ * @returns {number}
+ */
+export function getMaxRank() {
+  return dictState.maxRank || 0;
+}
+
+/**
  * 诊断信息（2026-08-14 第五十四次）：供诊断悬浮窗展示词典加载状态
  * 反思（2026-08-14 第五十五次修正）：旧版含 learnLangs: LANGUAGES 字段，但本模块
  *   未定义/未导入 LANGUAGES，getDiagState() 抛 ReferenceError -> 诊断窗显示

@@ -31,7 +31,7 @@ import { initLang } from '../../lib/i18n.js';
 import { isBalancedParens, pickCleanShortTrans } from '../../lib/dict-clean.js';
 import { beginBatch, countChars, countTokens, countUnique, incField, incScalar, getBatches, logBatch } from '../../lib/dict-stats.js';
 import { emitBlock, resetScan } from '../page-scan-bus.js';
-import { lookupWord } from '../../lib/annotator.js';
+import { lookupWord, getRankMax, setRankMax } from '../../lib/annotator.js';
 // === 2026-09-09（w4，ESM 模块图装载 1986ms 优化，用户拍板"拆分懒加载"）===
 // tooltip.js / panel.js 及其重依赖（chat.js、main-text.js、phonetics.js、
 //   diverse-lemmas/languages 词形表等）只服务 hover 悬浮 / 右键面板 / OCR 面板等
@@ -87,6 +87,8 @@ export async function startHint(settings) {
     //   虽不直接产生"NaN阶"显示，但影响高亮判定，且 console.log 会打印 NaN。
     thState.rankThreshold = (typeof settings.rankThreshold === 'number' && isFinite(settings.rankThreshold))
       ? settings.rankThreshold : 5000;
+    // 词频范围上界（storage.rankThresholdMax，0/缺省=不限制）
+    setRankMax(settings.rankThresholdMax);
     thState.annotateOov = settings.annotateOov === true;  // 默认 false（注释表外词默认不选）
     thState.annotateRepeat = settings.annotateRepeat === true;  // 默认 false（不注释重复生词）
     // 280次：侧邻注释模板（annBrackets 布尔退役，默认 {word}({meaning})）
@@ -287,6 +289,24 @@ export function setRankThreshold(v) {
     // 阈值降低：可能有之前跳过的高频词现在需要显示，重新扫描
     // 阈值升高：不需要重新扫描（updateWordVisibility 已隐藏高频词）
     if (thState.rankThreshold < oldThreshold) {
+      clearProcessedAttr();
+      resetScan();
+      scheduleScan(document.body || document.documentElement);
+    }
+  }
+}
+
+/**
+ * 词频上界 setter（storage.rankThresholdMax 变化时调用，与 setRankThreshold 同构）
+ * 上界调小（排除更多极生僻词）：重扫隐藏已包超界词；调大：updateWordVisibility 即可。
+ * @param {number} v 上界（0/缺省=不限制）
+ */
+export function setRankThresholdMax(v) {
+  const oldMax = getRankMax();
+  setRankMax(v);
+  if (thState.enabled) {
+    updateWordVisibility();
+    if (getRankMax() < oldMax) {
       clearProcessedAttr();
       resetScan();
       scheduleScan(document.body || document.documentElement);
@@ -873,8 +893,9 @@ export async function queryWord(lower, original, stats) {
     rank = full.rank;
     tags = full.tags || [];
     lemma = full.lemma || null;
-    // IDB 命中路径需手动做高频过滤（lookupWord 内部已做，此处补上）
-    if (rank !== null && typeof rank === 'number' && isFinite(rank) && rank <= thState.rankThreshold) {
+    // IDB 命中路径需手动做阈值范围过滤（lookupWord 内部已做，此处补上）
+    if (rank !== null && typeof rank === 'number' && isFinite(rank)
+        && (rank <= thState.rankThreshold || rank > getRankMax())) {
       if (stats) incScalar(stats, 'highFreq');
       return null;
     }
@@ -1243,8 +1264,8 @@ export function updateWordVisibility() {
       // 表外词：受 _annotateOov 控制
       shouldHide = !thState.annotateOov;
     } else {
-      // 词典命中：受 _rankThreshold 控制（rank<=阈值=高频词=隐藏）
-      shouldHide = rank <= thState.rankThreshold;
+      // 词典命中：受阈值范围控制（rank<=下界=高频词=隐藏；rank>上界=极生僻=隐藏）
+      shouldHide = (rank <= thState.rankThreshold) || (rank > getRankMax());
     }
     span.classList.toggle(HIDE_WORD_CLASS, shouldHide);
   });

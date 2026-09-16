@@ -60,6 +60,7 @@ export {
   rescanNow,
   clearHighlights,
   setRankThreshold,
+  setRankThresholdMax,
   setAnnotateOov,
   setAnnotateRepeat,
   setAnnTemplate,

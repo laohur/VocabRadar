@@ -263,6 +263,10 @@ async function _hintBoot() {
       if ('rankThreshold' in changes) {
         _impl.setRankThreshold(changes.rankThreshold.newValue);
       }
+      // 词频上界变化 → 按新上界重扫（词频范围，key rankThresholdMax）
+      if ('rankThresholdMax' in changes) {
+        _impl.setRankThresholdMax(changes.rankThresholdMax.newValue);
+      }
       // 注释表外词开关变化 → 重扫（2026-08-07；2026-08-14 键名改 annotateOov）
       if ('annotateOov' in changes) {
         _impl.setAnnotateOov(changes.annotateOov.newValue);
@@ -303,7 +307,7 @@ async function _hintBoot() {
     //   防抖命中必打 warn（不静默），高频出现即暴露循环调用方。
     let _lastStartSig = '';
     let _lastStartOkAt = 0;
-    const _startSig = (s) => [s.rankThreshold, s.annotateOov, s.annotateRepeat, s.textStyle,
+    const _startSig = (s) => [s.rankThreshold, s.rankThresholdMax, s.annotateOov, s.annotateRepeat, s.textStyle,
       s.hintFirstEnabled, s.hintFirstBg, s.hintFirstFg,
       s.hintLaterEnabled, s.hintLaterBg, s.hintLaterFg,
       s.hintSideAnnotation, s.hintAnnotationBg, s.hintAnnotationFg].join('|');

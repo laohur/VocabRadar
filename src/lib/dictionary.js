@@ -56,5 +56,5 @@
 // 本门面仅 re-export 全部原导出符号（符号名不变），所有引用方零改动。
 export { setQuietBatch, getLearnLang } from './dictionary/state.js';
 export {
-  ensureReady, ensureRanksReady, isRanksLoaded, lookup, lookupWithLemmatizer, lookupFull, prefetchFull, isLoaded, getDiagState
+  ensureReady, ensureRanksReady, isRanksLoaded, lookup, lookupWithLemmatizer, lookupFull, prefetchFull, isLoaded, getDiagState, getMaxRank
 } from './dictionary/query.js';

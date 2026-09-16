@@ -25,7 +25,7 @@ import { log } from './logger.js';
 import { formatTime, copyToClipboard, flashButton, escapeHtml, escapeReg, cssEscape } from './dom-utils.js';
 import { pickRandomLinesForComment, findMainCommentContainer, expandCommentBox, fillCommentInput, scrollMinIntoView } from './comment-fill.js';
 import { autoExpandOnce, requestSyncHeightOnce } from './sidebar-layout.js';
-import { getAnnotations, rankToStage, resetDiag } from '../../lib/annotator.js';
+import { getAnnotations, getRankMax, rankToStage, resetDiag } from '../../lib/annotator.js';
 import { lemmaFamily } from '../../lib/lemmatizer.js';
 import { getPhonetic } from '../../lib/phonetics.js';
 import { t } from '../../lib/i18n.js';
@@ -38,7 +38,7 @@ import { addSubtitle as overlayAddSubtitle } from '../subtitle-overlay.js';
 import { openChatPanel } from '../../lib/chat.js';
 import {
   getRoot, getSubtitlesRef, getActiveVideo, getRankThreshold, getAnnotateOov,
-  getAnnotateRepeat, getAnnTemplate, getCfg, getActiveTab, showNoSubtitle, clearLoading, toast
+  getAnnotateRepeat, getAnnTemplate, getCfg, getActiveTab, getSyncEnabled, showNoSubtitle, clearLoading, toast
 } from '../video-sidebar.js';
 // 280次：注释模板拆分（{word} 丢弃，取前后字面量包释义）
 import { splitAnnTemplate } from '../../lib/styles.js';
@@ -193,7 +193,9 @@ function createEmptySlot() {
   return div;
 }
 
-// === 面板点击事件委托（点击跳转到对应字幕）===
+// === 面板点击事件委托 ===
+// 同步开关（Sync display）：开启=点击字幕跳转播放进度并高亮该行；
+//   关闭=仅滚动/高亮该行（侧栏独立浏览字幕），不改变播放进度。
 function onPanelClick(e) {
   const item = e.target.closest('.beaver-sub-item');
   if (!item || item.dataset.idx === '-1') return;
@@ -202,8 +204,9 @@ function onPanelClick(e) {
   const sub = getSubtitlesRef()[idx];
   if (sub && isFinite(sub.start)) {
     const v = getActiveVideo();
-    if (v) v.currentTime = sub.start;
-    log('跳转到', sub.start, 's');
+    if (v && getSyncEnabled()) v.currentTime = sub.start;
+    log(getSyncEnabled() ? '跳转到' : '滚动到', sub.start, 's');
+    highlightCurrent(sub.start);
   }
 }
 
@@ -604,12 +607,14 @@ function wordDedupKey(w) {
 function filterByCurrentRank(anns) {
   if (!Array.isArray(anns)) return [];
   const thr = getRankThreshold();
+  const maxR = getRankMax();
   const oov = getAnnotateOov();
   return anns.filter((a) => {
     if (!a) return false;
     if (a.rank === null || a.rank === undefined) return !!oov;   // 表外词
     if (typeof a.rank === 'number' && isFinite(a.rank)
         && typeof thr === 'number' && isFinite(thr) && a.rank <= thr) return false;   // 高频词
+    if (typeof a.rank === 'number' && isFinite(a.rank) && a.rank > maxR) return false;   // 超词频上界（极生僻词）
     return true;
   });
 }

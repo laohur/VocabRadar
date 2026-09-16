@@ -37,7 +37,7 @@
 //   3. 个性化样式缺省值对齐（用户"个性化样式默认配置给个能用的样式"）：custom 规则
 //      CSS 变量缺省底色 transparent、字号 28px，与 guide 页 Custom 默认值同源。
 
-import { getAnnotations } from '../lib/annotator.js';
+import { getAnnotations, setRankMax } from '../lib/annotator.js';
 // 302次：侧邻注释统一用短释（与各侧邻路径同源；本地旧版只认；已删）
 import { pickCleanShortTrans } from '../lib/dict-clean.js';
 // 反思（2026-08-13 第五十一次）：字幕样式数据驱动（差异化属性定义在 styles.js SUBTITLE_TEXT_STYLES），
@@ -626,7 +626,7 @@ function onTimeUpdate() {
  * 反思（2026-07-06 v4）：先调 stopOverlay 清理旧状态，防止 SPA 换集时旧 video 引用残留。
  * @param {HTMLVideoElement} video
  * @param {Array<{start,end,text}>} subtitles
- * @param {{rankThreshold?:number, enabled?:boolean, mode?:string}} options
+ * @param {{rankThreshold?:number, rankThresholdMax?:number, enabled?:boolean, mode?:string}} options
  */
 export function startOverlay(video, subtitles, options = {}) {
   stopOverlay();
@@ -634,6 +634,8 @@ export function startOverlay(video, subtitles, options = {}) {
   _video = video;
   _subtitles = subtitles;
   _rankThreshold = options.rankThreshold ?? 5000;
+  // 词频范围上界（storage.rankThresholdMax；0/缺省=不限制），annotator 模块级生效
+  setRankMax(options.rankThresholdMax);
   _enabled = options.enabled ?? true;
   _mode = options.mode === 'detail' ? 'detail' : 'side';
   // 注释重复生词（2026-08-15 第六十二次：默认不选）
@@ -826,6 +828,14 @@ export function setOverlayEnabled(enabled) {
 /** 设置词频阈值 */
 export function setRankThreshold(v) {
   _rankThreshold = v;
+  _annotationsCache.clear();
+  _seen.clear();
+  _lastKey = '';
+}
+
+/** 设置词频范围上界（storage.rankThresholdMax 变化时调用；0/缺省=不限制） */
+export function setRankThresholdMax(v) {
+  setRankMax(v);
   _annotationsCache.clear();
   _seen.clear();
   _lastKey = '';

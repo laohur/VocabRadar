@@ -22,7 +22,7 @@
 //   不再使用独立的 _asrEntries 数组，ASR 结果直接进入 _subtitles/_subEntries。
 //   启动 ASR 时保存当前字幕，清空面板；停止 ASR 时恢复原字幕。
 
-import { getAnnotations, rankToStage, resetDiag } from '../lib/annotator.js';
+import { getAnnotations, rankToStage, resetDiag, setRankMax } from '../lib/annotator.js';
 // 280次：统一池样式表生成器（52 条共享样式，参数化选择器注入本容器）
 // （280 修正：import 路径写错层级 ../../→../，esbuild 预打包与运行时均解析不到）
 import { buildAnnPoolCss } from '../lib/styles.js';
@@ -189,6 +189,8 @@ export function getAnnTemplate() { return _annTemplate; }
 export function setAnnTemplate(v) { _annTemplate = (typeof v === 'string' && v.trim()) ? v : '{target}{annotation}'; }
 export function getCfg() { return _cfg; }
 export function getActiveTab() { return _activeTab; }
+// Sync display 开关读取（vs/subtitle-renderer 点击字幕跳转与门面播放跟随共用）
+export function getSyncEnabled() { return _syncEnabled; }
 
 // === 冒泡提示（替代 alert，非致命错误用） ===
 // msg: 文本；opts: {x,y,duration,error} —— x,y 为屏幕坐标，缺省居中底部
@@ -1396,8 +1398,8 @@ export async function startSidebar(video, options = {}) {
   // 反思（2026-07-04）：旧版只监听 timeupdate，但 timeupdate 在视频暂停时不触发。
   // 用户拖进度条暂停时 seek，timeupdate 不触发 → 高亮不更新 → "字幕没跟随"。
   // 新增 seeked 事件：seek 完成（无论是否暂停）立即触发，保证拖进度条后高亮即时更新。
-  _timeListener = () => highlightCurrent(_video.currentTime);
-  _seekedListener = () => highlightCurrent(_video.currentTime);
+  _timeListener = () => { if (_syncEnabled) highlightCurrent(_video.currentTime); };
+  _seekedListener = () => { if (_syncEnabled) highlightCurrent(_video.currentTime); };
   _video.addEventListener('timeupdate', _timeListener);
   _video.addEventListener('seeked', _seekedListener);
 
@@ -1410,6 +1412,8 @@ export async function startSidebar(video, options = {}) {
     _cfg = { ..._cfg, ...cfg };
     setDebug(!!cfg.debug);
     _rankThreshold = settings.rankThreshold;
+    // 词频范围上界（storage.rankThresholdMax；0/缺省=不限制），annotator 模块级生效
+    setRankMax(settings.rankThresholdMax);
     _annotateOov = settings.annotateOov === true;
     _annotateRepeat = settings.annotateRepeat === true;
     // 280次：侧邻注释模板初始化（annBrackets 布尔退役，默认 {word}({meaning})）

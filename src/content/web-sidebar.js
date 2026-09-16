@@ -104,6 +104,10 @@ async function _wsBoot() {
       if ('rankThreshold' in changes) {
         _wsImpl.setRankThreshold(changes.rankThreshold.newValue);
       }
+      // 词频上界变化 → 重扫（词频范围，key rankThresholdMax）
+      if ('rankThresholdMax' in changes) {
+        _wsImpl.setRankThresholdMax(changes.rankThresholdMax.newValue);
+      }
       // 语言变化 → 更新选择器
       if ('learnLanguage' in changes || 'meaningLanguage' in changes) {
         _wsGetSettings().then((s) => _wsImpl.updateLanguages(s));

@@ -26,6 +26,22 @@ import { cleanDictEntry } from './dict-clean.js';
 // 反思（2026-08-18 第七十四次）：本 Set 已移除——词形日志统一由 dictionary.js
 //   按用户三种情形（①首次查词典 ②词典外单词 ③词典缺属性组装）打印，此处不再重复。
 
+// === 词频范围上界（唯一属主，模块级） ===
+// 默认 Infinity = 不限制（仅用下界，兼容全部既有行为）；消费方启动/设置变更时
+//   经 setRankMax 写入（storage.rankThresholdMax，0/缺省=不限制）。
+let _rankMax = Infinity;
+
+/** 设置词频上界（0/无效值=不限制）。供各消费方读取配置后写入 */
+export function setRankMax(v) {
+  _rankMax = (typeof v === 'number' && isFinite(v) && v > 0) ? v : Infinity;
+  return _rankMax;
+}
+
+/** 读当前词频上界（±Infinity=不限制）。供显示口径再过滤（filterByCurrentRank 等） */
+export function getRankMax() {
+  return _rankMax;
+}
+
 /**
  * 查单个词的核心逻辑（词典命中+rank>阈值 → 返回 pending 占位；高频词 → null）
  * 这是文本提示与字幕提示共享的底层查词函数，杜绝两处重复代码导致行为不一致。
@@ -56,8 +72,9 @@ import { cleanDictEntry } from './dict-clean.js';
  */
 export function lookupWord(word, threshold = 0) {
   const entry = lookup(word);
-  // 词典命中且 rank 超阈值
-  if (entry && typeof entry.rank === 'number' && isFinite(entry.rank) && entry.rank > threshold) {
+  // 词典命中且 rank 在阈值范围内（>下界 且 <=上界）
+  if (entry && typeof entry.rank === 'number' && isFinite(entry.rank)
+      && entry.rank > threshold && entry.rank <= _rankMax) {
     return {
       isWord: true,
       rank: entry.rank,
@@ -228,8 +245,9 @@ async function getAnnotationsInner(text, rankThreshold = 0, seen = new Set(), on
     }
     _diag.push(`${word}:${rank !== null ? `r${rank}` : '表外'}`);
 
-    // 2. 高频词过滤（rank<=阈值不显示）
-    if (rank !== null && typeof rank === 'number' && isFinite(rank) && rank <= threshold) {
+    // 2. 阈值范围过滤（下界：rank<=阈值不高亮；上界：rank>上界=极生僻词不显示）
+    if (rank !== null && typeof rank === 'number' && isFinite(rank)
+        && (rank <= threshold || rank > _rankMax)) {
       incScalar(stats, 'highFreq');
       _diag[_diag.length - 1] += ':高频跳过';
       continue;

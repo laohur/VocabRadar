@@ -16,7 +16,7 @@
 // 仅使用 state.js 的 _ts() 时间戳辅助，无共享状态写入（产物 Map 由调用方消费）。
 // ============================================================
 
-import { _ts } from './state.js';
+import { _ts, dictState } from './state.js';
 import { b64ToU8 } from '../b64.js';
 import { decode as msgpackDecode } from '../vendor/msgpack-lite.js';
 
@@ -234,6 +234,9 @@ export async function loadWordfreq(lang) {
   }
   // 反思（2026-08-20 第八十五次）：词频是词典字段，不再写 dictCache。
   //   送入词典（rank 字段 + __built__ 标记）由 _loadDict 的 bulkWriteDictionary 统一完成。
+  // 词频表上界 = 该语言 wordfreq 词数（rank 连续 1..N 编号，N=map.size），供词频范围
+  //   上界默认值（词典未就绪前为 0，引导页据此回退到词频表上界）。
+  dictState.maxRank = map.size;
   return map;
 }
 

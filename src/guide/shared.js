@@ -108,7 +108,8 @@ const MSG = {
   fieldUiLang: { en: 'Interface Language', zh: '界面语言' },
   fieldSource: { en: 'Target language (to learn)', zh: '目标语言' },   // 第二百二十二次：名实相符（此键=要学习的目标语言）
   fieldTarget: { en: 'Definition language', zh: '释义语言' },   // 第二百二十二次：名实相符
-  fieldThreshold: { en: 'Frequency Threshold', zh: '词频阈值' },
+  fieldThreshold: { en: 'Minimum Frequency Rank', zh: '词频下界' },
+  fieldThresholdMax: { en: 'Maximum Frequency Rank', zh: '词频上界' },
   // 第二百二十四次：Whisper 模型行为单选行标签（选项为 whisper-tiny 等具体模型名，语言中立不走 i18n）
   fieldAsrModel: { en: 'Whisper model', zh: 'Whisper 模型' },
   // 第二百一十二次：对话上下文字段随界面语言（用户："界面语言是啥就用啥语言"）

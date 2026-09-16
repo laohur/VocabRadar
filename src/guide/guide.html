@@ -70,8 +70,12 @@
               <select id="meaningLanguage"></select>
             </div>
             <div class="field">
-              <label for="rankThreshold" data-key="fieldThreshold">词频阈值</label>
+              <label for="rankThreshold" data-key="fieldThreshold">词频下界</label>
               <input id="rankThreshold" type="number" min="0" step="1000">
+            </div>
+            <div class="field">
+              <label for="rankThresholdMax" data-key="fieldThresholdMax">词频上界</label>
+              <input id="rankThresholdMax" type="number" min="0" step="1000" placeholder="∞">
             </div>
             <label class="chk">
               <input id="annotateOov" type="checkbox">

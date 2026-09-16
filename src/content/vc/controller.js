@@ -18,7 +18,7 @@
 // ============================================================
 
 import { getBilibiliSubtitles, fetchBilibiliTrack, getYouTubeSubtitles, fetchYouTubeTrack } from '../../lib/subtitle/index.js';
-import { startOverlay, stopOverlay, setOverlayEnabled, setRankThreshold } from '../subtitle-overlay.js';
+import { startOverlay, stopOverlay, setOverlayEnabled, setRankThreshold, setRankThresholdMax } from '../subtitle-overlay.js';
 import { startSidebar, updateSubtitles, showNoSubtitle, setTracks, destroySidebar, loadASRCacheIfAny, loadASRCacheWithCoverage, selectASRTrackAndContinue, currentVideoKey, isASRActive } from '../video-sidebar.js';
 import { vcState } from './state.js';
 import { waitForVideo, waitForVideoReady, observeVideoChange } from './video-detect.js';
@@ -57,6 +57,7 @@ function getSettings() {
   return new Promise((resolve) => {
     chrome.storage.local.get({
       rankThreshold: 5000,   // 2026-08-14 第五十四次修正：恢复默认 5000
+      rankThresholdMax: 0,   // 词频范围上界，0/缺省=不限制（默认全表频段）
       learnLanguage: 'en',   // 所学语言（字幕轨道默认首选）
       meaningLanguage: 'zh',   // 释义语言
       sidebarEnabled: true,  // #88: 侧栏开关，默认显示
@@ -200,6 +201,10 @@ export async function startVideoController(platform) {
       chrome.storage.onChanged.addListener((changes) => {
         if (changes.rankThreshold) {
           setRankThreshold(changes.rankThreshold.newValue);
+        }
+        // 词频上界变化 → 清缓存重渲染（词频范围，key rankThresholdMax）
+        if (changes.rankThresholdMax) {
+          setRankThresholdMax(changes.rankThresholdMax.newValue);
         }
         // 反思（2026-07-10 #88）：用户在 popup 切换侧栏开关时，实时显示/隐藏侧栏。
         if (changes.sidebarEnabled) {
@@ -353,6 +358,7 @@ export async function startVideoController(platform) {
       try {
         startOverlay(video, subs, {
           rankThreshold: settings.rankThreshold,
+          rankThresholdMax: settings.rankThresholdMax,
           enabled: true,
           annotateRepeat: settings.annotateRepeat === true
         });
