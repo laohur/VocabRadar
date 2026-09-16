@@ -455,7 +455,13 @@ export function onWordLeave() {
 }
 
 export function onWordClick(e) {
-  e.stopPropagation();
+  // 328次修正（2026-09-16）：删除 stopPropagation——它截断 click 冒泡，
+  //   宿主页依赖冒泡的组件随之失效（用户报障：开启扩展后 B 站合集列表点不动。
+  //   实测对照：包词 span 调 stopPropagation 后，click 在 target 阶段即死，
+  //   .video-pod 及以上所有 bubble 层收不到；不调则全链路 17 条完整到达）。
+  //   查词（speak+翻译）不依赖冒泡，删除无副作用；点 <a> 内的词本来就照样
+  //   跳转（stopPropagation 从不阻止默认行为），无回归。对齐 saladict
+  //   「不拦截宿主点击」原则：包进宿主文本的 span 必须放行冒泡。
   const el = e.currentTarget;
   speak(el.dataset.word);
   // 反思（2026-08-02）：用户要求"点击生词时候，要翻译"。
