@@ -66,33 +66,39 @@ export async function _loadDict(lang) {
   //   防语言切换后旧语言的标记误放行新语言的空投影（真 0 词库时逐页死循环的保险丝）。
   dictState._emptyProjRebuilt = false;
 
-  // 2026-09-08（用户批复"主动轮询 files.json 检测更新并自动重建"）：SW 每 24h 比对
-  //   storage.wfInstalled[lang].sha256 与 HF files.json（checkWfUpdates），差异写
-  //   storage.wfUpdates[lang]。此处入口检查（60s 内存节流）：有更新 → clearByLang
-  //   清该语言词典数据 + 失效单例 → 不走下方命中分支，直接走正常重建路径自然重拉。
-  try {
-    const now = Date.now();
-    if (!dictState._wfUpdateCheckedAt || now - dictState._wfUpdateCheckedAt > 60000) {
-      dictState._wfUpdateCheckedAt = now;
-      const { wfUpdates } = await chrome.storage.local.get('wfUpdates');
-      if (wfUpdates && wfUpdates[meaningLang]) {
-        console.log(`[VocabRadar][dictionary][${_ts()}] 检测到 ${meaningLang} 词频源更新（HF files.json sha256 变化），清库重建`);
-        const removed = await clearByLang(meaningLang);
-        console.log(`[VocabRadar][dictionary][${_ts()}] 词典 ${meaningLang} 已清除 ${removed} 条，开始重建`);
-        dictState.loadedLang = null;
-        dictState.dictMap = null;
-        dictState.loadPromise = null;
-      }
-    }
-  } catch (e) {
-    console.warn(`[VocabRadar][dictionary][${_ts()}] wfUpdates 检查失败（不影响正常加载）:`, e);
-  }
-
-  // （第二百四十五次）"已加载返回/在途复用"两守卫已上移至同步段（首个 await 之前），
-  //   见函数开头——原位置在 wfUpdates 检查之后，处于让出点之后，守卫失效窗口见顶部注释。
-
+  // 第二百四十七次（用户 13:33 github.com 日志：一次装载却两次拉取词频文件）：
+  //   旧版把 loadPromise 的创建放在 wfUpdates 检查（首个 await）之后——两个同步调用方
+  //   （ensureRanksReady + ensureReady，文本提示/侧栏各自触发）都能在 loadPromise 尚未
+  //   赋值时穿过上方在途复用守卫，各自新建一个 IIFE 并发装载 → _rebuildFromSources
+  //   跑两遍 → 两次 WF_FETCH 网络拉取（判据：同上下文两次"词典缺少 en 数据"）。
+  //   修法：装载 Promise 在同步段（首个 await 之前）即赋值，之后所有调用方一律命中
+  //   上方在途复用；wfUpdates 检查下移进 IIFE 内部，行为语义不变。
   dictState.loadPromise = (async () => {
     const startTime = Date.now();
+
+    // 2026-09-08（用户批复"主动轮询 files.json 检测更新并自动重建"）：SW 每 24h 比对
+    //   storage.wfInstalled[lang].sha256 与 HF files.json（checkWfUpdates），差异写
+    //   storage.wfUpdates[lang]。此处入口检查（60s 内存节流）：有更新 → clearByLang
+    //   清该语言词典数据 + 失效单例 → 走下方正常重建路径自然重拉。
+    try {
+      const now = Date.now();
+      if (!dictState._wfUpdateCheckedAt || now - dictState._wfUpdateCheckedAt > 60000) {
+        dictState._wfUpdateCheckedAt = now;
+        const { wfUpdates } = await chrome.storage.local.get('wfUpdates');
+        if (wfUpdates && wfUpdates[meaningLang]) {
+          console.log(`[VocabRadar][dictionary][${_ts()}] 检测到 ${meaningLang} 词频源更新（HF files.json sha256 变化），清库重建`);
+          const removed = await clearByLang(meaningLang);
+          console.log(`[VocabRadar][dictionary][${_ts()}] 词典 ${meaningLang} 已清除 ${removed} 条，开始重建`);
+          dictState.loadedLang = null;
+          dictState.dictMap = null;
+          // 第二百四十七次：不置 loadPromise=null——本 IIFE 即在途装载，保持上方在途复用
+          //   （其他调用方复用本 Promise，不再开新并发装载；重拉由本 IIFE 正常重建完成）。
+        }
+      }
+    } catch (e) {
+      console.warn(`[VocabRadar][dictionary][${_ts()}] wfUpdates 检查失败（不影响正常加载）:`, e);
+    }
+
     console.log(`[VocabRadar][dictionary][${_ts()}] 开始加载词典, lang=${meaningLang}`);
 
     // 反思（2026-08-20 第八十五次）：从词典读词频/词表（rank/tags 字段）--

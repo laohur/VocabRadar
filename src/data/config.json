@@ -1,8 +1,8 @@
 {
   "debug": true,
   "commentMaxLen": 1000,
-  "prefixComment": "VocabRadar：\n",
-  "prefixCopy": "VocabRadar：\n",
+  "prefixComment": "VocabRadar🎯\n",
+  "prefixCopy": "VocabRadar🎯\n",
   "toastDuration": 2500,
   "panelHideDelay": 500,
   "asrSegmentSec": 30,

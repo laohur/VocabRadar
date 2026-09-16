@@ -6,10 +6,21 @@
  *   - 10个英文词表文件 (--wordlist-dir，默认 ../BeaverWord/preprocess/word_list/*.txt)
  *     每行一个英文单词，对应 CET4/CET6/TEM4/TEM8/GRADUATE/IELTS/TOEFL/GRE/GMAT/SAT
  *   - 图标源图 (--logo，默认 ../文档/logo.png)
+ *   - 英中翻译包 (--translation-src，默认 ../VocabRadar/data/translations/en_zh.json.br)，
+ *     Brotli 压缩的 {小写英文词: [中文释义...]}，由 VocabRadar 仓
+ *     preprocess/build_translation_zh.py 产出（输入 ECDICT + LLM 直译缺口，
+ *     ECDICT 为 MIT License，见旧 src/data/translations/ATTRIBUTION.md）
  *
  * 输出:
- *   - src/data/wordlists.json ({word_lower: [list_ids]}，仅英文词表)
+ *   - src/data/en/wordlists.json ({word_lower: [list_ids]}，仅英文词表)
+ *   - src/data/en/translations_zh.json ({word: [中文释义...]}，UTF-8 无 BOM)
  *   - src/data/icons/icon{16,32,48,128,144}.png（--icons 子任务，由 --logo 源图缩放生成）
+ *
+ * 第二百四十八次（用户裁定"这些当然是预处理工作，从外部拿数据，更新到合适位置"）：
+ *   - 词表输出路径对齐运行时读点 src/data/en/（此前写顶层 src/data/wordlists.json 成孤儿，
+ *     运行时自 2026-09-15 起读 en/ 里的；顶层文件已删除）。
+ *   - 翻译包改由管线解码落盘（--translations），取代手工复制/改名——9-15 refactor 用
+ *     PowerShell 手工落盘曾把整份 JSON 写成 UTF-16LE，运行时 res.json() 解析失败。
  *
  * 词频（wordfreq）不再由本脚本处理（2026-09-08 用户裁定"preprocess.mjs 不再处理
  * wordfreq，有 clean.js 文件处理"）：词频 .gz 与词数元数据均由公开仓库
@@ -63,12 +74,15 @@
  *   node preprocess.mjs                        # 全部子任务
  *   node preprocess.mjs --icons                # 仅重新生成图标
  *   node preprocess.mjs --wordlists            # 仅词表标签
+ *   node preprocess.mjs --translations         # 仅英中翻译包（解码 Brotli → UTF-8 JSON）
  *   node preprocess.mjs --wordlist-dir <目录>   # 指定词表目录（默认 ../BeaverWord/preprocess/word_list）
  *   node preprocess.mjs --logo <文件>          # 指定图标源图（默认 ../文档/logo.png）
+ *   node preprocess.mjs --translation-src <文件> # 指定翻译包源（默认 ../VocabRadar/data/translations/en_zh.json.br）
  */
 
 import fs from 'node:fs';
 import path from 'node:path';
+import zlib from 'node:zlib';
 import { parseArgs } from 'node:util';
 
 // === 配置 ===
@@ -76,7 +90,9 @@ import { parseArgs } from 'node:util';
 // 输出目录（scripts/ 的上一级即扩展项目根）
 const PROJECT_ROOT = path.resolve(import.meta.dirname, '..');
 const OUTPUT_DIR = path.join(PROJECT_ROOT, 'src', 'data');
-const WORDLISTS_OUTPUT_PATH = path.join(OUTPUT_DIR, 'wordlists.json');
+const EN_OUTPUT_DIR = path.join(OUTPUT_DIR, 'en');
+const WORDLISTS_OUTPUT_PATH = path.join(EN_OUTPUT_DIR, 'wordlists.json');
+const TRANSLATIONS_OUTPUT_PATH = path.join(EN_OUTPUT_DIR, 'translations_zh.json');
 const ICONS_OUTPUT_DIR = path.join(OUTPUT_DIR, 'icons');
 const ICON_SIZES = [16, 32, 48, 128, 144]; // 128 商店图标；144 备用（部分平台高分屏）
 
@@ -86,6 +102,8 @@ const ICON_SIZES = [16, 32, 48, 128, 144]; // 128 商店图标；144 备用（�
 const DEFAULT_WORDLIST_DIR = path.join(PROJECT_ROOT, '..', 'BeaverWord', 'preprocess', 'word_list');
 // 图标源图（第一百七十五次）
 const DEFAULT_LOGO = path.join(PROJECT_ROOT, '..', '文档', 'logo.png');
+// 英中翻译包源（VocabRadar 仓 data/translations/en_zh.json.br，build_translation_zh.py 产出）
+const DEFAULT_TRANSLATION_SRC = path.join(PROJECT_ROOT, '..', 'VocabRadar', 'data', 'translations', 'en_zh.json.br');
 
 // 词表配置（与前端 lemmatizer.js 词表标签匹配一致）
 // id -> 文件名
@@ -145,6 +163,30 @@ function buildWordlistsJson(wordlists) {
   return wordToTags;
 }
 
+function buildTranslationsFromBr(srcPath) {
+  // 第二百四十八次：解码 Brotli 压缩的英中翻译包 → JSON 文本；源缺失/解码失败/非合法
+  //   JSON 均明确报错返回 null（调用方跳过落盘，不静默造数据）。写盘统一 JSON.stringify
+  //   或原样文本 + 'utf8'（UTF-8 无 BOM），杜绝 Windows Out-File 默认 UTF-16LE 类事故。
+  if (!fs.existsSync(srcPath)) {
+    warn(`翻译包源不存在: ${srcPath}，跳过 translations_zh.json 生成`);
+    return null;
+  }
+  let text;
+  try {
+    text = zlib.brotliDecompressSync(fs.readFileSync(srcPath)).toString('utf8');
+  } catch (e) {
+    error(`翻译包解码失败: ${srcPath} (${e && e.message})`);
+    return null;
+  }
+  try {
+    JSON.parse(text);
+  } catch (e) {
+    error(`翻译包解码后不是合法 JSON: ${e && e.message}`);
+    return null;
+  }
+  return text;
+}
+
 async function genIcons(logoSrc) {
   // 由 --logo 源图生成扩展各尺寸图标 → src/data/icons/icon{size}.png
   //
@@ -193,20 +235,24 @@ async function main() {
     options: {
       wordlists: { type: 'boolean' },
       icons: { type: 'boolean' },
+      translations: { type: 'boolean' },
       'wordlist-dir': { type: 'string' },
       logo: { type: 'string' },
+      'translation-src': { type: 'string' },
     },
   });
   // 未指定任何子任务 = 全做
-  const runAll = !values.wordlists && !values.icons;
+  const runAll = !values.wordlists && !values.icons && !values.translations;
   // 发布代码不含本地绝对路径（2026-09-08 用户裁定）：外部源路径一律经命令行参数
-  // 提供，默认值相对 PROJECT_ROOT（见配置段 DEFAULT_WORDLIST_DIR / DEFAULT_LOGO）。
+  // 提供，默认值相对 PROJECT_ROOT（见配置段 DEFAULT_WORDLIST_DIR / DEFAULT_LOGO /
+  // DEFAULT_TRANSLATION_SRC）。
   const wordlistDir = values['wordlist-dir'] || DEFAULT_WORDLIST_DIR;
   const logoSrc = values.logo || DEFAULT_LOGO;
+  const translationSrc = values['translation-src'] || DEFAULT_TRANSLATION_SRC;
 
   log('=== VocabRadar 浏览器扩展 预处理 ===');
 
-  // 1. 构建英文词表标签 JSON
+  // 1. 构建英文词表标签 JSON（第二百四十八次：输出到 src/data/en/，对齐运行时读点）
   if (runAll || values.wordlists) {
     if (!fs.existsSync(wordlistDir)) {
       warn(`词表目录不存在: ${wordlistDir}，跳过 wordlists.json 生成`);
@@ -214,7 +260,7 @@ async function main() {
       const wordlists = loadWordlists(wordlistDir);
       const wordToTags = buildWordlistsJson(wordlists);
 
-      fs.mkdirSync(OUTPUT_DIR, { recursive: true });
+      fs.mkdirSync(EN_OUTPUT_DIR, { recursive: true });
       fs.writeFileSync(WORDLISTS_OUTPUT_PATH, JSON.stringify(wordToTags), 'utf8');
 
       const sizeKb = fs.statSync(WORDLISTS_OUTPUT_PATH).size / 1024;
@@ -222,13 +268,25 @@ async function main() {
     }
   }
 
-  // 2. 第一百七十五次：扩展图标
+  // 2. 第二百四十八次：英中翻译包（解码上游 .br → UTF-8 JSON，取代手工落盘）
+  if (runAll || values.translations) {
+    fs.mkdirSync(EN_OUTPUT_DIR, { recursive: true });
+    const text = buildTranslationsFromBr(translationSrc);
+    if (text !== null) {
+      fs.writeFileSync(TRANSLATIONS_OUTPUT_PATH, text, 'utf8');
+      const sizeKb = fs.statSync(TRANSLATIONS_OUTPUT_PATH).size / 1024;
+      const keys = Object.keys(JSON.parse(text)).length;
+      log(`输出: ${TRANSLATIONS_OUTPUT_PATH} (${keys} 词, ${sizeKb.toFixed(1)} KB)`);
+    }
+  }
+
+  // 3. 第一百七十五次：扩展图标
   if (runAll || values.icons) {
     await genIcons(logoSrc);
   }
 
   log('=== 预处理完成 ===');
-  log(`输出目录: ${OUTPUT_DIR}`);
+  log(`输出目录: ${EN_OUTPUT_DIR}（en 数据）/ ${OUTPUT_DIR}（图标等）`);
   log('提示：wordbank.json 已弃用，可手动删除');
 }
 

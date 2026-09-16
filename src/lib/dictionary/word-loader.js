@@ -89,7 +89,11 @@ export async function loadWordfreq(lang) {
   // 2026-09-08（用户批复"删包内 42 语 .bin"+ HF dataset）：词频包不再随扩展分发，
   //   改经 SW 从 HF dataset vocabradar/wordfreq 拉取（files.json SHA-256 校验在 SW 端）。
   const file = `data/small_${lang}.msgpack.gz`;
-  console.log(`[VocabRadar][dictionary][${_ts()}] 词典缺少 ${lang} 数据，经后台拉取词频源文件: ${file}`);
+  // 第二百四十七次（用户"后台多次拉取词频文件。应当打印地址链接"）：拉取日志带上完整
+  //   下载地址（WF_HF_URL+file，与失败日志同口径——网络失败要说明白是啥链接连不上；
+  //   本次为启动日志同样指路）。实际 fetch 在 SW 端双源回退（huggingface.co/hf-mirror.com），
+  //   此处链接为 HF 主源。
+  console.log(`[VocabRadar][dictionary][${_ts()}] 词典缺少 ${lang} 数据，经后台拉取词频源文件: ${file}（${WF_HF_URL + file}）`);
   // 反思（2026-08-05 修正）：拉取可能抛异常（扩展更新后页面未刷新、网络失败等），
   //   未包 try/catch 会导致 loadDictionary reject -> text-hint startHint 中断 -> 文本提示不出现。
   //   修正：失败返回空 Map（所有词按表外处理，不阻塞功能）——fetchWfViaBackground

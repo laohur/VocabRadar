@@ -6,6 +6,9 @@
 //       跨模块共享状态一律来自 ./core.js，写入走 core 导出的 set_xxx 接缝，绝不另存副本。
 
 import { getAnnotations, rankToStage } from '../../lib/annotator.js';
+// 第二百四十七次：兜底扫描前等待词典词频就绪（ensureRanksReady，防冷装载期间把词
+//   写入 _seenWords 造成同会话 skip(seen) 永久无提示；web-sidebar-impl 已 ensureReady 预热）。
+import { ensureRanksReady } from '../../lib/dictionary.js';
 import { isBalancedParens, pickCleanShortTrans } from '../../lib/dict-clean.js';
 import { t } from '../../lib/i18n.js';
 // 2026-09-04（原形折叠）：diverse-lemmas 语言名单（纯数据无依赖），用于判定
@@ -615,6 +618,13 @@ function scanPageTextFromSpans(allSpans) {
  */
 async function scanPageTextFallback() {
   if (!_root) return;
+  // 第二百四十七次（用户 13:33 github.com 日志：冷装载期间兜底 TreeWalker 扫描把整页词
+  //   记进 _seenWords 后词典才就绪 → 同会话 skip(seen) 永久无提示）：兜底扫描前等词典
+  //   词频就绪（对齐视频侧栏 13:18 "首渲前 await ensureDictRanksReady" 同款修法），
+  //   首批注释即带真实 rank；词典总失败时落 null 不阻塞（annotator 另有"未就绪不登记
+  //   seen"守卫兜底，不会污染跨句去重）。web-sidebar-impl 启动已 fire-and-forget
+  //   ensureReady，此处 await 只加入已在途的装载，不重复触发。
+  try { await ensureRanksReady(); } catch (_) { /* 词典失败按无词典继续，守卫防污染 */ }
   log('页面无 .beaver-word span，启动视口 TreeWalker 正文提取');
 
   // 视口范围

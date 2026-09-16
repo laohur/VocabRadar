@@ -7,7 +7,7 @@
 //   - lookupWord 统一返回 pending=true（释义待异步获取），由调用方决定阻塞/非阻塞模式
 //   - getAnnotations 中"词典命中"和"表外"分支合并为统一的异步翻译流程
 
-import { lookup, lookupWithLemmatizer, getLearnLang, setQuietBatch } from './dictionary.js';
+import { lookup, lookupWithLemmatizer, getLearnLang, setQuietBatch, isLoaded } from './dictionary.js';
 // 第一百九十九次：hasCachedLemma 守卫已删除（自败守卫，见 getAnnotationsInner 内注释）
 import { extractEnglishWords } from './tokenizer.js';
 import { translate, getMeaningLang } from './translator.js';
@@ -178,8 +178,16 @@ async function getAnnotationsInner(text, rankThreshold = 0, seen = new Set(), on
     //   修正：检查通过即刻占位登记（同步语义），把 check 与 act 之间的窗口压到零。
     //   高频词/无译文等后续 continue 分支也已登记：这些词本就不产注释，登记后其他句子
     //   同样不产注释，与单线程顺序执行的结果一致，不改变可见行为。
-    seen.add(word);
-    if (!batchUnique.has(word)) { batchUnique.add(word); countUnique(stats, 1); }
+    // 第二百四十七次（用户 13:33 github.com 日志：0命中诊断 words 与 lookup 全是
+    //   skip(seen)，词典加载=否）：词典冷装载（1~17s）期间的首批扫描把整页词都写进
+    //   共享 seen（check-then-act 占位），但词典未就绪时 lookup 全 null → 全部"表外"假象
+    //   被滤掉（annotateOov=false）→ 0 注释且词已被占位 → 词典就绪后同会话 skip(seen)
+    //   永不再查 → 侧栏/提示永久为空。修法：词典未就绪时不登记 seen（本轮不产注释也不
+    //   占位），词典就绪后的重扫可重新查词，桌面条目正常产出。
+    if (isLoaded()) {
+      seen.add(word);
+      if (!batchUnique.has(word)) { batchUnique.add(word); countUnique(stats, 1); }
+    }
 
     // 1. rank/lemma/tags：IDB 有则直接用（词典内单词不重建）；否则 Maps 组装并写回
     // 反思（2026-08-16 第六十九次）：完备性 = 词典记录已带词形字段（lemma 为字符串）。

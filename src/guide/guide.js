@@ -113,6 +113,9 @@ import { initDeactivate, disposeDeactivate } from './deactivate.js';
 import {
   LLM_PROVIDERS, LLM_FORMAT_GROUPS, LLM_DEFAULT_PROVIDER, CHAT_WORD_PROMPT, CHAT_SIDEBAR_PROMPT, getProvider
 } from '../lib/llm.js';
+// 第二百四十八次：词典装载状态行——ensureReady 幂等（IDB 已构建走投影快通道秒回，
+//   缺数据才就地从源装载 = 更新/安装后引导页静默初始化的点名入口），getDiagState 读装载态。
+import { ensureReady, getDiagState } from '../lib/dictionary.js';
 
 // 第二百二十三次：LLM 翻译渠道提示词默认模板（{text}=原文，{lang}=释义语言）。
 // 2026-09-02 修正占位为 {text}（用户裁定：Please translate "{text}" in {lang}.）
@@ -277,6 +280,37 @@ function fillByDataKey() {
     const key = el.dataset.phKey;
     const txt = m(key);
     if (txt !== '') el.placeholder = txt;
+  });
+}
+
+// 第二百四十八次：词典初始化状态行（设定栏顶部 #gDictStatus）——用户："更新安装后，自动
+//   打开引导页就静默初始化么"。引导页打开即触发 ensureReady：IDB 已构建（__built__ 标记，
+//   如 SW onInstalled 已建）则走投影快通道秒回；IDB 缺数据才就地从源装载（词频网络拉取只在
+//   缺数据时发生），完成翻转「已就绪」。失败示红（网页按无词典降级，不掩饰错误——AGENTS.md）。
+//   文案按界面语言取，与 renderHelp 一样用 getLangState()（不走 data-key/i18n 字典）。
+function renderDictStatus() {
+  const el = $('gDictStatus');
+  if (!el) return;
+  const zh = getLangState() === 'zh';
+  const statusReady = (size) => (zh ? `词典已就绪（内置释义${size ? ' · ' + size + ' 词' : ''} + 词表标签 + 词频）` : `Dictionary ready (built-in meanings${size ? ' · ' + size + ' words' : ''} + word-list tags + word frequency)`);
+  const diag = getDiagState();
+  if (diag.loadedLang) {
+    el.textContent = statusReady(diag.dictSize);
+    el.classList.add('ok');
+    return;
+  }
+  el.textContent = zh ? '词典装载中…' : 'Dictionary loading…';
+  // 承诺永不悬空（query.js：_loadDict 内部 catch，resolve null/undefined 表示失败）
+  Promise.resolve(ensureReady()).then((m) => {
+    if (m) {
+      el.textContent = statusReady(m.size);
+      el.classList.add('ok');
+      el.classList.remove('fail');
+    } else {
+      el.textContent = zh ? '词典装载失败：网页将按无词典降级运行（详见控制台）' : 'Dictionary load failed: pages fall back to no-dictionary mode (see console)';
+      el.classList.add('fail');
+      el.classList.remove('ok');
+    }
   });
 }
 
@@ -649,6 +683,8 @@ async function init() {
   await initLang().catch(() => {});
   // 272 次：改 await——_lang 就绪后 initDeactivate 才渲染动态行（修语言混杂竞态）
   await loadSettings();
+  // 第二百四十八次：词典状态行（引导页 = 更新/安装后静默初始化的点名入口）
+  renderDictStatus();
 
   // 三子标签切换
   document.querySelectorAll('.guide-tab').forEach((tab) => {

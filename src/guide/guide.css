@@ -1342,3 +1342,38 @@ input::placeholder { color: var(--g-muted); opacity: 1; }
 .deactivate-add-row {
   margin-top: 10px;
 }
+
+/* 第二百四十八次：词典初始化状态行（设定栏顶部）——引导页即初始化点名入口，
+   样式沿用全局配色：装载中 = muted 文字 + 软底；已就绪 = primary 文字 + 绿点；失败 = 警示色 */
+.g-dict-status {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 4px 0 8px;
+  padding: 7px 12px;
+  font-size: 13px;
+  line-height: 1.4;
+  color: var(--g-muted, #4a5a50);
+  background: var(--g-primary-soft, rgba(46, 107, 67, 0.08));
+  border: 1px solid var(--g-border, #dbe4dd);
+  border-radius: var(--g-radius, 10px);
+}
+.g-dict-status::before {
+  content: '';
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--g-muted, #4a5a50);
+  flex: none;
+}
+.g-dict-status.ok::before {
+  background: var(--g-primary, #2e6b43);
+  box-shadow: 0 0 0 3px var(--g-primary-soft, rgba(46, 107, 67, 0.08));
+}
+.g-dict-status.fail {
+  color: #b23a2e;
+  border-color: #e5bfbb;
+}
+.g-dict-status.fail::before {
+  background: #b23a2e;
+}

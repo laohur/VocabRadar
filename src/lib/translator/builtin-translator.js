@@ -140,6 +140,11 @@ async function _createTranslatorOnce() {
       CREATE_TIMEOUT_MS,
       'Translator.create'
     );
+    // 第二百四十七次（用户 13:33 github.com 日志：2 秒内 ~100 条"Translator 已就绪"）：
+    //   旧版创建成功后从不回写 _translator 单例——getTranslator 每次只读 _translator（恒 null）
+    //   就重建新实例，自动注释逐词 translate 高频触发 → 每次 create 成功都打"已就绪"刷屏。
+    //   修法：在此唯一创建点回写单例，此后 getTranslator/primeTranslator 直接复用。
+    _translator = translator;
     log(`[VocabRadar][translator][${_ts()}] Translator 已就绪 (${transState.learnLang}->${transState.meaningLang}, 模型态:${avail})`);
     return translator;
   } catch (e) {

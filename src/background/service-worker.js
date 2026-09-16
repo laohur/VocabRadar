@@ -682,7 +682,8 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       // wordfreq 词频数据 HF dataset 中转（2026-09-08）：42 语 small_*.msgpack.gz
       //   不随包，word-loader.js loadWordfreq 经本消息请求，SW 代理 fetch 并做
       //   files.json SHA-256 校验，直传 ArrayBuffer 回传。白名单/校验见 handleWfFetch。
-      handleWfFetch(msg.file)
+      //   第二百四十七次：经 wfFetchMemoized 在途去重 + 30s 结果缓存（见 handleWfFetch 上方）。
+      wfFetchMemoized(msg.file)
         .then((r) => sendResponse(r))
         .catch((e) => sendResponse({ ok: false, error: String(e.message || e) }));
       return true;
@@ -2418,6 +2419,35 @@ function getWfMeta() {
     });
   }
   return _wfMetaCache;
+}
+
+// 第二百四十七次（用户 13:33 github.com 日志：一次装载却两次网络拉取词频文件）：同一页
+//   多个内容脚本上下文（text-hint/侧栏各自冷装词典）或同一上下文竞态下，多个 WF_FETCH
+//   消息会并发打进 handleWfFetch 各拉一遍网络。修法：按文件在途 Promise 去重（并发请求
+//   共享同一次网络拉取）+ 30s 结果缓存（冷装完成后短时重拉直接命中缓存，不再发网）。
+const _wfFetchInFlight = new Map();   // file -> Promise<result>
+const _wfFetchCache = new Map();      // file -> {ts, result}
+const WF_FETCH_CACHE_TTL_MS = 30000;  // 30s 结果缓存（小包 base64 数十~百 KB 级，可接受）
+
+function wfFetchMemoized(file) {
+  const hit = _wfFetchCache.get(file);
+  if (hit && Date.now() - hit.ts < WF_FETCH_CACHE_TTL_MS) return Promise.resolve(hit.result);
+  let p = _wfFetchInFlight.get(file);
+  if (!p) {
+    p = handleWfFetch(file).then(
+      (result) => {
+        _wfFetchInFlight.delete(file);
+        if (result && result.ok) _wfFetchCache.set(file, { ts: Date.now(), result });
+        return result;
+      },
+      (e) => {
+        _wfFetchInFlight.delete(file);
+        return { ok: false, error: String((e && e.message) || e) };
+      }
+    );
+    _wfFetchInFlight.set(file, p);
+  }
+  return p;
 }
 
 async function handleWfFetch(file) {

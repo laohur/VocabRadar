@@ -45,6 +45,11 @@
     <!-- ===== 设定栏：按功能分组，开关与样式同组 ===== -->
     <section class="guide-panel active" id="panel-settings" data-panel="settings">
 
+      <!-- 第二百四十八次：词典初始化状态行（用户："更新安装后，自动打开引导页就静默初始化么"）——
+           更新/安装后引导页即词典初始化点名入口：IDB 已构建则秒回（投影快通道），缺数据才就地从
+           源装载（拉词频等），状态随装载完成翻转为「已就绪」，AST 由 guide.js renderDictStatus 驱动 -->
+      <div class="g-dict-status" id="gDictStatus"></div>
+
       <!-- 全局参数（第二百二十三次：翻译渠道行挪入「模型」分组，本组只留语言/阈值/注释开关） -->
       <div class="group" id="group-global">
         <div class="group-head">
