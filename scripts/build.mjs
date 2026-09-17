@@ -664,8 +664,8 @@ async function buildBrowser(browser, mode) {
   // 272次：zip 文件名追加版本号后缀 -v{manifest.version}（目录名不变）。
   // const appVersion = readAppVersion();
   const distDir = path.join(ROOT, `${browser === 'chrome' ? 'dist' : 'dist-firefox'}${cfg.suffix}`);
-  // const zipPath = path.join(ROOT, `vocabradar-extension-${browser}${cfg.suffix}-v${appVersion}.zip`);
-  const zipPath = path.join(ROOT, `vocabradar-extension-${browser}${cfg.suffix}.zip`);
+  const zipPath = path.join(ROOT, `vocabradar-extension-${browser}${cfg.suffix}-v${appVersion}.zip`);
+  // const zipPath = path.join(ROOT, `vocabradar-extension-${browser}${cfg.suffix}.zip`);
   console.log(`=== 构建 ${browser === 'chrome' ? 'Chrome/Edge' : 'Firefox'}（${cfg.label}）===`);
   cleanDist(distDir);
   copyRuntime(distDir);
