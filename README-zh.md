@@ -34,7 +34,7 @@ VocabRadar 是 Chrome / Edge / Firefox 的浏览器扩展。它扫描你正在�
 |---|---|
 | **Firefox** | [addons.mozilla.org — VocabRadar](https://addons.mozilla.org/zh-CN/firefox/addon/vocabradar/) |
 | **Edge** | [Microsoft Edge 加载项 — VocabRadar](https://microsoftedge.microsoft.com/addons/detail/hcpmjphbnjhlfahimifbkhfjafkfjbbb) |
-| **Chrome** | 尚未上架商店。请到仓库 Releases 页面（`<repo-url>/releases`）下载最新 zip，解压后打开 `chrome://extensions`，开启**开发者模式**，点击**加载已解压的扩展程序**，选择解压出的文件夹。官方指南：[加载已解压的扩展程序](https://developer.chrome.com/docs/extensions/get-started/tutorial/hello-world?load-unpacked)。 |
+| **Chrome** | 尚未上架商店。请在 [Releases](https://github.com/laohur/VocabRadar/releases) 页面下载最新 zip，解压后打开 `chrome://extensions`，开启**开发者模式**，点击**加载已解压的扩展程序**，选择解压出的文件夹。官方指南：[加载已解压的扩展程序](https://developer.chrome.com/docs/extensions/get-started/tutorial/hello-world?load-unpacked)。 |
 
 ## 微信小程序
 

@@ -48,7 +48,7 @@ Video side panel (subtitles + word notes) | Web page word hints
 |---|---|
 | **Firefox** | [addons.mozilla.org — VocabRadar](https://addons.mozilla.org/zh-CN/firefox/addon/vocabradar/) |
 | **Edge** | [Microsoft Edge Add-ons — VocabRadar](https://microsoftedge.microsoft.com/addons/detail/hcpmjphbnjhlfahimifbkhfjafkfjbbb) |
-| **Chrome** | Not listed in the store yet. Download the latest release zip at `<repo-url>/releases`, unzip it, then open `chrome://extensions`, enable **Developer mode**, click **Load unpacked** and select the folder. See the official guide: [Load an unpacked extension](https://developer.chrome.com/docs/extensions/get-started/tutorial/hello-world?load-unpacked). |
+| **Chrome** | Not listed in the store yet. Download the latest release zip at [Releases](https://github.com/laohur/VocabRadar/releases), unzip it, then open `chrome://extensions`, enable **Developer mode**, click **Load unpacked** and select the folder. See the official guide: [Load an unpacked extension](https://developer.chrome.com/docs/extensions/get-started/tutorial/hello-world?load-unpacked). |
 
 ## WeChat Mini Program
 
