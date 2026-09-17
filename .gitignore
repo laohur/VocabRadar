@@ -12,7 +12,7 @@ dist-firefox-upload/
 logs/
 change.log
 
-# ===== 文档（不入库；源码注释与 docs/ 均为文档；README 与 PRIVACY 随公开项目入库，333 次）=====
+# ===== 文档（不入库；源码注释与 docs/ 均为文档；README 与 PRIVACY 随公开项目入库）=====
 docs/
 note.txt
 浏览器扩展.txt
@@ -26,9 +26,10 @@ AGENTS.md
 # ===== 截图素材（不入库）=====
 Screenshot/
 
-# ===== 个人/品牌资产（公开仓库不携带，333 次解除跟踪；工作区文件保留）=====
+# ===== 个人/品牌资产（公开仓库不携带；工作区文件保留；公开版二维码在 doc/wx_qrcode-unlimit.jpg 随库跟踪）=====
 data/微信小程序码.jpg
 data/qrcode-unlimit.png
+data/wx_qrcode-unlimit.jpg
 
 # ===== 工具/编辑器状态与缓存 =====
 node_modules/

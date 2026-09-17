@@ -26,7 +26,7 @@ VocabRadar 是 Chrome / Edge / Firefox 的浏览器扩展。它扫描你正在�
 
 视频提示（字幕+注释） | 网页生词提示
 :---:|:---:
-![视频侧栏字幕与生词注释](Screenshot/chosen/video-sidebar.JPG) | ![网页生词高亮与侧邻注释](Screenshot/chosen/web-hints.jpg)
+![视频侧栏字幕与生词注释](doc/video-sidebar.JPG) | ![网页生词高亮与侧邻注释](doc/web-hints.jpg)
 
 ## 安装
 
@@ -35,6 +35,12 @@ VocabRadar 是 Chrome / Edge / Firefox 的浏览器扩展。它扫描你正在�
 | **Firefox** | [addons.mozilla.org — VocabRadar](https://addons.mozilla.org/zh-CN/firefox/addon/vocabradar/) |
 | **Edge** | [Microsoft Edge 加载项 — VocabRadar](https://microsoftedge.microsoft.com/addons/detail/hcpmjphbnjhlfahimifbkhfjafkfjbbb) |
 | **Chrome** | 尚未上架商店。请到仓库 Releases 页面（`<repo-url>/releases`）下载最新 zip，解压后打开 `chrome://extensions`，开启**开发者模式**，点击**加载已解压的扩展程序**，选择解压出的文件夹。官方指南：[加载已解压的扩展程序](https://developer.chrome.com/docs/extensions/get-started/tutorial/hello-world?load-unpacked)。 |
+
+## 微信小程序
+
+想在手机上练习？用微信扫描下方二维码，打开「河狸记词」小程序：
+
+![河狸记词微信小程序码](doc/wx_qrcode-unlimit.jpg)
 
 ## 数据来源
 
@@ -57,4 +63,4 @@ VocabRadar 是 Chrome / Edge / Firefox 的浏览器扩展。它扫描你正在�
 
 - 仓库地址：*待填——占位，填入公开仓库 URL（其 Releases 页面用于提供 Chrome 安装包）。*
 - 许可证：*待填——占位。*
-- 构建与 AMO 源码披露说明：[docs/build-readme.md](docs/build-readme.md)。
+- 构建与 AMO 源码披露说明：[doc/build-readme.md](doc/build-readme.md)。

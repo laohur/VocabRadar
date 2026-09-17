@@ -40,7 +40,7 @@ Supported languages (42):
 
 Video side panel (subtitles + word notes) | Web page word hints
 :---:|:---:
-![Video side panel with subtitle highlights](Screenshot/chosen/video-sidebar.JPG) | ![Web page word hints and side annotations](Screenshot/chosen/web-hints.jpg)
+![Video side panel with subtitle highlights](doc/video-sidebar.JPG) | ![Web page word hints and side annotations](doc/web-hints.jpg)
 
 ## Install
 
@@ -49,6 +49,13 @@ Video side panel (subtitles + word notes) | Web page word hints
 | **Firefox** | [addons.mozilla.org — VocabRadar](https://addons.mozilla.org/zh-CN/firefox/addon/vocabradar/) |
 | **Edge** | [Microsoft Edge Add-ons — VocabRadar](https://microsoftedge.microsoft.com/addons/detail/hcpmjphbnjhlfahimifbkhfjafkfjbbb) |
 | **Chrome** | Not listed in the store yet. Download the latest release zip at `<repo-url>/releases`, unzip it, then open `chrome://extensions`, enable **Developer mode**, click **Load unpacked** and select the folder. See the official guide: [Load an unpacked extension](https://developer.chrome.com/docs/extensions/get-started/tutorial/hello-world?load-unpacked). |
+
+## WeChat Mini Program
+
+Prefer practicing on your phone? Scan the QR code below with WeChat to open
+the VocabRadar mini program (Chinese UI):
+
+![VocabRadar WeChat mini program QR code](doc/wx_qrcode-unlimit.jpg)
 
 ## Data sources
 
@@ -79,4 +86,4 @@ See [PRIVACY.md](PRIVACY.md) (English + 中文).
 - Repository: *TBD — placeholder, fill in the public repo URL (its `/releases`
   page will host the Chrome install zips).*
 - License: *TBD — placeholder.*
-- Build & AMO source-submission notes: [docs/build-readme.md](docs/build-readme.md).
+- Build & AMO source-submission notes: [doc/build-readme.md](doc/build-readme.md).

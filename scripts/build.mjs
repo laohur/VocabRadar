@@ -44,7 +44,6 @@
  * 数据目录结构（src/data/，由 preprocess.mjs 生成，打包时不处理）：
  *   - config.json          配置文件（panelHideDelay 等）
  *   - wordlists.json       英文词表标签 { word: [list_ids] }
- *   - mp-qr.jpg            微信小程序码（本脚本从 data/ 复制）
  *   注：wordlists.json 必须先执行 `node preprocess.mjs` 生成。
  *   注（2026-09-08）：wordfreq 词频数据不再内置包内（src/data/wordfreq/ 已移除），
  *       运行时经 HF/镜像 CDN 拉取，词数动态取自下载文件解码后的实际 Map.size
@@ -155,19 +154,6 @@ function copyRuntime(distDir) {
       fs.copyFileSync(src, dst);
     }
     console.log(`[复制] ${item}`);
-  }
-
-  // 额外资源：微信小程序码图片源在 data/（qrcode-unlimit.png），
-  // 不放入 src/ 源码目录；打包时复制到 dist/src/data/mp-qr.jpg，
-  // 与 sidebar.js 的 chrome.runtime.getURL('src/data/mp-qr.jpg') 对应。
-  const mpSrc = path.join(ROOT, 'data', 'qrcode-unlimit.png');
-  const mpDst = path.join(distDir, 'src', 'data', 'mp-qr.jpg');
-  if (fs.existsSync(mpSrc)) {
-    fs.mkdirSync(path.dirname(mpDst), { recursive: true });
-    fs.copyFileSync(mpSrc, mpDst);
-    console.log(`[复制] ${mpSrc} -> ${mpDst}`);
-  } else {
-    console.log(`[警告] 缺失: ${mpSrc}`);
   }
 }
 
@@ -662,7 +648,7 @@ async function buildBrowser(browser, mode) {
   // 纯净沿用原目录/包名（dist、dist-firefox，zip 无后缀，Edge 上传等既有流程不受影响）；
   // 压缩/上传按后缀另开目录与包名，与纯净产物互不覆盖。
   // 272次：zip 文件名追加版本号后缀 -v{manifest.version}（目录名不变）。
-  // const appVersion = readAppVersion();
+  const appVersion = readAppVersion();
   const distDir = path.join(ROOT, `${browser === 'chrome' ? 'dist' : 'dist-firefox'}${cfg.suffix}`);
   const zipPath = path.join(ROOT, `vocabradar-extension-${browser}${cfg.suffix}-v${appVersion}.zip`);
   // const zipPath = path.join(ROOT, `vocabradar-extension-${browser}${cfg.suffix}.zip`);
