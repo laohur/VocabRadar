@@ -20,7 +20,7 @@ import { pickCleanShortTrans } from '../lib/dict-clean.js';
 
 // 当前选中的字幕文字/位置样式 id（渲染样卡与双预览共用，切换时同步刷新）
 let _subStyleId = SUB_DEFAULT_STYLE;   // 318次：初值=默认代指常量 SUB_DEFAULT_STYLE（default 是代指，版本变化才改常量值）
-let _subPosId = 'b10';   // 314次：默认位置改贴底 1/10（用户裁定"default位置应当是底部10%"，推翻 223/219 次的 b20）
+let _subPosId = 'b20';   // 314次：默认位置改贴底 1/10（b10）；329次：用户裁定改回下 1/5（b20）
 // 290次：样例句子（样式卡与预览共用；持久化 storage.subtitleSample）
 // 291次：默认改纯英文句（注释不再硬编码，动态按释义语言/词频注释）；290版旧默认做一次性迁移
 const DEFAULT_SUB_SAMPLE = 'VocabRadar is short for vocabulary radar.';
@@ -850,7 +850,7 @@ export function syncSubtitleSettings(res) {
       : sanitizeStyleId(SUBTITLE_TEXT_STYLES, res.subtitleStyle, SUB_DEFAULT_STYLE));
   if (subActive !== (res.subtitleStyle || SUB_DEFAULT_STYLE)) { markOwnWrite(); chrome.storage.local.set({ subtitleStyle: subActive }); }
   const posActive = sanitizePositionId(res.subtitlePosition);
-  if (posActive !== (res.subtitlePosition || 'b10')) { markOwnWrite(); chrome.storage.local.set({ subtitlePosition: posActive }); }   // 314次：默认回落对齐 b10
+  if (posActive !== (res.subtitlePosition || 'b20')) { markOwnWrite(); chrome.storage.local.set({ subtitlePosition: posActive }); }   // 314次：默认回落对齐 b10；329次：默认对齐 b20（下 1/5）
   _subStyleId = subActive;
   _subPosId = posActive;
   // 281次：个性化参数回填（storage.subtitleCustom；缺省/非法值回落默认对象）。
@@ -902,7 +902,8 @@ export function syncSubtitleSettings(res) {
       }
       if (sel) {
         backfillSubCustomFrom(sel);
-        // 314次：内置字幕样式可携带可选 pos（如 'white-bottom'（318 次实名化，旧 'none'）绑 'b10'），指派时
+        // 314次：内置字幕样式可携带可选 pos（如 'white-bottom'（318 次实名化，旧 'none'）绑 'b10'；
+        //   329次随默认改绑 'b20'），指派时
         //   同步字幕位置——用户手改位置后不被覆盖，直至再次指派带 pos 的样式；自建/
         //   用户样式无 pos，指派不动位置（位置仍是独立维度，见 69 次解耦）。
         //   写位置触发 guide.js 整栏重渲染，位置 radio 选中态自动同步。

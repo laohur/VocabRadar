@@ -316,11 +316,11 @@ export function sanitizeStyleId(items, id, fallback) {
   return fallback || SUB_DEFAULT_STYLE;
 }
 
-// 位置样式 id 清洗：不在 SUBTITLE_POSITIONS 内的回退默认 'b10'（贴底 1/10，与 storage/overlay
-// 出厂默认一致；314次：用户裁定默认位置改贴底 10%，推翻 223 次的 'b20'——
-// 'b10' 档一直存在，无显示兼容问题）
+// 位置样式 id 清洗：不在 SUBTITLE_POSITIONS 内的回退默认 'b20'（下 1/5，与 storage/overlay
+// 出厂默认一致；314次：用户裁定默认位置改贴底 10%（b10），推翻 223 次的 'b20'——
+// 329次：用户又裁定改回下 1/5，出厂默认同 b20；'b10' 档仍存在可选）
 // 316次：'t10'（原顶部 1/10，316 次改名 b90 延续 b 系列命名）存量一次性迁移。
 export function sanitizePositionId(id) {
   if (id === 't10') return 'b90';
-  return (id && SUBTITLE_POSITIONS.some((p) => p.id === id)) ? id : 'b10';
+  return (id && SUBTITLE_POSITIONS.some((p) => p.id === id)) ? id : 'b20';
 }

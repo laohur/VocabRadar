@@ -407,7 +407,7 @@ async function loadSettings() {
     videoOverlayAnnTemplate: DEFAULT_ANN_TEMPLATE,
     // 318次：字幕样式出厂默认改引代指常量 SUB_DEFAULT_STYLE（default=代指，版本变化才改常量值）
     subtitleStyle: SUB_DEFAULT_STYLE,
-    subtitlePosition: 'b10',   // 314次：默认位置改贴底 1/10（用户裁定"default位置应当是底部10%"，推翻 219 次的 b20）
+    subtitlePosition: 'b20',   // 314次：默认位置改贴底 1/10（用户裁定"default位置应当是底部10%"）；329次：用户裁定改回下 1/5（b20）
     // 281次：个性化字幕四参默认（subtitleStyle='custom' 时生效）+ 第四栏注释行样式键
     // 283次：默认改"能直接用"——透明底/不小字号/投影特效（用户裁定），与 overlay 端缺省对齐
     // 293次：字号改百分比；294次：默认 7%（用户裁定）

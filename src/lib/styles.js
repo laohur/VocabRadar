@@ -467,12 +467,15 @@ export function subFontSizePct(item) {
 export const SUBTITLE_TEXT_STYLES = [
   // 314次（用户"字幕样式目前的default位置应当是底部10%，改名White Bottom"）：
   //   条目实名 White Bottom（白字贴底）——黑半透明条+白字，本身即贴底观感；
-  //   新增可选 pos 字段：指派该样式时引导页同步把 subtitlePosition 写为 'b10'（底部10%），
+  //   新增可选 pos 字段：指派该样式时引导页同步把 subtitlePosition 写为对应档，
   //   用户手改位置后不被覆盖，直至再次指派带 pos 的样式（位置仍是独立维度，见 69 次解耦）。
+  //   329次（用户"字幕默认位置改为底部1/5"）：White Bottom 的 pos 由 'b10'（底部1/10）
+  //   改绑 'b20'（下1/5）——出厂默认样式与出厂默认位置保持一致，避免指派默认样式把
+  //   位置拉回旧档。
   // 318次（用户"'none'是非法，全部清理"）：id 由 'none' 实名化为 'white-bottom'，
   //   与 SUB_DEFAULT_STYLE 常量锚定；存量 storage.subtitleStyle='none' 由
   //   sanitizeStyleId（不在池内即回落 SUB_DEFAULT_STYLE）与各渲染端清洗点迁移。
-  { id: 'white-bottom', label: { en: 'White Bottom', zh: '白字贴底' }, pos: 'b10', font: 'sans', fg: '#ffffff', bg: 'rgba(0,0,0,0.75)', fontSizePct: 5, edge: null, bold: false, italic: false, shadow: false, annMode: 'side', sample: 'He passed the quiz.' },
+  { id: 'white-bottom', label: { en: 'White Bottom', zh: '白字贴底' }, pos: 'b20', font: 'sans', fg: '#ffffff', bg: 'rgba(0,0,0,0.75)', fontSizePct: 5, edge: null, bold: false, italic: false, shadow: false, annMode: 'side', sample: 'He passed the quiz.' },
   // 1. YouTube 官方默认：白字 + 黑半透明底（全球覆盖面最大的字幕样式）
   { id: 'yt-box', label: { en: 'YouTube', zh: 'YouTube 底条' }, font: 'sans', fg: '#ffffff', bg: 'rgba(8,8,8,0.75)', fontSizePct: 4, edge: null, bold: false, italic: false, shadow: false, annMode: 'side', sample: 'He passed the quiz.' },
   // 2. Netflix 官方：白字 + 软阴影（无底条，阴影保证亮暗场景均可读）

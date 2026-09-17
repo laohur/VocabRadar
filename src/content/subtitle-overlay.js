@@ -66,7 +66,7 @@ let _lastKey = '';               // 避免重复渲染
 let _scrollHandler = null;       // scroll/resize 监听器
 let _mode = 'side';              // 'side'（侧邻注释）或 'detail'（详细注释）
 let _styleId = SUB_DEFAULT_STYLE; // 当前字幕文字样式 id（'custom'=个性化；注释布局由 _mode 决定；318次：初值=默认代指常量 SUB_DEFAULT_STYLE）
-let _posId = 'b10';              // 当前字幕位置样式 id（距视频底部比例；314次：默认改贴底 1/10，用户裁定推翻 b20）
+let _posId = 'b20';              // 当前字幕位置样式 id（距视频底部比例；314次：默认改贴底 1/10；329次：用户裁定改回下 1/5（b20），推翻 314 次裁定）
 let _storageListener = null;     // storage 变化监听器（同步详略模式）
 let _fullscreenHandler = null;   // fullscreenchange 监听器（全屏时移动 overlay）
 let _userStyleSheet = null;      // 282次：用户样式动态 <style> 元素（style-user-* 规则重建用）
@@ -101,6 +101,7 @@ function injectOverlayStyles() {
 #beaver-subtitle-overlay {
   position: fixed;
   left: 0;
+  right: 0;
   top: 0;
   --beaver-first-bg: #2e6b43;
   --beaver-first-fg: #ffffff;
@@ -117,11 +118,20 @@ function injectOverlayStyles() {
   font-family: -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif;
   pointer-events: none;
   z-index: 2147483647;
+  /* 329次（用户"全屏后字幕变窄，挤成一团"根治）：水平居中由
+   *  left:视频中心 + transform:translateX(-50%) 改为 left/right 限定视频横切片 +
+   *  width:fit-content + margin:0 auto。根因：旧法 width:auto 走 shrink-to-fit，
+   *  其可用宽 = 视口宽 − left ≈ 半屏（绝对定位元素右界为 auto 时可用宽从 left 起算），
+   *  全屏（视频/视口 1920）时长句在 ~960px 处被迫换行 → 变成窄条挤成一团；
+   *  非全屏时可用宽≈视频宽，症状只在全屏暴露（用户日志 video rect 1920 vs 1152）。
+   *  新法可用宽 = 视频横切片宽（left/right 由 updateOverlayPosition 内联写入），
+   *  长句可铺满视频宽度、短句仍收缩居中。 */
+  width: fit-content;
   max-width: 80%;
+  margin: 0 auto;
   text-align: center;
   line-height: 1.5;
   display: none;
-  transform: translateX(-50%);
 }
 /* 字幕正文容器 */
 #beaver-subtitle-overlay .beaver-overlay-subtitle {
@@ -310,7 +320,7 @@ function syncUserStyleRules(list) {
 
 /**
  * 根据 video.getBoundingClientRect() 更新 overlay 位置
- * overlay 水平居中于视频，垂直在视频底部 8% 处
+ * overlay 水平居中于视频（left/right 限定视频横切片），垂直在视频底部 8% 处
  * 反思（2026-07-06 v4）：rect 为 0×0 时不隐藏 overlay，仅跳过位置更新。
  *   全屏切换/SPA 导航时 video 可能短暂 0×0，隐藏后 _lastKey 不变不会恢复。
  * 反思（2026-08-05 修正）：用户反馈"视频全屏播放内没有字幕"。
@@ -336,8 +346,15 @@ function updateOverlayPosition() {
   //   旧版 -h 把盒子底边压在 ratio 线上，与"中心线"语义不符，预览/真实 overlay 都对不齐
   //   用户说的"中心水平线"）。横屏/竖屏视频同一公式，天然跟随视频矩形。
   const posMeta = findStyle(SUBTITLE_POSITIONS, _posId);
-  const ratio = (posMeta && typeof posMeta.ratio === 'number') ? posMeta.ratio : 0.1;
-  _overlay.style.left = (rect.left + rect.width / 2) + 'px';
+  // 329次：兜底 ratio 随默认位置改 0.2（下 1/5；314 次曾为 0.1）
+  const ratio = (posMeta && typeof posMeta.ratio === 'number') ? posMeta.ratio : 0.2;
+  // 329次（用户"全屏后字幕变窄，挤成一团"根治）：水平方向由
+  //   left:视频中心 + transform:translateX(-50%) 改为 left/right 限定视频横切片，
+  //   配合基础样式 width:fit-content + margin:0 auto 居中。根因见基础样式注释。
+  //   left = 视频左边界，right = 视口宽 − 视频右边界 → 切片宽恒等于视频宽，
+  //   overlay 可用宽不再被"视口宽 − left ≈ 半屏"卡死，长句可铺满视频宽度。
+  _overlay.style.left = Math.max(0, rect.left) + 'px';
+  _overlay.style.right = Math.max(0, window.innerWidth - rect.right) + 'px';
   // 第一百二十七次：默认字号随视频高度自适应（Captionator polyfill 同款比例）。
   // 293次：全部样式统一按当前样式百分比换算（预设固定 px 已退役）。
   // 297次 clamp 删除（用户"clamp 不是失真么"）——大小屏纯比例；缺省默认 5%。
@@ -370,12 +387,6 @@ function updateOverlayPosition() {
   } else {
     _overlay.style.maxWidth = '';
   }
-  // 反思（2026-08-06）：诊断日志，验证全屏时 overlay 定位是否正确
-  console.log('[VocabRadar][overlay] 位置更新: video rect=' + JSON.stringify({
-    w: rect.width, h: rect.height, left: rect.left, top: rect.top
-  }) + ' overlay parent=' + (_overlay.parentElement ? _overlay.parentElement.tagName : 'null') +
-    ' fullscreen=' + (!!document.fullscreenElement) + ' display=' + _overlay.style.display +
-    ' ratio=' + ratio.toFixed(2) + ' pos=' + _posId + ' style=' + _styleId);
 }
 
 /**
@@ -388,22 +399,15 @@ function onFullscreenChange() {
   if (!_overlay) return;
   // 反思（2026-08-06）：同时检查标准与 webkit 前缀（Safari/旧 Chrome）
   const fsEl = document.fullscreenElement || document.webkitFullscreenElement;
-  // 反思（2026-08-06）：诊断日志，验证全屏事件是否触发
-  console.log('[VocabRadar][overlay] fullscreenchange: fullscreenElement=' +
-    (fsEl ? fsEl.tagName + '#' + (fsEl.id || '') : 'null') +
-    ' standard=' + (!!document.fullscreenElement) +
-    ' webkit=' + (!!document.webkitFullscreenElement));
   if (fsEl) {
     // 进入全屏：将 overlay 挂到全屏元素内部
     if (_overlay.parentElement !== fsEl) {
       fsEl.appendChild(_overlay);
-      console.log('[VocabRadar][overlay] overlay 已移入全屏元素:', fsEl.tagName);
     }
   } else {
     // 退出全屏：移回 body
     if (_overlay.parentElement !== document.body) {
       document.body.appendChild(_overlay);
-      console.log('[VocabRadar][overlay] overlay 已移回 body');
     }
   }
   // 强制重新渲染（位置变化）
@@ -733,13 +737,13 @@ export function startOverlay(video, subtitles, options = {}) {
     //   再应用激活样式（激活值可能是 user-*，规则就绪后类一挂即生效）
     // 309次第五轮（用户四栏统一裁定）：videoOverlayAnnStyle 兜底默认
     // 318次：兜底/回落改默认代指常量（317 次的 annDefaultStyle/subDefaultStyle 指针键撤销）
-    chrome.storage.local.get({ subtitleStyle: SUB_DEFAULT_STYLE, subtitlePosition: 'b10', subtitleCustom: null, videoOverlayAnnStyle: ANN_DEFAULT_STYLE, subtitleUserStyles: [] }, (res) => {
+    chrome.storage.local.get({ subtitleStyle: SUB_DEFAULT_STYLE, subtitlePosition: 'b20', subtitleCustom: null, videoOverlayAnnStyle: ANN_DEFAULT_STYLE, subtitleUserStyles: [] }, (res) => {
       syncUserStyleRules(res.subtitleUserStyles);
       setSubtitleStyle(res.subtitleStyle || SUB_DEFAULT_STYLE);
       // 316次：videoOverlayAnnStyle 读数清洗——池中 none 卡已删，残留 'none' 统一落
       //   默认代指常量 ANN_DEFAULT_STYLE（与引导页口径一致）；subtitlePosition 的
       //   旧 't10' 残留由 setSubtitlePosition 内迁移为 b90（见该函数）。
-      setSubtitlePosition(res.subtitlePosition || 'b10');   // 314次：默认贴底 1/10（用户裁定推翻 b20）
+      setSubtitlePosition(res.subtitlePosition || 'b20');   // 314次：默认贴底 1/10；329次：默认改回下 1/5（b20）
       if (res.subtitleCustom) setSubtitleCustom(res.subtitleCustom);
       setVideoOverlayAnnStyle(res.videoOverlayAnnStyle === 'none' ? ANN_DEFAULT_STYLE : (res.videoOverlayAnnStyle || ANN_DEFAULT_STYLE));
     });
@@ -904,20 +908,20 @@ export function setSubtitleStyle(style) {
  * 应用字幕位置样式（距视频底部比例）
  * 反思（2026-08-16 第六十九次）：位置与文字样式解耦。位置由 SUBTITLE_POSITIONS 元数据
  *   （ratio 字段）驱动，updateOverlayPosition 据此计算 top；本函数只更新 _posId 并刷新位置。
- *   storage key: subtitlePosition（'b10' 默认贴底，其他见 SUBTITLE_POSITIONS）。
+ *   storage key: subtitlePosition（'b20' 默认下 1/5，329次起；其他见 SUBTITLE_POSITIONS）。
  * @param {string} posId 位置样式 id
  */
 export function setSubtitlePosition(posId) {
-  let id = posId || 'b10';
+  let id = posId || 'b20';
   // 316次：'t10'（原顶部 1/10，316 次改名 b90 延续 b 系列命名）存量迁移——
-  //   落 b90 保持视觉位置不变；不迁的话 b90 已入池、t10 查不到会被当未知 id 回落 b10，
-  //   用户选好的"顶部 1/10"会无端跳回贴底。
+//   落 b90 保持视觉位置不变；不迁的话 b90 已入池、t10 查不到会被当未知 id 回落默认（329次起 b20），
+//   用户选好的"顶部 1/10"会无端跳回下 1/5。
   if (id === 't10') id = 'b90';
   if (!findStyle(SUBTITLE_POSITIONS, id)) {
     console.warn(`[VocabRadar][overlay] 字幕位置 "${id}" 已不存在，回退默认位置并清理 storage`);
-    id = 'b10';
+    id = 'b20';
     try {
-      chrome.storage.local.set({ subtitlePosition: 'b10' });
+      chrome.storage.local.set({ subtitlePosition: 'b20' });
     } catch (e) { /* 清理失败忽略 */ }
   }
   _posId = id;

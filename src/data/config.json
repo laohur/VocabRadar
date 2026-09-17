@@ -19,7 +19,7 @@
   "videoAnnotationStyle": "green-background",
   "annTemplate": "{target}{annotation}",
   "subtitleStyle": "white-bottom",
-  "subtitlePosition": "b10",
+  "subtitlePosition": "b20",
   "subtitleCustom": { "bg": "#000000", "fg": "#ffffff", "fontSizePct": 5, "fontFamily": "sans" },
   "videoOverlayAnnStyle": "green-background",
   "annotateRepeat": false,
