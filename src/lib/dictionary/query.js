@@ -21,7 +21,7 @@ import { lemmatize as lemmatizeMulti, lemmatizeAllCandidates, lemmatizeOne } fro
 //   lookup() 仍同步读 Maps（高频调用，不能 async）；
 //   lookupFull() 异步读 IDB 完整记录，缺失的 rank/lemma/tags 从 Maps 回填并写回 IDB。
 //   translation/phonetic 字段由 translator.js/phonetics.js 各自读写。
-import { getWord, getWordsBatch, updateFields } from '../word-db.js';
+import { getWord, getWordsBatch, updateFields, countTranslationEntries, lemmasSize } from '../word-db.js';
 // 反思（2026-08-16 第七十次）：词典层数据来源账本--lookupFull 在真实的
 //   needsMaps 决策点（IDB 直读 vs Maps 组装写回）计数 rank/lemma/tags 来源，
 //   由调用方把当前批次账本传进来（可选，其他调用方不传即不计数）。
@@ -476,13 +476,46 @@ export function getMaxRank() {
  *   "LANGUAGES is not defined"。移除该字段。
  * 反思（2026-08-21 第八十八次）：词典只有一个--诊断只报一个词条数（dictSize），
  *   不再分 wordfreq/wordlists 两个数字。
- * @returns {{loadedLang:string|null, dictSize:number, loadPending:boolean, currentLearnLang:string|null}}
+ * 第三百四十六次（用户裁定方案 A"有啥就出啥"）：新增 rebuildPending 字段——库残缺时
+ *   源重建改后台跑（projection.js 不再 await 阻塞就绪），引导页轮询此字段：非空 =
+ *   后台构建中（就绪行 ◑◒◐◓ 轮播提示），清空 = 重建结束（停轮播 + 重取分项数字）。
+ * @returns {{loadedLang:string|null, dictSize:number, loadPending:boolean, currentLearnLang:string|null, rebuildPending:string|null}}
  */
 export function getDiagState() {
   return {
     loadedLang: dictState.loadedLang,
     dictSize: dictState.dictMap ? dictState.dictMap.size : 0,
     loadPending: !!(dictState.loadPromise && !dictState.loadedLang),
-    currentLearnLang: dictState.currentLearnLang || null
+    currentLearnLang: dictState.currentLearnLang || null,
+    rebuildPending: dictState.rebuildPending || null
   };
+}
+
+// 第三百三十九次（用户："各个字段分别统计"）：词典各字段分项规模统计——引导页就绪行
+//   分项显示的取数接口。四个字段各自的计数口径（不是并集一个数）：
+//   ① 词频 rankCount：内存 dictMap 中 rank 为 number 的词条数；
+//   ② 词表 tagCount：内存 dictMap 中 tags 数组非空的词条数；
+//   ③ 翻译 transCount：d_trans 分表 by-lang 索引计数（内置翻译包 40261 词设计上不进
+//      内存投影、直接写 d_trans 懒读，dictMap 数不出，必须经 SW 查 IDB；另含运行时
+//      在线翻译缓存写入的词条，属真实状态如实显示）；
+//   ④ 词形 lemmaCount：扩展数据域词形缓存计数（lemmasSize 仅读缓存绝不触发 CDN 下载，
+//      词形数据从未装载过则如实回 0）。
+//   ①② 同步遍历 dictMap（3.8 万条目毫秒级）；③④ 异步经 SW 消息。失败一律按 0 兜底
+//   （两个计数函数内部已 try/catch），不允许统计失败影响页面。
+// @returns {Promise<{lang, total, rankCount, tagCount, transCount, lemmaCount}>}
+export async function getDictFieldStats() {
+  let rankCount = 0, tagCount = 0;
+  const dm = dictState.dictMap;
+  if (dm) {
+    for (const e of dm.values()) {
+      if (typeof e.rank === 'number') rankCount++;
+      if (Array.isArray(e.tags) && e.tags.length > 0) tagCount++;
+    }
+  }
+  const lang = dictState.loadedLang || dictState.currentLearnLang || DEFAULT_SOURCE_LANG;
+  let transCount = 0, lemmaCount = 0;
+  try {
+    [transCount, lemmaCount] = await Promise.all([countTranslationEntries(lang), lemmasSize(lang)]);
+  } catch (_) { /* 兜底：保持 0 */ }
+  return { lang, total: dm ? dm.size : 0, rankCount, tagCount, transCount, lemmaCount };
 }

@@ -18,10 +18,11 @@ import { isSW, DIRECT_IDB, runtimeValid } from './env.js';
 import { makeKey } from './key-utils.js';
 import {
   idbGet, idbGetBatch, idbPut, idbUpdate, idbClearByLang, idbClearAll,
-  idbBulkWrite, idbBulkTrans, idbGetLangProjection, idbGetRanksProjection, idbDictGet, idbDictMerge
+  idbBulkWrite, idbBulkTrans, idbCountTrans, idbGetLangProjection, idbGetRanksProjection, idbDictGet, idbDictMerge,
+  idbReadMeta
 } from './db-ops.js';
 import { _projCache } from './projection-cache.js';
-import { lemmasLoad, swLemmatizeWord, swLemmaFamily } from './lemmas-engine.js';
+import { lemmasLoad, lemmasSizeCached, swLemmatizeWord, swLemmaFamily } from './lemmas-engine.js';
 
 export async function getWord(lang, word) {
   if (!lang || !word) return null;
@@ -39,6 +40,39 @@ export async function getWord(lang, word) {
     return resp && resp.ok ? resp.record : null;
   } catch (e) {
     return null;
+  }
+}
+
+// 第三百三十九次：翻译分表（d_trans）按语言计数——引导页就绪行分项统计的取数管道。
+//   路由同 getWord：isSW 直调 IDB -> runtimeValid 时经 SW 代查（WORD_DB_COUNT_TRANS）。
+//   失败/不可用一律回 0（计数只是展示信息，不允许影响页面流程）。
+export async function countTranslationEntries(lang) {
+  if (!lang) return 0;
+  if (isSW) {
+    try { return await idbCountTrans(lang); } catch (e) { return 0; }
+  }
+  if (!runtimeValid()) return 0;
+  try {
+    const resp = await chrome.runtime.sendMessage({ type: 'WORD_DB_COUNT_TRANS', lang });
+    return resp && resp.ok ? (resp.count || 0) : 0;
+  } catch (e) {
+    return 0;
+  }
+}
+
+// 第三百三十九次：词形数据（扩展数据域 dictCache.lemmas）按语言计数——同上分项统计用。
+//   走 lemmasSizeCached：仅读缓存绝不触发 CDN 下载；未装载如实回 0。
+export async function lemmasSize(lang) {
+  if (!lang) return 0;
+  if (isSW) {
+    try { return (await lemmasSizeCached(lang)).size || 0; } catch (e) { return 0; }
+  }
+  if (!runtimeValid()) return 0;
+  try {
+    const resp = await chrome.runtime.sendMessage({ type: 'WORD_DB_LEMMAS_SIZE', lang });
+    return resp && resp.ok ? (resp.size || 0) : 0;
+  } catch (e) {
+    return 0;
   }
 }
 
@@ -159,18 +193,31 @@ export async function clearAll() {
 // （第一百一十九次：idbBulkWrite / idbGetLangProjection 已上移为分表实现）
 export async function getLangProjection(lang) {
   if (!lang) return null;
-  // 第一百五十二次：直连优先（Chromium CS/扩展页共享扩展源 IDB）
+  // 第三百四十三次：各失败路径显性打点——此前 SW 直调异常静默吞成 null、消息通道
+  //   失败（ok:false/error/异常）也静默吞成 null，页面侧只见「整投影缺失」，异常真相
+  //   全程不可见（违反"不遮蔽错误"）。修复后每条失败路径都有日志。
   if (DIRECT_IDB) {
-    try { return await idbGetLangProjection(lang); } catch (e) { /* 落入 SW 兜底 */ }
+    try { return await idbGetLangProjection(lang); } catch (e) {
+      console.error('[VocabRadar][word-db] 整投影直连读取异常，落入 SW 兜底:', e);
+    }
   }
   if (isSW) {
-    try { return await idbGetLangProjection(lang); } catch (e) { return null; }
+    try { return await idbGetLangProjection(lang); } catch (e) {
+      console.error('[VocabRadar][word-db] 整投影读取异常（SW 直调）:', e);
+      return null;
+    }
   }
   if (!runtimeValid()) return null;
   try {
     const resp = await chrome.runtime.sendMessage({ type: 'WORD_DB_GET_LANG_PROJ', lang });
-    return resp && resp.ok ? resp.proj : null;
-  } catch (e) { return null; }
+    if (resp && resp.ok) return resp.proj;
+    // 第三百四十三次：SW 回 ok:false（handler 外层 catch 的 error）——透出异常真相
+    console.error('[VocabRadar][word-db] 整投影消息返回失败:', (resp && resp.error) || '(无 error 字段)');
+    return null;
+  } catch (e) {
+    console.error('[VocabRadar][word-db] 整投影消息通道异常（SW 未响应/上下文失效）:', e);
+    return null;
+  }
 }
 
 // === 词典投影预热（第一百九十一次）===
@@ -240,17 +287,53 @@ function projLocalClearAll() {
  * （warmup 与消息路径共用） */
 async function loadProjCached(lang) {
   let proj = _projCache.get(lang);
+  let _src = 'mem';
+  // 第三百四十四次：内存命中过矛盾态检查（声称 built 却无数据才弃用）；345 起 built=false
+  //   投影（库的真实写照）合法缓存内存，防每次重复扫库。
+  if (proj && proj.built && !(proj.ranks && Object.keys(proj.ranks).length > 0)) {
+    console.warn('[VocabRadar][word-db] 内存缓存投影矛盾（built=true 但无数据），弃用重取');
+    proj = null;
+  }
+  if (proj) console.log(`[VocabRadar][word-db] 整投影命中内存缓存（${proj.built ? Object.keys(proj.ranks).length + ' 词' : '未构建态'}）`);
   if (!proj) {
     // 第二百零六次：先查 storage.local（跨会话存活），未命中才扫库
     proj = await projLocalGet(lang);
+    _src = 'local';
+    if (proj) console.log(`[VocabRadar][word-db] 整投影命中 local 缓存（${Object.keys(proj.ranks).length} 词）`);
+  }
+  // 第三百四十五次：meta 对账——缓存投影声称 built=true 而 meta 无构建记录 = 远古毒投影。
+  //   实证（用户诊断脚本）：meta 表全空、d_rank 仅 2263 条（残库），而 local 躺着 built=true
+  //   投影（expected 28811/dv 0）劫持 ranks FAST PATH 五轮（340-344），库残缺真相被掩盖。
+  //   判据唯一且可靠：库若真构建过，重建末块必同事务写 meta；meta 无记录 = 从未成功
+  //   构建过 = 投影是远古残物。对账通过（meta.built=true）才放行。
+  let _metaBuilt = null;
+  if (proj && proj.built) {
+    let meta = null;
+    try { meta = await idbReadMeta(lang); } catch (e) { console.error('[VocabRadar][word-db] meta 对账读取失败:', e); }
+    _metaBuilt = !!(meta && meta.built);
+    if (!_metaBuilt) {
+      console.warn(`[VocabRadar][word-db] 缓存投影称 built=true 但 meta 无构建记录（${meta ? '有记录缺标记' : 'meta 缺失'}）——判远古毒投影，弃用改扫库（345 对账）`);
+      proj = null;
+    }
   }
   if (!proj) {
-    proj = await idbGetLangProjection(lang);
+    _src = 'idb';
+    try {
+      proj = await idbGetLangProjection(lang);
+    } catch (e) {
+      // 第三百四十三次：扫库异常显性化（此前静默上抛→handler 外层 catch→页面只见「整投影缺失」）
+      console.error('[VocabRadar][word-db] 整投影扫库异常（loadProjCached）:', e);
+      throw e;
+    }
     try {
       // 第二百一十次：只落盘 **built** 投影（meta 读取偶发失败产出的残缺投影绝不落盘，
       //   否则每个页面都会判"缺 __built__"而重建，SW 被逐块写库埋掉——火狐重症根因）
+      // 第三百四十三次：_partial（分表读取降级）投影同样禁止落盘——坏段不固化，
+      //   每次装载重扫重打 error，症状持续可见（不掩耳盗铃）；内存照常缓存（会话内不重扫）。
       if (!proj || !proj.built) {
         console.warn('[VocabRadar][word-db] 投影缺 built 标记，跳过 local 缓存（防毒化）');
+      } else if (proj._partial) {
+        console.warn('[VocabRadar][word-db] 投影含降级空段(_partial)，跳过 local 缓存（坏段不固化，见上方 error 日志）');
       } else {
         // 第二百零九次：写入前体积保险——单语言投影超 4MB（JSON 序列化后）不写
         //   storage.local（Firefox local 配额约 5MB，超限写入行为不可控），只留内存缓存
@@ -265,7 +348,24 @@ async function loadProjCached(lang) {
       }
     } catch (e) { /* ignore */ }
   }
+  // 第三百四十五次：诊断载荷随投影回传页面（SW 控制台页面看不到，五轮排障盲区）——
+  //   Stage 2 据此打一行日志，命中来源（mem/local/idb）与 meta 对账结果一步可见。
+  if (proj) proj._diag = { src: _src, metaBuilt: _metaBuilt };
   _projCache.set(lang, proj);
+  return proj;
+}
+
+/** 第三百四十五次：ranks 切片候选的 meta 对账（loadProjCached/getRanksProjection/handler 三处共用）。
+ * 候选必须满足：built=true + ranks 非空 + meta 确有构建记录（三条全过才可信——
+ * local 远古毒投影 built=true 但库从未成功构建，实证见 loadProjCached 对账注释）。 */
+async function _sliceProjValidated(lang, proj) {
+  if (!(proj && proj.built && proj.ranks && Object.keys(proj.ranks).length > 0)) return null;
+  let meta = null;
+  try { meta = await idbReadMeta(lang); } catch (e) { /* 对账失败从严：当无构建记录处理 */ }
+  if (!(meta && meta.built)) {
+    console.warn('[VocabRadar][word-db] ranks 切片候选称 built 但 meta 无构建记录——判远古毒投影弃用（345 对账）');
+    return null;
+  }
   return proj;
 }
 
@@ -315,9 +415,10 @@ export async function getRanksProjection(lang) {
   if (!lang) return null;
   if (isSW) {
     try {
-      let proj = _projCache.get(lang);
-      if (!proj) proj = await projLocalGet(lang);
-      if (proj && proj.built && proj.ranks && Object.keys(proj.ranks).length > 0) {
+      // 第三百四十五次：切片候选一律过 meta 对账（local 远古毒投影曾劫持 FAST PATH 五轮）
+      let proj = await _sliceProjValidated(lang, _projCache.get(lang));
+      if (!proj) proj = await _sliceProjValidated(lang, await projLocalGet(lang));
+      if (proj) {
         return {
           built: true, ranks: proj.ranks, ranksCount: Object.keys(proj.ranks).length,
           expected: proj.expected || 0, dataVersion: proj.dataVersion || 0
@@ -580,9 +681,10 @@ export async function handleWordDbMessage(msg, sender, sendResponse) {
         // 分阶段投影 Stage 1（2026-09-04）：只读 ranks，供首屏先扫。优先复用两级缓存
         //   里的整投影切片（SW 热时零扫描）；未命中才扫 d_rank 单表，且结果不写缓存。
         try {
-          let proj = _projCache.get(msg.lang);
-          if (!proj) proj = await projLocalGet(msg.lang);
-          if (proj && proj.built && proj.ranks && Object.keys(proj.ranks).length > 0) {
+          // 第三百四十五次：切片候选一律过 meta 对账（local 远古毒投影曾劫持 FAST PATH 五轮）
+          let proj = await _sliceProjValidated(msg.lang, _projCache.get(msg.lang));
+          if (!proj) proj = await _sliceProjValidated(msg.lang, await projLocalGet(msg.lang));
+          if (proj) {
             sendResponse({
               ok: true,
               proj: {
@@ -634,6 +736,26 @@ export async function handleWordDbMessage(msg, sender, sendResponse) {
           sendResponse({ ok: true, written: (msg.entries || []).length });
         } catch (e) {
           sendResponse({ ok: false, error: String((e && e.message) || e) });
+        }
+        return true;
+      }
+      case 'WORD_DB_COUNT_TRANS': {
+        // 第三百三十九次：d_trans by-lang 索引计数（引导页就绪行分项统计用）。
+        try {
+          const count = await idbCountTrans(msg.lang);
+          sendResponse({ ok: true, count });
+        } catch (e) {
+          sendResponse({ ok: false, count: 0, error: String((e && e.message) || e) });
+        }
+        return true;
+      }
+      case 'WORD_DB_LEMMAS_SIZE': {
+        // 第三百三十九次：词形数据仅读缓存计数（绝不触发 CDN 下载，见 lemmas-engine.js）。
+        try {
+          const r = await lemmasSizeCached(msg.lang);
+          sendResponse({ ok: true, size: r.size || 0 });
+        } catch (e) {
+          sendResponse({ ok: false, size: 0, error: String((e && e.message) || e) });
         }
         return true;
       }

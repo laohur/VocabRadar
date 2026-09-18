@@ -57,5 +57,6 @@
 // 本门面仅 re-export 全部原导出符号（符号名不变），所有引用方零改动。
 export { setQuietBatch, getLearnLang } from './dictionary/state.js';
 export {
-  ensureReady, ensureRanksReady, isRanksLoaded, lookup, lookupWithLemmatizer, lookupFull, prefetchFull, isLoaded, getDiagState, getMaxRank
+  ensureReady, ensureRanksReady, isRanksLoaded, lookup, lookupWithLemmatizer, lookupFull, prefetchFull, isLoaded, getDiagState, getMaxRank,
+  getDictFieldStats // 第三百三十九次：各字段分项规模统计（引导页就绪行分项显示用）
 } from './dictionary/query.js';

@@ -270,6 +270,21 @@ export async function idbBulkTrans(lang, entries, translationLang) {
   });
 }
 
+// 第三百三十九次（用户："各个字段分别统计"）：引导页就绪行要分项显示各字段词典规模，
+//   其中翻译字段（d_trans 分表）页侧无现成计数——内置翻译包 40261 词经 idbBulkTrans
+//   直接写表、不进内存投影（projection.js 设计如此），dictMap 数不出翻译数。此处新增
+//   by-lang 索引 count：一条索引计数即得该语言全部翻译词条数（含运行时 setWordCached
+//   写入的在线翻译缓存，属真实状态，如实显示）。仅 SW 执行，CS 经 sw-channel 调用。
+export async function idbCountTrans(lang) {
+  const db = await getDB();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction([S_TRANS], 'readonly');
+    const req = tx.objectStore(S_TRANS).index('by-lang').count(IDBKeyRange.only(lang));
+    req.onsuccess = () => resolve(req.result || 0);
+    req.onerror = () => reject(req.error);
+  });
+}
+
 export async function idbGetLangProjection(lang) {
   // === 第一百九十次：IDB 投影读取内部细分计时 ===
   // 用户实测：词典装载 4448ms 全在投影读取（startHint→词典就绪 4537ms ≈ 投影 4448+Map 85），
@@ -291,13 +306,28 @@ export async function idbGetLangProjection(lang) {
   //   改为 index('by-lang').getAll(only(lang)) 一次取回该语言全部记录（IDB 内部批量出栈，
   //   无逐条回调），并三表 Promise.all 并行（三个独立 readonly 事务互不冲突）。
   //   返回结构与语义完全不变（仍经 splitKey 从 k 还原 word）。
-  const readSplitAll = (store, fn, name) => new Promise((resolve, reject) => {
+  // 第三百四十三次·整投影静默异常显性化（用户实测「整投影缺失」×3 而 ranks 三次全成）：
+  //   ranks 直扫 built=true 证明 meta('en').built 为真；整投影与 ranks 共用同一 readMetaFor
+  //   同一判据，逻辑上不可能一真一假——唯一自洽解释是整投影路径有异常被上层 catch 吞成
+  //   null（getLangProjection 的 catch 静默 / handler 外层 catch 只回 ok:false 且页面侧
+  //   丢弃 error）。修复分两层：
+  //   ① 逐表容错：单表 getAll/事务失败不再炸整投影——该段置空 + _partial 标记 +
+  //      console.error 显性打点，ranks+meta 段照常返回。Stage 2 合并照常、341 词表自愈
+  //      照常触发，词典不因单表坏而瘫痪；异常真相直接进日志（哪个表、什么错）。
+  //   ② _partial 投影由 loadProjCached 禁止落盘 local（坏段不固化），每次装载重扫重打
+  //      error——症状持续可见，逼出根因（不掩耳盗铃）。
+  let _partial = false;
+  const readSplitAll = (store, fn, name) => new Promise((resolve) => {
     const _ts = performance.now();   // 第一百九十次：单表耗时（含 success 回调内的 splitKey 处理）
     try {
       const tx = db.transaction(store, 'readonly');
       const idx = tx.objectStore(store).index('by-lang');
       const req = idx.getAll(IDBKeyRange.only(lang));
-      req.onerror = () => reject(req.error);
+      req.onerror = () => {
+        _partial = true;
+        console.error(`[VocabRadar][word-db] 整投影分表 ${name} getAll 失败（lang=${lang}）:`, req.error);
+        resolve();   // 第三百四十三次：单表失败降级为空段，不炸整投影
+      };
       req.onsuccess = () => {
         const rows = req.result || [];
         for (let i = 0; i < rows.length; i++) fn(rows[i]);
@@ -305,7 +335,11 @@ export async function idbGetLangProjection(lang) {
         _it[name + 'Rows'] = rows.length;
         resolve();
       };
-    } catch (e) { reject(e); }
+    } catch (e) {
+      _partial = true;
+      console.error(`[VocabRadar][word-db] 整投影分表 ${name} 事务/索引创建失败（lang=${lang}）:`, e);
+      resolve();   // 第三百四十三次：同上（表缺失或 index 缺失在此暴露）
+    }
   });
   await Promise.all([
     // 第一百三十七次·重大缺陷修复：分表记录字段是 {k,lang,v}（k=lang|word），没有 word 字段！
@@ -339,7 +373,8 @@ export async function idbGetLangProjection(lang) {
   // projection.js 与 manifest.version 比对，不一致 ⇒ 旧词典数据过期，清库全量重建。
   const metaDataVersion = (meta && Number.isFinite(meta.dataVersion)) ? meta.dataVersion : 0;
   // 带出实际值--ranksCount=库内实数，expected=构建时记录的实际词条数。
-  return { built, ranks, tags, lemmas, ranksCount: Object.keys(ranks).length, expected: metaExpected, dataVersion: metaDataVersion };
+  // 第三百四十三次：_partial=true 表示有分表读取失败被降级为空段（消费方据此禁落盘缓存）。
+  return { built, ranks, tags, lemmas, ranksCount: Object.keys(ranks).length, expected: metaExpected, dataVersion: metaDataVersion, _partial };
 }
 
 /** 读 meta 表单语言记录（idbGetLangProjection 与 idbGetRanksProjection 共用） */
@@ -349,9 +384,33 @@ function readMetaFor(db, lang) {
       const tx = db.transaction(S_META, 'readonly');
       const rq = tx.objectStore(S_META).get(lang);
       rq.onsuccess = () => res(rq.result || null);
-      rq.onerror = () => res(null);
-    } catch (e) { res(null); }
+      rq.onerror = () => {
+        // 第三百四十四次：meta 读取失败不再静默当"不存在"——error 返回 null 会伪装成
+        //   built=false，与"meta 真缺失"无法区分，排障三轮（340-342）都被它带偏。
+        console.error(`[VocabRadar][word-db] meta 表读取失败（lang=${lang}）:`, rq.error);
+        res(null);
+      };
+    } catch (e) {
+      console.error(`[VocabRadar][word-db] meta 表事务创建失败（lang=${lang}）:`, e);
+      res(null);
+    }
   });
+}
+
+/**
+ * 第三百四十五次：读 meta 表导出（跨模块对账用）。
+ * 背景（用户诊断脚本实证）：meta 表全空 + d_rank 仅 2263 条（残库），而 chrome.storage.local
+ *   里躺着一远古 built=true 投影（expected 28811/dataVersion 0）——ranks FAST PATH 每次被它
+ *   劫持（37929 词假象），库残缺真相被掩盖五轮（340-344）。对账判据：**缓存投影声称
+ *   built=true 而 meta 无构建记录 = 远古毒投影**（若库真构建过，meta 必有记录）。
+ * 第三百四十四次的 idbTouchMetaBuilt（d_rank>0 盲目重打 built）已删除——方向错误：
+ *   残库（2263/37915）标成完好只会掩盖问题，修复应走源重建补全数据，由重建末块打标。
+ * @param {string} lang
+ * @returns {Promise<object|null>} meta 记录（{lang,built,expected,dataVersion}）或 null
+ */
+export async function idbReadMeta(lang) {
+  const db = await getDB();
+  return readMetaFor(db, lang);
 }
 
 /**

@@ -45,5 +45,7 @@
 export {
   getWord, getWordsBatch, putWord, updateFields, clearByLang, clearAll,
   getLangProjection, getRanksProjection, bulkWriteDictionary, bulkWriteTranslations, getDictCache, setDictCache,
-  handleWordDbMessage, warmupDictProjection
+  handleWordDbMessage, warmupDictProjection,
+  countTranslationEntries, // 第三百三十九次：d_trans 按语言计数（引导页就绪行分项统计用）
+  lemmasSize // 第三百三十九次：词形数据仅读缓存计数（不触发下载，分项统计用）
 } from './word-db/sw-channel.js';

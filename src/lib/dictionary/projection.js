@@ -14,7 +14,7 @@
 // ============================================================
 
 import { dictState, DEFAULT_SOURCE_LANG, _ts } from './state.js';
-import { getLangProjection, getRanksProjection, bulkWriteDictionary, bulkWriteTranslations, clearByLang } from '../word-db.js';
+import { getLangProjection, getRanksProjection, bulkWriteDictionary, bulkWriteTranslations, clearByLang, countTranslationEntries } from '../word-db.js';
 import { loadWordfreq, loadWordlists, loadBuiltinEnZh } from './word-loader.js';
 
 /**
@@ -135,10 +135,23 @@ export async function _loadDict(lang) {
       const expectedFast = Number(ranksProj.expected) || 0;
       const cntFast = Number(ranksProj.ranksCount) || 0;
       if (expectedFast && cntFast < expectedFast) {
-        console.warn(`[VocabRadar][dictionary][${_ts()}] 投影不完整: 库内 ${cntFast} / 基准 ${expectedFast} -> 增量补齐(upsert，不清库)`);
-        _t0 = performance.now();
-        await _rebuildFromSources(meaningLang);
-        _seg.rebuild = Math.round(performance.now() - _t0);
+        // 第三百四十六次（用户裁定方案 A"有啥就出啥" + ◑◒◐◓ 轮播）：不再 await 重建
+        //   阻塞就绪（用户实测干等数分钟）——先建 rank-only 部分 Map 放行（ranks Promise
+        //   即刻 settle，扫描侧先亮已有词），增量补齐后台跑；完成后页侧轮询
+        //   rebuildPending 自动刷新就绪行分项数字，高亮全量需重扫。
+        console.warn(`[VocabRadar][dictionary][${_ts()}] 投影不完整: 库内 ${cntFast} / 基准 ${expectedFast} -> 后台增量补齐（346 渐进就绪：先放行 ${cntFast} 词，完成后自动刷新）`);
+        dictState.dictMap = new Map();
+        dictState.maxRank = 0;
+        const _pr = ranksProj.ranks || {};
+        for (const word in _pr) {
+          const _r = _pr[word];
+          if (typeof _r === 'number' && _r > dictState.maxRank) dictState.maxRank = _r;
+          dictState.dictMap.set(word, { rank: _r, tags: [], lemma: null, translation: undefined, translationLang: undefined, phonetic: undefined });
+        }
+        dictState.ranksReadyLang = meaningLang;
+        try { if (dictState._settleRanks) dictState._settleRanks(dictState.dictMap); } catch (_) {}
+        _kickRebuildBackground(meaningLang, `FAST 路投影不完整（库内 ${cntFast}/${expectedFast}）`);
+        dictState.loadedLang = meaningLang;
         return dictState.dictMap;
       }
       // ranks 命中且完整：建 rank-only Map，resolve ranks，先出高亮
@@ -163,10 +176,13 @@ export async function _loadDict(lang) {
       if (_full && _full.built) {
         const _pt = _full.tags || {};
         const _pl = _full.lemmas || {};
+        // 第三百四十一次：合并值数组校验——`|| []` 只防 null/undefined，防不了非数组
+        //   垃圾值（tags 字段系统契约恒为数组，统计侧 getDictFieldStats 即按 Array.isArray 计）。
         for (const word in _pt) {
+          const _tv = Array.isArray(_pt[word]) && _pt[word].length > 0 ? _pt[word] : [];
           const e = dictState.dictMap.get(word);
-          if (e) e.tags = _pt[word] || [];
-          else dictState.dictMap.set(word, { rank: null, tags: _pt[word] || [], lemma: _pl[word] || null, translation: undefined, translationLang: undefined, phonetic: undefined });
+          if (e) e.tags = _tv;
+          else dictState.dictMap.set(word, { rank: null, tags: _tv, lemma: _pl[word] || null, translation: undefined, translationLang: undefined, phonetic: undefined });
         }
         for (const word in _pl) {
           const e = dictState.dictMap.get(word);
@@ -174,8 +190,97 @@ export async function _loadDict(lang) {
           else dictState.dictMap.set(word, { rank: null, tags: [], lemma: _pl[word], translation: undefined, translationLang: undefined, phonetic: undefined });
         }
         console.log(`[VocabRadar][dictionary][${_ts()}] 整投影合并完成(Stage 2): tags/lemma 就位，共 ${dictState.dictMap.size} 词`);
+      } else if (_full === null) {
+        // 第三百四十三次：else 原先混打两种形态，掩盖真相——
+        //   null = 读取失败（消息通道/扫库异常/ok:false，异常详情已在 word-db 层四条
+        //   失败路径 + db-ops 分表 error 显性打出，此处只提示形态不遮蔽）；
+        //   built=false = 读到了投影但 meta 缺 built 标记（另一类问题，需重建）。
+        console.warn(`[VocabRadar][dictionary][${_ts()}] 整投影读取失败(null)，仅 ranks 可用（异常详情见上方 word-db error 日志；tags/lemma 为空，高亮不受影响）`);
       } else {
-        console.warn(`[VocabRadar][dictionary][${_ts()}] 整投影缺失，仅 ranks 可用（tags/lemma 为空，高亮不受影响）`);
+        // 第三百四十六次（用户裁定方案 A）：built=false 不再 await 阻塞——Stage 1 的
+        //   rank-only Map 已建/settle，即刻放行（词频部分数据先亮），源重建后台跑
+        //   （upsert 不清库 + 末块同事务打 __built__），完成后页侧轮询 rebuildPending
+        //   自动刷新就绪行；tags/lemma 高亮全量需重扫。
+        console.warn(`[VocabRadar][dictionary][${_ts()}] 整投影 built=false（库无构建标记/数据残缺）→ 后台源重建补全（346 渐进就绪：先放行词频 ${dictState.dictMap.size} 词，完成后自动刷新）`);
+        _kickRebuildBackground(meaningLang, 'Stage2 整投影 built=false（库残缺）');
+        dictState.loadedLang = meaningLang;
+        return dictState.dictMap;
+      }
+      // 第三百四十次（用户实测就绪行 "tags 0 · translations 687"）：快道坏库自愈——缺就补。
+      //   坏库成因：329-336 次期间构建——wordfreq 拉取成功打上 __built__（d_rank 完好），
+      //   但当时 loadWordlists/loadBuiltinEnZh 读 .json 解析失败（337 次已修读点）→
+      //   d_trans 无内置翻译包；此后 built+ranks 完整恒走快道永不重建，且
+      //   2026-09-08 起 dataVersion 固定写 0、版本比对自动跳过——坏状态固化。
+      //   第三百四十一次（用户实测 "tags 0" 在 340 次修复后依旧）：修正 340 次的错误
+      //   诊断——d_tags 并非"空"而是"全是空数组条目"：_rebuildFromSources 构建词条
+      //   tags 恒为 []（本文件 L360），bulkWriteDictionary 写库只查 !== undefined 即写，
+      //   故 loadWordlists 失败的重建仍把 28,813 个词频词的空 tags 写满 d_tags；投影
+      //   读出 Object.keys>0，340 次的 `keys===0` 判据恒假、自愈从未触发（translations
+      //   走数量阈值不受影响故补装成功——用户实测 40,366 即证）。判据改为扫描：无任何
+      //   非空数组条目即视为缺数据，空段/全空数组两种坏形态全覆盖。
+      //   修法：Stage 2 检出无有效标签 → loadWordlists 重装 → 原位并入 dictMap →
+      //   仅 tags 的精简 Map 送 bulkWriteDictionary 持久化（rank=undefined 跳过 rank 写、
+      //   expected/dataVersion 传整投影原值防 meta 整条替换抹字段——末块 __built__ 重打
+      //   不可避免，upsert 幂等，词表词覆盖旧空条目、词频独有词本就应空标签）。
+      //   en 限定：词表源是英文考试词表专属（word-loader.js 读
+      //   src/data/en/），小语种 tags 本就空，不得误补英文词表。
+      let _validTags = false;
+      const _ptScan = (_full && _full.tags) || {};
+      for (const _w in _ptScan) {
+        const _v = _ptScan[_w];
+        if (Array.isArray(_v) && _v.length > 0) { _validTags = true; break; }
+      }
+      if (meaningLang === 'en' && !_validTags) {
+        console.warn(`[VocabRadar][dictionary][${_ts()}] tags 投影无有效标签（历史坏库：全空数组条目或空段），词表缺就补装`);
+        try {
+          const wl = await loadWordlists();
+          if (wl.size > 0) {
+            const tagsOnly = new Map();
+            for (const [word, tags] of wl) {
+              const e = dictState.dictMap.get(word);
+              if (e) e.tags = tags;
+              else dictState.dictMap.set(word, { rank: null, tags, lemma: null, translation: undefined, translationLang: undefined, phonetic: undefined });
+              tagsOnly.set(word, { tags });
+            }
+            try {
+              await bulkWriteDictionary(meaningLang, tagsOnly, _full && _full.expected, _full && _full.dataVersion);
+              console.log(`[VocabRadar][dictionary][${_ts()}] 词表补装完成并持久化: ${tagsOnly.size} 词`);
+            } catch (e) {
+              console.warn(`[VocabRadar][dictionary][${_ts()}] 词表补装持久化失败（本页内存可用，下次装载再补）:`, e && e.message);
+            }
+          } else {
+            console.warn(`[VocabRadar][dictionary][${_ts()}] 词表补装失败：源装载为空（见上方 wordlists 告警），标签暂不可用`);
+          }
+        } catch (e) {
+          console.warn(`[VocabRadar][dictionary][${_ts()}] 词表补装异常（高亮不受影响）:`, e && e.message);
+        }
+      }
+      // 第三百四十次：内置英中翻译包补装（en 限定，不阻塞就绪——d_trans 是懒读字段）。
+      //   同上坏库：内置翻译包从未写入 d_trans（用户实测 687 条全是运行时在线缓存）。
+      //   补装条件 d_trans 计数 < 1000：内置包 4 万级、在线缓存一般数百；无法区分缓存与
+      //   内置包来源，阈值 + 会话节流双保险。节流 _transBackfilled 挂 dictState（SW 冷
+      //   启动重置，每会话最多补一次；重复补装幂等 upsert 无害）。完成后新查询自然命中，
+      //   本就绪行统计若晚于补装则直接显示真实词数。
+      if (meaningLang === 'en' && !dictState._transBackfilled) {
+        dictState._transBackfilled = true;
+        Promise.resolve().then(async () => {
+          try {
+            const cnt = await countTranslationEntries(meaningLang);
+            if (cnt >= 1000) {
+              console.log(`[VocabRadar][dictionary][${_ts()}] d_trans 已有 ${cnt} 条，跳过内置翻译包补装`);
+              return;
+            }
+            const zhMap = await loadBuiltinEnZh();
+            if (zhMap.size > 0) {
+              const ok = await bulkWriteTranslations(meaningLang, zhMap, 'zh');
+              console.log(`[VocabRadar][dictionary][${_ts()}] 内置英中翻译包补装${ok ? '完成' : '部分失败'}: ${zhMap.size} 词（补前 d_trans ${cnt} 条）`);
+            } else {
+              console.warn(`[VocabRadar][dictionary][${_ts()}] 内置翻译包补装失败：源装载为空（见上方告警），释义暂走在线`);
+            }
+          } catch (e) {
+            console.warn(`[VocabRadar][dictionary][${_ts()}] 内置翻译包补装异常（释义走在线）:`, e && e.message);
+          }
+        });
       }
       dictState.loadedLang = meaningLang;
       _seg.total = Math.round(Date.now() - startTime);
@@ -245,22 +350,27 @@ export async function _loadDict(lang) {
       if (cnt === 0 && dictState._emptyProjRebuilt) {
         return dictState.dictMap;
       }
-      console.warn(`[VocabRadar][dictionary][${_ts()}] 投影不完整/空投影: 库内 ${cnt} / 基准 ${expected} -> 增量补齐(upsert，不清库)`);
-      _t0 = performance.now();   // 第一百八十八次：增量补齐段计时
-      await _rebuildFromSources(meaningLang);
-      _seg.rebuild = Math.round(performance.now() - _t0);
-      // 第二百四十六次：补齐后 Map 仍空 → 置标记，本会话后续装载放行（真 0 词库保险丝）。
+      // 第三百四十六次（用户裁定方案 A）：不完整/空投影不再 await——SLOW PATH 无 ranks
+      //   快道，但手头 proj（built=true 而 cnt<expected）上方三轮合并已建好部分 dictMap，
+      //   直接放行，增量补齐后台跑；真 0 词库保险丝改在放行时置位（语义保持：空 Map
+      //   放行即视为"本会话重建过仍空"，重建完成后下次装载走正常完整性判据）。
+      console.warn(`[VocabRadar][dictionary][${_ts()}] 投影不完整/空投影: 库内 ${cnt} / 基准 ${expected} -> 后台增量补齐（346 渐进就绪：先放行 ${dictState.dictMap.size} 词，完成后自动刷新）`);
       if (!dictState.dictMap || dictState.dictMap.size === 0) {
         dictState._emptyProjRebuilt = true;
       }
+      _kickRebuildBackground(meaningLang, `SLOW 路投影不完整（库内 ${cnt}/${expected}）`);
       return dictState.dictMap;
     }
 
     // 词典缺 __built__ 标记 -> 首次构建
-    _t0 = performance.now();   // 第一百八十八次：首次构建段计时
-    await _rebuildFromSources(meaningLang);
-    _seg.rebuild = Math.round(performance.now() - _t0);
-    return dictState.dictMap;
+    // 第三百四十六次（用户裁定方案 A）：首建不再 await 阻塞就绪（用户实测干等数分钟，
+    //   内置翻译 d_trans 本就独立懒读不该陪绑）——放行空 Map（页侧就绪行翻转 + ◑◒◐◓
+    //   轮播提示"后台构建中"，翻译/已入库字段照常可用），源构建后台跑，完成后页侧
+    //   轮询 rebuildPending 自动刷新分项数字。反思：构建期间网页高亮 0 命中属临时态
+    //   （轮播明示构建中，不是假就绪、不遮蔽）。
+    console.warn(`[VocabRadar][dictionary][${_ts()}] 词典缺 __built__ 标记 -> 后台首次构建（346 渐进就绪：先放行，完成后自动刷新；构建期间高亮 0 命中属预期）`);
+    _kickRebuildBackground(meaningLang, '首建（无构建标记）');
+    return dictState.dictMap || new Map();
   })();
   dictState.loadPromise._lang = meaningLang;
   // 分阶段兜底（2026-09-04）：loadPromise 落定（成功/异常）时，若本轮 ranks 承诺还没人
@@ -284,6 +394,25 @@ export async function _loadDict(lang) {
  */
 async function _rebuildFromSources(lang) {
   const startTime = Date.now();
+  // 第三百四十七次（用户："好像还是一齐最后显示，而不是有啥字段显示啥"+"内置的翻译按道理
+  //   应该非常快"）：内置英中翻译包回填并行先行——原位置在 bulkWriteDictionary 成功之后，
+  //   被词频远程拉取（分钟级）+ 全量写库串行绑死；翻译源是包内本地 jsonl（秒级），提前
+  //   fire-and-forget 并行跑，d_trans 秒级满仓（页侧 347 渐进渲染下一次 tick 即亮翻译数）。
+  //   失败仅 warn 不影响重建主链（与原位置同语义）；upsert 幂等，与 340 自愈 b 补装并发
+  //   双写无害。
+  if (lang === 'en') {
+    Promise.resolve().then(async () => {
+      try {
+        const zhMap = await loadBuiltinEnZh();
+        if (zhMap.size > 0) {
+          const zhOk = await bulkWriteTranslations(lang, zhMap, 'zh');
+          console.log(`[VocabRadar][dictionary][${_ts()}] 内置英中翻译包先行回填${zhOk ? '完成' : '部分失败'}: ${zhMap.size} 词（347 与词频拉取并行，不等重建）`);
+        }
+      } catch (e) {
+        console.warn(`[VocabRadar][dictionary][${_ts()}] 内置英中翻译包先行回填异常（释义走在线）:`, e && e.message);
+      }
+    });
+  }
   const [wf, wl] = await Promise.all([
     loadWordfreq(lang),
     loadWordlists()
@@ -319,20 +448,9 @@ async function _rebuildFromSources(lang) {
       } else {
         console.log(`[VocabRadar][dictionary][${_ts()}] 词典已存入词典库（upsert 不清库 + __built__/expected=${wf.size}/dataVersion=v${dataVersion} 同事务原子）`);
         // 反思（2026-09-04）：内置英中翻译包回填——仅 learnLanguage=en。
-        //   不进内存 dictMap（40k 条释义常驻内存浪费，translation 本就设计为懒读字段），
-        //   直接 bulkWriteTranslations 写 d_trans 分表。失败只告警（不阻塞构建，下次
-        //   版本重建覆盖；translator 首层未命中则照常走在线）。
-        if (lang === 'en') {
-          try {
-            const zhMap = await loadBuiltinEnZh();
-            if (zhMap.size > 0) {
-              const zhOk = await bulkWriteTranslations(lang, zhMap, 'zh');
-              console.log(`[VocabRadar][dictionary][${_ts()}] 内置英中翻译包回填${zhOk ? '完成' : '部分失败'}: ${zhMap.size} 词`);
-            }
-          } catch (e) {
-            console.warn(`[VocabRadar][dictionary][${_ts()}] 内置英中翻译包回填异常（释义走在线）:`, e && e.message);
-          }
-        }
+        //   第三百四十七次：此块整体上移到函数开头 fire-and-forget 并行先行（原被词频
+        //   远程拉取+全量写库串行绑死，全新库下翻译数字陪绑到最后才出，违背"有啥字段
+        //   显示啥"）；失败语义不变（仅 warn，translator 未命中走在线兜底）。
         // 第一百五十三次：写后校验--直读投影确认持久化真实生效（cnt 应≈wf.size）
         try {
           const proj2 = await getLangProjection(lang);
@@ -344,4 +462,36 @@ async function _rebuildFromSources(lang) {
     console.warn(`[VocabRadar][dictionary][${_ts()}] 送入词典失败（忽略，本次内存词典仍可用）:`, e && e.message);
   }
   return dictState.dictMap;
+}
+
+/**
+ * 第三百四十六次（用户裁定方案 A"有啥就出啥"+◑◒◐◓ 轮播）：后台重建调度器。
+ * 装载路径检出库残缺/无构建标记时不再 await _rebuildFromSources 阻塞就绪（用户实测
+ * 干等数分钟，内置翻译等独立字段陪绑），改为：
+ *   1) 同步置 dictState.rebuildPending = lang（页侧 getDiagState 轮询依据）；
+ *   2) _rebuildFromSources 后台执行（其内部自会重建 dictMap/设 loadedLang/写库打标）；
+ *   3) 完成/失败 finally 清 rebuildPending——引导页轮询到清空即停轮播并重取分项数字。
+ * 防重入：_rebuildRunning 同页互斥；跨页各自 context 各跑各的（与原 await 版一致，
+ * upsert 幂等无害）。失败不遮蔽：console.warn + 分项数字如实显示当前值，下次装载再试。
+ * @param {string} lang
+ * @param {string} reason 触发原因（日志用）
+ */
+function _kickRebuildBackground(lang, reason) {
+  if (dictState._rebuildRunning) {
+    console.log(`[VocabRadar][dictionary][${_ts()}] 后台重建已在进行（跳过重复触发: ${reason}）`);
+    return;
+  }
+  dictState._rebuildRunning = true;
+  dictState.rebuildPending = lang;
+  console.log(`[VocabRadar][dictionary][${_ts()}] 后台重建启动: ${reason}（就绪不阻塞，完成后自动刷新就绪行）`);
+  Promise.resolve()
+    .then(() => _rebuildFromSources(lang))
+    .catch((e) => {
+      console.warn(`[VocabRadar][dictionary][${_ts()}] 后台重建失败（本页手头数据仍可用，下次装载再试）:`, e && e.message);
+    })
+    .finally(() => {
+      dictState._rebuildRunning = false;
+      dictState.rebuildPending = null;
+      console.log(`[VocabRadar][dictionary][${_ts()}] 后台重建结束，rebuildPending 已清空（页侧轮询将刷新就绪行）`);
+    });
 }

@@ -115,7 +115,7 @@ import {
 } from '../lib/llm.js';
 // 第二百四十八次：词典装载状态行——ensureReady 幂等（IDB 已构建走投影快通道秒回，
 //   缺数据才就地从源装载 = 更新/安装后引导页静默初始化的点名入口），getDiagState 读装载态。
-import { ensureReady, getDiagState, getMaxRank } from '../lib/dictionary.js';
+import { ensureReady, getDiagState, getMaxRank, getDictFieldStats } from '../lib/dictionary.js';
 
 // 第二百二十三次：LLM 翻译渠道提示词默认模板（{text}=原文，{lang}=释义语言）。
 // 2026-09-02 修正占位为 {text}（用户裁定：Please translate "{text}" in {lang}.）
@@ -288,26 +288,124 @@ function fillByDataKey() {
 //   如 SW onInstalled 已建）则走投影快通道秒回；IDB 缺数据才就地从源装载（词频网络拉取只在
 //   缺数据时发生），完成翻转「已就绪」。失败示红（网页按无词典降级，不掩饰错误——AGENTS.md）。
 //   文案按界面语言取，与 renderHelp 一样用 getLangState()（不走 data-key/i18n 字典）。
+// 第三百三十八次（用户："有错为啥不改"）：ready 文案 "built-in meanings · N words" 名不
+//   副实——N=dictMap.size=词频∪词表并集（rank+tags 两字段覆盖的词条数），并非释义数；
+//   内置翻译包 40261 词在 d_trans 分表懒读、不进内存投影（projection.js 321-324 行设计
+//   如此），页侧无现成计数。文案改为如实标注数字口径，不再声称 "built-in meanings"。
+// 第三百三十九次（用户："各个字段分别统计"）：338 次仍只显示一个并集数，仍不符要求。
+//   就绪行改为四字段各显各的规模：词频 / 词表标签 / 翻译 / 词形还原，计数经
+//   getDictFieldStats()（query.js 339 次）分项取得——词频/词表遍历内存 dictMap，
+//   翻译查 d_trans 分表 IDB 计数（含运行时在线翻译缓存），词形查扩展数据域缓存
+//   （仅读不下载）。就绪先翻转（不阻塞），分项数字异步到账后刷新文案。
+const _fmt = (n) => Number(n || 0).toLocaleString('en-US');
+// 第三百四十六次（用户裁定方案 A + "◑◒◐◓轮播"）：渐进式就绪视觉——
+//   ◑◒◐◓ 四帧 120ms 字符轮播用于两处：装载中（ensureReady 未落定）、后台构建中
+//   （projection.js 346 起库残缺不再 await 重建，放行就绪后源构建后台跑）。
+//   句柄模块级持有：renderDictStatus 重入（语言切换）先停旧轮播防 interval 泄漏。
+//   rebuildPending 观察器 2s 轮询 getDiagState，清空（重建结束/失败）即停轮播并
+//   applyStats(3) 重取分项终值；重建失败时 rebuildPending 同样清空，分项数字如实
+//   显示当前残值（控制台有 projection.js 的 warn 详情），不遮蔽错误。
+const _SPIN_FRAMES = ['◑', '◒', '◐', '◓'];
+let _spinEl = null;
+let _spinTimer = null;
+function _stopDictSpin() {
+  if (_spinTimer) { try { clearInterval(_spinTimer); } catch (_) { /* ignore */ } _spinTimer = null; }
+  if (_spinEl) { try { _spinEl.remove(); } catch (_) { /* ignore */ } _spinEl = null; }
+}
+function _startDictSpin(el, baseText) {
+  _stopDictSpin();
+  el.textContent = baseText + ' ';
+  const span = document.createElement('span');
+  span.className = 'g-dict-spin';
+  span.textContent = _SPIN_FRAMES[0];
+  el.appendChild(span);
+  _spinEl = span;
+  let _i = 0;
+  _spinTimer = setInterval(() => { span.textContent = _SPIN_FRAMES[(++_i) % _SPIN_FRAMES.length]; }, 120);
+}
+// 第三百四十七次（用户："好像还是一齐最后显示，而不是有啥字段显示啥"）：textContent 赋值
+//   会整体替换子节点（轮播 span 被摘下、interval 仍在往脱管节点写字符）——346 版 applyStats
+//   因此被延后到重建结束，快字段全被绑死一齐出。改为：span 句柄模块级持有，数字刷新后
+//   轮播仍活跃即把 span 重新挂回行尾（appendChild 自动从脱管状态移回），构建中的渐进
+//   数字刷新与轮播可共存。
+function _reattachSpin(el) {
+  if (_spinEl && _spinTimer) el.appendChild(_spinEl);
+}
 function renderDictStatus() {
   const el = $('gDictStatus');
   if (!el) return;
   const zh = getLangState() === 'zh';
-  const statusReady = (size) => (zh ? `词典已就绪（内置释义${size ? ' · ' + size + ' 词' : ''} + 词表标签 + 词频）` : `Dictionary ready (built-in meanings${size ? ' · ' + size + ' words' : ''} + word-list tags + word frequency)`);
+  const statusReady = (s) => (zh
+    ? `词典已就绪 · 词频 ${_fmt(s.rankCount)} 词 · 词表标签 ${_fmt(s.tagCount)} 词 · 翻译 ${_fmt(s.transCount)} 词 · 词形还原 ${_fmt(s.lemmaCount)} 词`
+    : `Dictionary ready · frequency ${_fmt(s.rankCount)} · word-list tags ${_fmt(s.tagCount)} · translations ${_fmt(s.transCount)} · lemmas ${_fmt(s.lemmaCount)}`);
+  // 分项统计异步取数后刷新就绪文案；统计失败不回退就绪态（数字维持未刷新前的兜底文案）
+  // 第三百四十次：翻译包后台补装期重取——补装在 projection.js 异步进行（不阻塞词典就绪），
+  //   首次统计大概率取到补装前旧计数（如 687）；transCount<1000 且 lang=en 时 2s 后重取
+  //   （最多 3 次），小语种无内置包不空转。其余字段（词频/词表/词形）就绪时已是终值。
+  // 第三百四十七次：构建中数字照刷（有啥字段显示啥）——行尾追加"后台构建中"标记，轮播
+  //   span 重挂行尾；346 版把 applyStats 延后到重建结束，快字段（翻译/词形）被绑死一齐出。
+  const applyStats = (retries) => {
+    Promise.resolve(getDictFieldStats()).then((s) => {
+      const building = !!getDiagState().rebuildPending;
+      el.textContent = statusReady(s) + (building ? (zh ? ' · 后台构建中' : ' · building in background') : '');
+      if (building) _reattachSpin(el);
+      if (s.lang === 'en' && s.transCount < 1000 && retries > 0) {
+        setTimeout(() => applyStats(retries - 1), 2000);
+      }
+    }).catch(() => { /* 计数失败明示：保留已就绪基础文案，不掩饰也不阻断 */ });
+  };
+  // 346：后台重建观察器——rebuildPending 清空（重建结束/失败）即停轮播并重取分项终值
+  // 347：构建中每 2s tick 顺带 applyStats(0)——字段到账即亮（如翻译先行回填完成后下一次
+  //   tick 就显数），不再等重建结束一齐出；retries=0 不叠加翻译重试链（tick 本身就在重刷）
+  let _rebuildWatchTimer = null;
+  const watchRebuild = () => {
+    if (_rebuildWatchTimer) return;
+    _rebuildWatchTimer = setInterval(() => {
+      let d = null;
+      try { d = getDiagState(); } catch (_) { d = null; }
+      if (!d || !d.rebuildPending) {
+        clearInterval(_rebuildWatchTimer);
+        _rebuildWatchTimer = null;
+        _stopDictSpin();
+        applyStats(3);
+      } else {
+        applyStats(0);
+      }
+    }, 2000);
+  };
+  // 346：就绪渲染按"是否后台构建中"分流——构建中走轮播文案（applyStats 延后到
+  //   重建结束，防其 textContent 刷新清掉轮播 span；当前数字如实不撒谎）
+  // 347：构建中立即 applyStats(0) 取数——快字段先行亮出，数字渐进刷新与轮播共存
+  const renderReady = () => {
+    const d = getDiagState();
+    if (d.rebuildPending) {
+      _startDictSpin(el, zh ? '词典已就绪 · 后台构建词频/标签中' : 'Dictionary ready · building frequency/tags in background');
+      applyStats(0);
+      watchRebuild();
+    } else {
+      _stopDictSpin();
+      el.textContent = zh ? '词典已就绪' : 'Dictionary ready';
+      el.classList.add('ok');
+      applyStats(3);
+    }
+  };
   const diag = getDiagState();
   if (diag.loadedLang) {
-    el.textContent = statusReady(diag.dictSize);
     el.classList.add('ok');
+    renderReady();
     return;
   }
-  el.textContent = zh ? '词典装载中…' : 'Dictionary loading…';
+  // 346：装载中 ◑◒◐◓ 轮播（替代静态"装载中…"，一眼可见在动、没死）
+  _startDictSpin(el, zh ? '词典装载中' : 'Dictionary loading');
   // 承诺永不悬空（query.js：_loadDict 内部 catch，resolve null/undefined 表示失败）
   Promise.resolve(ensureReady()).then((m) => {
     if (m) {
-      el.textContent = statusReady(m.size);
       el.classList.add('ok');
       el.classList.remove('fail');
       refreshRankMaxPlaceholder();
+      renderReady();
     } else {
+      _stopDictSpin();
       el.textContent = zh ? '词典装载失败：网页将按无词典降级运行（详见控制台）' : 'Dictionary load failed: pages fall back to no-dictionary mode (see console)';
       el.classList.add('fail');
       el.classList.remove('ok');

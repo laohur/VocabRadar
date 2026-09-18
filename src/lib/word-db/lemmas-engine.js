@@ -77,6 +77,21 @@ async function lemmasLoadInner(lang) {
   return { source: 'download', wordDict, ambiguityMap };
 }
 
+// 第三百三十九次（用户："各个字段分别统计"）：词形字段规模查询——仅读扩展数据域 IDB
+//   缓存计数，绝不触发 CDN 下载。与 lemmasLoad 的区别：lemmasLoad 未命中会下载几 MB
+//   词形整表，引导页只为显示一个统计数字不应发起下载；本函数缓存未命中（词形数据从未
+//   装载过）如实回 0，词形还原首次真正使用时才由 lemmasLoad 下载。仅 SW 执行。
+export async function lemmasSizeCached(lang) {
+  try {
+    const cache = await idbDictGet(lang);
+    if (cache && cache.lemmas) {
+      const n = Object.keys(cache.lemmas).length;
+      if (n >= LEMMAS_MIN_WORDS) return { ok: true, size: n };
+    }
+  } catch (_) { /* 缓存读失败按未装载处理 */ }
+  return { ok: true, size: 0 };
+}
+
 // SW 侧逐词词形还原（2026-08-16 第六十七次）：lemmatizer 实例缓存，每 SW 会话每个语言只构建一次
 const _swLemmatizers = new Map();  // lang -> lemmatizer instance
 
