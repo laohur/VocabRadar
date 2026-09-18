@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "default_locale": "en",
   "name": "__MSG_extName__",
-  "version": "0.3.4",
+  "version": "0.3.5",
   "description": "__MSG_extDesc__",
   "permissions": ["storage", "alarms", "activeTab", "cookies", "contextMenus", "offscreen", "audioCapture", "videoCapture", "scripting"],
   "host_permissions": [
