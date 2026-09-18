@@ -43,8 +43,8 @@
  *
  * 数据目录结构（src/data/，由 preprocess.mjs 生成，打包时不处理）：
  *   - config.json          配置文件（panelHideDelay 等）
- *   - wordlists.json       英文词表标签 { word: [list_ids] }
- *   注：wordlists.json 必须先执行 `node preprocess.mjs` 生成。
+ *   - wordlists.jsonl      英文词表标签（JSONL，每行 {标签: [单词...]}，2026-09-18 改）
+ *   注：wordlists.jsonl / translations_zh.jsonl 必须先执行 `node preprocess.mjs` 生成。
  *   注（2026-09-08）：wordfreq 词频数据不再内置包内（src/data/wordfreq/ 已移除），
  *       运行时经 HF/镜像 CDN 拉取，词数动态取自下载文件解码后的实际 Map.size
  *       （见 src/lib/vendor/dictionary/projection.js；tessdata/kuromoji 字典亦同为 CDN）。
@@ -106,7 +106,7 @@ const EXCLUDE_NAMES = new Set(['.DS_Store', 'Thumbs.db', 'wordbank.json']);
 // 注释剥离排除目录（2026-09-04 由 TERSER_EXCLUDE_DIRS 更名，语义不变）
 // - vendor：第三方库（msgpack-lite/transformers/tesseract 等）保持原样不剥离
 //   （AMO 政策对第三方开源库豁免，且部分为压缩单行文件，重写有风险）
-// - data：数据目录（wordlists.json 是 JSON、icons/ 是 PNG，均非 JS）
+// - data：数据目录（wordlists.jsonl 是 JSONL 数据、icons/ 是 PNG，均非 JS）
 const STRIP_EXCLUDE_DIRS = new Set(['vendor', 'data']);
 
 // 打包形态配置（2026-09-07 --mode，纯净为基础；2026-09-08 用户裁定全不混淆）

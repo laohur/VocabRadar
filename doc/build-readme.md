@@ -44,9 +44,9 @@ suffix appended to content-script import URLs is an MD5 **content** hash of
 the bundled entries (`scripts/build.mjs`), so identical sources produce
 identical hashes — there is no timestamp or randomness in the build output.
 
-`scripts/preprocess.mjs` (regenerates the wordfreq frequency tables from a
-local corpus) is **not** required to build: the generated data files are
-already included under `src/data/wordfreq/` and `src/data/wordlists.json`.
+`scripts/preprocess.mjs` (regenerates the bundled data files — wordlists.jsonl,
+translations_zh.jsonl and icons) is **not** required to build: the generated
+data files are already included under `src/data/en/` and `src/data/icons/`.
 It is shipped only for completeness.
 
 ## 3. Processing disclosure (per AMO source-code policy)

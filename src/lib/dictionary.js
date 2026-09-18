@@ -22,15 +22,16 @@
 // 数据来源：
 //   1. src/data/wordfreq/small_{lang}.msgpack.gz (wordfreq 数据，10种语言)
 //      格式：{ word: frequency }，frequency 为每百万词出现次数（float）
-//   2. src/data/en/wordlists.json (英文词表标签)
-//      格式：{ word_lower: [list_ids] }，仅英文，list_ids 如 ["CET4","CET6"]
-//   3. src/data/en/translations_zh.json (英中翻译包)
-//      格式：{ word_lower: [中文释义] }，仅英文
+//   2. src/data/en/wordlists.jsonl (英文词表标签，2026-09-18 改 JSONL)
+//      格式：每行 {标签: [单词...]}，仅英文，如 {"CET4":["a","abandon",...]}；
+//      装载时反转组装为 Map<word_lower, [tags]> 送入词典
+//   3. src/data/en/translations_zh.jsonl (英中翻译包，2026-09-18 改 JSONL)
+//      格式：每行 { word_lower: [中文释义] }，仅英文
 //
 // 查询接口：
 //   - lookup(word) 返回 { rank, tags }（不再含 translations，释义改由 translator.js 异步获取）
 //   - rank 按 frequency 降序排序后赋值（rank=1 为最高频词，如 "the"）
-//   - tags 从 wordlists.json 匹配，匹配前先词形还原（如 "running" -> "run"）
+//   - tags 从 wordlists.jsonl 匹配，匹配前先词形还原（如 "running" -> "run"）
 //
 // 反思（2026-08-02）：
 //   - 旧版加载 wordbank.json (6.8MB，含 translations+rank+tags)，
@@ -38,7 +39,7 @@
 //   - 用户要求"不再使用词典文件，由在线查询后缓存本地"：
 //     (a) 移除 wordbank.json，改加载 wordfreq 的 small_*.msgpack.bin (10个文件共~1.6MB)
 //     (b) 释义改由 translator.js 在线查询后 fnv1aHash 100分桶缓存本地
-//     (c) tags 保留为 wordlists.json (约200KB)，仅英文词表
+//     (c) tags 保留为 wordlists.jsonl（约650KB，仅英文词表）
 //   - wordfreq 各语言独立文件，按 learnLanguage 选择加载
 //   - 同语言只加载一次（缓存到内存），切换源语言时重新加载
 //

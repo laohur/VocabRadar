@@ -11,8 +11,9 @@
 //   故 SW 端 base64 编码回传，页面端 b64ToU8 解码）、
 //   loadWordfreq（HF CDN 拉取 + DecompressionStream 解压 + msgpack/cBpack 解码 ->
 //   Map<word, rank>；2026-09-09（用户裁定）解码后比对 SW 随包回传的远程 meta.json
-//   kept 词数基准，不匹配即弃包）、loadWordlists（JSON -> Map<word, tags>）、
-//   loadBuiltinEnZh（内置英中翻译包 JSON -> Map<word, translation定稿字符串>）。
+//   kept 词数基准，不匹配即弃包）、loadWordlists（JSONL {标签:[单词]} 逐行解析 ->
+//   反转组装 Map<word, tags>；2026-09-18 存储结构改标签-单词列表）、
+//   loadBuiltinEnZh（内置英中翻译包 JSONL -> Map<word, translation定稿字符串>）。
 // 仅使用 state.js 的 _ts() 时间戳辅助，无共享状态写入（产物 Map 由调用方消费）。
 // ============================================================
 
@@ -241,30 +242,60 @@ export async function loadWordfreq(lang) {
 }
 
 /**
- * 加载 wordlists.json 词表标签（装载函数，与词典无关--仅初始化或词典数据缺失/不全时启用）
+ * 加载 wordlists.jsonl 词表标签（装载函数，与词典无关--仅初始化或词典数据缺失/不全时启用）
  * 反思（2026-08-20 第八十五次）：词表标签不是独立缓存，而是词典字段（words store 记录 tags 字段）。
  *   装载完成由 _loadDict 送入词典，此后页面加载只从词典投影读，本函数仅词典缺数据时执行。
- * 2026-09-15：translations 和 wordlists.json 合并到 en 文件夹。
+ * 2026-09-15：translations 和 wordlists 合并到 en 文件夹。
+ * 2026-09-18（用户裁定"wordlists 也改 jsonl，存储键值对为标签-单词列表，初始化中
+ *   再组装到词典中"）：源文件改 JSONL（每行 {标签: [单词...]}，preprocess.mjs 产出，
+ *   以标签为主键——人类可读、词表更新易 diff），此处逐行解析后反转组装为
+ *   Map<word_lower, [tags]> 送入词典，逆索引延后到运行时一次性构建。
  * @returns {Promise<Map<string, string[]>>} Map<word_lower, [list_ids]>
  */
 export async function loadWordlists() {
-  const url = chrome.runtime.getURL('src/data/en/wordlists.json');
+  const url = chrome.runtime.getURL('src/data/en/wordlists.jsonl');
   console.log(`[VocabRadar][dictionary][${_ts()}] 词典缺少词表数据，装载词表源文件: ${url}`);
   const res = await fetch(url);
   if (!res.ok) {
     console.warn(`[VocabRadar][dictionary][${_ts()}] wordlists 加载失败: HTTP ${res.status}, 返回空 Map`);
     return new Map();
   }
-  const obj = await res.json();
+  const text = await res.text();
   const map = new Map();
-  for (const word in obj) {
-    if (Object.prototype.hasOwnProperty.call(obj, word)) {
-      const lower = word.toLowerCase();
-      const lists = obj[word] || [];
-      map.set(lower, lists);
+  let tagLines = 0;
+  let bad = 0;
+  for (const line of text.split(/\r?\n/)) {
+    const s = line.trim();
+    if (!s) continue;
+    let obj;
+    try {
+      obj = JSON.parse(s);
+    } catch {
+      bad += 1;
+      continue;
+    }
+    tagLines += 1;
+    for (const tag in obj) {
+      if (!Object.prototype.hasOwnProperty.call(obj, tag)) continue;
+      const words = obj[tag];
+      if (!Array.isArray(words)) { bad += 1; continue; }
+      // 反转组装：标签 → 单词列表 逐词并入 Map<word, [tags]>（同词跨标签聚合）
+      for (const w of words) {
+        const lower = String(w).trim().toLowerCase();
+        if (!lower) continue;
+        const tags = map.get(lower);
+        if (tags) {
+          if (tags.indexOf(tag) === -1) tags.push(tag);
+        } else {
+          map.set(lower, [tag]);
+        }
+      }
     }
   }
-  console.log(`[VocabRadar][dictionary][${_ts()}] wordlists 装载完成: ${map.size} 词`);
+  if (bad > 0) {
+    console.warn(`[VocabRadar][dictionary][${_ts()}] wordlists.jsonl ${bad} 行无效已跳过（坏行/值非数组）`);
+  }
+  console.log(`[VocabRadar][dictionary][${_ts()}] wordlists 装载完成: ${map.size} 词（${tagLines} 个标签行）`);
   return map;
 }
 
@@ -277,11 +308,14 @@ export async function loadWordlists() {
  *   分表（translationLang='zh'），之后 translator 首层词典缓存即命中，在线只补真正缺词。
  *   仅 learnLanguage=en 时调用；其它语言对不受影响（translationLang 校验天然隔离）。
  *   释义定稿：数组 join(' | ')，与详细模式 translations.join(' | ') 全列口径一致。
- * 2026-09-15：translations 和 wordlists.json 合并到 en 文件夹。
+ * 2026-09-15：translations 和 wordlists 合并到 en 文件夹。
+ * 2026-09-18：随 preprocess.mjs 管线化改读 translations_zh.jsonl（每行 {word: [defs]}）。
+ *   反思：此前读点写的是 translations_zh.json，而磁盘实际文件是 .jsonl（读点错位，
+ *   res.json() 恒解析失败走在线兜底，内置包一直未实际装载）——本次顺带修复。
  * @returns {Promise<Map<string, string>>} Map<word_lower, translation>
  */
 export async function loadBuiltinEnZh() {
-  const url = chrome.runtime.getURL('src/data/en/translations_zh.json');
+  const url = chrome.runtime.getURL('src/data/en/translations_zh.jsonl');
   console.log(`[VocabRadar][dictionary][${_ts()}] 装载内置英中翻译包: ${url}`);
   let res;
   try {
@@ -294,15 +328,26 @@ export async function loadBuiltinEnZh() {
     console.warn(`[VocabRadar][dictionary][${_ts()}] 内置翻译包加载失败: HTTP ${res.status}, 返回空 Map（释义走在线）`);
     return new Map();
   }
-  let obj;
+  let text;
   try {
-    obj = await res.json();
+    text = await res.text();
   } catch (e) {
-    console.warn(`[VocabRadar][dictionary][${_ts()}] 内置翻译包 JSON 解析失败，返回空 Map（释义走在线）`);
+    console.warn(`[VocabRadar][dictionary][${_ts()}] 内置翻译包读取失败: ${e && e.message}, 返回空 Map（释义走在线）`);
     return new Map();
   }
   const map = new Map();
-  if (obj && typeof obj === 'object') {
+  let bad = 0;
+  for (const line of text.split(/\r?\n/)) {
+    const s = line.trim();
+    if (!s) continue;
+    let obj;
+    try {
+      obj = JSON.parse(s);
+    } catch {
+      bad += 1;
+      continue;
+    }
+    if (!obj || typeof obj !== 'object') { bad += 1; continue; }
     for (const word in obj) {
       if (!Object.prototype.hasOwnProperty.call(obj, word)) continue;
       const v = obj[word];
@@ -311,12 +356,15 @@ export async function loadBuiltinEnZh() {
       const items = [];
       for (const t of arr) {
         if (typeof t !== 'string') continue;
-        const s = t.trim();
-        if (s && items.indexOf(s) === -1) items.push(s);
+        const s2 = t.trim();
+        if (s2 && items.indexOf(s2) === -1) items.push(s2);
         if (items.length >= 5) break;
       }
       if (items.length > 0) map.set(String(word).toLowerCase(), items.join(' | '));
     }
+  }
+  if (bad > 0) {
+    console.warn(`[VocabRadar][dictionary][${_ts()}] 内置翻译包 ${bad} 行无效已跳过（坏行）`);
   }
   console.log(`[VocabRadar][dictionary][${_ts()}] 内置英中翻译包装载完成: ${map.size} 词`);
   return map;

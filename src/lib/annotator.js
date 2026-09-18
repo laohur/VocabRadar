@@ -57,7 +57,7 @@ export function getRankMax() {
  *   - 旧版词典命中返回 pending:false + 静态 translations（来自 wordbank.json）
  *   - 新版移除 wordbank.json，所有词的释义都改为在线查询后缓存本地
  *   - 故所有"待显示词"统一返回 pending:true，由调用方异步获取 translations
- *   - tags 仍来自 wordlists.json（仅英文），与 rank 同步返回
+ *   - tags 仍来自 wordlists.jsonl（仅英文，2026-09-18 改 JSONL），与 rank 同步返回
  *
  * 反思（2026-08-02 修正）：传递 lemma 字段（词形还原原形）供浮层显示
  *   - 词典直接命中：lemma=null
