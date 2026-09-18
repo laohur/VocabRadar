@@ -49,11 +49,6 @@ VocabRadar 是 Chrome / Edge / Firefox 的浏览器扩展。它扫描你正在�
 - **英文词表与释义**——随扩展本地打包。
 - **翻译**——在线渠道、Chrome 内置 Translator API 或你自己配置的 AI 接口；每次只发送你主动查询的文本。
 
-## Roadmap / TODO
-
-- **生词本（wordbook）**——多设备同步、间隔重复复习，与配套网站练习联动。
-- 更多视频站点（B 站 / YouTube 之外）。
-- 更多随包词表与释义。
 
 ## 隐私
 

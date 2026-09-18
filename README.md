@@ -69,12 +69,6 @@ the VocabRadar mini program (Chinese UI):
 - **Translations** — online channels, Chrome's built-in Translator API, or the
   AI endpoint **you** configure; only the text you explicitly look up is sent.
 
-## Roadmap / TODO
-
-- **Wordbook** — multi-device sync, spaced repetition review, and integration
-  with practice exercises on the companion site.
-- More video sites beyond Bilibili / YouTube.
-- More bundled word lists / translations.
 
 ## Privacy
 
