@@ -58,5 +58,6 @@
 export { setQuietBatch, getLearnLang } from './dictionary/state.js';
 export {
   ensureReady, ensureRanksReady, isRanksLoaded, lookup, lookupWithLemmatizer, lookupFull, prefetchFull, isLoaded, getDiagState, getMaxRank,
-  getDictFieldStats // 第三百三十九次：各字段分项规模统计（引导页就绪行分项显示用）
+  getDictFieldStats, // 第三百三十九次：各字段分项规模统计（引导页就绪行分项显示用）
+  getWordsByTag // 330次：按词表标签取整表单词（My Words 词表快捷选择器用）
 } from './dictionary/query.js';

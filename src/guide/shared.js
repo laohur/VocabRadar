@@ -21,6 +21,8 @@ export function setLangState(v) { _langState = (v === 'zh') ? 'zh' : 'en'; }
 // 引导页自身文案（中英双语，跟随界面语言；data-key 与 HTML 属性对应）
 const MSG = {
   tabSettings: { en: 'Settings', zh: '设定栏' },
+  // 340次：My Words 独立子标签（tab 顺序=设定栏之后、ASR 之前）
+  tabMyWords: { en: 'My Words', zh: 'My Words' },
   tabAsr: { en: 'ASR', zh: 'ASR' },
   tabOcr: { en: 'OCR', zh: 'OCR' },
   // 第二百五十三次：Parser 标签与面板文案；第二百五十四次：desc 补链接、删 browse/sidebar 键
@@ -44,6 +46,15 @@ const MSG = {
   //   统一绘制，修复"解析出的纯文本将显示在这里"语言混杂（静态 HTML/MSG 双源导致）
   tabHelp: { en: 'Help', zh: '说明栏' },
   groupGlobal: { en: 'Global Parameters', zh: '全局参数' },
+  // 330次（需求2）：My Words 分组（设定栏 group-global 后）——生词/熟词两栏词表
+  groupMyWords: { en: 'My Words', zh: 'My Words（我的词表）' },
+  mwNewWords: { en: 'New Words', zh: '生词' },
+  mwKnownWords: { en: 'Known Words', zh: '熟词' },
+  mwCountUnit: { en: 'words', zh: '个词' },
+  mwCopy: { en: 'Copy list', zh: '复制词表' },
+  mwExport: { en: 'Export as .txt', zh: '导出为 .txt' },
+  mwNewPh: { en: 'One word per line — annotated regardless of frequency range', zh: '一行一个单词——无论词频范围如何都会标注' },
+  mwKnownPh: { en: 'One word per line — never annotated', zh: '一行一个单词——一律不再标注' },
   groupModel: { en: 'Models', zh: '模型' },
   // 第一百七十四次：「模型」分组内分成小标题（对话大模型 / 翻译 / 语音识别模型 / OCR）
   subHeadChat: { en: 'Chat LLM', zh: '对话大模型' },

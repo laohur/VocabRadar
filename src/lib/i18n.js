@@ -444,6 +444,9 @@ const DICT = {
     'th.notWord': 'Common word',
     'th.outside': 'Outside',
     'th.stage': 'Level {n}',
+    // 330次（需求3）：查询卡 🏁/✓ 标记按钮 title
+    'th.markFresh': 'Mark as new word (My Words)',
+    'th.markKnown': 'Mark as known word (My Words)',
     'th.brand': 'VocabRadar',
     // 字幕样式预设名称（3属性×3值=9种 + 无）
     'ws.subNone': 'None',
@@ -825,6 +828,9 @@ const DICT = {
     'th.notWord': '非生词',
     'th.outside': '表外',
     'th.stage': '{n}阶',
+    // 330次（需求3）：查询卡 🏁/✓ 标记按钮 title
+    'th.markFresh': '标记为生词（存入 My Words）',
+    'th.markKnown': '标记为熟词（存入 My Words）',
     // 字幕样式预设名称（3属性×3值=9种 + 无）
     'ws.subNone': '无',
     'ws.subBottomWhiteSans': '底部 / 白色 / 无衬线',

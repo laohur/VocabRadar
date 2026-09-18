@@ -18,7 +18,7 @@
 // ============================================================
 
 import { getBilibiliSubtitles, fetchBilibiliTrack, getYouTubeSubtitles, fetchYouTubeTrack } from '../../lib/subtitle/index.js';
-import { startOverlay, stopOverlay, setOverlayEnabled, setRankThreshold, setRankThresholdMax } from '../subtitle-overlay.js';
+import { startOverlay, stopOverlay, setOverlayEnabled, setRankThreshold, setRankThresholdMax, setMyWordsLists } from '../subtitle-overlay.js';
 import { startSidebar, updateSubtitles, showNoSubtitle, setTracks, destroySidebar, loadASRCacheIfAny, loadASRCacheWithCoverage, selectASRTrackAndContinue, currentVideoKey, isASRActive } from '../video-sidebar.js';
 import { vcState } from './state.js';
 import { waitForVideo, waitForVideoReady, observeVideoChange } from './video-detect.js';
@@ -58,6 +58,9 @@ function getSettings() {
     chrome.storage.local.get({
       rankThreshold: 5000,   // 2026-08-14 第五十四次修正：恢复默认 5000
       rankThresholdMax: 0,   // 词频范围上界，0/缺省=不限制（默认全表频段）
+      // 340次（My Words 过滤失效修复）：此前缺键 → getSettings 后转发 startOverlay 的
+      //   myWords=undefined → subtitle-overlay 真值守卫不清空但也从不 setMyWords → 失效
+      myWords: { new: [], known: [] },
       learnLanguage: 'en',   // 所学语言（字幕轨道默认首选）
       meaningLanguage: 'zh',   // 释义语言
       sidebarEnabled: true,  // #88: 侧栏开关，默认显示
@@ -205,6 +208,11 @@ export async function startVideoController(platform) {
         // 词频上界变化 → 清缓存重渲染（词频范围，key rankThresholdMax）
         if (changes.rankThresholdMax) {
           setRankThresholdMax(changes.rankThresholdMax.newValue);
+        }
+        // My Words（用户生词/熟词表）变化 → 清缓存重渲染（2026-09-18）
+        if (changes.myWords) {
+          const _mw = changes.myWords.newValue || {};
+          setMyWordsLists(_mw.new, _mw.known);
         }
         // 反思（2026-07-10 #88）：用户在 popup 切换侧栏开关时，实时显示/隐藏侧栏。
         if (changes.sidebarEnabled) {
@@ -359,6 +367,7 @@ export async function startVideoController(platform) {
         startOverlay(video, subs, {
           rankThreshold: settings.rankThreshold,
           rankThresholdMax: settings.rankThresholdMax,
+          myWords: settings.myWords,
           enabled: true,
           annotateRepeat: settings.annotateRepeat === true
         });

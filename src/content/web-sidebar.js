@@ -108,6 +108,11 @@ async function _wsBoot() {
       if ('rankThresholdMax' in changes) {
         _wsImpl.setRankThresholdMax(changes.rankThresholdMax.newValue);
       }
+      // My Words（用户生词/熟词表）变化 → 全量重扫（2026-09-18）
+      if ('myWords' in changes) {
+        const _mw = changes.myWords.newValue || {};
+        _wsImpl.setMyWordsLists(_mw.new, _mw.known);
+      }
       // 语言变化 → 更新选择器
       if ('learnLanguage' in changes || 'meaningLanguage' in changes) {
         _wsGetSettings().then((s) => _wsImpl.updateLanguages(s));
@@ -215,6 +220,10 @@ function _wsGetSettings() {
       meaningLanguage: 'zh',
       // 反思（2026-08-14 第五十四次修正）：默认词频阈值恢复 5000，撤销第五十二次误改的 0
       rankThreshold: 5000,
+      // 340次（My Words 过滤失效修复）：此前缺两键 → 刷新后 _settings.myWords=undefined →
+      //   web-sidebar-impl setMyWords(空) 过滤失效；上界恒 Infinity 不限
+      rankThresholdMax: 0,
+      myWords: { new: [], known: [] },
       annotateOov: false,
       annotateRepeat: false,
       // 280次：侧邻注释模板默认（annBrackets 布尔退役）

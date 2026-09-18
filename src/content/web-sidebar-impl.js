@@ -21,7 +21,7 @@
 //
 // 词汇标签：从页面句子收集的生词表。
 
-import { rankToStage, getAnnotations, setRankMax } from '../lib/annotator.js';
+import { rankToStage, getAnnotations, setRankMax, setMyWords } from '../lib/annotator.js';
 // 第二百次：侧栏词典自足——词典装载此前只挂在 text-hint startHint 身上，text-hint
 //   一旦启动失败（如 Firefox 上 bundle 链路断裂），侧栏兜底扫描的 getAnnotations
 //   全部按表外词处理 → 词表永远为空。此处 fire-and-forget 预热，不阻塞启动。
@@ -113,6 +113,9 @@ export async function startWebSidebar(settings) {
   set_rankThreshold((_settings.rankThreshold != null) ? _settings.rankThreshold : 5000);
   // 词频范围上界（storage.rankThresholdMax，0/缺省=不限制）
   setRankMax(_settings.rankThresholdMax);
+  // My Words（用户生词/熟词表，优先级高于词频范围；storage.myWords={new:[],known:[]}）
+  const _mwInit = _settings.myWords || {};
+  setMyWords(_mwInit.new, _mwInit.known);
   set_annotateOov((_settings.annotateOov != null) ? _settings.annotateOov : false);
   // 注释重复生词（2026-08-15 第六十二次：默认不选，同一段文本内重复词仅注释首次）
   set_annotateRepeat((_settings.annotateRepeat != null) ? _settings.annotateRepeat : false);
@@ -337,6 +340,23 @@ export function setAnnTemplate(v) {
 // 词频上界 setter（storage.rankThresholdMax 变化时调用，与 setRankThreshold 同构）
 export function setRankThresholdMax(n) {
   setRankMax(n);
+  _annotationsCache.clear();
+  set_firstSentMap(new Map());
+  set_collectedSubs(new WeakSet());
+  set_seenWords(new Set());
+  set_seenSentences(new Set());
+  set_allAnnotations([]);
+  clearPageSentences();
+  if (_root) {
+    const wp = _root.querySelector('#beaver-web-word-panel');
+    if (wp) wp.innerHTML = `<div class="beaver-web-empty-tip">${t('ws.noWords')}</div>`;
+  }
+  schedulePageScan();
+}
+
+// My Words setter（storage.myWords 变化时调用，2026-09-18；熟词隐藏/生词显示双向生效 → 全量重扫）
+export function setMyWordsLists(newList, knownList) {
+  setMyWords(newList, knownList);
   _annotationsCache.clear();
   set_firstSentMap(new Map());
   set_collectedSubs(new WeakSet());

@@ -24,7 +24,7 @@ import { getPhonetic } from '../../lib/phonetics.js';
 import {
   thState, TOOLTIP_ID, formatStage, isContextValid, speak
 } from './core.js';
-import { buildPanelHTML, hidePanel, queryWordForPanel, renderLemmaInto, bindLemmaChipClick, showInsertFeedback } from './panel.js';
+import { buildPanelHTML, hidePanel, queryWordForPanel, renderLemmaInto, bindLemmaChipClick, bindMarkButtons, showInsertFeedback } from './panel.js';
 import { validateSpan, unwrapSingle, backfillSideAnnotation } from './scan.js';
 // 第一百七十一次：悬浮提示卡片底部 chat 按钮（结构复用 buildPanelHTML，故此处也需绑定）
 import { openChatPanel } from '../../lib/chat.js';
@@ -184,6 +184,9 @@ export function showTooltip(data, anchorRect, opts) {
     // 309次第三轮：传当次 data.translations（每次 showTooltip 重绑，闭包捕获最新释义数组）
     insertMeaningAfterTarget(data.translations);
   };
+  // 330次（需求3）：🏁/✓ 标记按钮（悬浮卡复用 buildPanelHTML，绑定同右键面板；
+  //   每次 showTooltip 重绑，闭包捕获当次 data.word）
+  bindMarkButtons(shadow, data.word);
 
   thState.tooltip.style.display = 'block';
   const tRect = thState.tooltip.getBoundingClientRect();

@@ -519,3 +519,19 @@ export async function getDictFieldStats() {
   } catch (_) { /* 兜底：保持 0 */ }
   return { lang, total: dm ? dm.size : 0, rankCount, tagCount, transCount, lemmaCount };
 }
+
+// 330次：按词表标签取整表单词（My Words 词表快捷选择器并入文本框用）——
+//   同步遍历内存 dictMap（3.8 万条目毫秒级，与 getDictFieldStats 同口径）；
+//   词典未就绪时返回空数组（调用方先 await ensureReady 保证就绪）。
+//   tags 是 string[]（wordlists.jsonl 装载时反转组装 Map<word_lower, [tags]>），
+//   匹配为精确元素匹配；返回词表原词（即原形），按字母排序便于阅读。
+export function getWordsByTag(tag) {
+  const dm = dictState.dictMap;
+  const out = [];
+  if (!dm || !tag) return out;
+  for (const [word, e] of dm) {
+    if (Array.isArray(e.tags) && e.tags.indexOf(tag) !== -1) out.push(word);
+  }
+  out.sort();
+  return out;
+}

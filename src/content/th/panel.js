@@ -514,6 +514,8 @@ export async function renderQueryCard(root, trimmed, onUpdate, isAlive, opts) {
 
   const speakBtn = q('.speak');
   if (speakBtn) speakBtn.onclick = () => speak(word);
+  // 330次（需求3）：🏁/✓ 标记按钮（右键面板与文本侧栏 query 卡共用本函数，单点绑定全覆盖）
+  bindMarkButtons(root, word);
   // 第一百七十一次：chat 按钮就"选区原文"发起对话（不是词元，保留用户实际选中的上下文）
   // 第一百八十四次：传 kind='word' —— 右键查询属"单词类查询"，用 chatWordPrompt 模板
   // 第一百八十六次（用户："对话框的上下文依旧胡说。老毛病，并不是第一次出现。
@@ -998,6 +1000,14 @@ export function buildPanelCss() {
       .lemma-more { color: #8a918a; }
       .section { margin-bottom: 10px; }
       .section-label { font-size: 12px; color: #424942; margin-bottom: 4px; }
+      /* 330次（需求3）：My Words 标记按钮（🏁=生词/✓=熟词）。默认低调半透明，
+         hover 浅绿底；active（该词已在对应表）浅绿底＋描边常亮，一眼可辨当前归属 */
+      .mark-fresh, .mark-known { border: 0; background: transparent; cursor: pointer; font-size: 13px; line-height: 1; padding: 2px 6px; border-radius: 6px; opacity: 0.8; }
+      .mark-fresh:hover, .mark-known:hover { background: #e4efe6; opacity: 1; }
+      .mark-fresh.active, .mark-known.active { background: #d1e8d8; opacity: 1; box-shadow: inset 0 0 0 1px rgba(13,32,20,.22); }
+      /* 330次：Definition label 行 flex 容器（左标签右 ✓ 按钮），内部 label 去除自带的下边距 */
+      .section-label-row { display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px; }
+      .section-label-row .section-label { margin-bottom: 0; }
       .trans-row { color: #1a1f1a; line-height: 1.7;
         /* 314次（用户"文本侧栏的字号正常，查询窗口可以参考"）：trans-row 原先未指定
            字号，Shadow DOM 内继承宿主页面字号（网页正文字号多大释义就多大）；
@@ -1048,12 +1058,19 @@ export function buildCardInnerHTML() {
     <div class="word-row">
       <span class="word"></span>
       <span class="stage"></span>
+      <!-- 330次（用户需求3）：🏁 标记生词按钮（生词右端）；✓ 标记熟词按钮（Definition 右端）。
+           点击写 storage.myWords → My Words 页实时回填 + text-hint.js onChanged 全量重扫（本页标注即时生效） -->
+      <button type="button" class="mark-fresh" title="${t('th.markFresh')}">🏁</button>
     </div>
     <div class="phonetic-row"></div>
     <div class="lemma-row"></div>
     <div class="lemma-group" style="display:none"></div>
     <div class="section">
-      <div class="section-label">${t('th.definition')}</div>
+      <!-- 330次：label 行改 flex 容器，✓ 熟词按钮放 Definition 右端（tags section 的 .section-label 不受影响） -->
+      <div class="section-label-row">
+        <div class="section-label">${t('th.definition')}</div>
+        <button type="button" class="mark-known" title="${t('th.markKnown')}">✓</button>
+      </div>
       <div class="trans-row"></div>
     </div>
     <div class="section tags-section">
@@ -1068,6 +1085,85 @@ export function buildCardInnerHTML() {
       <button class="chat" title="${t('btn.chat')}">💬</button>
     </div>
   `;
+}
+
+/**
+ * 330次（用户需求3）：查询卡 🏁/✓ 标记按钮绑定 + active 态回填。
+ *
+ * 语义（说人话）：
+ *   🏁 = 把这个词记为"生词"（New Words）；✓ = 记为"熟词"（Known Words）。
+ *   数据写 chrome.storage.local 的 myWords={new:[],known:[]}（小写单词数组）：
+ *     - 再点一次同一个按钮 → 取消标记（从对应表移除）；
+ *     - 两表互斥：标生词时自动从熟词表移除，反之亦然（一词不能既生又熟）。
+ *   写完后三件事自动发生：
+ *     ① 引导页 My Words 两栏经 onChanged 实时回填（my-words.js）；
+ *     ② 当前页标注经 text-hint.js onChanged → setMyWordsLists 全量重扫即时生效；
+ *     ③ 按钮本地刷新 active 态（浅绿底=已在表中）。
+ *
+ * 调用方：renderQueryCard（右键面板 + 文本侧栏 query 卡，单点覆盖两形态）、
+ *         tooltip.js showTooltip（hover 悬浮卡）。每次显示重绑，闭包捕获当次查询词。
+ *
+ * 反思（为何直接用 chrome.storage.local 而非 storage 包装）：与 scan.js 1475 行先例
+ *   同口径——content 侧无统一 storage 门面，原语即 chrome.storage.local。
+ * 反思（stopPropagation）：与 .speak/.show-page/.chat 同款纪律——shadow 内按钮
+ *   放行冒泡本无害，但标记点击语义独立，阻断防宿主页委托误判（onCardLemmaClick
+ *   的 closest('.lemma-chip') 委托不受影响，只认自家按钮）。
+ *
+ * @param {Element|ShadowRoot} root 卡片根（内含 .mark-fresh/.mark-known）
+ * @param {string} word 当次查询词（原文即可，内部统一小写化）
+ */
+export async function bindMarkButtons(root, word) {
+  if (!root || !root.querySelector) return;
+  const fresh = root.querySelector('.mark-fresh');
+  const known = root.querySelector('.mark-known');
+  if (!fresh || !known) return;
+  const lower = String(word || '').trim().toLowerCase();
+  if (!lower) return;
+  const DEF = { myWords: { new: [], known: [] } };
+  // active 态回填：该词在 new/known 表中则高亮对应按钮
+  const refresh = (mw) => {
+    const nw = (mw && Array.isArray(mw.new)) ? mw.new : [];
+    const kw = (mw && Array.isArray(mw.known)) ? mw.known : [];
+    fresh.classList.toggle('active', nw.indexOf(lower) !== -1);
+    known.classList.toggle('active', kw.indexOf(lower) !== -1);
+  };
+  try {
+    const res = await chrome.storage.local.get(DEF);
+    refresh(res.myWords);
+  } catch (_) { /* 存储不可用时按钮仍可点（写入时会再报） */ }
+  // 通用 toggle：写入 myWords（互斥 + 再点取消），返回写入后的最新表
+  const toggle = async (list) => {
+    const mw = (await chrome.storage.local.get(DEF)).myWords || { new: [], known: [] };
+    const nw = Array.isArray(mw.new) ? mw.new.slice() : [];
+    const kw = Array.isArray(mw.known) ? mw.known.slice() : [];
+    if (list === 'new') {
+      const i = nw.indexOf(lower);
+      if (i !== -1) nw.splice(i, 1);
+      else { nw.push(lower); const k = kw.indexOf(lower); if (k !== -1) kw.splice(k, 1); }
+    } else {
+      const k = kw.indexOf(lower);
+      if (k !== -1) kw.splice(k, 1);
+      else { kw.push(lower); const i = nw.indexOf(lower); if (i !== -1) nw.splice(i, 1); }
+    }
+    await chrome.storage.local.set({ myWords: { new: nw, known: kw } });
+    return { new: nw, known: kw };
+  };
+  fresh.onclick = async (e) => {
+    e.stopPropagation();
+    try {
+      const mw = await toggle('new');
+      refresh(mw);
+      console.log(`[VocabRadar][text-hint] 🏁 标记生词 "${lower}": ${mw.new.indexOf(lower) !== -1 ? '已加入' : '已移出'} My Words（生词 ${mw.new.length}/熟词 ${mw.known.length}）`);
+    } catch (err) { console.warn('[VocabRadar][text-hint] 🏁 生词标记写入失败:', err); }
+  };
+  known.onclick = async (e) => {
+    e.stopPropagation();
+    try {
+      const mw = await toggle('known');
+      refresh(mw);
+      console.log(`[VocabRadar][text-hint] ✓ 标记熟词 "${lower}": ${mw.known.indexOf(lower) !== -1 ? '已加入' : '已移出'} My Words（生词 ${mw.new.length}/熟词 ${mw.known.length}）`);
+    } catch (err) { console.warn('[VocabRadar][text-hint] ✓ 熟词标记写入失败:', err); }
+  };
 }
 
 export function ensurePanel() {

@@ -1377,3 +1377,155 @@ input::placeholder { color: var(--g-muted); opacity: 1; }
 .g-dict-status.fail::before {
   background: #b23a2e;
 }
+
+/* === 330次：My Words（生词/熟词左右两栏，设定栏 group-global 之后） === */
+/* 两栏：左右各一份文本框；窄屏退化为上下堆叠 */
+/* 341次（用户口径）：面板占整页后两栏不再左右拉满——收窄居中 */
+.mw-cols {
+  display: flex;
+  gap: 16px;
+  align-items: stretch;
+  max-width: 960px;
+  margin-left: auto;
+  margin-right: auto;
+}
+.mw-col {
+  flex: 1 1 0;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+/* 栏名（New Words / Known Words）；342次（用户口径）：标题在各栏内居中 */
+.mw-col-head {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--g-text);
+  text-align: center;
+}
+/* 生词栏头顶词表快捷选择器 chips（CET4/…/GRE，勾选并入文本框、取消移除） */
+/* 342次：固定高两行——chips 换行增多时栏内滚动，两栏（含 Known 空占位）恒等高，
+   两栏 textarea 顶边严格水平对齐（此前 min-height 随换行数变高，顶边会错位） */
+.mw-presets {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  height: 52px;
+  overflow-y: auto;
+}
+.mw-chip {
+  border: 1px solid var(--g-border);
+  border-radius: 999px;
+  padding: 2px 10px;
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--g-text);
+  background: #ffffff;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 0.15s, color 0.15s;
+}
+.mw-chip:hover { background: var(--g-primary-soft); }
+.mw-chip.active {
+  background: var(--g-primary);
+  border-color: var(--g-primary);
+  color: #ffffff;
+}
+/* 顶行工具条：统计词数 + 复制 + 导出 */
+/* 340次（用户口径）：统计/复制/导出移到文本框底部，左右对齐——词数居左、⧉⬇居右 */
+/* 342次（用户口径）：「2 words」「⧉」「⬇」三元素之间以及与左右边界四段间距相等
+   （space-evenly 均匀分布；2 words 包 .mw-left 组保持挨在一起） */
+.mw-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-evenly;
+}
+/* 底部行左侧「N words」计数组 */
+.mw-left {
+  display: flex;
+  align-items: baseline;
+}
+.mw-count {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--g-primary);
+  min-width: 2ch;
+  margin-right: 2px;
+}
+.mw-count-label { font-size: 12px; color: var(--g-muted); }
+.mw-btn {
+  border: 1px solid var(--g-border);
+  background: #ffffff;
+  color: var(--g-text);
+  border-radius: 6px;
+  padding: 2px 9px;
+  font-size: 13px;
+  line-height: 1.5;
+  cursor: pointer;
+}
+.mw-btn:hover { background: var(--g-primary-soft); border-color: var(--g-primary); }
+.mw-btn.ok { color: var(--g-primary); border-color: var(--g-primary); }
+/* 文本框主体：一行一个单词。342次：尺寸/拖拽上移到 .mw-twrap（行号列+文本框统一
+   调高、两栏顶底双边对齐）；resize:vertical 拖 wrapper 底边，横向仍不可越界 */
+.mw-twrap {
+  position: relative;
+  display: flex;
+  align-items: stretch;
+  flex: 1 1 auto;
+  min-height: 60vh;
+  max-height: 80vh;
+  resize: vertical;
+  overflow: hidden;
+}
+/* 行号列：padding-top/行高与 textarea 一致（14px×1.6=22.4px），滚动由 my-words.js 同步 */
+.mw-gutter {
+  flex: none;
+  width: 34px;
+  padding: 8px 6px 8px 0;
+  border: 1px solid var(--g-border);
+  border-right: none;
+  border-radius: 6px 0 0 6px;
+  background: #fafafa;
+  font-size: 12px;
+  line-height: 22.4px;
+  text-align: right;
+  color: var(--g-muted);
+  overflow: hidden;
+  user-select: none;
+  white-space: pre;
+}
+.mw-text {
+  flex: 1 1 auto;
+  min-height: 0;
+  resize: none;
+  overflow: auto;
+  padding: 8px 11px;
+  border: 1px solid var(--g-border);
+  border-radius: 0 6px 6px 0;
+  font-size: 14px;
+  font-family: inherit;
+  line-height: 1.6;
+  background: #fff;
+  color: var(--g-text);
+}
+.mw-text:focus { outline: none; border-color: var(--g-primary); }
+/* 342次（用户需求：占位符挪到中央）：textarea 原生 placeholder 无法定位，改覆盖层——
+   空内容时 .mw-twrap.is-empty 显示（my-words.js 切换）；左偏 34px 避开行号列居中 */
+.mw-ph {
+  position: absolute;
+  inset: 0 0 0 34px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 16px;
+  text-align: center;
+  font-size: 13px;
+  color: var(--g-muted);
+  pointer-events: none;
+  opacity: 0;
+}
+.mw-twrap.is-empty .mw-ph { opacity: 1; }
+/* 窄窗口：两栏改上下堆叠 */
+@media (max-width: 760px) {
+  .mw-cols { flex-direction: column; }
+}

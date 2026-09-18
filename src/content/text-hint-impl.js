@@ -61,6 +61,7 @@ export {
   clearHighlights,
   setRankThreshold,
   setRankThresholdMax,
+  setMyWordsLists,
   setAnnotateOov,
   setAnnotateRepeat,
   setAnnTemplate,

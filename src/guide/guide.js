@@ -108,6 +108,8 @@ import { initOcr, disposeOcr } from './ocr.js';
 import { initParser, disposeParser } from './parser.js';
 // 第二百七十次：Deactivate 停用栏（逐条规则行渲染/编辑/深链，见该文件头注释）
 import { initDeactivate, disposeDeactivate } from './deactivate.js';
+// 330次：My Words（生词/熟词两栏，设定栏 group-global 后）独立模块（guide.js 超行限）
+import { initMyWords, syncMyWordsFromStorage } from './my-words.js';
 // 第一百七十次：对话大模型来源预置表（与后台共用同一份，避免地址/模型名两处不一致）
 // 第一百七十四次：新增 LLM_FORMAT_GROUPS —— 下拉按「免费直连 / OpenAI 格式 / Anthropic 格式」三类分组
 import {
@@ -552,6 +554,12 @@ function refreshRankMaxPlaceholder() {
   $('rankThresholdMax').placeholder = (maxHint > 0) ? String(maxHint) : '∞';
 }
 
+// 上界 spinner 起步值随动下界：min = 下界+步长，空值点 ▲ 直接落在合法值上
+function updateRankMaxMin() {
+  const low = parseInt($('rankThreshold').value, 10);
+  $('rankThresholdMax').min = String((isFinite(low) ? low : 0) + 1000);
+}
+
 function renderAll(res) {
   // 语言控件（2026-09-02 释义语言统一英文名称：meaningLanguage 固定用 LANG_NAMES_EN）
   renderLangSelect($('uiLang'), UI_LANGS, res.uiLanguage);
@@ -559,8 +567,11 @@ function renderAll(res) {
   renderLangSelect($('meaningLanguage'), TRANSLATE_LANGS, res.meaningLanguage, LANG_NAMES_EN);
   $('rankThreshold').value = res.rankThreshold;
   // 词频上界：0/缺省=回退到词典词频表上界（用户「是几就是几」；词典未就绪时显示 ∞）
-  $('rankThresholdMax').value = (typeof res.rankThresholdMax === 'number' && isFinite(res.rankThresholdMax) && res.rankThresholdMax > 0)
-    ? res.rankThresholdMax : '';
+  const _effMax = (typeof res.rankThresholdMax === 'number' && isFinite(res.rankThresholdMax) && res.rankThresholdMax > 0)
+    ? res.rankThresholdMax : 0;
+  $('rankThresholdMax').value = _effMax > 0 ? _effMax : '';
+  if (_effMax > 0) $('rankThresholdMax').dataset.prev = String(_effMax); // 非法输入恢复基准
+  updateRankMaxMin(); // 上界 spinner 起步值随动下界
   refreshRankMaxPlaceholder();
   $('annotateOov').checked = !!res.annotateOov;
   // 第二百二十五次：引擎存储值定名 'api'（与 UI 词、语义一致，《命名清查》裁定）。
@@ -649,6 +660,9 @@ function renderAll(res) {
   renderPoolSideDemos();
 
   syncSubtitleSettings(res);
+
+  // 330次：My Words 两栏初始化（幂等；读 storage 回填 + 控件绑定 + chips 渲染）
+  initMyWords();
 
   // 界面文案
   applyTexts();
@@ -865,17 +879,34 @@ async function init() {
   $('rankThreshold').addEventListener('change', (e) => {
     const v = parseInt(e.target.value, 10);
     chrome.storage.local.set({ rankThreshold: isFinite(v) ? v : 5000 }, () => log('词频阈值=', v));
+    updateRankMaxMin(); // 下界变了 → 上界 spinner 起步值随动
   });
-  // 词频上界（0/空=回退到词典词频表上界；下界必须小于上界，冲突时清空回退表上界）
+  // 词频上界（0/空=回退到词典词频表上界；下界必须小于上界）
+  // 反思：修复"上界框不可点击调节"——根因是 Chrome 空值点 ▲ 从 min 起步，旧 min=0
+  //   得 0，校验 `v<=0` 命中即清空输入框 → 数字闪一下就没了，永远调不上去。
+  //   现区分三种输入：留空=未设上界(∞)；合法值=直接存；非法（含 spinner 起步 0）
+  //   = 起步值自动补 下界+步长，手输非法恢复上次有效值（dataset.prev），不再清空。
   $('rankThresholdMax').addEventListener('change', (e) => {
-    const v = parseInt(e.target.value, 10);
+    const raw = e.target.value;
+    const v = parseInt(raw, 10);
     const low = parseInt($('rankThreshold').value, 10);
-    if (!isFinite(v) || v <= 0 || (isFinite(low) && v <= low)) {
-      $('rankThresholdMax').value = '';
+    if (raw === '') {
+      // 留空 = 未设上界（∞）：存 0，输入框保持空显示占位 ∞
       chrome.storage.local.set({ rankThresholdMax: 0 }, () => { refreshRankMaxPlaceholder(); log('词频上界重置为词频表上界'); });
       return;
     }
-    chrome.storage.local.set({ rankThresholdMax: v }, () => log('词频上界=', v));
+    if (isFinite(v) && v > 0 && !(isFinite(low) && v <= low)) {
+      $('rankThresholdMax').dataset.prev = String(v);
+      chrome.storage.local.set({ rankThresholdMax: v }, () => log('词频上界=', v));
+      return;
+    }
+    // 非法输入：spinner 起步（v===0）自动补 下界+步长；其余恢复上次有效值
+    const floor = (isFinite(low) ? low : 0) + 1000;
+    const prev = parseInt($('rankThresholdMax').dataset.prev || '0', 10);
+    const restore = (v === 0) ? floor : (isFinite(prev) && prev > 0 ? prev : 0);
+    $('rankThresholdMax').value = restore > 0 ? String(restore) : '';
+    if (restore > 0) $('rankThresholdMax').dataset.prev = String(restore);
+    chrome.storage.local.set({ rankThresholdMax: restore }, () => { refreshRankMaxPlaceholder(); log('词频上界非法，已恢复=', restore > 0 ? restore : '未设'); });
   });
   $('annotateOov').addEventListener('change', (e) => {
     chrome.storage.local.set({ annotateOov: e.target.checked }, () => log('注释表外词=', e.target.checked));
@@ -1065,6 +1096,10 @@ async function init() {
       //   样式本页预览不动"（用户"都会触发立即预览，现在没动"的根因之一）。
       //   283次：补三栏独立模板键（分键后每个键变化都需重渲染池卡样例与输入框回填）。
       chrome.storage.local.get(null, (res) => renderAll(res));
+    } else if (changes.myWords || changes.myWordsPresetSel) {
+      // 330次：My Words 外部变化（查询窗 🏁/✓ 标记按钮、他页编辑）→ 两栏回填。
+      //   自写回声由 my-words.js 内部 _lastWriteAt 窗口抑制（防打断输入），不整页 renderAll。
+      syncMyWordsFromStorage();
     } else if (changes.llmProvider || changes.llmBaseUrl || changes.llmModel
                || changes.llmApiKey || changes.chatWordPrompt || changes.chatSidebarPrompt || changes.asrModelSize
                || changes.asrEngine || changes.ocrEngine || changes.asrLlmModel || changes.asrLlmBaseUrl

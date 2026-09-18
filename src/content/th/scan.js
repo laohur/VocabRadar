@@ -31,7 +31,7 @@ import { initLang } from '../../lib/i18n.js';
 import { isBalancedParens, pickCleanShortTrans } from '../../lib/dict-clean.js';
 import { beginBatch, countChars, countTokens, countUnique, incField, incScalar, getBatches, logBatch } from '../../lib/dict-stats.js';
 import { emitBlock, resetScan } from '../page-scan-bus.js';
-import { lookupWord, getRankMax, setRankMax } from '../../lib/annotator.js';
+import { lookupWord, getRankMax, setRankMax, setMyWords, myWordsHit } from '../../lib/annotator.js';
 // === 2026-09-09（w4，ESM 模块图装载 1986ms 优化，用户拍板"拆分懒加载"）===
 // tooltip.js / panel.js 及其重依赖（chat.js、main-text.js、phonetics.js、
 //   diverse-lemmas/languages 词形表等）只服务 hover 悬浮 / 右键面板 / OCR 面板等
@@ -89,6 +89,9 @@ export async function startHint(settings) {
       ? settings.rankThreshold : 5000;
     // 词频范围上界（storage.rankThresholdMax，0/缺省=不限制）
     setRankMax(settings.rankThresholdMax);
+    // My Words（用户生词/熟词表，优先级高于词频范围；storage.myWords={new:[],known:[]}）
+    const _mwInit = settings.myWords || {};
+    setMyWords(_mwInit.new, _mwInit.known);
     thState.annotateOov = settings.annotateOov === true;  // 默认 false（注释表外词默认不选）
     thState.annotateRepeat = settings.annotateRepeat === true;  // 默认 false（不注释重复生词）
     // 280次：侧邻注释模板（annBrackets 布尔退役，默认 {word}({meaning})）
@@ -311,6 +314,23 @@ export function setRankThresholdMax(v) {
       resetScan();
       scheduleScan(document.body || document.documentElement);
     }
+  }
+}
+
+/**
+ * My Words setter（storage.myWords 变化时调用，2026-09-18）
+ * 生词/熟词变化双向影响可见性（熟词要隐藏、生词要显示），updateWordVisibility
+ * 只认 dataset.rank 无法覆盖 → 一律清标记全量重扫（与 setRankThreshold 缩小同策略）。
+ * @param {string[]} [newList] 生词表（小写单词数组）
+ * @param {string[]} [knownList] 熟词表
+ */
+export function setMyWordsLists(newList, knownList) {
+  setMyWords(newList, knownList);
+  thState.wordCache.clear();
+  if (thState.enabled) {
+    clearProcessedAttr();
+    resetScan();
+    scheduleScan(document.body || document.documentElement);
   }
 }
 
@@ -894,11 +914,20 @@ export async function queryWord(lower, original, stats) {
     tags = full.tags || [];
     lemma = full.lemma || null;
     // IDB 命中路径需手动做阈值范围过滤（lookupWord 内部已做，此处补上）
+    // My Words（2026-09-18）：生词（词形或原形）绕过词频范围强制标注
+    const _fresh = myWordsHit(lower, lemma).fresh;
     if (rank !== null && typeof rank === 'number' && isFinite(rank)
-        && (rank <= thState.rankThreshold || rank > getRankMax())) {
+        && !_fresh && (rank <= thState.rankThreshold || rank > getRankMax())) {
       if (stats) incScalar(stats, 'highFreq');
       return null;
     }
+  }
+
+  // My Words 熟词拦截（2026-09-18，优先级高于词频范围）：词形或原形命中熟词表一律不标注。
+  //   降级路径 lookupWord 内部已挡词形熟词，此处补原形熟词与 IDB 命中路径。
+  if (myWordsHit(lower, lemma).known) {
+    if (stats) incScalar(stats, 'highFreq');
+    return null;
   }
 
   // 反思（2026-08-07）：annotateOov=false 时跳过表外词（rank=null）

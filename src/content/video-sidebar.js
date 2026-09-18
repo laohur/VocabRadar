@@ -22,7 +22,7 @@
 //   不再使用独立的 _asrEntries 数组，ASR 结果直接进入 _subtitles/_subEntries。
 //   启动 ASR 时保存当前字幕，清空面板；停止 ASR 时恢复原字幕。
 
-import { getAnnotations, rankToStage, resetDiag, setRankMax } from '../lib/annotator.js';
+import { getAnnotations, rankToStage, resetDiag, setRankMax, setMyWords } from '../lib/annotator.js';
 // 280次：统一池样式表生成器（52 条共享样式，参数化选择器注入本容器）
 // （280 修正：import 路径写错层级 ../../→../，esbuild 预打包与运行时均解析不到）
 import { buildAnnPoolCss } from '../lib/styles.js';
@@ -110,6 +110,7 @@ initAsrProgress({ getRoot: () => _root });
 let _video = null;            // video 元素
 let _subtitles = [];          // [{start, end, text}]
 let _rankThreshold = 5000;    // 词频阈值（2026-08-14 第五十四次修正：恢复默认 5000）
+let _myWords = null;          // My Words 生词/熟词表（storage.myWords；null=未加载，startOverlay 传参用）
 // 是否注释表外词（2026-08-14 第五十四次：键名改 annotateOov，默认不选）
 let _annotateOov = false;
 // 注释重复生词（2026-08-15 第六十二次：默认不选，同一字幕文本内重复词仅注释首次）
@@ -277,6 +278,11 @@ async function loadSettings() {
   return new Promise((resolve) => {
     chrome.storage.local.get({
       rankThreshold: 5000,
+      // 340次（My Words 过滤失效修复）：此前缺两键 → 刷新后 settings.myWords=undefined →
+      //   video-sidebar.js:1419 setMyWords(空) 过滤失效；controller 转发 startOverlay 的
+      //   myWords/rankThresholdMax 也为 undefined（subtitle-overlay 真值守卫不清空但从不生效）
+      rankThresholdMax: 0,
+      myWords: { new: [], known: [] },
       // 反思（2026-08-18 第七十三次修正）：默认配色曾是单词绿底白字。
       // 304次（用户"默认无底色"）：改透明底绿字。
       hintFirstBg: 'transparent',
@@ -1414,6 +1420,9 @@ export async function startSidebar(video, options = {}) {
     _rankThreshold = settings.rankThreshold;
     // 词频范围上界（storage.rankThresholdMax；0/缺省=不限制），annotator 模块级生效
     setRankMax(settings.rankThresholdMax);
+    // My Words（用户生词/熟词表，优先级高于词频范围；storage.myWords={new:[],known:[]}）
+    _myWords = settings.myWords || { new: [], known: [] };
+    setMyWords(_myWords.new, _myWords.known);
     _annotateOov = settings.annotateOov === true;
     _annotateRepeat = settings.annotateRepeat === true;
     // 280次：侧邻注释模板初始化（annBrackets 布尔退役，默认 {word}({meaning})）

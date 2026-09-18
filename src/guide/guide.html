@@ -30,10 +30,13 @@
     </a>
   </header>
 
-  <!-- ===== 五子标签（设定栏 / ASR / OCR / Parser / 说明栏），默认设定栏 =====
-       第二百五十三次（用户："引导页 asr ocr 之后增加 parser"）：新增 Parser 文档解析标签 -->
+  <!-- ===== 六子标签（设定栏 / My Words / ASR / OCR / Parser / 说明栏），默认设定栏 =====
+       第二百五十三次（用户："引导页 asr ocr 之后增加 parser"）：新增 Parser 文档解析标签；
+       340次（用户："My Words 说了放在 setting 之后，asr 之前"）：My Words 自设定栏内分组
+       升为独立子标签，tab 顺序在设定栏之后、ASR 之前 -->
   <nav class="guide-tabs" id="guideTabs">
     <button class="guide-tab active" data-tab="settings" data-key="tabSettings">设定栏</button>
+    <button class="guide-tab" data-tab="my-words" data-key="tabMyWords">My Words</button>
     <button class="guide-tab" data-tab="asr" data-key="tabAsr">ASR</button>
     <button class="guide-tab" data-tab="ocr" data-key="tabOcr">OCR</button>
     <button class="guide-tab" data-tab="parser" data-key="tabParser">Parser</button>
@@ -75,7 +78,9 @@
             </div>
             <div class="field">
               <label for="rankThresholdMax" data-key="fieldThresholdMax">词频上界</label>
-              <input id="rankThresholdMax" type="number" min="0" step="1000" placeholder="∞">
+              <!-- min=1000：修复"上界框不可点击调节"——Chrome 空值点 ▲ 从 min 起步，
+                   min=0 时得 0 被 JS 校验清空 → 死循环；起步值给合法量级 1000 -->
+              <input id="rankThresholdMax" type="number" min="1000" step="1000" placeholder="∞">
             </div>
             <label class="chk">
               <input id="annotateOov" type="checkbox">
@@ -88,6 +93,8 @@
           </div>
         </div>
       </div>
+
+      <!-- 340次：My Words 分组已升为独立子标签 panel-my-words（设定栏之后、ASR 之前） -->
 
       <!-- 模型（第二百二十三次重排：对话大模型 / 翻译 / 语音识别模型 / OCR 四小节；
            LLM 四参数一行、两提示词与正文最大长度各一行；ASR/OCR 引擎为下拉两行式） -->
@@ -479,6 +486,64 @@
           <div class="deactivate-rows" id="deactivateList"></div>
           <div class="deactivate-add-row">
             <button class="func-btn" id="deactivateAdd" data-key="deactivateAdd">＋ Add rule</button>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ===== My Words 栏：我的词表（340次自设定栏分组升为独立子标签，tab 顺序=设定栏之后、ASR 之前） =====
+         左右两栏 textarea（一行一词，可拖角调节大小），统计词数/复制/导出移到文本框底部
+         左右对齐（词数居左、⧉⬇居右，340次用户口径）；生词栏头顶词表快捷选择器 chips
+         （勾选→整表并入文本框、取消→移除仅属该表的词，文本框为唯一真源，默认全不选），
+         New Words 栏比 Known Words 栏多的这行选择器，右栏同水平位置留空占位保持两栏
+         textarea 顶边对齐 -->
+    <section class="guide-panel" id="panel-my-words" data-panel="my-words">
+      <div class="group" id="group-my-words">
+        <div class="group-head">
+          <span class="group-name" data-key="groupMyWords">My Words</span>
+        </div>
+        <div class="group-body">
+          <div class="mw-cols">
+            <!-- 生词栏（New Words）：头顶词表快捷选择器 -->
+            <div class="mw-col">
+              <div class="mw-col-head" data-key="mwNewWords">New Words</div>
+              <div class="mw-presets" id="mwNewPresets"></div>
+              <!-- 342次（用户需求：占位符居中＋带行号）：twrap 包行号列+文本框+占位覆盖层
+                   （textarea 原生 placeholder 无法居中、原生无行号）；拖拽调高上移到 twrap -->
+              <div class="mw-twrap">
+                <div class="mw-gutter" aria-hidden="true">1</div>
+                <textarea id="mwNewText" class="mw-text" spellcheck="false"></textarea>
+                <div class="mw-ph" data-key="mwNewPh" aria-hidden="true"></div>
+              </div>
+              <!-- 342次（用户口径）：2 words 与 ⧉/⬇ 之间、以及与左右边界四段间距相等
+                   （CSS space-evenly 按三元素均匀分布；2 words 包组保持挨在一起） -->
+              <div class="mw-toolbar">
+                <span class="mw-left">
+                  <span class="mw-count" id="mwNewCount" title="0">0</span>
+                  <span class="mw-count-label" data-key="mwCountUnit">words</span>
+                </span>
+                <button type="button" class="mw-btn" id="mwNewCopy" data-title-key="mwCopy">⧉</button>
+                <button type="button" class="mw-btn" id="mwNewExport" data-title-key="mwExport">⬇</button>
+              </div>
+            </div>
+            <!-- 熟词栏（Known Words）：与生词栏选择器同水平位置留空占位（textarea 顶边对齐） -->
+            <div class="mw-col">
+              <div class="mw-col-head" data-key="mwKnownWords">Known Words</div>
+              <div class="mw-presets mw-presets-blank" aria-hidden="true"></div>
+              <div class="mw-twrap">
+                <div class="mw-gutter" aria-hidden="true">1</div>
+                <textarea id="mwKnownText" class="mw-text" spellcheck="false"></textarea>
+                <div class="mw-ph" data-key="mwKnownPh" aria-hidden="true"></div>
+              </div>
+              <div class="mw-toolbar">
+                <span class="mw-left">
+                  <span class="mw-count" id="mwKnownCount" title="0">0</span>
+                  <span class="mw-count-label" data-key="mwCountUnit">words</span>
+                </span>
+                <button type="button" class="mw-btn" id="mwKnownCopy" data-title-key="mwCopy">⧉</button>
+                <button type="button" class="mw-btn" id="mwKnownExport" data-title-key="mwExport">⬇</button>
+              </div>
+            </div>
           </div>
         </div>
       </div>

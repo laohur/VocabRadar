@@ -14,7 +14,8 @@ import {
   SUBTITLE_REF_H, pxToSizePct, sizePctToPx, subFontSizePct,
   DEFAULT_ANN_TEMPLATE, splitAnnTemplate, SUB_DEFAULT_STYLE
 } from '../lib/styles.js';
-import { getAnnotations, setRankMax } from '../lib/annotator.js';
+// 330次：My Words（用户生词/熟词表，优先级高于词频范围）同步进 annotator 模块级
+import { getAnnotations, setRankMax, setMyWords } from '../lib/annotator.js';
 import { ensureReady } from '../lib/dictionary.js';
 import { pickCleanShortTrans } from '../lib/dict-clean.js';
 
@@ -45,11 +46,14 @@ async function refreshPreviewAnns() {
     try { await ensureReady(); } catch (_) { /* 降级：用缓存/空注释 */ }
     if (snap !== _subSample) return;
     const th = await new Promise((resolve) => {
-      try { chrome.storage.local.get({ rankThreshold: 5000, rankThresholdMax: 0 }, (r) => resolve({ low: r.rankThreshold, max: r.rankThresholdMax })); }
-      catch (_) { resolve({ low: 5000, max: 0 }); }
+      try { chrome.storage.local.get({ rankThreshold: 5000, rankThresholdMax: 0, myWords: { new: [], known: [] } }, (r) => resolve({ low: r.rankThreshold, max: r.rankThresholdMax, mw: r.myWords })); }
+      catch (_) { resolve({ low: 5000, max: 0, mw: null }); }
     });
     // 词频上界同步到 annotator 模块级（预览走 getAnnotations 内部过滤）
     setRankMax(th.max);
+    // 330次：My Words 同步到 annotator 模块级（预览与真实标注同口径：生词绕过词频范围、熟词跳过）
+    const _mw = th.mw || {};
+    setMyWords(_mw.new, _mw.known);
     const anns = await getAnnotations(snap, th.low, new Set(), null, false);
     if (snap !== _subSample) return;
     const map = new Map();

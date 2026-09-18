@@ -17,7 +17,8 @@
 import { t } from '../lib/i18n.js';
 // 317次：文本侧栏 annotationStyle 兜底改引默认代指常量（回落不写死绝对 id）
 import { ANN_DEFAULT_STYLE } from '../lib/styles.js';
-import { getAnnotations, setRankMax } from '../lib/annotator.js';
+// 330次：My Words（用户生词/熟词表，优先级高于词频范围）同步进 annotator 模块级
+import { getAnnotations, setRankMax, setMyWords } from '../lib/annotator.js';
 // 第二百二十五次：短义项选取统一收敛到 lib 版（原本地独立实现已漂移，见下方删除说明）
 import { pickCleanShortTrans } from '../lib/dict-clean.js';
 // 反思（2026-08-21 第九十二次）：引导页没有 startHint 等 await ensureReady 的入口，
@@ -573,6 +574,7 @@ export function initAsrCommon() {
   chrome.storage.local.get({
     rankThreshold: 5000,
     rankThresholdMax: 0,   // 词频范围上界，0/缺省=不限制
+    myWords: { new: [], known: [] },   // 330次：My Words 生词/熟词表（优先级高于词频范围）
     annotateOov: false,
     learnLanguage: 'en'
   }, (res) => {
@@ -581,6 +583,9 @@ export function initAsrCommon() {
       ? res.rankThresholdMax : 0;
     // 词频上界同步到 annotator 模块级（识别注释走 getAnnotations 内部过滤）
     setRankMax(S.rankThresholdMax);
+    // 330次：My Words 同步到 annotator 模块级（生词绕过词频范围、熟词一律跳过）
+    const _mwInit = res.myWords || {};
+    setMyWords(_mwInit.new, _mwInit.known);
     S.annotateOov = res.annotateOov === true;
     S.learnLang = res.learnLanguage || 'en';
   });
@@ -598,6 +603,12 @@ export function initAsrCommon() {
         S.rankThresholdMax = changes.rankThresholdMax.newValue;
         setRankMax(S.rankThresholdMax);
         log('词频上界已同步:', S.rankThresholdMax);
+      }
+      // 330次：My Words 变化实时同步（My Words 页编辑后，后续识别立即生效）
+      if (changes.myWords) {
+        const _mw = changes.myWords.newValue || {};
+        setMyWords(_mw.new, _mw.known);
+        log('My Words 已同步: 生词', (_mw.new || []).length, '熟词', (_mw.known || []).length);
       }
       if (changes.annotateOov && typeof changes.annotateOov.newValue === 'boolean') {
         S.annotateOov = changes.annotateOov.newValue;

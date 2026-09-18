@@ -267,6 +267,11 @@ async function _hintBoot() {
       if ('rankThresholdMax' in changes) {
         _impl.setRankThresholdMax(changes.rankThresholdMax.newValue);
       }
+      // My Words（用户生词/熟词表）变化 → 全量重扫（熟词隐藏/生词显示双向生效，2026-09-18）
+      if ('myWords' in changes) {
+        const _mw = changes.myWords.newValue || {};
+        _impl.setMyWordsLists(_mw.new, _mw.known);
+      }
       // 注释表外词开关变化 → 重扫（2026-08-07；2026-08-14 键名改 annotateOov）
       if ('annotateOov' in changes) {
         _impl.setAnnotateOov(changes.annotateOov.newValue);
@@ -658,6 +663,13 @@ function _hintGetSettings() {
     annotationUserStyles: [],
     // 反思（2026-08-14 第五十四次修正）：恢复默认 5000，撤销第五十二次误改的 0
     rankThreshold: 5000,
+    // 340次（My Words 过滤失效修复）：上界也一并补——本 DEFAULTS 手工合并只拷列出的键
+    //   （get(null) 全量拿、按白名单合），此前缺 rankThresholdMax → 刷新后上界恒回 Infinity 不限
+    rankThresholdMax: 0,
+    // 340次（用户实测"进 Known 依旧提示/进 New 依旧不提示"根因）：缺 myWords → startHint 传给
+    //   scan.js 的 settings 永远没有 myWords → setMyWords(空) → 过滤全失效；onChanged 链路虽
+    //   正常但刷新/新开页面即失效。storage.myWords={new:[],known:[]}（小写单词数组）
+    myWords: { new: [], known: [] },
     annotateOov: false,  // 注释表外词（2026-08-14 第五十四次：键名改名 + 默认不选）
     annotateRepeat: false,  // 注释重复生词（2026-08-15 第六十二次：默认不选）
     hintFirstEnabled: true,

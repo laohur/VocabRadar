@@ -42,6 +42,29 @@ export function getRankMax() {
   return _rankMax;
 }
 
+// === My Words（用户生词/熟词表，唯一属主，模块级） ===
+// 优先级高于词频范围：熟词一律不标注；生词绕过词频上下界强制标注。
+//   消费方启动/设置变更时经 setMyWords 写入（storage.myWords = {new:[], known:[]}，
+//   词已小写化）。匹配规则：词形本身或词条原形（lemma）命中均算——
+//   用户标记的是查询窗里看到的词，其屈折形式（running/ran）按同一单词对待。
+let _newWords = new Set();
+let _knownWords = new Set();
+
+/** 设置 My Words 生词/熟词集合（数组元素应为小写单词）。供各消费方读取配置后写入 */
+export function setMyWords(newList, knownList) {
+  _newWords = new Set(Array.isArray(newList) ? newList : []);
+  _knownWords = new Set(Array.isArray(knownList) ? knownList : []);
+  return { new: _newWords.size, known: _knownWords.size };
+}
+
+/** My Words 命中判断（词形或原形）：known=熟词应跳过；fresh=生词应强制标注 */
+export function myWordsHit(word, lemma) {
+  return {
+    known: _knownWords.has(word) || (!!lemma && _knownWords.has(lemma)),
+    fresh: _newWords.has(word) || (!!lemma && _newWords.has(lemma))
+  };
+}
+
 /**
  * 查单个词的核心逻辑（词典命中+rank>阈值 → 返回 pending 占位；高频词 → null）
  * 这是文本提示与字幕提示共享的底层查词函数，杜绝两处重复代码导致行为不一致。
@@ -71,10 +94,14 @@ export function getRankMax() {
  * @returns {{isWord:boolean,rank:number|null,tags:string[],lemma:string|null,translations:string[],pending:boolean}|null}
  */
 export function lookupWord(word, threshold = 0) {
+  // My Words 过滤（优先级高于词频范围，2026-09-18）：熟词一律不标注
+  if (_knownWords.has(word)) return null;
   const entry = lookup(word);
-  // 词典命中且 rank 在阈值范围内（>下界 且 <=上界）
+  // 生词命中（词形或词条原形）→ 绕过词频上下界强制标注
+  const fresh = _newWords.has(word) || (entry && entry.lemma && _newWords.has(entry.lemma));
+  // 词典命中且 rank 在阈值范围内（>下界 且 <=上界）；生词表命中则无视范围
   if (entry && typeof entry.rank === 'number' && isFinite(entry.rank)
-      && entry.rank > threshold && entry.rank <= _rankMax) {
+      && (fresh || (entry.rank > threshold && entry.rank <= _rankMax))) {
     return {
       isWord: true,
       rank: entry.rank,
@@ -245,9 +272,17 @@ async function getAnnotationsInner(text, rankThreshold = 0, seen = new Set(), on
     }
     _diag.push(`${word}:${rank !== null ? `r${rank}` : '表外'}`);
 
-    // 2. 阈值范围过滤（下界：rank<=阈值不高亮；上界：rank>上界=极生僻词不显示）
+    // 2. My Words + 阈值范围过滤（2026-09-18）：My Words 优先级高于词频范围——
+    //    熟词一律跳过；生词（词形或原形命中）绕过词频上下界强制标注。
+    //    跳过账复用 highFreq 通道（诊断串区分真实原因），不新增统计键。
+    const _mw = myWordsHit(word, lemma);
+    if (_mw.known) {
+      incScalar(stats, 'highFreq');
+      _diag[_diag.length - 1] += ':熟词跳过';
+      continue;
+    }
     if (rank !== null && typeof rank === 'number' && isFinite(rank)
-        && (rank <= threshold || rank > _rankMax)) {
+        && !_mw.fresh && (rank <= threshold || rank > _rankMax)) {
       incScalar(stats, 'highFreq');
       _diag[_diag.length - 1] += ':高频跳过';
       continue;

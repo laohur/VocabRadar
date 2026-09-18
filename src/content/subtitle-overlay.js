@@ -37,7 +37,7 @@
 //   3. 个性化样式缺省值对齐（用户"个性化样式默认配置给个能用的样式"）：custom 规则
 //      CSS 变量缺省底色 transparent、字号 28px，与 guide 页 Custom 默认值同源。
 
-import { getAnnotations, setRankMax } from '../lib/annotator.js';
+import { getAnnotations, setRankMax, setMyWords } from '../lib/annotator.js';
 // 302次：侧邻注释统一用短释（与各侧邻路径同源；本地旧版只认；已删）
 import { pickCleanShortTrans } from '../lib/dict-clean.js';
 // 反思（2026-08-13 第五十一次）：字幕样式数据驱动（差异化属性定义在 styles.js SUBTITLE_TEXT_STYLES），
@@ -640,6 +640,10 @@ export function startOverlay(video, subtitles, options = {}) {
   _rankThreshold = options.rankThreshold ?? 5000;
   // 词频范围上界（storage.rankThresholdMax；0/缺省=不限制），annotator 模块级生效
   setRankMax(options.rankThresholdMax);
+  // My Words（用户生词/熟词表，优先级高于词频范围；storage.myWords={new:[],known:[]}）
+  // 反思：真值守卫——video-sidebar 等调用方未传 myWords 时不得清空 annotator
+  //   已有集合（同一 JS 上下文内 annotator 模块级 Set 是共享的）
+  if (options.myWords) setMyWords(options.myWords.new, options.myWords.known);
   _enabled = options.enabled ?? true;
   _mode = options.mode === 'detail' ? 'detail' : 'side';
   // 注释重复生词（2026-08-15 第六十二次：默认不选）
@@ -840,6 +844,14 @@ export function setRankThreshold(v) {
 /** 设置词频范围上界（storage.rankThresholdMax 变化时调用；0/缺省=不限制） */
 export function setRankThresholdMax(v) {
   setRankMax(v);
+  _annotationsCache.clear();
+  _seen.clear();
+  _lastKey = '';
+}
+
+/** 设置 My Words 生词/熟词表（storage.myWords 变化时调用，2026-09-18） */
+export function setMyWordsLists(newList, knownList) {
+  setMyWords(newList, knownList);
   _annotationsCache.clear();
   _seen.clear();
   _lastKey = '';
