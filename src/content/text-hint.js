@@ -29,6 +29,15 @@ function _bootPatch(patch) {
   } catch (_) { /* ignore */ }
 }
 
+// 同步 myWords 到网页 localStorage（供 VocabRadar 网站 My Words 页读取，2026-09-20）
+// 存储键 vocabradar_ext_my_words，格式 {new:[], known:[]}（对齐扩展 storage.myWords）
+function _syncMyWordsToWeb(mw) {
+  try {
+    const data = { new: mw.new || [], known: mw.known || [] };
+    localStorage.setItem('vocabradar_ext_my_words', JSON.stringify(data));
+  } catch (_) { /* localStorage 写入失败静默忽略 */ }
+}
+
 async function _loadImpl() {
   _bootPatch({ state: 'loading', at: Date.now() });
   try {
@@ -271,6 +280,8 @@ async function _hintBoot() {
       if ('myWords' in changes) {
         const _mw = changes.myWords.newValue || {};
         _impl.setMyWordsLists(_mw.new, _mw.known);
+        // 同步到网页 localStorage（供 VocabRadar 网站 My Words 页读取，2026-09-20）
+        _syncMyWordsToWeb(_mw);
       }
       // 注释表外词开关变化 → 重扫（2026-08-07；2026-08-14 键名改 annotateOov）
       if ('annotateOov' in changes) {
@@ -338,6 +349,8 @@ async function _hintBoot() {
     };
 
     const settings = await _hintGetSettings();
+    // 初始同步 myWords 到网页 localStorage（供 VocabRadar 网站 My Words 页读取，2026-09-20）
+    _syncMyWordsToWeb(settings.myWords || {});
     // 272次：初始启动判据并入停用规则——提示被停则不 startHint（reconcile 的
     // wantEnabled 亦含规则判定，规则解除后自动恢复）；查询不受影响。
     const _bootHintSup = await _hintSuppressed();

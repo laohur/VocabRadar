@@ -14,7 +14,8 @@
 import '../lib/vendor/md5.js';
 // 反思（2026-08-12）：导入 word-db.js 消息处理器，注册 WORD_DB_* 消息分发
 // 第一百九十一次：warmupDictProjection 供 SW 唤醒即预热词典投影
-import { handleWordDbMessage, clearAll as clearIdbAll, warmupDictProjection } from '../lib/word-db.js';
+// 343 次（2026-09-19）：getWord/updateFields 供网站桥接翻译快路径直读词典缓存与回写
+import { handleWordDbMessage, clearAll as clearIdbAll, warmupDictProjection, getWord, updateFields } from '../lib/word-db.js';
 // 反思（2026-08-16 第六十六次）：词典渠道返回的释义清洗（去除"原形(释义)的屈折说明"夹杂）
 import { cleanDictEntry } from '../lib/dict-clean.js';
 // 第一百七十一次：LLM 对话（Chat）配置解析——引导页「模型」行写入 storage，此处解析成请求参数
@@ -994,9 +995,90 @@ async function handleParseMaterial(kind, payload) {
     if (!out.ok) return { ok: false, error: out.error };
     return { ok: true, text: String(out.content || '').trim() };
   }
+  if (kind === 'translation') {
+    // 343 次（2026-09-19）：网站侧单词翻译通道（桥接网站.md §4.2 kind:'translation'，
+    //   消费方网站 translateService 第③级「扩展桥」）。网站侧超时仅 3s 且任何一次
+    //   失败（含超时）置 _extCapability=false 本会话熔断不再试探——故本分支只走
+    //   「有界快路径」：词典缓存直读（SW 属主 IDB，毫秒级，含原形回退）→ 词典直查
+    //   快渠道并行（BaiduSug + YoudaoDict，单词场景最快、国内免签名）；慢渠道
+    //   （MyMemory/Google/Bing 等）与 LLM 一概不碰（最坏 55s 必超时毒化能力记忆）。
+    //   总预算 2.2s（Promise.race 兜底，给桥转发+回传留 ~0.8s 余量）。
+    // 343 次·裁定（用户「空文本降级」）：快路径失败（快渠道全挂/超预算）返回
+    //   { ok: true, text: '', error: 原因 } 而非 ok:false——网站侧对 ok:false 一律
+    //   reject→熔断 _extCapability 本会话不再试探，而 ok:true+空 text 走其既有
+    //   空分支（translateService L115）=null 降级第④级 Worker API 且不熔断。
+    //   错误不遮蔽：error 字段照带 + SW 控制台 warn 照打；仅 payload 缺 word
+    //   （调用方 bug）仍 ok:false。
+    const r = await Promise.race([
+      handleBridgeTranslation(payload),
+      new Promise((res) => setTimeout(() => res({ ok: true, text: '', error: 'bridge translation budget (2.2s) exceeded' }), 2200))
+    ]);
+    return r;
+  }
   // 312 批注：音频走上方 kind === 'asr' 分支（本地推理 / 在线失败自动降级本地）；
   // 此处兜底=其余未支持类型明示报错（不静默成功）
   return { ok: false, error: 'kind not supported: ' + kind };
+}
+
+// === 343 次（2026-09-19）：网站桥接翻译快路径（kind:'translation' 实现） ===
+// 说人话：网站页面遇到生词，先问扩展「你有这个词的中文释义吗」——本函数就是
+//   扩展的应答器。三步：①查本地词典缓存（含原形，如 running→run 的缓存）；
+//   ②缓存没有就并行问两个最快的词典端点（百度联想 sug + 有道词典 jsonapi）；
+//   ③拿到有效译文回写缓存（下次秒回）。全程尊重扩展设置里的渠道勾选
+//   （translationChannels，用户关掉的渠道不问）。
+// 为什么不用 handleTranslateText 全渠道：它串行跑 8 渠道最坏 55s，网站侧 3s 就
+//   超时并熔断扩展通道（本会话不再用扩展翻译），违背本次供给初衷。
+async function handleBridgeTranslation(payload) {
+  const word = String((payload && payload.word) || '').trim();
+  // 网站侧传 BCP-47（可能 zh-CN/en-US），渠道函数只认基码——截基段
+  const src = (String((payload && payload.source) || 'en').split('-')[0] || 'en').toLowerCase();
+  const tgt = (String((payload && payload.target) || 'zh').split('-')[0] || 'zh').toLowerCase();
+  if (!word) return { ok: false, error: 'translation payload missing word' };
+
+  // ① 词典缓存直读（translationLang 校验语言对；原形回退：屈折词借原形缓存）
+  try {
+    const rec = await getWord(src, word);
+    if (rec && rec.translation && rec.translationLang === tgt) {
+      return { ok: true, text: cleanDictEntry(rec.translation), channel: '缓存' };
+    }
+    if (rec && rec.lemma && rec.lemma !== word.toLowerCase()) {
+      const lem = await getWord(src, rec.lemma);
+      if (lem && lem.translation && lem.translationLang === tgt) {
+        const t = cleanDictEntry(lem.translation);
+        await updateFields(src, word, { translation: t, translationLang: tgt }); // 回写原词，下次直接命中
+        return { ok: true, text: t, channel: '缓存(原形:' + rec.lemma + ')' };
+      }
+    }
+  } catch (_) { /* 缓存读失败不阻断，走在线快渠道 */ }
+
+  // ② 快渠道并行（各渠道勾选门控对齐 handleTranslateText 的 chGate 语义：缺省启用）
+  let ch = {};
+  try { ch = (await new Promise((r) => chrome.storage.local.get({ translationChannels: {} }, r))).translationChannels || {}; } catch (_) { }
+  const tasks = [];
+  if (ch.baidusug !== false) tasks.push(_bridgeTryChannel('BaiduSug', baiduSugTranslate(word, src, tgt), word, src, tgt));
+  if (ch.youdaodict !== false) tasks.push(_bridgeTryChannel('YoudaoDict', youdaoDictTranslate(word, src, tgt), word, src, tgt));
+  // 343 次·裁定：失败返回 ok:true+空 text（空文本降级，见上方分支注释），error 照带不遮蔽
+  if (!tasks.length) return { ok: true, text: '', error: '快渠道均未启用（baidusug/youdaodict 已在扩展设置勾选关闭）' };
+  const results = await Promise.all(tasks);
+  const hit = results.find(Boolean);
+  if (!hit) return { ok: true, text: '', error: '快渠道（BaiduSug/YoudaoDict）均失败——网站侧降级其自身 API' };
+
+  // ③ 回写缓存（小写主键与 makeKey 口径一致），下次网站请求毫秒级命中
+  try { await updateFields(src, word, { translation: hit.text, translationLang: tgt }); } catch (_) { /* ignore */ }
+  return { ok: true, text: hit.text, channel: hit.channel };
+}
+
+// 单渠道尝试包装：译文须过 isUntranslated 校验（同 handleTranslateText 口径），
+//   失败/原文回显一律 null（不抛，由上层汇总），防单渠道异常拖垮并行结构
+async function _bridgeTryChannel(channel, p, word, src, tgt) {
+  try {
+    const t = await p;
+    if (t && !isUntranslated(t, word, src, tgt)) return { text: t, channel };
+    console.warn('[VocabRadar][sw][' + _ts() + '] 桥接渠道[' + channel + '] 无效结果:', t || '(空)');
+  } catch (e) {
+    console.warn('[VocabRadar][sw][' + _ts() + '] 桥接渠道[' + channel + '] 失败:', String(e.message || e));
+  }
+  return null;
 }
 
 // === 第二百一十四次：OCR 的 LLM 引擎（视觉识别）===
