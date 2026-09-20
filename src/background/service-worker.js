@@ -863,7 +863,16 @@ async function handleParseMaterial(kind, payload) {
     //   从 dataURL 头解析真实 mime，extMap 反查扩展名——blob type 与 fileName 不再
     //   硬编码 audio/webm/audio.webm。
     const audioDataUrl = String((payload && payload.audioDataUrl) || '');
-    const lang = String((payload && payload.lang) || 'en');
+    // W批（2026-09-20）：lang 兜底改读扩展 learnLanguage——旧兜底硬编码 'en'，网页音视频
+    //   路径不传 lang（undefined）时中文音频被强制英文转写 → whisper 返回空（本次
+    //   《世界赠与我的》报障链路一环）。learnLanguage 是 ASR 语言真源（L895 在线路径
+    //   本就以它兜底），仍缺省才落 'en'。话筒路径显式传 BCP-47 不受影响。
+    let lang = String((payload && payload.lang) || '');
+    if (!lang) {
+      try {
+        lang = String((await new Promise((r) => chrome.storage.local.get({ learnLanguage: 'en' }, r))).learnLanguage || 'en');
+      } catch (_) { lang = 'en'; }
+    }
     if (!audioDataUrl) return { ok: false, error: 'asr payload missing audioDataUrl' };
     let asrEngine = 'local';
     try { asrEngine = (await new Promise((r) => chrome.storage.local.get({ asrEngine: 'local' }, r))).asrEngine || 'local'; } catch (_) { }
@@ -887,7 +896,22 @@ async function handleParseMaterial(kind, payload) {
         lang: lang
       }).catch((e) => ({ ok: false, error: String(e.message || e) }));
       if (!resp || !resp.ok) return { ok: false, error: (resp && resp.error) || 'offscreen no response' };
-      return { ok: true, text: resp.text || '' };
+      // W批（2026-09-20 用户令「应该返回结构化信息啊，带时间戳，数组啊，识别结果的
+      // 信息都带回来。而不是纯文本」）：透传 offscreen 产出的 segments（带时间戳段数组）
+      // 与诊断字段 lang/samples/peak；空文本不再静默 ok——console.warn 留痕供 SW 控制
+      // 台定位，诊断字段让网页侧能区分「静音」与「有声但识别空」（peak）
+      const outText = String(resp.text || '').trim();
+      if (!outText) {
+        console.warn('[VocabRadar][sw] 本地转写空结果: lang=' + (resp.lang || lang) + ' samples=' + (resp.samples != null ? resp.samples : '?') + ' peak=' + (resp.peak != null ? resp.peak : '?') + '（空 segments+诊断随响应回传，网页侧按 asr-empty 引导）');
+      }
+      return {
+        ok: true,
+        text: outText,
+        segments: Array.isArray(resp.segments) ? resp.segments : null,
+        lang: resp.lang || lang,
+        samples: resp.samples,
+        peak: resp.peak
+      };
     }
     if (asrEngine === 'local') return runLocalAsr();
     // api/llm 在线转写：失败（网络不好/端点错/配额）→ 降级本地模型推理（312 批用户令）
@@ -958,7 +982,13 @@ async function handleParseMaterial(kind, payload) {
       } finally {
         clearTimeout(timer);
       }
-      return { ok: true, text: String(text || '') };
+      // W批（2026-09-20）：在线转写只能产出纯文本（无时间戳），segments 置 null（协议
+      // 允许缺省）；空结果 warn 留痕不静默（本地路径同口径）
+      const onlineText = String(text || '').trim();
+      if (!onlineText) {
+        console.warn('[VocabRadar][sw] 在线转写空结果: engine=' + (cfg && cfg.engine || '?') + ' lang=' + learn + '（无时间戳可带，segments=null）');
+      }
+      return { ok: true, text: onlineText, segments: null };
     } catch (e) {
       const local = await runLocalAsr();
       if (local.ok) return local;

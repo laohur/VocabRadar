@@ -167,6 +167,16 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     // （offscreen 有 AudioContext；SW 没有），识别复用 getWhisper pipeline，
     // 结果同步 sendResponse 回 SW（网页侧单请求单响应，不走 ASR_SEGMENT 推送链）。
     // 协议见 VocabRadar/web/docs/桥接扩展.md §2.2 asr 行。
+    // W批（2026-09-20 用户令「应该返回结构化信息啊，带时间戳，数组啊，识别结果的
+    // 信息都带回来。而不是纯文本」）：①语言优先级改为网页传入 msg.lang 优先、
+    // learnLanguage 兜底——旧实现强制读 storage learnLanguage 忽略网页 lang，
+    // 中文歌+扩展学习语言 en → 强制英文解码中文语音 → whisper 返回空（网页侧表现为
+    // 「Nothing usable was extracted」；recognizeAndSend 内 2026-07-08 同款教训）。
+    // ②return_timestamps:true 产出带时间戳段数组 segments（buildAsrSegments 复用
+    // recognizeAndSend 修正管线），text 由段拼接保持旧消费兼容。
+    // ③空结果兜底：带语言识别为空 → 去 language 让 whisper 自动检测重试一次。
+    // ④诊断：samples/peak/lang 随响应回传，console 留痕（空结果区分「解码静音」
+    // 与「有声但识别空」），不再静默返回空成功。
     (async () => {
       try {
         const webmB64 = String(msg.webmB64 || '');
@@ -185,19 +195,47 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         srcNode.start();
         const rendered = await off.startRendering();
         const float32 = rendered.getChannelData(0);
+        // 抽样峰值（对齐 recognizeAndSend 第一百零二次）：区分「解码静音」与「有声但识别空」
+        let peak = 0;
+        {
+          const st = Math.max(1, Math.floor(float32.length / 20000));
+          for (let i = 0; i < float32.length; i += st) { const a = Math.abs(float32[i]); if (a > peak) peak = a; }
+        }
         const whisper = await getWhisper();
         if (!whisper) throw new Error('whisper not ready');
+        // 语言优先级：网页 msg.lang（桥接契约 BCP-47）> learnLanguage 兜底；'auto'/空不传
         let asrLang = null;
-        try {
-          const stored = await chrome.storage.local.get({ learnLanguage: 'en' });
-          if (stored.learnLanguage && stored.learnLanguage !== 'auto') asrLang = stored.learnLanguage;
-        } catch (_) { }
-        const opts = { task: 'transcribe', chunk_length_s: 30, stride_length_s: 5 };
-        if (asrLang) opts.language = asrLang;
-        const output = await whisper(float32, opts);
-        const text = (output && output.text) ? output.text.trim() : '';
+        const msgLang = String(msg.lang || '').trim();
+        // 话筒路径传 BCP-47 带地区码（zh-CN/en-US），whisper 只认基码——截 '-' 前段
+        const msgBase = msgLang ? msgLang.split('-')[0] : '';
+        if (msgBase && msgBase.toLowerCase() !== 'auto') asrLang = msgBase;
+        if (!asrLang) {
+          try {
+            const stored = await chrome.storage.local.get({ learnLanguage: 'en' });
+            if (stored.learnLanguage && stored.learnLanguage !== 'auto') asrLang = stored.learnLanguage;
+          } catch (_) { }
+        }
+        const mkOpts = (withLang) => {
+          const o = { task: 'transcribe', chunk_length_s: 30, stride_length_s: 5, return_timestamps: true };
+          if (withLang && asrLang) o.language = asrLang;
+          return o;
+        };
+        console.info('[VocabRadar][offscreen] ASR_WEBM samples=' + float32.length + ' peak=' + peak.toFixed(3) + ' lang=' + (asrLang || 'auto-detect') + ' dur=' + decoded.duration.toFixed(1) + 's');
+        let output = await whisper(float32, mkOpts(true));
+        if (asrLang && emptyAsrOutput(output)) {
+          // 空结果兜底：带语言识别为空 → 去 language 自动检测重试（多语言语音场景）
+          console.warn('[VocabRadar][offscreen] 带语言 ' + asrLang + ' 识别为空，去 language 自动检测重试');
+          output = await whisper(float32, mkOpts(false));
+        }
+        const segments = buildAsrSegments(output, decoded.duration);
+        const text = segments.length ? segments.map((s) => s.text).join(' ').trim() : '';
+        if (!text) {
+          console.warn('[VocabRadar][offscreen] ASR_WEBM 识别为空: peak=' + peak.toFixed(3) + (peak < 0.005 ? '（疑似静音音频）' : '（有声但识别空，语言可能不匹配）') + ' lang尝试=' + (asrLang || 'auto'));
+        } else {
+          console.info('[VocabRadar][offscreen] ASR_WEBM 结果 segments=' + segments.length + ' text=' + JSON.stringify(text).slice(0, 120));
+        }
         ab.close();
-        sendResponse({ ok: true, text: text });
+        sendResponse({ ok: true, text: text, segments: segments, lang: asrLang || 'auto', samples: float32.length, peak: Number(peak.toFixed(4)) });
       } catch (e) {
         try { sendResponse({ ok: false, error: String(e.message || e) }); } catch (_) { }
       }
@@ -863,6 +901,42 @@ function truncateByBytesPerSec(text, durationSec) {
     cutBytes--;
   }
   return new TextDecoder().decode(bytes.slice(0, cutBytes));
+}
+
+// W批（2026-09-20）：ASR 空结果判定——text 与 chunks 全空才算空。用于
+// OFFSCREEN_ASR_WEBM 的「带语言识别为空 → 去 language 自动检测重试」兜底
+//（强制语言遇非匹配语音返回空的教训见 recognizeAndSend 内 2026-07-08 反思）。
+function emptyAsrOutput(output) {
+  const t = (output && typeof output.text === 'string') ? output.text.trim() : '';
+  const n = (output && Array.isArray(output.chunks)) ? output.chunks.length : 0;
+  return !t && n === 0;
+}
+
+// W批（2026-09-20 用户令「应该返回结构化信息啊，带时间戳，数组啊，识别结果的
+// 信息都带回来。而不是纯文本」）：whisper 输出 → 结构化段数组 [{text, timestamp:[ts0,ts1]}]，
+// 复用 recognizeAndSend 同款修正管线（重复 chunk 去重 → 行内重复折叠 → 每秒字节截断）。
+// return_timestamps 未产出 chunks（旧模型/异常）时退化为单段（整段时间戳），协议不塌。
+function buildAsrSegments(output, durSec) {
+  const chunks = (output && Array.isArray(output.chunks) && output.chunks.length) ? output.chunks : null;
+  if (!chunks) {
+    const t = dedupeInlineRepetition(String((output && output.text) || '').trim());
+    if (!t) return [];
+    return [{
+      text: truncateByBytesPerSec(t, Math.max(0.5, durSec || 30)),
+      timestamp: [0, Math.round((durSec || 0) * 100) / 100]
+    }];
+  }
+  const out = [];
+  for (const c of dedupeRepeatedChunks(chunks)) {
+    const ts0 = (c.timestamp && typeof c.timestamp[0] === 'number') ? c.timestamp[0] : 0;
+    // 末尾 chunk timestamp[1] 常为 null，回退 ts0+2s（recognizeAndSend 同口径）
+    const ts1 = (c.timestamp && typeof c.timestamp[1] === 'number') ? c.timestamp[1] : (ts0 + 2);
+    const chunkDur = Math.max(0.5, ts1 - ts0);
+    let cText = dedupeInlineRepetition(String(c.text || '').trim());
+    cText = truncateByBytesPerSec(cText, chunkDur);
+    if (cText) out.push({ text: cText, timestamp: [ts0, ts1] });
+  }
+  return out;
 }
 
 /**
