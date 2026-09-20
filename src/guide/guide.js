@@ -415,6 +415,20 @@ function renderDictStatus() {
   });
 }
 
+// 第357次（用户："让 config.json 生效…我手动调的为准"）：读取 config.json 出厂值（模块级缓存）。
+//   对话三项参数（chatWordPrompt/chatSidebarPrompt/chatContextMaxBytes）实际生效以出厂值为
+//   第一优先（chat.js openChatPanel/buildFirstPrompt 同款三级优先），本页回填后异步覆盖显示，
+//   保证引导页"所见 = 实际生效"。
+let _factoryCfgPromise = null;
+function readFactoryCfg() {
+  if (!_factoryCfgPromise) {
+    _factoryCfgPromise = fetch(chrome.runtime.getURL('src/data/config.json'))
+      .then((r) => r.json())
+      .catch(() => ({}));
+  }
+  return _factoryCfgPromise;
+}
+
 // === 事件绑定 ===
 
 // 样式网格点击：写 storage + 切 active + 预览（每个网格只绑一次）
@@ -643,8 +657,19 @@ function renderAll(res) {
   $('llmApiKey').value = res.llmApiKey || '';
   $('chatWordPrompt').value = res.chatWordPrompt || CHAT_WORD_PROMPT;
   $('chatSidebarPrompt').value = res.chatSidebarPrompt || CHAT_SIDEBAR_PROMPT;
-  // 第二百零七次：对话上下文上限回填（空值显示默认 100000）
+  // 第二百零七次：对话上下文上限回填（空值显示默认 10000）
+  // 第357次（用户："让 config.json 生效…我手动调的为准"）：三项对话参数实际生效以
+  //   config.json 出厂值为第一优先，回填后异步用出厂值覆盖显示，保证"所见 = 实际生效"。
   $('chatContextMaxBytes').value = res.chatContextMaxBytes || 10000;
+  readFactoryCfg().then((cfg) => {
+    if (!cfg) return;
+    const w = cfg.chatWordPrompt;
+    if (typeof w === 'string' && w.trim()) $('chatWordPrompt').value = w;
+    const s = cfg.chatSidebarPrompt;
+    if (typeof s === 'string' && s.trim()) $('chatSidebarPrompt').value = s;
+    const n = cfg.chatContextMaxBytes;
+    if (typeof n === 'number' && n >= 1000) $('chatContextMaxBytes').value = Math.floor(n);
+  });
   applyLlmProviderHints(res.llmProvider);
 
   syncPoolSettings(res);

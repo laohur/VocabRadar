@@ -18,9 +18,24 @@
  */
 
 import { LANG_NAMES, t } from './i18n.js';
-// 第二百零七次：上下文按引导页字节上限截断（超出取当前阅读位置附近文本）
+// 第二百零七次：上下文按字节上限截断（超出取当前阅读位置附近文本）
 import { capContextByBytes } from './main-text.js';
 import { CHAT_WORD_PROMPT, CHAT_SIDEBAR_PROMPT } from './llm.js';
+
+// 第357次（用户："让 config.json 生效…我手动调的为准"）：三项对话参数
+//   （chatContextMaxBytes/chatWordPrompt/chatSidebarPrompt）改为三级优先取数——
+//   config.json 出厂值 ＞ 引导页写入的 storage 值 ＞ 代码常量兜底。
+//   此前 config.json 里这几键从未进 popup.js/SW 的 CONFIG_KEYS 白名单，属孤儿配置，
+//   用户手调 config.json 完全不生效。模块级缓存只 fetch 一次，失败缓存空对象不重试。
+let _cfgPromise = null;
+function readChatCfg() {
+  if (!_cfgPromise) {
+    _cfgPromise = fetch(chrome.runtime.getURL('src/data/config.json'))
+      .then((r) => r.json())
+      .catch(() => ({}));
+  }
+  return _cfgPromise;
+}
 
 // 面板宿主元素 id：右键查词面板的"点击外部关闭"逻辑需按此 id 放行（见 th/panel.js）
 export const CHAT_PANEL_ID = 'beaver-chat-panel';
@@ -35,10 +50,8 @@ let _busy = false;
 
 // 引用文本最大长度：过长的字幕/正文直接塞给模型既慢又易超上下文，统一截断
 const MAX_TEXT = 2000;
-// 第二百零六次：上下文正文上限与提问引用分离。第二百零七次改为**引导页参数**
-//   chatContextMaxBytes（默认 100000 字节），超出时取当前阅读位置附近文本
-//   （capContextByBytes）；本常量仅作 storage 读取失败时的保底值。
-const MAX_CONTEXT = 20000;
+// 第357次：上下文正文字节上限不再是常量——MAX_CONTEXT(20000) 退役，
+//   改按三级优先取数（config.json chatContextMaxBytes ＞ storage ＞ 1 万兜底），见 openChatPanel
 
 /**
  * 面板结构与样式（Shadow DOM 内部）
@@ -356,33 +369,34 @@ async function sendMessage(content) {
  *     · kind='word'    —— 右键查词面板、悬浮提示里点开的单词，模板含 {text}（= 该词/选区）
  *     · kind='sidebar' —— 文本侧栏正文、视频侧栏字幕，正文由上下文区承载，模板不含 {text}
  *   侧栏模板不含 {text} 时 split 是无害空转，故仍统一走同一套替换（同时兼容旧 {}）。
+ * 第357次（用户："让 config.json 生效…我手动调的为准"）：模板同样三级优先——
+ *   config.json chatWordPrompt/chatSidebarPrompt ＞ storage ＞ llm.js 内置常量。
  * @param {string} text 引用文本
  * @param {string} kind 'word' | 'sidebar'
  * @returns {Promise<string>} 首条消息
  */
-function buildFirstPrompt(text, kind) {
+async function buildFirstPrompt(text, kind) {
   const isWord = kind !== 'sidebar';
   const key = isWord ? 'chatWordPrompt' : 'chatSidebarPrompt';
   const def = isWord ? CHAT_WORD_PROMPT : CHAT_SIDEBAR_PROMPT;
-  return new Promise((resolve) => {
-    let done = false;
-    const fill = (tpl, langName) => tpl.split('{text}').join(text).split('{}').join(text).split('{lang}').join(langName);
-    const fallback = () => {
-      if (done) return;
-      done = true;
-      resolve(fill(def, 'English'));
-    };
-    try {
-      chrome.storage.local.get({ [key]: def, meaningLanguage: 'zh' }, (res) => {
-        if (done) return;
-        done = true;
-        const tpl = String((res && res[key]) || def);
-        const langCode = String((res && res.meaningLanguage) || 'zh');
-        const langName = LANG_NAMES[langCode] || langCode;
-        resolve(fill(tpl, langName));
-      });
-    } catch (e) { fallback(); }
-  });
+  const fill = (tpl, langName) => tpl.split('{text}').join(text).split('{}').join(text).split('{lang}').join(langName);
+  // 一级取数：storage（模板 + 释义语言一次拿齐），失败退内置常量 + 'English'
+  let tpl = def;
+  let langName = 'English';
+  try {
+    const res = await new Promise((resolve) => {
+      try { chrome.storage.local.get({ [key]: def, meaningLanguage: 'zh' }, resolve); } catch (_) { resolve({}); }
+    });
+    const langCode = String((res && res.meaningLanguage) || 'zh');
+    langName = LANG_NAMES[langCode] || langCode;
+    tpl = String((res && res[key]) || '') || def;
+  } catch (_) { /* 保底内置常量 */ }
+  // 第357次：config.json 出厂模板有有效值则覆盖 storage 值（"我手动调的为准"）
+  try {
+    const v = (await readChatCfg())[key];
+    if (typeof v === 'string' && v.trim()) tpl = v;
+  } catch (_) { /* 读不到维持上一级取数结果 */ }
+  return fill(tpl, langName);
 }
 
 /**
@@ -408,19 +422,27 @@ export async function openChatPanel(text, kind, contextText) {
   // 第二百零七次（用户："对话窗口的上下文要截断，引导页参数，默认最多10万字节。
   //   选取当前位置附近的文本"）：有独立上下文（网页正文/字幕）→ 读引导页字节上限，
   //   超限以当前阅读位置为锚点取附近文本；无独立上下文（单词/选区）→ 维持 2000。
+  // 第357次（用户："让 config.json 生效…我手动调的为准"）：上下文字节上限三级优先——
+  //   config.json chatContextMaxBytes ＞ 引导页写入的 storage 值 ＞ 1 万字节兜底。
   let ctxClipped;
   if (contextText === undefined || contextText === null) {
     ctxClipped = ctxRaw.length > MAX_TEXT ? ctxRaw.slice(0, MAX_TEXT) : ctxRaw;
   } else {
-    let cap = MAX_CONTEXT;
+    let cap = 0;
     try {
-      const res = await new Promise((resolve) => {
-        try { chrome.storage.local.get({ chatContextMaxBytes: 10000 }, resolve); } catch (_) { resolve({}); }
-      });
-      if (typeof res.chatContextMaxBytes === 'number' && res.chatContextMaxBytes >= 1000) {
-        cap = Math.floor(res.chatContextMaxBytes);
-      }
-    } catch (_) { /* 读取失败用保底值 */ }
+      const v = (await readChatCfg()).chatContextMaxBytes;
+      if (typeof v === 'number' && v >= 1000) cap = Math.floor(v);
+    } catch (_) { /* config.json 读失败走下一级 */ }
+    if (!cap) {
+      try {
+        const res = await new Promise((resolve) => {
+          try { chrome.storage.local.get({ chatContextMaxBytes: 0 }, resolve); } catch (_) { resolve({}); }
+        });
+        const v = res.chatContextMaxBytes;
+        if (typeof v === 'number' && v >= 1000) cap = Math.floor(v);
+      } catch (_) { /* storage 读失败用兜底值 */ }
+    }
+    if (!cap) cap = 10000;
     ctxClipped = capContextByBytes(ctxRaw, cap);
   }
   ensureChatPanel();
