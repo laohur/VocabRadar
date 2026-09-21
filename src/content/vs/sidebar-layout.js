@@ -117,6 +117,25 @@ export function toggleSidebarCollapse(byUser = true) {
       getRoot().style.height = _heightSyncMaxH + 'px';
       getRoot().style.maxHeight = _heightSyncMaxH + 'px';
       log('[size] expand 无快照, 用同步高 ' + _heightSyncMaxH + 'px');
+    } else if (getRoot().dataset.mode !== 'float') {
+      // 第363次（用户反馈"手动展开后高度经常超限"）：无快照无同步高的内嵌展开——
+      //   典型路径：延迟档注入完成前用户手动展开（启动折叠走直改 class/style，
+      //   不产生 _preCollapseSize；apply 在折叠态全跳过，_heightSyncMaxH=0）。
+      //   旧版此处清空内联高度 → 全部字幕把侧栏撑到极高，且展开动作不触发
+      //   apply（延迟批次已跑完、无 observer）→ 超限不自愈。
+      //   改为实测写入（与快照分支同式，90% 视口钳制）；测不出则先以 90% 视口
+      //   maxHeight 封顶防溢出，height 留空待 apply() 锚点就绪后补齐。
+      const fresh = measureTargetHeight();
+      if (fresh > 100) {
+        const cap = Math.min(fresh, Math.round(window.innerHeight * 0.9));
+        getRoot().style.height = cap + 'px';
+        getRoot().style.maxHeight = cap + 'px';
+        _heightSyncMaxH = cap;
+        log('[size] expand 无快照, 实测写入 ' + cap + 'px');
+      } else {
+        getRoot().style.maxHeight = Math.round(window.innerHeight * 0.9) + 'px';
+        log('[size] expand 无快照且测不出, 先以 90% 视口 maxHeight 封顶');
+      }
     } else {
       getRoot().style.height = '';
       getRoot().style.maxHeight = '';

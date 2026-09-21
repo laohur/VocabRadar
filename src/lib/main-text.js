@@ -1195,7 +1195,9 @@ function renderHintTiming(esc, ms) {
  * 第二百七十一次：新增 opts.actions 动作注入——调用方可往顶栏「重新测算」与
  * 「关闭」之间插自定义按钮（现用于视频侧栏把 ⬇️ 下载音频挪进诊断窗）。
  * 每次打开重建动作区（host 复用，旧容器先拆防叠加）；文本侧栏等无参调用不注入。
- * @param {{actions?: Array<{label:string, title?:string, onClick:Function}>}} opts
+ * @param {{actions?: Array<{label:string, title?:string, onClick:Function}>,
+ *   reveal?: boolean}} opts
+ *   reveal=false（快捷键调用）→ 纯切换显隐；缺省（菜单调用）→ 强制显示并重测。
  * @returns {Promise<void>}
  */
 export async function openMainTextDiag(opts = {}) {
@@ -1203,11 +1205,12 @@ export async function openMainTextDiag(opts = {}) {
   let shadow;
   if (host && host.shadowRoot) {
     shadow = host.shadowRoot;
-    host.style.display = 'block';
+    // 第363次：复用分支不再强制显示——显隐统一由函数尾按 reveal 语义决定
   } else {
     host = document.createElement('div');
     host.id = DIAG_HOST_ID;
-    host.style.cssText = 'position:fixed;right:16px;bottom:16px;z-index:2147483646;';
+    // 第363次：创建即隐藏（诊断窗默认不可见，仅 Ctrl+Shift+V / 菜单唤出）
+    host.style.cssText = 'position:fixed;right:16px;bottom:16px;z-index:2147483646;display:none;';
     shadow = host.attachShadow({ mode: 'open' });
     shadow.innerHTML = `
       <style>
@@ -1340,7 +1343,30 @@ export async function openMainTextDiag(opts = {}) {
     const hdEl = shadow.querySelector('.hd');
     hdEl.insertBefore(act, hdEl.querySelector('.close'));
   }
-  await runDiagInto(shadow);
+  // 第363次：显隐统一出口（用户指令"所有诊断页面都通过按键调出，包括侧栏的"）——
+  //   菜单调用（缺省）→ 强制显示并重测；快捷键（reveal:false）→ 纯切换，仅唤出时重测。
+  const reveal = (opts.reveal === false) ? (host.style.display === 'none') : true;
+  host.style.display = reveal ? 'block' : 'none';
+  if (reveal) await runDiagInto(shadow);
+}
+
+// 第363次：诊断窗快捷键 Ctrl+Shift+V（与 vs/inject-timing.js 注入时机浮窗同键，
+//   视频页按下两窗同显隐）。注册守卫：仅网页环境——main-text.js 亦被 guide 页
+//   （chrome-extension://）与后台链引入，扩展内部页/无 window 环境不注册；
+//   window 幂等标记防同页多个 content script 入口重复绑定。
+if (typeof window !== 'undefined' && typeof document !== 'undefined'
+    && location.protocol.startsWith('http')
+    && !window.__vrMainTextDiagKeyBound) {
+  window.__vrMainTextDiagKeyBound = true;
+  window.addEventListener('keydown', (ev) => {
+    try {
+      if (!ev.ctrlKey || !ev.shiftKey) return;
+      if ((ev.key || '').toLowerCase() !== 'v') return;
+      const t = ev.target;
+      if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return;
+      openMainTextDiag({ reveal: false }).catch(() => { /* 诊断窗异常不外溢按键链 */ });
+    } catch (e) { /* ignore */ }
+  }, true);
 }
 
 /**

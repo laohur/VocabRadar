@@ -80,6 +80,9 @@ import {
   setSidebarCollapsedFlag, getSidebarCollapsedFlag, setSizeFrozen,
   setNoSubAutoCollapseDone, setHiddenByFormSwitch
 } from './vs/sidebar-layout.js';
+// 第361次（诊断）：注入时机分档——getInjectTiming 读档位、waitForBiliCommentsThen 档3等待；
+// 档位定义与判读矩阵见 vs/inject-timing.js 文件头注释
+import { getInjectTiming, waitForBiliCommentsThen } from './vs/inject-timing.js';
 import { installPlaybackGate, uninstallPlaybackGate } from './vs/playback-gate.js';
 import { pushDiagLine, clearDiagLines, updateASRProgressFromStage } from './vs/asr-stage.js';
 import { onDownloadAudioClick, getRecordedBlobForASR, setRecordedBlobForASR } from './vs/record-workflow.js';
@@ -1203,6 +1206,29 @@ export function getActiveVideo() {
   return v || null;
 }
 
+/**
+ * 第361次（诊断）：档4浮动注入——侧栏挂 body 顶层 fixed，不进右列文档流。
+ * 目的：隔离「插入右列文档流」这个变量（判读矩阵见 vs/inject-timing.js）。
+ * 尺寸简单固定（诊断态不求完美），不 wireMoveResize、不 startSyncHeight；
+ * 调用方（档4分支）也不启动重注入守卫——守卫重注入走 injectIntoPage 会把它插回右列，
+ * 破坏本档「不进右列」语义。浮动挂 body 顶层，B站 Vue 重渲染不直接触碰 body 顶层节点。
+ */
+function floatInjectDiag(root) {
+  root.dataset.mode = 'float';
+  root.style.position = 'fixed';
+  root.style.right = '16px';
+  root.style.top = '20px';
+  const w = Math.min(360, Math.round(window.innerWidth * 0.3));
+  root.style.width = w + 'px';
+  root.style.maxWidth = w + 'px';
+  root.style.height = '60vh';
+  root.style.maxHeight = '60vh';
+  root.style.zIndex = '2147483000';
+  root.style.boxShadow = '-2px 0 8px rgba(0,0,0,0.15)';
+  document.body.appendChild(root);
+  log('诊断档4: 浮动注入(不进右列文档流)');
+}
+
 export async function startSidebar(video, options = {}) {
   // 第二百七十次：启动时点刷新「视频叠加字幕」停用规则否决位（storage.onChanged
   // 亦实时更新，此处兜底覆盖"规则先写、模块后启"的时序）。
@@ -1362,11 +1388,45 @@ export async function startSidebar(video, options = {}) {
     //   看门狗又被 _hiddenByUserSetting 豁免标记拦住 → 整页"啥都没有"（用户复测实证）。
     //   广播让文本侧栏立即进入互斥状态机（球保持隐藏），后续 showSidebar() 恢复显示
     //   时状态机自然放行——侧栏在 DOM 且可恢复，不再是"消失"。
-    injectIntoPage(_root);
-    try { window.dispatchEvent(new CustomEvent('beaver-video-sidebar-visible')); } catch (e) { /* ignore */ }
-
-    // 防消失：B站 Vue 重新渲染右侧容器时会移除 sidebar，监听并重新注入
-    startReinjectGuard();
+    // 第361次（诊断）：B站评论区消失排查——按注入时机分档调度（用户指令「按页面加载
+    //   时间线划分阶段，看哪一步失败」）。只改 injectIntoPage 的执行时机与形态，
+    //   其余链路（字幕/ASR/overlay）不变；默认档0=现行立即注入，线上行为不变。
+    //   档位定义与判读矩阵见 vs/inject-timing.js 文件头注释。
+    const timing = getInjectTiming();
+    const broadcastVisible = () => {
+      try { window.dispatchEvent(new CustomEvent('beaver-video-sidebar-visible')); } catch (e) { /* ignore */ }
+    };
+    if (timing === 5) {
+      // 档5 基线：完全不注入侧栏（等同抑制侧栏对照），仅广播互斥事件让文本侧栏让位
+      broadcastVisible();
+    } else if (timing === 4) {
+      // 档4：浮动注入，不进右列文档流；不启动重注入守卫（语义见 floatInjectDiag 注释）
+      floatInjectDiag(_root);
+      // 第363次：与右列档位同理——浮动注入完成也补触发自动展开（幂等，见 doInject 注释）
+      autoExpandOnce();
+      broadcastVisible();
+    } else {
+      // 档0/1/2/3：右列注入，仅时机不同。
+      // 重注入守卫必须与注入同批启动——守卫判「root 在但不在 DOM」会抢先重注入
+      // （sidebar-layout.js startReinjectGuard），延迟档若先启守卫则延迟失效。
+      const rootAtSchedule = _root;
+      const doInject = () => {
+        if (_root !== rootAtSchedule) return;  // 调度等待期间已换集重建，旧闭包作废
+        injectIntoPage(_root);
+        broadcastVisible();
+        startReinjectGuard();
+        // 第363次（用户反馈"视频侧栏不能自动展开"）：注入完成补触发自动展开。
+        //   根因：autoExpandOnce 只在首批字幕/ASR 到达时被调一次；延迟档（1/2/3）
+        //   等待注入期间字幕常已到达，触发时 root 未入 DOM 直接 return（配额保留），
+        //   此后注入完成无人再调 → 触发窗口错过，配额永远无人消费，侧栏永不展开。
+        //   补调幂等：配额已被正常路径消费时入口直接短路，无副作用。
+        autoExpandOnce();
+      };
+      if (timing === 1) setTimeout(doInject, 2000);
+      else if (timing === 2) setTimeout(doInject, 5000);
+      else if (timing === 3) waitForBiliCommentsThen(doInject);
+      else doInject();
+    }
   }
   // 第一百三十五次：诊断探针——"视频侧栏整体消失"无法远程复现，暴露真实状态供
   //   控制台一键取证（挂载/注入模式/折叠/display），配合 web 侧 __beaverWebSidebarDiag。

@@ -25,6 +25,9 @@ import { waitForVideo, waitForVideoReady, observeVideoChange } from './video-det
 // 第二百七十次：停用规则（Deactivate）抑制表——匹配/存储唯一来源 lib/deactivate.js，
 //   本模块按「视频侧栏/视频叠加字幕」两位组合编排启动内容。
 import { suppressionFor } from '../../lib/deactivate.js';
+// 第361次（诊断）：B站侧栏注入时机分档浮窗（右下角切换档位，写 vsInjectTiming 后刷新）。
+// 临时诊断工具，实锤后连调度一并撤除；档位定义与判读矩阵见 vs/inject-timing.js 文件头。
+import { startTimingSwitcher } from '../vs/inject-timing.js';
 
 // 反思（2026-07-06 二次修复）：storage.onChanged 监听器注册位置 bug
 // 旧版将监听器注册在字幕处理之后（行158），如果字幕为空/失败走 autoStartASR 提前 return，
@@ -143,6 +146,10 @@ export function reviveSidebarIfPossible(platform) {
  */
 export async function startVideoController(platform) {
   if (vcState.started) return;
+
+  // 第361次（诊断）：挂注入时机分档浮窗——置于抑制判断之前，全停/overlay-only/
+  // 正常注入三种编排下均可切档对照（浮窗内部自幂等+仅B站视频页显示）
+  try { startTimingSwitcher(); } catch (e) { /* ignore */ }
 
   // 第二百七十次：先读本页停用规则抑制组合——「视频侧栏」+「视频叠加字幕」全停
   // 即尽量不活动：清场（拆侧栏/停 overlay）后返回，仅保留 observeVideoChange
