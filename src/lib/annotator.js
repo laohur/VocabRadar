@@ -268,7 +268,14 @@ async function getAnnotationsInner(text, rankThreshold = 0, seen = new Set(), on
       incField(stats, 'lemma', 'asm');
       incField(stats, 'tags', 'asm');
       // 组装结果写回统一词典：之后刷新/换站直接读词典字段，不再逐词组装
-      try { await updateFields(lang, word, { rank, lemma, tags }); } catch (e) { /* 写回失败不阻塞 */ }
+      // 第三百六十六次（YouTube 侧栏字幕无注释·层2）：冷装载期 lookup 全 null，组装结果
+      //   全是 rank:null/lemma:原词 的坏数据——写回 IDB 后上方完备性判据放行（rank:null
+      //   !==undefined、lemma 是字符串、tags 是数组），后续每次查询（含词典就绪后重查）
+      //   都直读坏记录 → 永远表外且刷新不恢复。与第247次"不登记 seen"同哲学：冷装载期
+      //   查询结果不可信，不持久化。词典就绪后的组装（真表外词 rank:null）仍正常写回。
+      if (isLoaded()) {
+        try { await updateFields(lang, word, { rank, lemma, tags }); } catch (e) { /* 写回失败不阻塞 */ }
+      }
     }
     _diag.push(`${word}:${rank !== null ? `r${rank}` : '表外'}`);
 

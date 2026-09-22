@@ -41,6 +41,9 @@ import { summarize } from '../lib/summarizer.js';
 import { startASR, stopASR, isASRReady, hasASRCache, getCachedSubtitles, getASRCoverage, getASRFrontier, getASRStats } from '../lib/asr-client.js';
 // 第九十六次：下载音频按钮——B站音轨信息（urls[]/标题）；YouTube 走 youtube-audio.js 按需动态 import
 import { getBilibiliAudioInfo } from '../lib/bilibili-audio.js';
+// 第三百六十六次：词典就绪双钩子——YouTube 立即注入（第365次）后字幕渲染抢在词典
+//   冷装载（1~17s）之前，就绪后需补渲染才能出注释（ensureRanksReady/ensureReady/isLoaded）
+import { ensureReady, ensureRanksReady, isLoaded } from '../lib/dictionary.js';
 
 /**
  * 当前视频稳定标识（第一百零二次：video-controller 区分真换集与画质切换）
@@ -1626,6 +1629,10 @@ function injectAnnPoolCss() {
 }
 
 // === 字幕到达后填充视频提示 ===
+// 第三百六十六次：词典就绪重渲染武装标志（armed 幂等，参照 th/scan.js _dictRescanArmed）。
+//   一次武装钩子跨视频存活：触发后 isLoaded 为真不再武装；若触发时字幕尚未渲染则
+//   空转一轮无害，后续 updateSubtitles 正常渲染即带注释。
+let _dictReadyArmed = false;
 export async function updateSubtitles(subtitles) {
   if (!_root) {
     log('updateSubtitles: 骨架未启动, 忽略');
@@ -1662,6 +1669,25 @@ export async function updateSubtitles(subtitles) {
   }
   // 分批渲染（renderSubtitlePanel 内部自带 setTimeout 让出主线程）
   await rerender();
+  // 第三百六十六次（YouTube 侧栏字幕无注释·层1）：第365次起 YouTube 立即注入，字幕渲染
+  //   抢在词典冷装载（1~17s）之前——冷装载期 lookup 全 null → 全部词判表外被滤 → 无注释，
+  //   而侧栏此前无 text-hint 那样的就绪重扫钩子，词典装好后永不恢复。修法：渲染后武装
+  //   双钩子——ranks 先行重渲染（补词频口径），整词典就绪再重渲染（补 lemma/tags/真表外）；
+  //   rerenderPanelOnly 自带清注释缓存+清 seen+遍历全部 slot 重查，即可产出注释。
+  //   词典已就绪则无需武装；装载失败 resolve null 时空转一轮无害（与现状一致）。
+  if (!_dictReadyArmed && !isLoaded()) {
+    _dictReadyArmed = true;
+    try {
+      ensureRanksReady().then(() => {
+        try { rerenderPanelOnly(); } catch (e) { console.warn('[VocabRadar][video-sidebar] 词频就绪重渲染失败:', e); }
+      }).catch((e) => { console.warn('[VocabRadar][video-sidebar] 词频装载失败（等整词典就绪重渲染）:', e); });
+      ensureReady().then(() => {
+        try { rerenderPanelOnly(); } catch (e) { console.warn('[VocabRadar][video-sidebar] 词典就绪重渲染失败:', e); }
+      }).catch((e) => { console.warn('[VocabRadar][video-sidebar] 词典装载失败（按表外继续）:', e); });
+    } catch (e) {
+      console.warn('[VocabRadar][video-sidebar] 词典就绪钩子调度失败:', e);
+    }
+  }
   // 第一百二十五次：字幕填充后补测一次高度（锚点可能晚于骨架就绪）
   requestSyncHeightOnce();
   // 第一百三十三次：首批真实字幕到达 → 自动展开一次（启动折叠态的解除）
