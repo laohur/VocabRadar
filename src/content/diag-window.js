@@ -30,13 +30,14 @@ import { t } from '../lib/i18n.js';
 
 const DIAG_HOST_ID = 'beaver-diag-center';
 
-// 标签表：key ↔ i18n 键；前两个不需测算，后两个共用一次 measureMainTextExtractors()
+// 标签表：key ↔ i18n 键；timing/load/ann/audio 不需测算，extract/ai 共用一次 measureMainTextExtractors()
 const TABS = [
   ['timing', 'diag.tabTiming'],
   ['load', 'diag.tabLoad'],
   ['extract', 'diag.tabExtract'],
   ['ai', 'diag.tabAi'],
-  ['audio', 'diag.tabAudio']
+  ['audio', 'diag.tabAudio'],
+  ['ann', 'diag.tabAnn']
 ];
 
 // 记忆上次所在标签（页面刷新即回默认 extract——原大杂烩窗的主打内容）
@@ -262,6 +263,96 @@ function renderAudioTab() {
     + '从视频侧栏 ⋯ 菜单 →「诊断中心」打开本窗，此标签才有下载动作。</div></div>';
 }
 
+// === 标签 6：字幕注释（第370次：ann-diag 四路证据——词典装载 / 字幕时间线 / 每句统计 / 翻译通道） ===
+// 数据源：window.__beaverAnnDiag()（lib/ann-diag.js 环形缓冲；打包版默认关日志也照常采集，
+// 本标签就是为「用户报字幕没注释+字幕晚到」取证据而生）。
+function renderAnnTab() {
+  let d = null;
+  try { d = (typeof window.__beaverAnnDiag === 'function') ? window.__beaverAnnDiag() : null; }
+  catch (e) { return '<div class="err">注释诊断读取失败：' + esc((e && e.message) || e) + '</div>'; }
+  if (!d || d.error) {
+    return '<div class="err">注释诊断数据异常：' + esc((d && d.error) || '未取到（记录器未注入？）') + '</div>';
+  }
+  const hh = (t) => (t ? new Date(t).toLocaleTimeString('zh-CN', { hour12: false }) : '—');
+  // 事件详情摘要：按事件类型挑关键字段拼一行，避免整包 JSON 噪声；未知事件退化为 k=v 串
+  const evNote = (r) => {
+    if (r.ev === 'wf-ok' || r.ev === 'wf-empty') {
+      return '词频=' + r.wf + ' 词表=' + (r.wl ?? '—') + ' lang=' + (r.lang || '—');
+    }
+    if (r.ev === 'rebuild-done') {
+      return '词典=' + r.size + ' 词频=' + r.wf + ' 耗时=' + r.cost + 'ms lang=' + (r.lang || '—');
+    }
+    if (r.ev === 'rebuild-empty') {
+      return '词频=' + r.wf + ' 词表=' + r.wl + '（两源全空，拒绝假就绪，保持未就绪待重试）';
+    }
+    if (r.ev === 'rebuild-fail') return String(r.err || '');
+    return Object.keys(r).filter((k) => k !== 't' && k !== 'ev').map((k) => k + '=' + r[k]).join(' ');
+  };
+  // 坏事件标红：词频/词典装载失败类（对应用户报障「词典晚就绪→字幕无注释」最直接证据）
+  const BAD = { 'wf-empty': 1, 'rebuild-empty': 1, 'rebuild-fail': 1 };
+  let html = '';
+  // ① 词典状态快照（loadPromise 最近一次落定态）
+  const s = d.dictSnap;
+  html += '<div class="pv"><b>【① 词典状态】</b>' + (s
+    ? '<table>'
+      + '<tr><td class="k">快照时刻</td><td class="v' + (s.loaded ? '' : ' err') + '">' + hh(s.t)
+      + '</td><td class="n">' + (s.err ? '装载失败（throw，未就绪待重试）' : '') + '</td></tr>'
+      + '<tr><td class="k">就绪 / 词条数</td><td class="v' + (s.loaded ? '' : ' err') + '">'
+      + (s.loaded ? '是' : '否') + ' / ' + (s.size ?? '—') + '</td><td class="n">lang=' + esc(s.lang || '—') + '</td></tr>'
+      + '</table>'
+    : '<div class="pvt">尚无快照（词典装载链路未落定或本页未触发）</div>') + '</div>';
+  // ② 词典/词频事件流（时间倒序，末 15 条）
+  html += '<div class="pv"><b>【② 词典/词频事件流】共 ' + d.dictEvents.length + ' 条（显示末 '
+    + Math.min(d.dictEvents.length, 15) + '）</b>'
+    + (d.dictEvents.length
+      ? '<table>' + d.dictEvents.slice(-15).reverse().map((r) =>
+          '<tr><td class="k">' + hh(r.t) + '</td><td class="v' + (BAD[r.ev] ? ' err' : '') + '">'
+          + esc(r.ev) + '</td><td class="n">' + esc(evNote(r)) + '</td></tr>').join('') + '</table>'
+      : '<div class="pvt">无（本页未触发词典装载）</div>')
+    + '</div>';
+  // ③ 字幕时间线（上屏 show / 算注 ann 两阶段，倒序末 15；词典未就绪标红）
+  html += '<div class="pv"><b>【③ 字幕时间线】共 ' + d.subtitles.length + ' 条（显示末 '
+    + Math.min(d.subtitles.length, 15) + '）</b>'
+    + (d.subtitles.length
+      ? '<table>' + d.subtitles.slice(-15).reverse().map((r) => {
+          const isAnn = r.phase === 'ann';
+          const head = isAnn
+            ? 'out=' + r.out + ' pending=' + r.pending + ' ' + ms(r.ms)
+            : (r.cached ? '缓存直出' : '现算');
+          return '<tr><td class="k">' + hh(r.t) + '</td><td class="v' + (r.dictReady ? '' : ' err') + '">'
+            + (isAnn ? 'ann' : 'show') + '</td><td class="n">start=' + (r.start ?? '—') + ' '
+            + (r.dictReady ? '' : '【词典未就绪】') + esc(r.text || '') + ' · ' + esc(head) + '</td></tr>';
+        }).join('') + '</table>'
+      : '<div class="pvt">无（本页未渲染视频字幕）</div>')
+    + '</div>';
+  // ④ 每句注释统计（0 注释是「跳过」还是「pending 拖住」一眼可见；out+pending 全 0 标红）
+  html += '<div class="pv"><b>【④ 每句注释统计】共 ' + d.lines.length + ' 句（显示末 '
+    + Math.min(d.lines.length, 15) + '）</b>'
+    + (d.lines.length
+      ? '<table>' + d.lines.slice(-15).reverse().map((r) =>
+          '<tr><td class="k">' + hh(r.t) + '</td><td class="v' + ((r.out || r.pending) ? '' : ' err') + '">'
+          + 'out=' + r.out + ' pending=' + r.pending + '</td><td class="n">'
+          + (r.dictReady ? '' : '【词典未就绪】') + esc(r.text || '') + ' · 词' + r.words
+          + ' seen跳' + r.skipSeen + ' 高频跳' + r.skipHigh + ' oov=' + r.oov + ' ' + ms(r.ms) + '</td></tr>').join('') + '</table>'
+      : '<div class="pvt">无（字幕算注未运行）</div>')
+    + '</div>';
+  // ⑤ 翻译通道（表外词兜底翻译的成败/耗时；成批失败=翻译通道阻塞的直接证据）
+  html += '<div class="pv"><b>【⑤ 翻译通道】共 ' + d.translates.length + ' 次（显示末 '
+    + Math.min(d.translates.length, 15) + '）</b>'
+    + (d.translates.length
+      ? '<table>' + d.translates.slice(-15).reverse().map((r) =>
+          '<tr><td class="k">' + hh(r.t) + '</td><td class="v' + (r.ok ? '' : ' err') + '">'
+          + esc(r.word || '') + '</td><td class="n">' + (r.ok ? '成功' : '失败')
+          + (r.async ? ' 异步回填' : ' 阻塞') + ' ' + ms(r.ms) + (r.err ? ' ' + esc(r.err) : '') + '</td></tr>').join('') + '</table>'
+      : '<div class="pvt">无（表外词翻译未触发——全命中词表或尚未见字幕）</div>')
+    + '</div>';
+  // 取证口诀 + 清空按钮（重置走 __beaverAnnDiagReset，取证可重复累积）
+  html += '<div class="tip">读法：② 见 rebuild-empty/rebuild-fail → 词典装载挂了；③④ 长期「词典未就绪」→ '
+    + '字幕比词典先到（重建完成广播后应自动补渲染）；⑤ 成批「失败」或超长耗时 → 翻译通道阻塞。'
+    + '<button class="tgb" id="beaver-ann-reset">清空记录重新累积</button></div>';
+  return html;
+}
+
 // 按当前标签渲染内容区（extract/ai 依赖测算结果，timing 依赖 storage 实读）。
 // 注意：各分支先拼完整 html 再一次性赋 innerHTML——若先赋值再绑定事件，后续
 // innerHTML += 会重新解析 DOM 把刚绑的监听器干掉（音频按钮即此坑）。
@@ -282,6 +373,8 @@ async function renderTab(shadow, tab) {
     html = await renderTimingTab();
   } else if (tab === 'load') {
     html = renderLoadTab();
+  } else if (tab === 'ann') {
+    html = renderAnnTab();
   } else {
     html = renderAudioTab();
   }
@@ -298,6 +391,18 @@ async function renderTab(shadow, tab) {
           // 不遮蔽：动作自身抛错必须出声（窗内可见 + 控制台留痕）
           console.error('[VocabRadar][diag-window] 下载音频动作执行失败:', err);
         }
+      });
+    }
+  }
+  // 字幕注释标签：清空按钮 → 重置 ann-diag 环形缓冲后重渲染本标签（取证可重复累积）
+  if (tab === 'ann') {
+    const rst = bd.querySelector('#beaver-ann-reset');
+    if (rst) {
+      rst.addEventListener('click', () => {
+        try {
+          if (typeof window.__beaverAnnDiagReset === 'function') window.__beaverAnnDiagReset();
+        } catch (_) { /* ignore */ }
+        renderTab(shadow, 'ann').catch(() => { /* 渲染失败已有统一日志 */ });
       });
     }
   }

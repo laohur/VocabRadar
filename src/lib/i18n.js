@@ -300,6 +300,7 @@ const DICT = {
     'diag.tabExtract': 'Main text',
     'diag.tabAi': 'AI context',
     'diag.tabAudio': 'Audio download',
+    'diag.tabAnn': 'Subtitle notes',
     'ws.resetLayout': 'Reset position & size',
     'ws.close': 'Close (refresh to restore)',
     // 第二百七十次：⋯ 菜单「停用本站」——写当前域全停规则并跳引导页停用栏
@@ -697,6 +698,7 @@ const DICT = {
     'diag.tabExtract': '正文提取',
     'diag.tabAi': 'AI上下文',
     'diag.tabAudio': '下载音频',
+    'diag.tabAnn': '字幕注释',
     'ws.resetLayout': '重置位置与尺寸',
     'ws.close': '关闭（刷新恢复）',
     // 第二百七十次：⋯ 菜单「停用本站」——写当前域全停规则并跳引导页停用栏

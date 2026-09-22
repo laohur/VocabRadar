@@ -40,6 +40,9 @@
 import { getAnnotations, setRankMax, setMyWords } from '../lib/annotator.js';
 // 302次：侧邻注释统一用短释（与各侧邻路径同源；本地旧版只认；已删）
 import { pickCleanShortTrans } from '../lib/dict-clean.js';
+// 第三百七十次（方案A）：词典就绪态（缓存守卫/时间线上报）+ 诊断记录器。
+import { isLoaded } from '../lib/dictionary.js';
+import { reportSubtitle } from '../lib/ann-diag.js';
 // 反思（2026-08-13 第五十一次）：字幕样式数据驱动（差异化属性定义在 styles.js SUBTITLE_TEXT_STYLES），
 //   CSS 按元数据生成，避免样式定义与元数据不一致。
 // 反思（2026-08-16 第六十九次）：文字样式与位置样式解耦——文字外观由 SUBTITLE_TEXT_STYLES，
@@ -49,6 +52,10 @@ import { pickCleanShortTrans } from '../lib/dict-clean.js';
 //   字体栈、特效声明、用户样式声明与 guide 页预览同源（预览=真实渲染），删除本文件
 //   本地 SUB_FONTS 常量（旧三栈与共享层重复，字体扩列后必然脱节）。
 import { SUBTITLE_TEXT_STYLES, SUBTITLE_POSITIONS, POOL_STYLES, SUB_FONTS, findStyle, annDecl, splitAnnTemplate, DEFAULT_ANN_TEMPLATE, BUILD_STAMP, subFontFamily, subFxDecl, buildUserStyleDecl, pxToSizePct, subFontSizePct, ANN_DEFAULT_STYLE, SUB_DEFAULT_STYLE } from '../lib/styles.js';
+// 第368次：流水日志接 debugLog 阀门（引导页「调试日志」开关）——字号/构建版本/创建/
+//   样式应用四条 console.log 直出属流水信息（用户点名"字号"日志多余），默认静默；
+//   warn/error 异常信号不受阀门影响。
+import { isDebugLog } from '../lib/log-flag.js';
 
 let _overlay = null;
 let _video = null;
@@ -71,6 +78,23 @@ let _storageListener = null;     // storage 变化监听器（同步详略模式
 let _fullscreenHandler = null;   // fullscreenchange 监听器（全屏时移动 overlay）
 let _userStyleSheet = null;      // 282次：用户样式动态 <style> 元素（style-user-* 规则重建用）
 let _userStylesCache = [];       // 282次：最近一次同步的用户样式列表（激活样式被删时回落判定）
+
+// 第三百七十次（方案A·堵洞④）：词典后台重建完成——清注释缓存并强制重绘。
+//   首建/假就绪期算出的注释（全表外/翻译排队）可能被 _annotationsCache 钉死，
+//   重建完成事件到达时字幕若在屏上不换 key 永不重算；清缓存 + 置 _lastKey=''
+//   让 onTimeUpdate 走全渲染路径重算注释（projection.js vr-dict-rebuilt 广播）。
+if (typeof window !== 'undefined') {
+  window.addEventListener('vr-dict-rebuilt', () => {
+    try {
+      _annotationsCache.clear();
+      _lastKey = '';
+      if (_video && _enabled) onTimeUpdate();
+      console.log('[VocabRadar][subtitle-overlay] 词典后台重建完成：注释缓存已清，重绘字幕');
+    } catch (e) {
+      console.warn('[VocabRadar][subtitle-overlay] 重建完成重绘失败:', e);
+    }
+  });
+}
 
 /** 创建 overlay 元素（position:fixed，位置由 updateOverlayPosition 动态计算） */
 function createOverlay() {
@@ -370,7 +394,8 @@ function updateOverlayPosition() {
     //   "显示高异常（选错 video 元素）/ pct 未随设定更新 / 纯比例观感问题"。
     if (fs !== _diagLastFs) {
       _diagLastFs = fs;
-      console.log(`[VocabRadar][overlay] 字号: ${fs}px = 视频显示高 ${Math.round(rect.height)}px × ${pct}%（样式=${_styleId}）`);
+      // 第368次：字号取证日志接 debugLog 阀门（用户点名"多余日志"），默认静默
+      if (isDebugLog()) console.log(`[VocabRadar][overlay] 字号: ${fs}px = 视频显示高 ${Math.round(rect.height)}px × ${pct}%（样式=${_styleId}）`);
     }
   }
   const h = _overlay.offsetHeight || 0;
@@ -556,24 +581,49 @@ async function renderSubtitle(subtitle) {
     return;
   }
 
-  // 缓存注解结果
-  let anns = _annotationsCache.get(subtitle.text);
-  if (anns === undefined) {
-    anns = await getAnnotations(subtitle.text, _rankThreshold, _seen);
-    _annotationsCache.set(subtitle.text, anns);
-    // 反思（2026-08-14 第五十四次修正）：getAnnotations 是 async，等待期间用户可能已关闭
-    //   叠加字幕（setOverlayEnabled(false)）。若直接继续渲染，会"取消叠加字幕仍显示残留"。
-    //   修正：await 返回后重新检查 _enabled，已关闭则不再渲染。
-    if (!_enabled) return;
-  }
-
   const subtitleEl = _overlay.querySelector('.beaver-overlay-subtitle');
   const annEl = _overlay.querySelector('.beaver-overlay-annotations');
-
   // 281次：注释布局只由详略开关(_mode)决定——旧逻辑"正文字样式的 annMode 优先"在新
   //   10 条内置样式（annMode 全为 'side'）下会压过用户切换的详细注释（缺陷预防修正）。
   const annMode = _mode === 'detail' ? 'detail' : 'side';
 
+  // 第369次（用户报"字幕也是很晚才出现"+方案A层1）：字幕显示与注释计算解耦——
+  //   旧版 await getAnnotations 完才设 innerHTML/display:block，注释计算被 lemma/
+  //   翻译串行风暴拖住时（逐词 30s 叠加），纯字幕也被拖着分钟级不上屏。
+  //   新版：缓存命中 → 直接渲染注释版（原行为）；未命中 → 先以空注释渲染纯字幕
+  //   立即上屏（buildXxx 对空数组天然降级为纯文本），注释异步算完后再补渲染。
+  let anns = _annotationsCache.get(subtitle.text);
+  const pending = anns === undefined;
+  applyAnns(subtitle, pending ? [] : anns, annMode, subtitleEl, annEl);
+
+  // 反思（2026-08-14 第五十四次修正）：上屏前确认 _enabled，防止注释等待期间被关闭叠加。
+  if (!_enabled) return;
+  _overlay.style.display = 'block';
+  updateOverlayPosition();
+
+  // 第三百七十次（方案A）：字幕时间线上报——上屏时刻/词典就绪与否/缓存命中，
+  //   配合 annotator 每句统计定位"字幕晚出现/没注释"卡在哪段。
+  reportSubtitle({ phase: 'show', start: subtitle.start, text: String(subtitle.text).slice(0, 40), dictReady: isLoaded(), cached: !pending });
+
+  if (!pending) return;
+
+  // 注释异步补渲染：完成后写缓存；期间已换字幕（_lastKey 变）/已关叠加则跳过，
+  //   防止把旧字幕的注释画到新字幕上（key 公式与 onTimeUpdate 保持一致）。
+  const _annT0 = Date.now();   // 第三百七十次：算注耗时起点（诊断窗时间线）
+  anns = await getAnnotations(subtitle.text, _rankThreshold, _seen);
+  // 第三百七十次（方案A·堵洞③）：词典未就绪期算出的注释不可信（全表外/全 pending，
+  //   247/366 同哲学"冷装载期查询结果不可信"），不写缓存——词典就绪后同句重算才有
+  //   真注释；词典就绪后的空数组是真无生词，照常缓存（避免同句每帧重算 IDB 批读）。
+  if (isLoaded()) _annotationsCache.set(subtitle.text, anns);
+  reportSubtitle({ phase: 'ann', start: subtitle.start, text: String(subtitle.text).slice(0, 40), dictReady: isLoaded(), out: anns.length, pending: anns.filter((a) => a.pending).length, ms: Date.now() - _annT0 });
+  if (!_enabled || _lastKey !== (subtitle.start + ':' + subtitle.text)) return;
+  applyAnns(subtitle, anns, annMode, subtitleEl, annEl);
+  _overlay.style.display = 'block';
+  updateOverlayPosition();
+}
+
+// 第369次：注释版渲染应用（detail/side 两模式统一封装，供先上屏与补渲染共用）
+function applyAnns(subtitle, anns, annMode, subtitleEl, annEl) {
   if (annMode === 'detail') {
     // 详细注释模式：字幕仅高亮 + 下方注释列表
     const { subtitleHtml, annotationHtml } = buildDetailAnnotationHtml(subtitle.text, anns);
@@ -584,13 +634,6 @@ async function renderSubtitle(subtitle) {
     subtitleEl.innerHTML = buildSideAnnotationHtml(subtitle.text, anns);
     annEl.innerHTML = '';
   }
-
-  // 反思（2026-08-14 第五十四次修正）：渲染前最后确认 _enabled（防止 await 期间被关闭，
-  //   或缓存命中时跳过 await 检查导致的残留）。
-  if (!_enabled) return;
-
-  _overlay.style.display = 'block';
-  updateOverlayPosition();
 }
 
 /** 找当前时间对应的字幕条目 */
@@ -759,8 +802,12 @@ export function startOverlay(video, subtitles, options = {}) {
   // 反思（2026-08-16 第七十次）：构建版本 + 生效样式日志——若本日志版本与引导页头部
   //   "vXX" 不一致，即旧构建内容脚本残留（扩展已更新但视频页未重载），
   //   用户反馈"edge 默认样式被改/设定栏没选中"多为这类残留，不必再猜。
-  console.log('[VocabRadar][overlay] 构建 ' + BUILD_STAMP + '（引导页头部版本若不同 = 旧构建残留，请重载扩展并刷新视频页）');
-  console.log('[VocabRadar][overlay] overlay 已创建（mode=' + _mode + '，style=' + _styleId + '，pos=' + _posId + '）');
+  // 第368次：构建版本 + 创建日志接 debugLog 阀门（默认静默；排障时勾选「调试日志」
+  //   仍可取证旧构建残留）。版本判定口径：引导页头部版本若不同 = 旧构建内容脚本残留。
+  if (isDebugLog()) {
+    console.log('[VocabRadar][overlay] 构建 ' + BUILD_STAMP + '（引导页头部版本若不同 = 旧构建残留，请重载扩展并刷新视频页）');
+    console.log('[VocabRadar][overlay] overlay 已创建（mode=' + _mode + '，style=' + _styleId + '，pos=' + _posId + '）');
+  }
 
   video.addEventListener('timeupdate', onTimeUpdate);
 
@@ -906,7 +953,8 @@ export function setSubtitleStyle(style) {
   //   便于排查"透明当作黑色"（③ 需要实机对照的日志之一）。
   try {
     const cs = getComputedStyle(_overlay);
-    console.log(`[VocabRadar][overlay] 字幕样式已应用: "${_styleId}" 计算背景色=${cs.backgroundColor} 计算字色=${cs.color}`);
+    // 第368次：样式应用取证日志接 debugLog 阀门，默认静默
+    if (isDebugLog()) console.log(`[VocabRadar][overlay] 字幕样式已应用: "${_styleId}" 计算背景色=${cs.backgroundColor} 计算字色=${cs.color}`);
   } catch (e) { /* 计算样式取证失败忽略 */ }
   // 字幕样式含"侧邻注释/新行注释"：样式非 none 时注释布局以样式为准
   // 反思（2026-08-14 第五十八次）：切换样式前必须清 _lastKey。

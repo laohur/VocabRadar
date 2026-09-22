@@ -15,6 +15,9 @@
 
 // （第二百二十五次：原 pickCleanShortTrans 导入随转发包装 pickRandomShortTrans 的删除一并移除）
 
+// 第367次：日志阀门（storage.debugLog 镜像 + onChanged 即时生效）
+import { isDebugLog } from '../../lib/log-flag.js';
+
 // 句子分隔正则：句号/感叹/问号/中文标点/换行
 const SENTENCE_SPLIT_RE = /[.!?。！？\n]+/;
 
@@ -116,7 +119,11 @@ export let _collectedSubs = new WeakSet();
 export let _scanScheduled = false;
 
 // === 工具函数 ===
+// 第367次：log 出口接 storage 阀门——原版无开关直出 console（日志刷屏根源之一）。
+//   引导页 help 底部「调试日志」开关勾选写 storage.debugLog，经 lib/log-flag.js
+//   onChanged 镜像即时生效，content script 无需刷新页面。
 export function log(...args) {
+  if (!isDebugLog()) return;
   console.log('[VocabRadar][web-sidebar]', ...args);
 }
 

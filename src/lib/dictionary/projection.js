@@ -16,6 +16,8 @@
 import { dictState, DEFAULT_SOURCE_LANG, _ts } from './state.js';
 import { getLangProjection, getRanksProjection, bulkWriteDictionary, bulkWriteTranslations, clearByLang, countTranslationEntries } from '../word-db.js';
 import { loadWordfreq, loadWordlists, loadBuiltinEnZh } from './word-loader.js';
+// 第三百七十次（方案A）：诊断记录器——词典装载事件/快照上报，诊断悬浮窗「字幕」标签读取。
+import { reportDictEvent, reportDictSnap } from '../ann-diag.js';
 
 /**
  * 加载词典（懒加载，按 learnLanguage 选择 wordfreq 文件）
@@ -378,8 +380,17 @@ export async function _loadDict(lang) {
   //   闭包捕获本轮 settler——语言切换开新一轮 _loadDict 时，旧轮的落定不得碰新轮的承诺。
   const _settleMine = dictState._settleRanks;
   dictState.loadPromise.then(
-    (m) => { try { if (_settleMine) _settleMine(m); } catch (_) {} },
-    () => { try { if (_settleMine) _settleMine(null); } catch (_) {} }
+    (m) => {
+      try { if (_settleMine) _settleMine(m); } catch (_) {}
+      // 第三百七十次：装载落定快照上报（诊断窗：就绪与否/词数；空 Map 就绪即假就绪警报）。
+      try {
+        reportDictSnap({ lang: meaningLang, loaded: !!(m && m.size > 0), size: m ? m.size : 0 });
+      } catch (_) {}
+    },
+    () => {
+      try { if (_settleMine) _settleMine(null); } catch (_) {}
+      try { reportDictSnap({ lang: meaningLang, loaded: false, size: 0, err: true }); } catch (_) {}
+    }
   );
 
   return dictState.loadPromise;
@@ -417,6 +428,21 @@ async function _rebuildFromSources(lang) {
     loadWordfreq(lang),
     loadWordlists()
   ]);
+  // 第三百七十次：词频/词表装载结果上报（诊断窗：确认源文件拉取是否失败/空包）。
+  reportDictEvent(wf.size > 0 ? 'wf-ok' : 'wf-empty', { wf: wf.size, wl: wl.size, lang });
+  // 第三百七十次（方案A·堵洞②假就绪守卫）：两源全空 = 词频远程拉取与词表装载双双失败
+  //   （word-loader 各失败路径均返回空 Map 不抛错）。继续走下方会把空 Map 置为 dictMap
+  //   并置 loadedLang —— isLoaded() 翻真成"假就绪"：annotator 开始占 seen（247 次"冷装载期
+  //   查询不可信"语义失效）、侧栏 armed 钩子被空词典提前消耗、页侧就绪行误报。改法：
+  //   显性报错并 throw —— _kickRebuildBackground 的 catch 记"后台重建失败（下次装载再试）"，
+  //   loadPromise reject 被 ensureReady 的 .catch 吞掉 resolve undefined，isLoaded() 保持
+  //   false，语义回到"未就绪"，armed 钩子不消耗、seen 不占位。
+  if (wf.size === 0 && wl.size === 0) {
+    const msg = `源装载全空（wf=${wf.size} wl=${wl.size}，词频拉取/解压失败），拒绝假就绪（词典保持未就绪，下次装载重试）`;
+    console.error(`[VocabRadar][dictionary][${_ts()}] ${msg}`);
+    reportDictEvent('rebuild-empty', { wf: wf.size, wl: wl.size, lang });
+    throw new Error(`[VocabRadar][dictionary] ${msg}`);
+  }
   // 2026-09-08：与 preprocess manifest 的词数对账随包内 meta.json 退役——
   //   wf.size 就是远程数据解码后的动态实际词数，直接作为 expected 基准写库。
   // 两个源文件是同一词典的字段：wordfreq 给 rank、wordlists 给 tags，合为一张全属性词条表
@@ -435,6 +461,8 @@ async function _rebuildFromSources(lang) {
   dictState.loadedLang = lang;
   const cost = ((Date.now() - startTime) / 1000).toFixed(2);
   console.log(`[VocabRadar][dictionary][${_ts()}] 源装载完成并送入词典: lang=${lang} ${dictState.dictMap.size} 词 (rank 基准 ${wf.size}) (${cost}s)`);
+  // 第三百七十次：源装载完成上报（诊断窗：词数/耗时，核对是否空词典就绪）。
+  reportDictEvent('rebuild-done', { size: dictState.dictMap.size, wf: wf.size, wl: wl.size, cost, lang });
 
   // 装载完成送入词典--分块 upsert + 末块原子标记（含 expected 实际值 + dataVersion 数据版本）。
     try {
@@ -486,8 +514,20 @@ function _kickRebuildBackground(lang, reason) {
   console.log(`[VocabRadar][dictionary][${_ts()}] 后台重建启动: ${reason}（就绪不阻塞，完成后自动刷新就绪行）`);
   Promise.resolve()
     .then(() => _rebuildFromSources(lang))
+    .then((m) => {
+      // 第三百七十次（方案A·堵洞④重建完成广播）：后台重建成功且词典非空时广播事件——
+      //   页侧就绪钩子（video-sidebar armed 幂等一次）若在假就绪/首建放行期已被消耗，
+      //   真词典就绪后无人重渲染；侧栏与字幕 overlay 各自监听本事件补渲染/清缓存。
+      try {
+        if (m && m.size > 0 && typeof window !== 'undefined') {
+          window.dispatchEvent(new CustomEvent('vr-dict-rebuilt', { detail: { size: m.size, lang } }));
+        }
+      } catch (_) {}
+      return m;
+    })
     .catch((e) => {
       console.warn(`[VocabRadar][dictionary][${_ts()}] 后台重建失败（本页手头数据仍可用，下次装载再试）:`, e && e.message);
+      reportDictEvent('rebuild-fail', { err: String((e && e.message) || e).slice(0, 120), lang });
     })
     .finally(() => {
       dictState._rebuildRunning = false;

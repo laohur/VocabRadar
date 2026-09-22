@@ -15,6 +15,9 @@
 //   - 批次环形保留最近 MAX 批，经各模块 getDiagState 的 stats 字段输出到诊断悬浮窗。
 // 同页面内所有处理模块共享本实例（ESM 单例），诊断窗一次看到同一账本。
 
+// 第367次：logBatch 输出接 diagLog 阀门（引导页「诊断日志」开关）
+import { isDiagLog } from './log-flag.js';
+
 const MAX = 8;
 let batches = [];
 
@@ -86,6 +89,8 @@ export function resetBatches() { batches = []; }
  */
 export function logBatch(b) {
   if (!b) return;
+  // 第367次：诊断类日志接 diagLog 阀门（引导页「诊断日志」开关，storage.diagLog 即时生效）
+  if (!isDiagLog()) return;
   const d = b.dict, a = b.asm;
   console.log(
     `[VocabRadar][${b.source}] ${b.label} | ${b.chars}字符 / ${b.tokens}分词 / ${b.unique}单词` +

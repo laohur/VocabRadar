@@ -93,33 +93,49 @@ export async function lemmatizeOne(word, lang = 'en') {
 // 逐词词形还原消息：SW 侧内存持有整表（每 SW 会话一次），页面只取该词的 lemma+候选原形
 // 反思（2026-08-16 第六十七次）：不再把 13.9 万词整表经 LEMMAS_GET 传给页面，
 //   SW→CS 巨型消息既慢又占内存，且与"缺啥单词再组装该单词"原则相悖。
-function lemmatizeOneViaMessage(word, lang) {
+//
+// 第369次（方案A层3）：SW 消息层故障冷却——旧版超时 30s 且逐词各等各的：SW 冷装载/
+//   无响应期间，N 个生词 = N×30s 串行挂起（本次用户报"注释很晚才出现"的根因链一环）。
+//   改法：①超时 30s→8s（正常冷装载 1~17s 多数落在 8s 内；368 已给 SW 端 lemmas 引擎
+//   加退避快速失败，超时只剩"SW 忙/僵"一种慢场景）；②任一 transport 失败（超时/
+//   lastError/发送异常）即进入 60s 冷却，冷却期内消息直接快速降级"原词即原形"，
+//   不再逐词重放等满超时；③收到成功响应即解除冷却（SW 恢复后最多再黑 60s）。
+//   注意：SW 正常应答（哪怕 ok:false，如词不在词形表）不算故障，不触发冷却。
+const SW_MSG_TIMEOUT_MS = 8000;
+const SW_FAIL_COOLDOWN_MS = 60000;
+let _swFailUntil = 0; // 冷却截止时间戳，0=未冷却（lemmatizeOne/lemmaFamily 共享同一 SW 通道）
+function swMsgSend(msg) {
   return new Promise((resolve) => {
     try {
       if (typeof chrome === 'undefined' || !chrome.runtime || !chrome.runtime.sendMessage) {
         resolve(null);
         return;
       }
+      if (Date.now() < _swFailUntil) { resolve(null); return; } // 冷却期：不发消息快速降级
       let settled = false;
-      // SW 首次构建 lemmatizer 需读扩展 IDB（4-8MB），最慢情况下还要首次 CDN 下载，超时给 30s
       const timer = setTimeout(() => {
-        if (!settled) { settled = true; resolve(null); }
-      }, 30000);
+        if (!settled) { settled = true; _swFailUntil = Date.now() + SW_FAIL_COOLDOWN_MS; resolve(null); }
+      }, SW_MSG_TIMEOUT_MS);
       try {
-        chrome.runtime.sendMessage({ type: 'LEMMATIZE_WORD', word, lang }, (r) => {
+        chrome.runtime.sendMessage(msg, (r) => {
           if (settled) return;
           settled = true;
           clearTimeout(timer);
-          if (chrome.runtime.lastError) { resolve(null); return; }
+          if (chrome.runtime.lastError) { _swFailUntil = Date.now() + SW_FAIL_COOLDOWN_MS; resolve(null); return; }
+          if (r && r.ok) _swFailUntil = 0; // 成功响应=通道健康，解除冷却
           resolve(r);
         });
       } catch (sendErr) {
-        if (!settled) { settled = true; clearTimeout(timer); resolve(null); }
+        if (!settled) { settled = true; clearTimeout(timer); _swFailUntil = Date.now() + SW_FAIL_COOLDOWN_MS; resolve(null); }
       }
     } catch (e) {
       resolve(null);
     }
   });
+}
+
+function lemmatizeOneViaMessage(word, lang) {
+  return swMsgSend({ type: 'LEMMATIZE_WORD', word, lang });
 }
 
 /**
@@ -159,31 +175,10 @@ export async function lemmaFamily(lemma, lang = 'en', limit = 20) {
   return out;
 }
 
-// 同族反查消息：SW 侧反向扫描整表（首次可能读 IDB/下载，超时给 30s，与 lemmatizeOne 同口径）
+// 同族反查消息：SW 侧反向扫描整表（第369次：与 lemmatizeOne 同走 swMsgSend——8s 超时
+//   + 60s 故障冷却共享同一通道状态，旧版独立 30s 超时同样存在逐词挂起问题）
 function lemmaFamilyViaMessage(lemma, lang, limit) {
-  return new Promise((resolve) => {
-    try {
-      if (typeof chrome === 'undefined' || !chrome.runtime || !chrome.runtime.sendMessage) {
-        resolve([]);
-        return;
-      }
-      let settled = false;
-      const timer = setTimeout(() => {
-        if (!settled) { settled = true; resolve([]); }
-      }, 30000);
-      try {
-        chrome.runtime.sendMessage({ type: 'LEMMATIZE_FAMILY', lemma, lang, limit }, (r) => {
-          if (settled) return;
-          settled = true;
-          clearTimeout(timer);
-          if (chrome.runtime.lastError) { resolve([]); return; }
-          resolve(r && r.ok && Array.isArray(r.words) ? r.words : []);
-        });
-      } catch (sendErr) {
-        if (!settled) { settled = true; clearTimeout(timer); resolve([]); }
-      }
-    } catch (e) {
-      resolve([]);
-    }
+  return swMsgSend({ type: 'LEMMATIZE_FAMILY', lemma, lang, limit }).then((r) => {
+    return (r && r.ok && Array.isArray(r.words)) ? r.words : [];
   });
 }

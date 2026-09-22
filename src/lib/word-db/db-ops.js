@@ -208,7 +208,12 @@ export async function idbClearByLang(lang) {
 
 export async function idbClearAll() {
   const db = await getDB();
-  for (const s of [...SPLIT_STORES, S_META]) {
+  // 第367次：清理范围补全——原仅清 [分表+meta]，漏两处可复取缓存：
+  //   1. DICT_CACHE_STORE：词频整表 + diverse-lemmas 词形还原数据（53次并入本 store，
+  //      vendor storage.js 的独立 'diverse-lemmas' 库在扩展中从未使用，清这里即彻底）；
+  //   2. STORE_NAME（旧 words 统一表）：第119次拆表后只读迁移残留，一并清空。
+  //   均为可复取缓存（版本变更后重拉重建）；用户数据（My Words/设定）在 storage.local，不受影响。
+  for (const s of [...SPLIT_STORES, S_META, DICT_CACHE_STORE, STORE_NAME]) {
     await new Promise((resolve, reject) => {
       const tx = db.transaction(s, 'readwrite');
       const rq = tx.objectStore(s).clear();

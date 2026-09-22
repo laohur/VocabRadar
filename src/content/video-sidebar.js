@@ -1633,6 +1633,19 @@ function injectAnnPoolCss() {
 //   一次武装钩子跨视频存活：触发后 isLoaded 为真不再武装；若触发时字幕尚未渲染则
 //   空转一轮无害，后续 updateSubtitles 正常渲染即带注释。
 let _dictReadyArmed = false;
+// 第三百七十次（方案A·堵洞④）：词典后台重建完成补渲染——armed 钩子幂等一次，若被
+//   假就绪/首建放行提前消耗，真词典就绪后无人重渲染；监听 projection.js 的重建广播兜底。
+if (typeof window !== 'undefined' && !window.__vrRebuildRelisten) {
+  window.__vrRebuildRelisten = true;
+  window.addEventListener('vr-dict-rebuilt', () => {
+    try {
+      rerenderPanelOnly();
+      console.log('[VocabRadar][video-sidebar] 词典后台重建完成：侧栏已补渲染');
+    } catch (e) {
+      console.warn('[VocabRadar][video-sidebar] 重建完成补渲染失败:', e);
+    }
+  });
+}
 export async function updateSubtitles(subtitles) {
   if (!_root) {
     log('updateSubtitles: 骨架未启动, 忽略');

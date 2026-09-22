@@ -20,6 +20,10 @@ import { beginBatch, countChars, countTokens, countUnique, incField, incScalar, 
 //   "原形(释义)的屈折说明"脏数据（如 "v. 促进( facilitate的第三人称单数 ); ..."），
 //   读缓存时清洗一次，旧脏数据不再污染页面/侧栏注释。
 import { cleanDictEntry } from './dict-clean.js';
+// 第367次：0命中诊断接 diagLog 阀门（引导页「诊断日志」开关）
+import { isDiagLog } from './log-flag.js';
+// 第三百七十次（方案A）：诊断记录器——每句注释统计/单词翻译结果上报，诊断悬浮窗读取。
+import { reportLine, reportTranslate } from './ann-diag.js';
 
 // 已打印词形日志的词（2026-08-18 第七十三次）：词形日志仅第一次打印，
 //   避免 IDB 写回失败/页面刷新后"首次查询词形"反复刷屏。
@@ -185,6 +189,8 @@ async function getAnnotationsInner(text, rankThreshold = 0, seen = new Set(), on
   const stats = beginBatch('annotator', '整句注释（字幕/侧栏 逐句）');
   countChars(stats, text.length);
   countTokens(stats, words.length);
+  // 第三百七十次：整句处理计时起点（诊断窗：每句算注耗时，配合字幕时间线定位晚到段）。
+  const _annT0 = Date.now();
   const batchUnique = new Set();
 
   // 反思（2026-08-13 第五十次）：用户要求"统一词典——刷新页面/换网站后应从词典加载，
@@ -209,9 +215,30 @@ async function getAnnotationsInner(text, rankThreshold = 0, seen = new Set(), on
   }
 
   // 诊断：首批打印词典状态 + 每词 lookup 结果，排查"字幕0生词"
+  // 第367次：_diag 采集同步受 diagLog 阀门控制——阀门关闭时（打包默认）不再为
+  //   每词构造诊断字符串（模板串+push 在热路径上纯属浪费），零开销直通。
+  const diagOn = isDiagLog();
   const _diag = [];
-  for (const word of words) {
-    if (seen.has(word)) { incScalar(stats, 'skipSeen'); _diag.push(`${word}:skip(seen)`); continue; }
+  // 第369次（方案A层2）：词级并行——旧版逐词串行 await（lookupWithLemmatizer/
+  //   updateFields/translate），一个词慢全句慢，N 个生词 N 倍叠加（首词 30s 时
+  //   其余词排队等）；渲染端 collectEdgeMatches 按词正则匹配+位置排序，与 anns
+  //   数组顺序无关，可安全并行。改法：①同步段先做 seen 占位+批内去重（零 await，
+  //   182 次 TOCTOU 窗口保持为零；247 次"!isLoaded 不占位"语义保持）；②
+  //   Promise.all 并行处理，总耗时=最慢单词；③诊断条目局部化（旧版
+  //   `_diag[_diag.length-1] +=` 在并行下会改到别的词的条目）。
+  const pendingWords = [];
+  {
+    const uniqSet = new Set();
+    for (const word of words) {
+      if (seen.has(word)) { incScalar(stats, 'skipSeen'); if (diagOn) _diag.push(`${word}:skip(seen)`); continue; }
+      if (isLoaded()) seen.add(word);   // 同步占位（182 次：check 与 act 间窗口压零）
+      if (uniqSet.has(word)) continue;  // 批内去重（与词典就绪时 seen 去重等价）
+      if (isLoaded()) { batchUnique.add(word); countUnique(stats, 1); }
+      uniqSet.add(word);
+      pendingWords.push(word);
+    }
+  }
+  const processWord = async (word) => {
     // 反思（2026-08-30 第一百八十二次）：用户报障「视频侧栏的句子…生词重复高亮注释」。
     //   根因是本函数对 seen 的用法是 check-then-act（TOCTOU）：上一行做 has() 检查，
     //   而 seen.add() 原先分散在下方三个 push 分支里，两者之间横跨
@@ -277,7 +304,9 @@ async function getAnnotationsInner(text, rankThreshold = 0, seen = new Set(), on
         try { await updateFields(lang, word, { rank, lemma, tags }); } catch (e) { /* 写回失败不阻塞 */ }
       }
     }
-    _diag.push(`${word}:${rank !== null ? `r${rank}` : '表外'}`);
+    // 第369次（诊断条目局部化）：并行下 _diag.length-1 可能指向其他词刚 push 的条目，
+    //   记住本词条目下标，下方"追加跳过原因"只改自己的条目。
+    const diagIdx = diagOn ? (_diag.push(`${word}:${rank !== null ? `r${rank}` : '表外'}`) - 1) : -1;
 
     // 2. My Words + 阈值范围过滤（2026-09-18）：My Words 优先级高于词频范围——
     //    熟词一律跳过；生词（词形或原形命中）绕过词频上下界强制标注。
@@ -285,14 +314,14 @@ async function getAnnotationsInner(text, rankThreshold = 0, seen = new Set(), on
     const _mw = myWordsHit(word, lemma);
     if (_mw.known) {
       incScalar(stats, 'highFreq');
-      _diag[_diag.length - 1] += ':熟词跳过';
-      continue;
+      if (diagIdx >= 0) _diag[diagIdx] += ':熟词跳过';
+      return; // 第369次：原循环 continue，processWord 内改 return（跳过本词）
     }
     if (rank !== null && typeof rank === 'number' && isFinite(rank)
         && !_mw.fresh && (rank <= threshold || rank > _rankMax)) {
       incScalar(stats, 'highFreq');
-      _diag[_diag.length - 1] += ':高频跳过';
-      continue;
+      if (diagIdx >= 0) _diag[diagIdx] += ':高频跳过';
+      return; // 第369次：原循环 continue，processWord 内改 return
     }
 
     // 3. 释义：优先用统一词典缓存的翻译（translationLang 匹配则无需再调 translate）
@@ -316,7 +345,7 @@ async function getAnnotationsInner(text, rankThreshold = 0, seen = new Set(), on
           rank,
           pending: false
         });
-        continue;
+        return; // 第369次：原循环 continue，processWord 内改 return
       }
     }
 
@@ -334,18 +363,23 @@ async function getAnnotationsInner(text, rankThreshold = 0, seen = new Set(), on
         pending: true      // 标记翻译进行中
       };
       annotations.push(ann);
+      const _trT0 = Date.now();   // 第三百七十次：翻译计时（诊断窗：通道健康/耗时）
       translate(word, priority).then((translated) => {
         ann.translations = translated ? [translated] : [];
         ann.pending = false;
+        reportTranslate({ word, ok: !!translated, ms: Date.now() - _trT0, async: 1 });
         onAsyncTranslate(ann);
       }).catch((e) => {
         ann.pending = false;
+        reportTranslate({ word, ok: false, err: String((e && e.message) || e).slice(0, 80), ms: Date.now() - _trT0, async: 1 });
         console.warn(`[VocabRadar][annotator] 单词翻译失败: ${word}`, e);
         onAsyncTranslate(ann);
       });
     } else {
       // 阻塞模式：await translate，翻译完才返回
+      const _trT0 = Date.now();   // 第三百七十次：翻译计时（诊断窗：通道健康/耗时）
       const translated = await translate(word, priority);
+      reportTranslate({ word, ok: !!translated, ms: Date.now() - _trT0, async: 0 });
       annotations.push({
         word,
         lemma,          // 词形还原原形（2026-08-14 第五十四次）
@@ -354,21 +388,47 @@ async function getAnnotationsInner(text, rankThreshold = 0, seen = new Set(), on
         rank
       });
     }
-  }
+  }; // 第369次：原 for 循环体，现封装为单词处理函数 processWord
+
+  // 第369次：并行派发——总耗时=最慢单词（旧版逐词串行 await，N 个生词 N 倍叠加）。
+  //   processWord 直接 push 共享 annotations，无需收集返回值展平；
+  //   渲染端 collectEdgeMatches 按词正则匹配+位置排序，与数组顺序无关。
+  await Promise.all(pendingWords.map(processWord));
+
+  // 第三百七十次（方案A）：每句注释统计上报（环形缓冲，诊断悬浮窗「字幕」标签读取）——
+  //   词数/seen跳过/高频跳过/产出/pending/词典就绪/耗时，定位"0注释"是被跳过还是被翻译拖住。
+  try {
+    reportLine({
+      text: String(text || '').slice(0, 40),
+      words: words.length,
+      skipSeen: stats.skipSeen || 0,
+      skipHigh: stats.highFreq || 0,
+      out: annotations.length,
+      pending: annotations.filter((a) => a.pending).length,
+      oov: annotations.filter((a) => a.rank === null).length,
+      dictReady: isLoaded(),
+      ms: Date.now() - _annT0
+    });
+  } catch (_) {}
 
   // 空结果诊断：words 非空但 0 命中时，打印词典状态 + 前10词 lookup 结果
   // 排查"字幕0生词"——若 wordfreq 未加载，所有词都走表外分支
   // 仅首次 0 命中打印一次，避免多字幕刷屏
   if (words.length > 0 && annotations.length === 0 && !_0HitLogged) {
+    // 第367次：诊断类日志接 diagLog 阀门（引导页「诊断日志」开关）。
+    //   注意：阀门关闭时同样置位 _0HitLogged——本批"仅首次"语义保持，
+    //   开关勾选后从下一批 0 命中起打印，不回溯补打。
     _0HitLogged = true;
-    const the = lookup('the');  // 用已知词探测词典是否加载
-    const sample = words.slice(0, 10).join(',') + (words.length > 10 ? ` ...共${words.length}词` : '');
-    const diagSample = _diag.slice(0, 10).join('|');
-    console.warn('[VocabRadar][annotator] 0命中诊断(仅首次):',
-      '词典加载=', the ? `是(the:rank${the.rank})` : '否(lookup(the)=null)',
-      'threshold=', threshold,
-      'words(前10)=', sample,
-      'lookup(前10)=', diagSample);
+    if (isDiagLog()) {
+      const the = lookup('the');  // 用已知词探测词典是否加载
+      const sample = words.slice(0, 10).join(',') + (words.length > 10 ? ` ...共${words.length}词` : '');
+      const diagSample = _diag.slice(0, 10).join('|');
+      console.warn('[VocabRadar][annotator] 0命中诊断(仅首次):',
+        '词典加载=', the ? `是(the:rank${the.rank})` : '否(lookup(the)=null)',
+        'threshold=', threshold,
+        'words(前10)=', sample,
+        'lookup(前10)=', diagSample);
+    }
   }
 
   // 反思（2026-08-16 第七十二次）：annotator 逐句调用——不再每句打印 logBatch，

@@ -1041,6 +1041,12 @@ input::placeholder { color: var(--g-muted); opacity: 1; }
 .help-list { margin: 0 0 10px; padding-left: 22px; }
 .help-list li { margin: 4px 0; font-size: 14px; color: var(--g-text); }
 
+/* === 第367次：help 底部日志双开关（调试日志 debugLog / 诊断日志 diagLog） === */
+.help-logflags { margin: 12px 0 4px; padding-top: 10px; border-top: 1px solid var(--g-border, #e0e0e0); }
+.help-logflag-hint { font-size: 13px; color: var(--g-text-2, #666); margin-bottom: 6px; }
+.help-logflag { display: block; margin: 6px 0; font-size: 14px; color: var(--g-text); cursor: pointer; }
+.help-logflag input { margin-right: 6px; vertical-align: middle; }
+
 
 
 /* === Parser 栏（第二百五十三次新增：文档解析界面） ===

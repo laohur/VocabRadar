@@ -22,6 +22,9 @@ import { formatTime } from './dom-utils.js';
 import { t } from '../../lib/i18n.js';
 import { showASRProgress, updateASRProgressFill } from '../vs-asr-progress.js';
 import { evaluateGate } from './playback-gate.js';
+// 第367次：[asr][diag] 时间线 console 接 diagLog 阀门（引导页「诊断日志」开关）；
+//   _diagLines 环形缓冲保留（诊断窗/日志无依赖，仅 console 输出受阀门控制）。
+import { isDiagLog } from '../../lib/log-flag.js';
 
 // === ASR 阶段时间线（第一百零二次引入；第一百零三次按用户裁定改为仅日志）===
 // "侧栏展示调试大逆不道，只能日志"——不再渲染任何 DOM，统一打
@@ -32,7 +35,7 @@ function pushDiagLine(text) {
   const ts = d.toLocaleTimeString('en-GB', { hour12: false }) + '.' + String(d.getMilliseconds()).padStart(3, '0');
   _diagLines.push('[' + ts + '] ' + text);
   if (_diagLines.length > 200) _diagLines.shift();
-  console.log('[VocabRadar][asr][diag][' + ts + '] ' + text);
+  if (isDiagLog()) console.log('[VocabRadar][asr][diag][' + ts + '] ' + text);
 }
 
 // 接驳导出：门面 toggleASR 开始新会话时清空时间线（原门面内 `_diagLines.length = 0;` 的等价迁移）

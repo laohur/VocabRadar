@@ -1,5 +1,5 @@
 {
-  "debug": true,
+  "debug": false,
   "commentMaxLen": 1000,
   "prefixComment": "VocabRadar🎯\n",
   "prefixCopy": "VocabRadar🎯\n",

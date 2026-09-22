@@ -19,9 +19,35 @@ import { idbDictGet, idbDictMerge } from './db-ops.js';
 // diverse-lemmas 词形数据 CDN（与 vendor/diverse-lemmas/downloader.js DEFAULT_CDN 保持一致）
 // 反思（2026-08-14 第五十七次）：词形数据首次下载后存入扩展数据域 IDB（本文件 dictCache store 的
 //   lemmas/ambiguity 字段），之后各网站按需调用，不再重复下载、也不打包进扩展包体。
-const LEMMAS_CDN = 'https://unpkg.com/@hg0428/diverse-lemmas-data@1';
+// 第368次（用户报"扫描 30s 门闸卡死+YouTube 侧栏字幕无注释"）：单源 unpkg 改双源回退
+//   +单源 12s 超时+失败 60s 退避——第367次清 dictCache 后首查必触发整表下载，unpkg 在
+//   部分网络 TCP 黑洞挂起且 fetch 无 signal 永不失败，页面侧 lemmatizeOne 只能逐词等满
+//   30s 超时（扫描串行逐词叠加 → 门闸卡死；侧栏注释链路同挂 → 无注释）。双源 jsdelivr
+//   （fastly 节点镜像同一 npm 包，可达性优于 unpkg）+超时把挂起窗口收敛为最坏 24s，
+//   退避期保证失败后逐词查询快速降级（原词即原形），不再逐词重放网络流程。
+const LEMMAS_CDNS = [
+  'https://unpkg.com/@hg0428/diverse-lemmas-data@1',
+  'https://fastly.jsdelivr.net/npm/@hg0428/diverse-lemmas-data@1'
+];
 // 词形数据最少词数（正常英文 139,070 词，<100 视为残缺数据拒绝缓存）
 const LEMMAS_MIN_WORDS = 100;
+// 第368次：单源 fetch 超时（ms）——两源最坏 24s < 页面侧 lemmatizeOne 30s 超时，
+//   保证失败路径由 SW 快速回 ok:false，页面不再逐词等满 30s。
+const LEMMAS_FETCH_TIMEOUT_MS = 12000;
+// 第368次：双源全失败后的重试退避（ms）——冷却期内 lemmasLoad 直接快速失败。
+const LEMMAS_RETRY_BACKOFF_MS = 60000;
+let _lemmasFailUntil = 0;
+
+// 第368次：带超时的 fetch（AbortController）——词形整表/歧义表下载共用
+async function lemmasFetch(url) {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), LEMMAS_FETCH_TIMEOUT_MS);
+  try {
+    return await fetch(url, { credentials: 'omit', cache: 'no-store', signal: ctrl.signal });
+  } finally {
+    clearTimeout(timer);
+  }
+}
 
 // 反思（2026-08-14 第五十七次）：词形数据的下载/缓存/持久化全部在 SW（扩展数据域）内完成，
 //   content script 只发一次 LEMMAS_GET 消息获取词形数据（SW->CS 巨型响应已被 FETCH_URL 验证可行）。
@@ -46,6 +72,11 @@ export async function lemmasLoad(lang) {
 }
 
 async function lemmasLoadInner(lang) {
+  // 第368次：失败退避——冷却期内直接快速失败（异常沿 handleWordDbMessage catch 回
+  //   ok:false，页面 lemmatizeOne 降级"原词即原形"），不逐词重放 24s 网络流程。
+  if (Date.now() < _lemmasFailUntil) {
+    throw new Error('词形数据下载近期失败，退避中（' + Math.ceil((_lemmasFailUntil - Date.now()) / 1000) + 's 后自动重试）');
+  }
   // 1. 扩展数据域缓存命中
   const cache = await idbDictGet(lang);
   if (cache && cache.lemmas && Object.keys(cache.lemmas).length >= LEMMAS_MIN_WORDS) {
@@ -53,21 +84,35 @@ async function lemmasLoadInner(lang) {
     return { source: 'unified', wordDict: cache.lemmas, ambiguityMap: cache.ambiguity || null };
   }
 
-  // 2. CDN 下载（SW 有 host_permissions，不受页面 CSP 限制）
-  const url = LEMMAS_CDN + '/' + lang + '/lemmas.json';
-  console.log(`[VocabRadar][词形数据] 首次下载语言 ${lang} 词形数据: ${url}`);
-  const res = await fetch(url, { credentials: 'omit', cache: 'no-store' });
-  if (!res.ok) throw new Error('HTTP ' + res.status + ' ' + url);
-  const data = await res.json();
+  // 2. CDN 下载（SW 有 host_permissions，不受页面 CSP 限制）——第368次改双源回退：
+  //   主源失败（HTTP 错/超时/网络错）换备源，两源全败置 60s 退避并抛错（错误串带各源
+  //   失败原因，与词频 handleWfFetch 的 srcErrs 口径一致——网络失败要说清哪个链接连不上）。
+  const srcErrs = [];
+  let data = null;
+  for (const cdn of LEMMAS_CDNS) {
+    const url = cdn + '/' + lang + '/lemmas.json';
+    console.log(`[VocabRadar][词形数据] 首次下载语言 ${lang} 词形数据: ${url}`);
+    try {
+      const res = await lemmasFetch(url);
+      if (!res.ok) { srcErrs.push(cdn + ' -> HTTP ' + res.status); continue; }
+      data = await res.json();
+      break;
+    } catch (e) {
+      srcErrs.push(cdn + ' -> ' + ((e && e.name === 'AbortError') ? ('超时 ' + LEMMAS_FETCH_TIMEOUT_MS + 'ms') : String((e && e.message) || e)));
+    }
+  }
   const wordDict = (data && data.word_dict) || data;
   const count = wordDict ? Object.keys(wordDict).length : 0;
-  if (count < LEMMAS_MIN_WORDS) throw new Error('词形数据过少: ' + count);
+  if (count < LEMMAS_MIN_WORDS) {
+    _lemmasFailUntil = Date.now() + LEMMAS_RETRY_BACKOFF_MS;
+    throw new Error('词形数据下载失败（' + (srcErrs.join(' | ') || '词形数据过少: ' + count) + '）');
+  }
 
-  // 3. 歧义表（可选，失败忽略；无歧义的语言该 URL 返回 404）
+  // 3. 歧义表（可选，失败忽略；无歧义的语言该 URL 返回 404）——第368次：同样加超时，防挂
   let ambiguityMap = null;
   try {
-    const ambUrl = LEMMAS_CDN + '/' + lang + '/ambiguity_map.json';
-    const ares = await fetch(ambUrl, { credentials: 'omit', cache: 'no-store' });
+    const ambUrl = LEMMAS_CDNS[0] + '/' + lang + '/ambiguity_map.json';
+    const ares = await lemmasFetch(ambUrl);
     if (ares.ok) ambiguityMap = await ares.json();
   } catch (_) { /* 歧义表可选 */ }
 

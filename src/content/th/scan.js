@@ -25,6 +25,10 @@
 // 第一百八十七次：新增 prefetchFull —— processBatch 每批开跑前一次性批量预取本批词，
 //   消除 lookupFull 逐词 SW 往返（实测串行查词 1069 次）。
 import { lookupFull, prefetchFull, getDiagState as getDictDiagState, ensureReady, ensureRanksReady, setQuietBatch, isLoaded as isDictLoaded } from '../../lib/dictionary.js';
+// 第368次：流水日志接 debugLog 阀门（引导页「调试日志」开关）——本模块 console.log
+//   直出的启动/停止/清扫/去重/挂载成功等流水默认静默；warn/error 异常信号不受阀门影响
+//   （30s 门闸 console.error 保留，不可讳疾忌医）。
+import { isDebugLog } from '../../lib/log-flag.js';
 import { getDiagState as getLemmatizerDiagState } from '../../lib/lemmatizer.js';
 import { translate } from '../../lib/translator.js';
 import { initLang } from '../../lib/i18n.js';
@@ -195,7 +199,7 @@ export async function startHint(settings) {
       };
       window.addEventListener('scroll', thState.scrollHandler, { capture: true, passive: true });
     }
-    console.log(`[VocabRadar][text-hint] 已启动 rankThreshold=${thState.rankThreshold}`, thState.colors);
+    if (isDebugLog()) console.log(`[VocabRadar][text-hint] 已启动 rankThreshold=${thState.rankThreshold}`, thState.colors);
   } catch (e) {
     thState.lastStartError = String((e && e.message) || e);
     console.error('[VocabRadar][text-hint] startHint 出错（已尽力继续）:', e);
@@ -227,7 +231,7 @@ export function stopHint() {
   // w4：UI 模块未加载 = 无浮层/面板可藏，跳过；已加载才转发隐藏
   if (_uiMods) _uiMods.then((m) => m.tt.hideTooltip()).catch(() => {});
   if (_uiMods) _uiMods.then((m) => m.pp.hidePanel()).catch(() => {});
-  console.log('[VocabRadar][text-hint] 已停止');
+  if (isDebugLog()) console.log('[VocabRadar][text-hint] 已停止');
 }
 
 /**
@@ -266,7 +270,7 @@ export function clearHighlights() {
   resetScan();
   // 318次：高亮全拆＝注释宿主已不在，账本一并清零（重扫可重挂）
   thState.annSeenWords.clear();
-  console.log('[VocabRadar][text-hint] 已删除全部高亮');
+  if (isDebugLog()) console.log('[VocabRadar][text-hint] 已删除全部高亮');
 }
 
 /**
@@ -1116,7 +1120,7 @@ function purgeLegacySideAnnotations() {
       el.remove();
       n++;
     });
-    if (n > 0) console.log('[VocabRadar][text-hint] 清扫旧版残留注释 ' + n + ' 个（无 data-word）');
+    if (n > 0 && isDebugLog()) console.log('[VocabRadar][text-hint] 清扫旧版残留注释 ' + n + ' 个（无 data-word）');
     // 322次：同词多注释去重——按文档序保留每词首个，其余移除（容器内渲染不参与）；
     //   重复模式开启时逐处注释是设计行为，跳过。与挂载自愈（appendSideAnnotation
     //   322 段）同口径：重复不再依赖定位漏口即被消除。
@@ -1131,7 +1135,7 @@ function purgeLegacySideAnnotations() {
         if (seen.has(w)) { el.remove(); d++; }
         else seen.add(w);
       });
-      if (d > 0) console.log('[VocabRadar][text-hint] 启动清扫同词重复注释 ' + d + ' 个');
+      if (d > 0 && isDebugLog()) console.log('[VocabRadar][text-hint] 启动清扫同词重复注释 ' + d + ' 个');
     }
   } catch (e) {
     console.warn('[VocabRadar][text-hint] 清扫旧版残留注释失败:', e);
@@ -1179,7 +1183,7 @@ export function appendSideAnnotation(span, translations) {
   const ownAnn = sibAnn && sibAnn.classList && sibAnn.classList.contains(SIDE_ANN_CLASS)
     && (!annWord || sibAnn.dataset.word === annWord);
   if (!thState.annotateRepeat && annWord && thState.annSeenWords.has(annWord) && !ownAnn) {
-    console.log('[VocabRadar][text-hint] 注释去重拦截（annSeenWords 已记该词）：', annWord);
+    if (isDebugLog()) console.log('[VocabRadar][text-hint] 注释去重拦截（annSeenWords 已记该词）：', annWord);
     return;
   }
   // 320次：页级 DOM 存在性兜底——annSeenWords 未记该词但页面上已有同词注释时
@@ -1195,7 +1199,7 @@ export function appendSideAnnotation(span, translations) {
       .find((el) => !(el.closest && el.closest(
         '#beaver-sidebar, #beaver-web-sidebar, #beaver-subtitle-overlay, #beaver-debug-panel')));
     if (dup) {
-      console.log('[VocabRadar][text-hint] 注释去重拦截（页级 DOM 已有同词注释）：', annWord);
+      if (isDebugLog()) console.log('[VocabRadar][text-hint] 注释去重拦截（页级 DOM 已有同词注释）：', annWord);
       return;
     }
   }
@@ -1231,15 +1235,17 @@ export function appendSideAnnotation(span, translations) {
       if (el.closest && el.closest(
         '#beaver-sidebar, #beaver-web-sidebar, #beaver-subtitle-overlay, #beaver-debug-panel')) return;
       el.remove();
-      console.log('[VocabRadar][text-hint] 注释自愈：移除同词多余注释（' + annWord + '）');
+      if (isDebugLog()) console.log('[VocabRadar][text-hint] 注释自愈：移除同词多余注释（' + annWord + '）');
     });
   }
-  // 324次：无条件取证日志（不受 _debug 门控）——用户 324 次反馈"网页提示依旧重复提示，是最新版"，
+  // 324次：无条件取证日志——用户 324 次反馈"网页提示依旧重复提示，是最新版"，
   //   但其 console 中零防线输出（LATER 拦截/账本拦截/页级 DOM 拦截/自愈均无一条日志），
   //   与"annotateRepeat=false＋防线全在本函数"矛盾：重复注入在逻辑上不可能经 appendSideAnnotation。
   //   挂载成功留痕后，下次复现 console 四路对账（挂载/账本拦截/DOM 拦截/自愈）即可定位漏口；
   //   同时打印是否落在排除容器内（侧栏/字幕/诊断容器内的重复属设计性无视，页级自愈不清扫）。
-  if (annWord) {
+  // 第368次：改接 debugLog 阀门——每词一条属流水日志，默认静默；取证时在引导页
+  //   打开「调试日志」开关即可恢复四路对账能力（对账口径不变）。
+  if (annWord && isDebugLog()) {
     const exContainer = span.closest && span.closest(
       '#beaver-sidebar, #beaver-web-sidebar, #beaver-subtitle-overlay, #beaver-debug-panel');
     console.log('[VocabRadar][text-hint] 注释挂载成功（' + annWord + '）'

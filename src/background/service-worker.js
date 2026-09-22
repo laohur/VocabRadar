@@ -318,9 +318,14 @@ chrome.runtime.onInstalled.addListener(async (details) => {
   const curVersion = chrome.runtime.getManifest().version;
   chrome.storage.local.get(['_lastDictClearVersion'], (res) => {
     if (res._lastDictClearVersion !== curVersion) {
+      // 第367次：idbClearAll 清理范围已补全（分表+meta+dictCache+旧words）。
+      //   反思：diverse-lemmas 词形还原数据第五十三次起并入 dictCache store，
+      //   vendor storage.js 的独立 'diverse-lemmas' 库在扩展中从未打开（无 import），
+      //   故无需 deleteDatabase——清 dictCache 即为"可复取缓存彻底清"。
+      //   用户数据（My Words/设定，storage.local）不动；代价：更新后首次冷装载慢一轮（重拉重建）。
       clearIdbAll().catch(() => {});
       chrome.storage.local.set({ _lastDictClearVersion: curVersion });
-      log('[VocabRadar][sw][' + _ts() + '] 版本变更(' + curVersion + ')，清空 IDB 词典缓存');
+      log('[VocabRadar][sw][' + _ts() + '] 版本变更(' + curVersion + ')，清空 IDB 词典缓存（分表+meta+dictCache+旧words，用户数据保留）');
     } else {
       log('[VocabRadar][sw][' + _ts() + '] 版本未变更(' + curVersion + ')，保留词典缓存');
       // 2026-09-09（用户批复"扩展更新安装，不应该就拉取吗"→ 拍板"补 onInstalled 对账"）：
@@ -2490,7 +2495,9 @@ function getWfFilesJson() {
     _wfFilesCache = (async () => {
       for (const base of WF_SOURCES) {
         try {
-          const res = await fetch(base + 'files.json', { credentials: 'omit', cache: 'no-store' });
+          // 第368次（与 lemmas-engine 同类黑洞防护）：fetch 无 signal 时 hf 源网络
+          //   挂起会拖死整条词频装载链，改用带超时 fetch（小 json 10s 足够）。
+          const res = await fetchWithTimeout(base + 'files.json', { credentials: 'omit', cache: 'no-store' }, 10000);
           if (!res.ok) continue;
           const j = await res.json();
           if (j && Array.isArray(j.files) && j.files.length) return j;
@@ -2518,7 +2525,8 @@ function getWfMeta() {
     _wfMetaCache = (async () => {
       for (const base of WF_SOURCES) {
         try {
-          const res = await fetch(base + 'meta.json', { credentials: 'omit', cache: 'no-store' });
+          // 第368次：同 files.json，带超时防源挂起拖死 meta 装载（小 json 10s 足够）。
+          const res = await fetchWithTimeout(base + 'meta.json', { credentials: 'omit', cache: 'no-store' }, 10000);
           if (!res.ok) continue;
           const j = await res.json();
           if (j && j.languages && typeof j.languages === 'object') return j;
@@ -2574,7 +2582,9 @@ async function handleWfFetch(file) {
     const srcErrs = []; // 逐源失败原因收集（2026-09-09 用户裁定：失败要说清哪个链接连不上）
     for (const base of WF_SOURCES) {
       try {
-        const res = await fetch(base + file, { credentials: 'omit' });
+        // 第368次：词频主文件（数十~百 KB gzip）fetch 无 signal 在源挂起时永不失败，
+        //   页面端只能干等——改带超时 15s（两源最坏 30s 后必有结果，错误沿 srcErrs 上报）。
+        const res = await fetchWithTimeout(base + file, { credentials: 'omit' }, 15000);
         if (!res.ok) {
           log('[VocabRadar][sw][' + _ts() + '] wfFetch HTTP ' + res.status + ': ' + base + file);
           srcErrs.push(base + file + ' -> HTTP ' + res.status);

@@ -254,6 +254,43 @@ function renderHelp() {
     }
     box.appendChild(ul);
   }
+  // 第367次（用户指令"help 底部增加 debug 日志开关、诊断开关，选中后打印丰富日志"）
+  appendLogFlags(box);
+}
+
+// 第367次：日志双开关（debugLog=侧栏逐条流水日志阀门；diagLog=诊断类日志阀门）。
+//   勾选写 storage.local，content script 经 lib/log-flag.js 的 onChanged 镜像
+//   即时生效（无需刷新页面）；config.json debug 仍是打包期默认（现 false，静默）。
+const LOG_FLAG_DEFS = [
+  { key: 'debugLog', zh: '调试日志（侧栏逐条流水日志）', en: 'Debug logs (sidebar per-event logs)' },
+  { key: 'diagLog', zh: '诊断日志（0命中诊断、词典账本、ASR 时间线）', en: 'Diagnostic logs (0-hit diag, dict ledger, ASR timeline)' }
+];
+function appendLogFlags(box) {
+  const wrap = document.createElement('div');
+  wrap.className = 'help-logflags';
+  const hint = document.createElement('div');
+  hint.className = 'help-logflag-hint';
+  hint.textContent = (getLangState() === 'zh')
+    ? '日志开关（勾选即时生效，无需刷新页面）：'
+    : 'Log switches (take effect immediately, no reload needed):';
+  wrap.appendChild(hint);
+  chrome.storage.local.get(LOG_FLAG_DEFS.map((d) => d.key), (res) => {
+    if (chrome.runtime.lastError) return;
+    for (const def of LOG_FLAG_DEFS) {
+      const label = document.createElement('label');
+      label.className = 'help-logflag';
+      const cb = document.createElement('input');
+      cb.type = 'checkbox';
+      cb.checked = !!(res && res[def.key]);
+      cb.addEventListener('change', () => {
+        chrome.storage.local.set({ [def.key]: cb.checked });
+      });
+      label.appendChild(cb);
+      label.appendChild(document.createTextNode(' ' + (def[getLangState()] || def.en)));
+      wrap.appendChild(label);
+    }
+    box.appendChild(wrap);
+  });
 }
 
 // 通用 data-key 文案填充
