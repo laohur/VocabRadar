@@ -26,8 +26,9 @@ import { getAnnotations, rankToStage, resetDiag, setRankMax, setMyWords } from '
 // 280次：统一池样式表生成器（52 条共享样式，参数化选择器注入本容器）
 // （280 修正：import 路径写错层级 ../../→../，esbuild 预打包与运行时均解析不到）
 import { buildAnnPoolCss } from '../lib/styles.js';
-// 第二百零四次：⋯ 下拉菜单新增「诊断窗口」项——正文提取诊断窗与文本侧栏同名同功能
-import { openMainTextDiag } from '../lib/main-text.js';
+// 第二百零四次：⋯ 下拉菜单新增「诊断窗口」项；第364次改调诊断中心路由窗
+// （openDiagCenter，src/content/diag-window.js——五标签：注入时机/加载耗时/正文提取/AI上下文/下载音频）
+import { openDiagCenter } from './diag-window.js';
 import { getPhonetic } from '../lib/phonetics.js';
 // 第一百三十四次：youtubei 单例预热（消除首取轨道冷启动竞争→空结果）
 import { warmYouTubeCaptionInnertube } from '../lib/subtitle/index.js';
@@ -394,8 +395,9 @@ function buildSidebar() {
       </div>
       <div class="beaver-footer-row">
         <!-- 第二百七十一次：⬇️ 下载音频按钮移除（用户裁定"挪到诊断窗口中"）——
-             入口迁至 ⋯ 菜单「正文提取诊断」窗顶栏动作区（openMainTextDiag actions 注入，
-             见 bindEvents 的 #beaver-diag-item 绑定）；功能本体 vs/record-workflow.js 不动 -->
+             入口迁至诊断窗；第364次诊断窗拆分为诊断中心路由窗（openDiagCenter），
+             下载音频经 opts.audioDownload 注入「下载音频」标签（见 bindEvents 的
+             #beaver-diag-item 绑定）；功能本体 vs/record-workflow.js 不动 -->
         <button class="beaver-icon-btn" id="beaver-ocr" data-i18n="btn.ocr" data-i18n-title="btn.ocrTitle" title="OCR current frame">📷</button>
         <!-- 第一百七十一次：评论按钮左侧新增对话按钮 -->
         <button id="beaver-chat" data-i18n="btn.chat">💬 Chat</button>
@@ -408,7 +410,8 @@ function buildSidebar() {
            引导页/诊断窗口降级为菜单项（171 次的"点 ⋯ 直接跳引导页"撤销） -->
       <button class="beaver-settings-item" id="beaver-deactivate-item">⏸ <span data-i18n="ws.deactivate">Deactivate on this site</span></button>
       <button class="beaver-settings-item" id="beaver-guide-item">📖 <span data-i18n="ws.openGuide">Open guide page</span></button>
-      <button class="beaver-settings-item" id="beaver-diag-item">⏱ <span data-i18n="ws.mainTextDiag">Main-text extraction diag</span></button>
+      <!-- 第364次：诊断菜单改名「诊断中心」（ws.diagCenter），打开诊断中心路由窗 -->
+      <button class="beaver-settings-item" id="beaver-diag-item">🩺 <span data-i18n="ws.diagCenter">Diagnostics Hub</span></button>
       <!-- 第一百三十二次：↺ 重置位置与尺寸——拖动/调尺寸被接管（_userPlaced）后
            自动对位/同步永久停写，历史小尺寸每页复活即"很矮"；给用户一个自愈出口
            （与文本侧栏 ⋯ 菜单同名同功能，i18n 键 ws.resetLayout 已有）。 -->
@@ -609,16 +612,15 @@ function bindEvents(options = {}) {
       log('⋯菜单 打开引导页失败：' + String((err && err.message) || err));
     }
   });
-  // 菜单项：正文提取诊断窗（与文本侧栏 ⋯ 菜单同名同功能）
-  // 第二百七十一次：诊断窗顶栏注入「⬇️ 音频」动作——下载音频按钮自侧栏底部挪入
-  //   （用户裁定）。动作闭包调 vs/record-workflow 的 onDownloadAudioClick（同页
-  //   上下文，getActiveVideo 取当前视频），进度条/报错仍走原链路；文本侧栏打开
-  //   诊断窗不注入（无视频语境）。
+  // 菜单项：诊断中心路由窗（第364次改名「诊断中心」，原「正文提取诊断」）
+  // 下载音频动作经 opts.audioDownload 注入「下载音频」标签——动作闭包调
+  // vs/record-workflow 的 onDownloadAudioClick（同页上下文，getActiveVideo 取当前视频），
+  // 进度条/报错仍走原链路；文本侧栏入口不注入（无视频语境，标签内显示说明）。
   _root.querySelector('#beaver-diag-item').addEventListener('click', (e) => {
     e.stopPropagation();
     closeAllPopups();
-    openMainTextDiag({
-      actions: [{
+    openDiagCenter({
+      audioDownload: {
         label: '⬇️ ' + t('btn.downloadAudio'),
         title: t('btn.downloadAudioTitle') || 'Download audio',
         onClick: () => {
@@ -626,7 +628,7 @@ function bindEvents(options = {}) {
             log('诊断窗下载音频异常：' + String((err && err.message) || err));
           }
         }
-      }]
+      }
     }).catch((err) => {
       log('⋯菜单 诊断打开失败：' + String(err && err.message || err));
     });

@@ -292,7 +292,14 @@ const DICT = {
     'ws.collapse': 'Collapse',
     'ws.settings': 'Settings',
     'ws.openGuide': 'Open guide page',
-    'ws.mainTextDiag': 'Main-text extraction diag',
+    // 第364次：诊断窗拆分为诊断中心路由窗（openDiagCenter），侧栏菜单入口改名
+    'ws.diagCenter': 'Diagnostics Hub',
+    // 诊断中心五标签（diag-window.js 路由窗）
+    'diag.tabTiming': 'Inject timing',
+    'diag.tabLoad': 'Load timing',
+    'diag.tabExtract': 'Main text',
+    'diag.tabAi': 'AI context',
+    'diag.tabAudio': 'Audio download',
     'ws.resetLayout': 'Reset position & size',
     'ws.close': 'Close (refresh to restore)',
     // 第二百七十次：⋯ 菜单「停用本站」——写当前域全停规则并跳引导页停用栏
@@ -682,7 +689,14 @@ const DICT = {
     'ws.collapse': '收起',
     'ws.settings': '设定',
     'ws.openGuide': '打开引导页',
-    'ws.mainTextDiag': '正文提取诊断',
+    // 第364次：诊断窗拆分为诊断中心路由窗（openDiagCenter），侧栏菜单入口改名
+    'ws.diagCenter': '诊断中心',
+    // 诊断中心五标签（diag-window.js 路由窗）
+    'diag.tabTiming': '注入时机',
+    'diag.tabLoad': '加载耗时',
+    'diag.tabExtract': '正文提取',
+    'diag.tabAi': 'AI上下文',
+    'diag.tabAudio': '下载音频',
     'ws.resetLayout': '重置位置与尺寸',
     'ws.close': '关闭（刷新恢复）',
     // 第二百七十次：⋯ 菜单「停用本站」——写当前域全停规则并跳引导页停用栏

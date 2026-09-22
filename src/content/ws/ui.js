@@ -24,8 +24,10 @@ import { _activeTab, _allAnnotations, _cachedLearnLang, _detailMode, _pageSenten
 import { rerenderAllSlots, schedulePageScan, toggleLemmaGroup } from './scanner.js';
 // 第一百七十一次：文本侧栏底部对话按钮 —— 对话面板唯一实现在 lib/chat.js
 import { openChatPanel } from '../../lib/chat.js';
-// 第一百八十五次：给 AI 的正文提取（Readability 优先）与耗时诊断，唯一实现在 lib/main-text.js
-import { getAiMainText, openMainTextDiag } from '../../lib/main-text.js';
+// 第一百八十五次：给 AI 的正文提取（Readability 优先），唯一实现在 lib/main-text.js；
+// 第364次：诊断窗拆分为诊断中心路由窗（openDiagCenter），openMainTextDiag 随之撤除
+import { getAiMainText } from '../../lib/main-text.js';
+import { openDiagCenter } from '../diag-window.js';
 // G3（2026-09-08）：learn 面板草稿导入（§6.2）——组装+落缓存唯一实现在 ./draft-export.js
 import { importCurrentSidebarDraft, getSiteUrl } from './draft-export.js';
 // 第二百七十次：⋯ 菜单「停用本站」——写当前域「网页提示」停用规则（272 次默认由
@@ -80,7 +82,7 @@ export function buildSidebar() {
         <!-- 第二百七十次：⋯ 菜单「停用本站」——写当前域全停规则并跳引导页停用栏微调 -->
         <button class="beaver-web-settings-item" id="beaver-web-deactivate-item">⏸ ${t('ws.deactivate')}</button>
         <button class="beaver-web-settings-item" id="beaver-web-guide-item">📖 ${t('ws.openGuide')}</button>
-        <button class="beaver-web-settings-item" id="beaver-web-diag-item">⏱ ${t('ws.mainTextDiag')}</button>
+        <button class="beaver-web-settings-item" id="beaver-web-diag-item">🩺 ${t('ws.diagCenter')}</button>
         <button class="beaver-web-settings-item" id="beaver-web-reset">↺ ${t('ws.resetLayout')}</button>
         <button class="beaver-web-settings-item" id="beaver-web-close-item">✕ ${t('ws.close')}</button>
       </div>
@@ -291,10 +293,11 @@ export function bindEvents() {
       log('⋯菜单 打开引导页失败：' + String((err && err.message) || err));
     }
   });
-  // 菜单项：正文提取诊断窗（原工具栏 ⏱ 按钮的功能，入口按钮已移除）
+  // 菜单项：诊断中心路由窗（第364次：openMainTextDiag 拆分为 openDiagCenter；
+  // 文本侧栏无视频语境，不传 audioDownload，音频标签自会渲染"无视频"提示）
   _root.querySelector('#beaver-web-diag-item').addEventListener('click', () => {
     closeAllPopups();
-    openMainTextDiag().catch((e) => {
+    openDiagCenter().catch((e) => {
       // 不遮蔽错误：诊断窗自身挂了也要出声
       toast('诊断打开失败：' + String((e && e.message) || e), { error: true });
     });
