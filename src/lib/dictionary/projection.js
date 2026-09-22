@@ -287,6 +287,15 @@ export async function _loadDict(lang) {
       dictState.loadedLang = meaningLang;
       _seg.total = Math.round(Date.now() - startTime);
       console.log(`[VocabRadar][dictionary][${_ts()}] 词典完全就绪: ${dictState.dictMap.size} 词 (ranks ${_seg.ranks}ms / 整投影 ${_seg.proj}ms / 合计 ${_seg.total}ms)`);
+      // 第三百七十一次（用户批复 A"词典初始装载完成也广播"）：FAST 完整就绪点补广播——
+      //   旧版只在 _kickRebuildBackground 成功分支发 vr-dict-rebuilt（L523），正常装载
+      //   主路径不广播：字幕先于词典上屏的句子画了空注释后，词典就绪无人通知 overlay
+      //   重算（侧栏有就绪双钩子能自愈，叠加字幕没有——两侧表现差异的根源）。口径对齐。
+      try {
+        if (dictState.dictMap && dictState.dictMap.size > 0 && typeof window !== 'undefined') {
+          window.dispatchEvent(new CustomEvent('vr-dict-rebuilt', { detail: { size: dictState.dictMap.size, lang: meaningLang } }));
+        }
+      } catch (_) {}
       return dictState.dictMap;
     }
     // ---- SLOW PATH：ranks 缺失/未 built——沿用旧整投影路径（首屏等多一轮，无分阶段收益）----
@@ -346,6 +355,12 @@ export async function _loadDict(lang) {
         if (Number(cost) >= 0.25) {
           console.log(`[VocabRadar][dictionary][${_ts()}] 词典已就绪(投影): ${dictState.dictMap.size} 词 (${cost}s)`);
         }
+        // 第三百七十一次：SLOW 完整就绪点同补广播（与 FAST 完整分支同理由，见上）。
+        try {
+          if (dictState.dictMap && dictState.dictMap.size > 0 && typeof window !== 'undefined') {
+            window.dispatchEvent(new CustomEvent('vr-dict-rebuilt', { detail: { size: dictState.dictMap.size, lang: meaningLang } }));
+          }
+        } catch (_) {}
         return dictState.dictMap;
       }
       // 空 Map 且本会话已重建过仍空（真 0 词库/坏源）：放行防逐页死循环（标记见下方补齐后）。

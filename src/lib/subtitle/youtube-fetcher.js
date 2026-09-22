@@ -97,6 +97,32 @@ let _pageScriptInjected = false;
 let _pageScriptReady = false;
 
 /**
+ * 第三百七十三次（用户复测：侧栏字幕 100 句全是 [music] 类噪音，而视频真实 CC 是正常
+ * 英文解说——抓到的字幕数据与画面不一致）：数据卫生校验——timedtext URL 的 v= 参数
+ * 必须等于当前页面视频 ID，否则拒绝入缓存。
+ * 是啥：预览播放器（频道/首页 hover 内联预览）、贴片广告、连播上一条都在**主文档**
+ *   JS 上下文发 timedtext 请求，page-fetch.js 一律捕获；旧版无差别入缓存后，
+ *   checkPageCache 的 `(!urlV || urlV === videoId)` 分支可能误用他源字幕。
+ * 有啥用：从入缓存口断掉跨视频污染，SPA 连播换视频后旧字幕也不会被误用（额外收益）。
+ * 口径：urlV 缺失或 pageV 缺失（无法判定）放行——保守不误杀；带 v 且不匹配才拒。
+ * @param {string} url timedtext 请求 URL
+ * @returns {boolean} true=放行入缓存
+ */
+function timedtextUrlAllowed(url) {
+  let urlV = null;
+  try { urlV = new URL(url, 'https://www.youtube.com').searchParams.get('v'); } catch (e) { /* 无法解析视为无 v */ }
+  if (!urlV) return true;
+  const pageV = location.search.match(/[?&]v=([A-Za-z0-9_-]{11})/)?.[1]
+    || location.pathname.match(/\/([A-Za-z0-9_-]{11})(?:[/?]|$)/)?.[1];
+  if (!pageV) return true;
+  if (urlV !== pageV) {
+    console.warn('[VocabRadar][youtube] 数据卫生: 拒绝他源 timedtext 入缓存 urlV=', urlV, 'pageV=', pageV);
+    return false;
+  }
+  return true;
+}
+
+/**
  * 注入 page-fetch.js 到页面主世界（Firefox 兜底路径）+ 建立消息监听。
  *
  * 第一百七十八次（借鉴 VideoSeek 修 YouTube CC 字幕）双轨化：
@@ -127,8 +153,17 @@ function injectPageScript() {
     if (data.type === 'BEAVER_TIMEDTEXT_CAPTURE' && data.url && data.resp) {
       // 避免重复缓存同一 URL
       if (_pageTimedtextCache.some(function (c) { return c.url === data.url; })) return;
+      // 第三百七十三次：数据卫生——他源视频的 timedtext（预览/广告/连播）不入缓存
+      if (!timedtextUrlAllowed(data.url)) return;
       _pageTimedtextCache.push({ url: data.url, resp: data.resp, contentType: data.contentType || '' });
       console.log('[VocabRadar][youtube] 页面主世界拦截: timedtext 已捕获, url长度=', data.url.length, '响应长度=', (data.resp || '').length, '共', _pageTimedtextCache.length, '条');
+      // 第三百七十一次（用户批复"事件驱动重拉"）：捕获信号外发——旧版只进缓存+
+      //   console.log，无人消费；用户初始未开 CC 时 getYouTubeSubtitles 早已一次性
+      //   失败返回 null，之后点开 CC 侧栏永远"无字幕"。此处广播给本世界（content），
+      //   vc/controller.js 监听后自动重拉轨道（每视频限 3 次防风暴）。
+      try {
+        window.dispatchEvent(new CustomEvent('vr-timedtext-captured', { detail: { len: (data.resp || '').length, n: _pageTimedtextCache.length } }));
+      } catch (_) { /* 广播失败不影响缓存主链 */ }
     }
   });
 
@@ -172,6 +207,8 @@ async function syncPageTimedtextCache() {
     for (const item of list) {
       if (!item || !item.url || !item.resp) continue;
       if (_pageTimedtextCache.some((c) => c.url === item.url)) continue;
+      // 第三百七十三次：数据卫生——页面侧回查合并同样拒绝他源 timedtext
+      if (!timedtextUrlAllowed(item.url)) continue;
       _pageTimedtextCache.push({ url: item.url, resp: item.resp, contentType: item.contentType || '' });
       added++;
     }

@@ -34,6 +34,8 @@
 //   2. 首尾生词过滤（用户"注释样式作用于首尾两个单词"=字幕的首尾两个单词选为生词
 //      注释）：side/detail 两模式的生词高亮与注释列表都只保留位于句首/句尾 token
 //      位置的生词，中段生词不高亮不注释（collectEdgeMatches 统一管线）；
+//      【371次推翻】用户裁定"你记错了。全都注释。"——本条设计废止，叠加字幕与
+//      视频侧栏口径统一：全部生词全注释（collectAnnotateMatches，无首尾过滤）；
 //   3. 个性化样式缺省值对齐（用户"个性化样式默认配置给个能用的样式"）：custom 规则
 //      CSS 变量缺省底色 transparent、字号 28px，与 guide 页 Custom 默认值同源。
 
@@ -457,18 +459,16 @@ function escapeReg(s) {
 //   （detail 列表仍全量 join，179次"详细全列"口径不变）
 
 /**
- * 283次：首尾生词筛选管线（side/detail 两模式共用）——
- * 用户裁定"注释样式作用于首尾两个单词"= 字幕的首尾两个单词选为生词注释：
- * 只有位于句首/句尾 token 位置的生词才高亮/注释，中段生词不再处理。
- * 管线：过滤重复生词 → \bword\b 定位 → 排序去重叠 → 与首/尾 token 边界完全一致者保留。
+ * 283次首尾筛选 →【371次推翻（用户裁定"你记错了。全都注释。"）】生词注释管线
+ * （side/detail 两模式共用）——叠加字幕与视频侧栏口径统一：全部生词全注释。
+ * 管线：过滤重复生词（isFirst，62次）→ \bword\b 定位 → 排序去重叠。
+ * 旧版末段的"首/尾 token 边界过滤"已删除（371次）——中段生词同样高亮/注释。
  * token 提取正则：[A-Za-z][A-Za-z'’-]*（g 标志全局匹配；撇号/连字覆盖缩略与所有格，如 don't、teacher's）。
- * （283次自查：JSDoc 内不能出现「星号+斜杠」相邻序列——正则原样粘贴会让块注释提前闭合，
- *   后续中文说明被当作代码导致 esbuild/terser 构建失败，故此处以文字描述正则。）
  * @param {string} text 字幕文本
  * @param {Array} anns 注解数组
- * @returns {Array<{start:number,end:number,word:string,ann:object}>} 首尾生词匹配
+ * @returns {Array<{start:number,end:number,word:string,ann:object}>} 全部生词匹配（去重叠后）
  */
-function collectEdgeMatches(text, anns) {
+function collectAnnotateMatches(text, anns) {
   const matches = [];
   for (const a of anns) {
     // 反思（2026-08-15 第六十二次）：注释重复生词默认不选——
@@ -490,27 +490,22 @@ function collectEdgeMatches(text, anns) {
       lastEnd = m.end;
     }
   }
-  // 首尾过滤：句首/句尾 token 的边界区间（单 token 时首尾同一区间，去重）
-  const tokens = [...text.matchAll(/[A-Za-z][A-Za-z'’-]*/g)];
-  if (!tokens.length) return [];
-  const firstTok = tokens[0];
-  const lastTok = tokens[tokens.length - 1];
-  const edges = [[firstTok.index, firstTok.index + firstTok[0].length]];
-  if (lastTok !== firstTok) edges.push([lastTok.index, lastTok.index + lastTok[0].length]);
-  return valid.filter((m) => edges.some(([s, e]) => m.start === s && m.end === e));
+  // 371次：旧版此处按首/尾 token 边界过滤，仅剩句首句尾生词——与侧栏口径不一致，
+  //   用户裁定全注释，过滤段删除，直接返回去重叠后的全部生词。
+  return valid;
 }
 
 /**
  * 构建侧邻注释 HTML：生词高亮 + (释义) 行内
- * 283次：生词集合先经 collectEdgeMatches 首尾过滤——只有句首/句尾生词参与渲染
+ * 371次：生词集合经 collectAnnotateMatches 定位——全部生词全注释（与侧栏口径一致）
  * @param {string} text 字幕文本
  * @param {Array} anns 注解数组
  * @returns {string} HTML 字符串
  */
 function buildSideAnnotationHtml(text, anns) {
   if (!anns || anns.length === 0) return escapeHtml(text);
-  // 283次：首尾生词筛选（collectEdgeMatches，见上）——中段生词不高亮不注释
-  const valid = collectEdgeMatches(text, anns);
+  // 371次：全注释管线（collectAnnotateMatches，见上）——中段生词同样高亮注释
+  const valid = collectAnnotateMatches(text, anns);
   // 构建 HTML
   let html = '';
   let pos = 0;
@@ -544,11 +539,11 @@ function buildSideAnnotationHtml(text, anns) {
  * @returns {{subtitleHtml:string, annotationHtml:string}}
  */
 function buildDetailAnnotationHtml(text, anns) {
-  // 字幕正文：仅高亮生词，不加行内注释（buildSideAnnotationHtml 内已做首尾过滤）
+  // 字幕正文：仅高亮生词，不加行内注释（buildSideAnnotationHtml 内已做全注释定位）
   const subtitleHtml = buildSideAnnotationHtml(text, anns.map(a => ({ ...a, translations: [] })));
-  // 283次（用户"注释样式作用于首尾两个单词"）：注释列表同样只保留首尾生词——
-  //   与字幕高亮走同一 collectEdgeMatches 管线，保证列表与高亮词完全一致
-  const edgeWords = new Set(collectEdgeMatches(text, anns).map((m) => m.word.toLowerCase()));
+  // 371次（推翻 283"只保留首尾生词"）：注释列表同样全注释——
+  //   与字幕高亮走同一 collectAnnotateMatches 管线，保证列表与高亮词完全一致
+  const edgeWords = new Set(collectAnnotateMatches(text, anns).map((m) => m.word.toLowerCase()));
   // 注释列表：每个生词一行（词头+释义）
   let annotationHtml = '';
   const usedWords = new Set();
@@ -610,7 +605,19 @@ async function renderSubtitle(subtitle) {
   // 注释异步补渲染：完成后写缓存；期间已换字幕（_lastKey 变）/已关叠加则跳过，
   //   防止把旧字幕的注释画到新字幕上（key 公式与 onTimeUpdate 保持一致）。
   const _annT0 = Date.now();   // 第三百七十次：算注耗时起点（诊断窗时间线）
-  anns = await getAnnotations(subtitle.text, _rankThreshold, _seen);
+  // 第三百七十一次（用户批复 B"overlay 切非阻塞+翻译回填重画"）：旧版阻塞 await（不传
+  //   onAsyncTranslate），翻译慢/失败时该句只有高亮无释义，异步翻译完成也无人重画；
+  //   侧栏早已是非阻塞+回填，两侧表现差异的另一根源。改法：传 onAsyncTranslate——
+  //   回调收到的 ann 与数组内对象同引用（annotator 非阻塞分支原位回填），await 返回后
+  //   触发的回调只需重画当前句；await 返回前触发的早回调（annsRef 未赋值）跳过——
+  //   届时 L615 首次 applyAnns 已含其结果（同引用），不丢注释。
+  let annsRef = null;
+  anns = await getAnnotations(subtitle.text, _rankThreshold, _seen, (ann) => {
+    if (!annsRef || !_enabled || _lastKey !== (subtitle.start + ':' + subtitle.text)) return;
+    applyAnns(subtitle, annsRef, annMode, subtitleEl, annEl);
+    updateOverlayPosition();
+  });
+  annsRef = anns;
   // 第三百七十次（方案A·堵洞③）：词典未就绪期算出的注释不可信（全表外/全 pending，
   //   247/366 同哲学"冷装载期查询结果不可信"），不写缓存——词典就绪后同句重算才有
   //   真注释；词典就绪后的空数组是真无生词，照常缓存（避免同句每帧重算 IDB 批读）。

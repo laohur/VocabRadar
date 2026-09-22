@@ -182,7 +182,10 @@ async function getAnnotationsInner(text, rankThreshold = 0, seen = new Set(), on
   //   与全仓默认阈值 5000（popup/service-worker/th/core/ws/core/video-sidebar 等）不一致；
   //   一旦调用方漏传或传入 NaN（配置未就绪的竞态），高频词就整批漏进词表。统一为 5000。
   const threshold = (typeof rankThreshold === 'number' && !isNaN(rankThreshold)) ? rankThreshold : 5000;
-  const words = extractEnglishWords(text.toLowerCase());
+  // 第三百七十五次：垃圾 token 便宜守卫——单字母碎片与超长拼接串（频道 handle/URL 片，
+  //   如诊断所见 crashcoursekids/youtubecrashcourse/bsky 类）不进 IDB 批量与翻译队列；
+  //   英文实词长度恒在 2~24 区间，真词零影响（a/I 本就因高频被滤，此处只是提前止损）。
+  const words = extractEnglishWords(text.toLowerCase()).filter((w) => w.length >= 2 && w.length <= 24);
   const annotations = [];
   // 反思（2026-08-16 第七十次）：每批处理的真实账本——文本字符数 / 分词数 / 去重单词数，
   //   以及各属性 词典直读 vs 临时组装 的数量（计数点在下方真实读取/翻译处）。
@@ -221,8 +224,8 @@ async function getAnnotationsInner(text, rankThreshold = 0, seen = new Set(), on
   const _diag = [];
   // 第369次（方案A层2）：词级并行——旧版逐词串行 await（lookupWithLemmatizer/
   //   updateFields/translate），一个词慢全句慢，N 个生词 N 倍叠加（首词 30s 时
-  //   其余词排队等）；渲染端 collectEdgeMatches 按词正则匹配+位置排序，与 anns
-  //   数组顺序无关，可安全并行。改法：①同步段先做 seen 占位+批内去重（零 await，
+  //   其余词排队等）；渲染端 collectAnnotateMatches（371次前名 collectEdgeMatches）
+  //   按词正则匹配+位置排序，与 anns 数组顺序无关，可安全并行。改法：①同步段先做 seen 占位+批内去重（零 await，
   //   182 次 TOCTOU 窗口保持为零；247 次"!isLoaded 不占位"语义保持）；②
   //   Promise.all 并行处理，总耗时=最慢单词；③诊断条目局部化（旧版
   //   `_diag[_diag.length-1] +=` 在并行下会改到别的词的条目）。
@@ -392,7 +395,7 @@ async function getAnnotationsInner(text, rankThreshold = 0, seen = new Set(), on
 
   // 第369次：并行派发——总耗时=最慢单词（旧版逐词串行 await，N 个生词 N 倍叠加）。
   //   processWord 直接 push 共享 annotations，无需收集返回值展平；
-  //   渲染端 collectEdgeMatches 按词正则匹配+位置排序，与数组顺序无关。
+  //   渲染端 collectAnnotateMatches（371次前名 collectEdgeMatches）按词正则匹配+位置排序，与数组顺序无关。
   await Promise.all(pendingWords.map(processWord));
 
   // 第三百七十次（方案A）：每句注释统计上报（环形缓冲，诊断悬浮窗「字幕」标签读取）——

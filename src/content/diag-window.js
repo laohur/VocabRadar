@@ -41,7 +41,10 @@ const TABS = [
 ];
 
 // 记忆上次所在标签（页面刷新即回默认 extract——原大杂烩窗的主打内容）
-let _curTab = 'extract';
+// 第三百七十四次（用户批复"诊断窗口打开，应当默认啥都标签不选"）：初始 null=不选任何标签。
+//   旧版默认 extract 还连带每次唤窗白跑四方案正文提取（第373次已改 ann，但仍带选中态）；
+//   现按批复改为无选中——内容区显示引导提示，点标签才加载对应诊断（全懒加载）。
+let _curTab = null;
 // 音频下载动作（视频侧栏 ⋯ 菜单打开时经 opts.audioDownload 注入；每次打开重建）
 let _audioDownload = null;
 
@@ -326,15 +329,46 @@ function renderAnnTab() {
       : '<div class="pvt">无（本页未渲染视频字幕）</div>')
     + '</div>';
   // ④ 每句注释统计（0 注释是「跳过」还是「pending 拖住」一眼可见；out+pending 全 0 标红）
-  html += '<div class="pv"><b>【④ 每句注释统计】共 ' + d.lines.length + ' 句（显示末 '
-    + Math.min(d.lines.length, 15) + '）</b>'
-    + (d.lines.length
-      ? '<table>' + d.lines.slice(-15).reverse().map((r) =>
+  // 第三百七十二次：词0 句折叠——YouTube 字幕含大量 [music] 类无词噪音句，旧版 slice(-15)
+  //   末窗全被噪音句占据，正常句统计被挤出视野（取证盲区：用户贴的 51 句末 15 条全是词0，
+  //   真正要看的正常句 out/pending 根本看不到）。改为只显示有词句子（末 15 条倒序），
+  //   无词句折叠为计数行——噪音句 out 恒 0 无信息量，折叠不丢证据。
+  const _annWithWords = d.lines.filter((r) => r.words > 0);
+  const _annNoWords = d.lines.length - _annWithWords.length;
+  // 第三百七十三次：全页聚合行——环形明细 100 条会被噪音句挤占，「有词 0 句」可能是
+  //   挤出假象；聚合计数不受 CAP 影响，先看全页总量再说明细可信度。
+  const _agg = d.linesAgg || { total: 0, withWords: 0, outPos: 0, pendingPos: 0 };
+  html += '<div class="pv"><b>【④ 每句注释统计】</b><table>'
+    + '<tr><td class="k">全页聚合</td><td class="v' + ((_agg.withWords > 0) ? '' : ' err') + '">'
+    + '累计 ' + _agg.total + ' 句：有词 ' + _agg.withWords + ' ｜ out>0 ' + _agg.outPos
+    + ' ｜ pending>0 ' + _agg.pendingPos + '</td><td class="n">'
+    + ((_agg.withWords > 0 && _annWithWords.length === 0)
+      ? '有词句被环形缓冲挤出（明细仅见最近100条噪音），以下明细不完整'
+      : ((_agg.withWords === 0 && _agg.total > 0) ? '全页字幕均为无词噪音句——抓到的字幕数据本身可疑' : '聚合与明细一致')) + '</td></tr>'
+    + '</table></div>';
+  html += '<div class="pv"><b>【④明细】环形共 ' + d.lines.length + ' 条（有词 '
+    + _annWithWords.length + ' 句，显示末 ' + Math.min(_annWithWords.length, 15)
+    + '；无词噪音句 ' + _annNoWords + ' 条已折叠）</b>'
+    + (_annWithWords.length
+      ? '<table>' + _annWithWords.slice(-15).reverse().map((r) =>
           '<tr><td class="k">' + hh(r.t) + '</td><td class="v' + ((r.out || r.pending) ? '' : ' err') + '">'
           + 'out=' + r.out + ' pending=' + r.pending + '</td><td class="n">'
           + (r.dictReady ? '' : '【词典未就绪】') + esc(r.text || '') + ' · 词' + r.words
           + ' seen跳' + r.skipSeen + ' 高频跳' + r.skipHigh + ' oov=' + r.oov + ' ' + ms(r.ms) + '</td></tr>').join('') + '</table>'
-      : '<div class="pvt">无（字幕算注未运行）</div>')
+      : '<div class="pvt">无有词句子（' + (d.lines.length ? '全部是 [music] 类无词噪音句' : '字幕算注未运行') + '）</div>')
+    + '</div>';
+  // ④b 渲染层漏斗（第三百七十二次）：计算层 out>0 但页面无高亮时，看丢在哪段——
+  //   raw→valid 递减=译文过滤（pickCleanShortTrans 空）；valid→shown 递减=阈值过滤；
+  //   shown>0 仍无高亮=noAnn 开关或 DOM 层。noAnn=true 标红。
+  const _renders = d.renders || [];
+  html += '<div class="pv"><b>【④b 渲染层漏斗】共 ' + _renders.length + ' 槽（显示末 '
+    + Math.min(_renders.length, 10) + '）</b>'
+    + (_renders.length
+      ? '<table>' + _renders.slice(-10).reverse().map((r) =>
+          '<tr><td class="k">' + hh(r.t) + '</td><td class="v' + ((r.noAnn || (r.raw > 0 && r.shown === 0)) ? ' err' : '') + '">'
+          + 'raw=' + r.raw + ' → 有译文=' + r.valid + ' → 过阈值=' + r.shown + (r.noAnn ? ' 【注释开关=关】' : '') + '</td><td class="n">'
+          + esc(r.text || '') + '</td></tr>').join('') + '</table>'
+      : '<div class="pvt">无（侧栏字幕槽位未渲染）</div>')
     + '</div>';
   // ⑤ 翻译通道（表外词兜底翻译的成败/耗时；成批失败=翻译通道阻塞的直接证据）
   html += '<div class="pv"><b>【⑤ 翻译通道】共 ' + d.translates.length + ' 次（显示末 '
@@ -348,7 +382,8 @@ function renderAnnTab() {
     + '</div>';
   // 取证口诀 + 清空按钮（重置走 __beaverAnnDiagReset，取证可重复累积）
   html += '<div class="tip">读法：② 见 rebuild-empty/rebuild-fail → 词典装载挂了；③④ 长期「词典未就绪」→ '
-    + '字幕比词典先到（重建完成广播后应自动补渲染）；⑤ 成批「失败」或超长耗时 → 翻译通道阻塞。'
+    + '字幕比词典先到（重建完成广播后应自动补渲染）；④b raw→有译文 递减=译文被过滤，有译文→过阈值 递减=阈值过滤，'
+    + '过阈值>0 仍无高亮=注释开关关；⑤ 成批「失败」或超长耗时 → 翻译通道阻塞。'
     + '<button class="tgb" id="beaver-ann-reset">清空记录重新累积</button></div>';
   return html;
 }
@@ -375,6 +410,9 @@ async function renderTab(shadow, tab) {
     html = renderLoadTab();
   } else if (tab === 'ann') {
     html = renderAnnTab();
+  } else if (tab === null || tab === undefined) {
+    // 第三百七十四次：默认无选中标签——不预载任何诊断数据（含正文提取测算）
+    html = '<div class="tip">请点上方标签查看对应诊断（数据均为点击时才收集）。</div>';
   } else {
     html = renderAudioTab();
   }

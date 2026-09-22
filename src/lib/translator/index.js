@@ -159,7 +159,10 @@ async function _processQueue() {
         ? _highPriorityQueue.shift()
         : _lowPriorityQueue.shift();
       try {
-        const result = await _translateInternal(task.word);
+        // 第三百七十五次：单任务加总超时——诊断实测单个黑洞词（TCP 挂起类无 signal 源，
+        //   各渠道超时叠加＋原形回退）可拖 112~126s，串行队列队头一卡全队列陪葬，
+        //   侧栏 5540 行低优先级直接饿死。45s 仍未回则判失败让位（正常慢词：内置 10s＋在线数秒，远到不了 45s）。
+        const result = await withTimeout(_translateInternal(task.word), 45000, 'translate:' + task.word);
         task.resolve(result);
       } catch (e) {
         task.resolve(null);

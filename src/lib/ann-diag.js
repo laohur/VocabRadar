@@ -20,7 +20,15 @@ const state = {
   dictSnap: null,   // 最新词典快照 {t, lang, loaded, size, rebuild}
   subtitles: [],    // [{t, phase:'show'|'ann', start, text, dictReady, cached, out, pending, ms}]
   lines: [],        // [{t, text, words, skipSeen, skipHigh, out, pending, dictReady, ms}]
-  translates: []    // [{t, word, ok, ms, err}]
+  translates: [],   // [{t, word, ok, ms, err}]
+  // 第三百七十二次：渲染层记录——计算层（getAnnotations）产出 out>0 但侧栏仍无高亮时，
+  //   需要区分「译文过滤掉」/「阈值过滤掉」/「noAnn 开关」三段漏斗，旧版无渲染层证据。
+  renders: [],      // [{t, text, noAnn, detail, raw, valid, shown}]（vs/subtitle-renderer fillSlotAnnotations 上报）
+  // 第三百七十三次：每句统计全页聚合——lines 环形 100 条在长视频（几百句渲染）下
+  //   正常句明细被 [music] 类噪音句挤出（用户复测 100 句全词0，「有词 0 句」无法区分
+  //   「数据本来就是噪音」还是「正常句被挤出视野」）。聚合计数不受 CAP 挤占，
+  //   一次看清全页有词句总量——有词句>0 而明细里看不见=挤出实锤；=0=数据源全是噪音。
+  agg: { total: 0, withWords: 0, outPos: 0, pendingPos: 0 }
 };
 
 function now() { return Date.now(); }
@@ -46,12 +54,26 @@ export function reportSubtitle(rec) {
 
 /** 每句注释统计（annotator getAnnotations 尾部上报） */
 export function reportLine(rec) {
-  try { push(state.lines, { t: now(), ...(rec || {}) }); } catch (_) {}
+  try {
+    const r = rec || {};
+    push(state.lines, { t: now(), ...r });
+    // 第三百七十三次：全页聚合（与环形明细并行累加，Reset 时清零）
+    const a = state.agg;
+    a.total++;
+    if (r.words > 0) a.withWords++;
+    if (r.out > 0) a.outPos++;
+    if (r.pending > 0) a.pendingPos++;
+  } catch (_) {}
 }
 
 /** 单词翻译结果（annotator translate 包装上报，ok/err/ms） */
 export function reportTranslate(rec) {
   try { push(state.translates, { t: now(), ...(rec || {}) }); } catch (_) {}
+}
+
+/** 渲染层漏斗（第三百七十二次：侧栏 fillSlotAnnotations 上报，raw/valid/shown 三段递减） */
+export function reportRender(rec) {
+  try { push(state.renders, { t: now(), ...(rec || {}) }); } catch (_) {}
 }
 
 /** 汇总导出（诊断悬浮窗 window.__beaverAnnDiag() 读取） */
@@ -65,7 +87,9 @@ export function getAnnDiag() {
       dictEvents: state.dictEvents.slice(),
       subtitles: state.subtitles.slice(),
       lines: state.lines.slice(),
-      translates: state.translates.slice()
+      linesAgg: { ...state.agg },
+      translates: state.translates.slice(),
+      renders: state.renders.slice()
     };
   } catch (e) {
     return { error: String(e && e.message) };
@@ -77,6 +101,7 @@ if (typeof window !== 'undefined') {
   // 第三百七十次：诊断窗「清空」入口——取证可重复（点一次清零重新累积）。
   window.__beaverAnnDiagReset = function () {
     state.dictEvents.length = 0; state.dictSnap = null; state.subtitles.length = 0;
-    state.lines.length = 0; state.translates.length = 0;
+    state.lines.length = 0; state.translates.length = 0; state.renders.length = 0;
+    state.agg = { total: 0, withWords: 0, outPos: 0, pendingPos: 0 };
   };
 }

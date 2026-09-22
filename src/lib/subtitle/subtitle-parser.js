@@ -27,6 +27,49 @@ function parseYouTubeTimedText(xml) {
 }
 
 /**
+ * 第三百七十四次：ASR JSON3 碎片事件合并成句。
+ * 是啥：YouTube json3 ASR 轨的 events 是逐词/逐碎片渲染事件（实测一条视频解析出
+ *   14331 条碎片，每条一两个词甚至 [Music]），而画面 CC 显示的是合并后的行——
+ *   旧版逐 event 一句直接全量塞侧栏：渲染队列同步跑 14331 条阻塞主线程几十秒
+ *   （用户报"等了很久也无注释"），碎片句内容也与画面 CC 对不上（"咋还能跟视频
+ *   侧栏捕获的不一样"）。
+ * 有啥用：把碎片吸并到正常字幕行（~80 字符/7s/句末标点切句），条数降 1-2 个数量级，
+ *   内容与画面 CC 行一致；对已是整行的 events（合并条件不满足则每条独立）无副作用。
+ * 参考：youtube-transcript-api / yt-dlp 对 json3 均做行级重组，本函数同思路。
+ * @param {Array<{start,end,text}>} list 已解析的碎片列表（json3 events 天然按时间有序）
+ * @returns {Array<{start,end,text}>} 合并后的字幕行
+ */
+function mergeFragmentEvents(list) {
+  if (!Array.isArray(list) || list.length < 2) return list;
+  // 噪音行（[Music]/[Applause] 等，可带 >> 说话人前缀）：独立成句，不与正文互吸
+  const isNoise = (t) => /^(>>\s*)?\[\s*(music|applause|laughter)\s*\]$/i.test(String(t).trim());
+  const sentenceEnd = (t) => /[.!?…]['")\]]?$/.test(String(t).trim());
+  const out = [];
+  let cur = null; // {start, end, text} 当前合并中的行
+  const flush = () => { if (cur) { out.push(cur); cur = null; } };
+  for (let i = 0; i < list.length; i++) {
+    const s = list[i];
+    if (isNoise(s.text)) { flush(); out.push(s); continue; }
+    if (!cur) {
+      cur = { start: s.start, end: s.end, text: s.text };
+    } else if (s.start - cur.end >= 2) {
+      // 与正在积累的行间隔过大 → 先切句，本碎片另起一行
+      flush();
+      cur = { start: s.start, end: s.end, text: s.text };
+    } else {
+      cur.end = Math.max(cur.end, s.end);
+      cur.text = (cur.text + ' ' + s.text).replace(/\s+/g, ' ').trim();
+    }
+    // 切句判定：句末标点 / 已 80 字符 / 已 7 秒 / 与下一条碎片间隔 >= 2s
+    const next = list[i + 1];
+    const gapNext = next ? (next.start - cur.end) : Infinity;
+    if (sentenceEnd(cur.text) || cur.text.length >= 80 || (cur.end - cur.start) >= 7 || gapNext >= 2) flush();
+  }
+  flush();
+  return out;
+}
+
+/**
  * 解析 YouTube 字幕 JSON 格式（主解析器，XHR 拦截返回 JSON）
  * YouTube JSON 字幕常见两种结构：
  *   1) {events: [{tStartMs, dDurationMs, segs: [{utf8}]}]}
@@ -52,7 +95,12 @@ function parseYouTubeTimedTextJson(json) {
         result.push({ start, end: start + dur, text });
       }
     }
-    return result;
+    // 第三百七十四次：逐词碎片合并成句（长视频 ASR 实测 14331 条碎片 → 正常行数）
+    const merged = mergeFragmentEvents(result);
+    if (merged.length !== result.length) {
+      console.log('[VocabRadar][subtitle-parser] JSON3 碎片合并:', result.length, '→', merged.length, '条');
+    }
+    return merged;
   }
   // 格式 2：transcript 数组
   if (json.transcript && Array.isArray(json.transcript)) {

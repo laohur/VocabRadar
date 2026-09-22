@@ -47,6 +47,11 @@ const PLATFORM = {
 // 不匹配则丢弃（过期字幕）。triggerReload 触发的新请求 ID 更大，旧请求被作废。
 let _requestId = 0;
 
+// 第三百七十一次（用户批复"事件驱动重拉"）：YouTube timedtext 捕获监听的当前 handler。
+//   每轮 startVideoController 注册本轮 handler 前先移除上一轮的（闭包绑定本轮
+//   video/settings/sup/myRequestId），换集重入不累积监听器。
+let _ttLastHandler = null;
+
 // 第二百七十次：抑制组合键（视频侧栏/叠加字幕两位布尔串）——startVideoController
 // 每次启动刷新；deactivateRules 变化时与新组合比较，不同即清场重编排。
 let _lastSupKey = '';
@@ -294,6 +299,58 @@ export async function startVideoController(platform) {
       return;
     }
 
+    // 第三百七十一次（用户批复"事件驱动重拉"）：YouTube timedtext 捕获信号 → 自动重拉。
+    //   getYouTubeSubtitles 是一次性拉取：初始未开 CC（或轨道晚到）时失败返回 null，
+    //   走 showNoSubtitle/ASR 兜底后永不再试；用户随后点开 CC，播放器请求 timedtext 被
+    //   page-fetch.js 捕获（youtube-fetcher 广播 vr-timedtext-captured），旧版该信号
+    //   无人消费——侧栏永远"无字幕"。修法：监听信号重拉轨道，拿到字幕即 updateSubtitles
+    //   （其内部自动同步 overlay）。防风暴：每视频轮次限 3 次；字幕已在手（_subOk）/
+    //   ASR 运行中不重拉。换集重入：移除上一轮 handler 注册本轮（闭包绑定本轮
+    //   video/settings/sup/myRequestId），过期轮次请求直接丢弃。
+    let _subOk = false;        // 本轮字幕是否已成功上屏（侧栏/overlay-only 直启/ASR 缓存）
+    let _ttRetryCount = 0;     // 本轮重拉计数（每轮限 3 次）
+    if (platform !== PLATFORM.BILIBILI) {
+      if (_ttLastHandler) {
+        try { window.removeEventListener('vr-timedtext-captured', _ttLastHandler); } catch (_) { /* ignore */ }
+      }
+      const ttHandler = async () => {
+        try {
+          if (myRequestId !== _requestId) return;   // 过期轮次（换集后双保险）
+          if (_subOk || isASRActive()) return;       // 字幕已在手/ASR 运行中，不重拉
+          if (_ttRetryCount >= 3) return;            // 每视频限 3 次防风暴
+          _ttRetryCount += 1;
+          console.log('[VocabRadar][video-controller] timedtext 捕获信号 → 重拉 YouTube 轨道（第 ' + _ttRetryCount + '/3 次）');
+          const result2 = await getYouTubeSubtitles(settings.learnLanguage, settings.meaningLanguage);
+          if (myRequestId !== _requestId) return;    // 重拉期间换集，丢弃
+          const subs2 = result2 ? (Array.isArray(result2) ? result2 : (result2.subtitles || [])) : [];
+          if (!subs2.length) {
+            console.log('[VocabRadar][video-controller] 重拉仍无字幕，等待下次捕获信号');
+            return;
+          }
+          console.log('[VocabRadar][video-controller] 重拉成功: ' + subs2.length + ' 条 → 自动填充');
+          if (!sup.videoSidebar) {
+            await updateSubtitles(subs2);
+            _subOk = true;
+          } else {
+            // overlay-only（侧栏被停）：无字幕时 overlay 未启动，此处首启（startOverlay 自带清场重启，重复调用安全）
+            startOverlay(video, subs2, {
+              rankThreshold: settings.rankThreshold,
+              rankThresholdMax: settings.rankThresholdMax,
+              myWords: settings.myWords,
+              enabled: true,
+              annotateRepeat: settings.annotateRepeat === true
+            });
+            _subOk = true;
+          }
+        } catch (e) {
+          console.warn('[VocabRadar][video-controller] timedtext 重拉异常:', e);
+        }
+      };
+      _ttLastHandler = ttHandler;
+      window.addEventListener('vr-timedtext-captured', ttHandler);
+      console.log('[VocabRadar][video-controller] timedtext 捕获监听已注册（点开 CC 自动发现字幕）');
+    }
+
     // waitForVideoReady 与字幕获取并行：字幕获取不依赖 video.duration
     // 超时降级：video 未就绪仍继续取字幕（overlay 跳转可能延迟，但 sidebar 字幕可显示）
     const subtitlesPromise = (platform === PLATFORM.BILIBILI)
@@ -330,7 +387,9 @@ export async function startVideoController(platform) {
       // 旧版无字幕时自动启动 ASR（autoStartASR），导致每次刷新都自动选中语音识别按钮。
       // 修正：不再自动启动 ASR，显示"无字幕"提示，用户可手动点击 🎤 按钮启动。
       // 反思（2026-07-08 #41）：无字幕时先尝试加载 ASR 缓存（若有），无缓存才显示"无字幕"提示。
-      if (!await loadASRCacheIfAny()) {
+      if (await loadASRCacheIfAny()) {
+        _subOk = true;   // 371次：ASR 缓存已上屏，timedtext 重拉不再触发
+      } else {
         showNoSubtitle();
       }
       return;
@@ -353,7 +412,9 @@ export async function startVideoController(platform) {
       }
       // 反思（2026-07-06 三次修复）：不再自动启动 ASR，避免每次刷新都自动选中语音识别
       // 反思（2026-07-08 #41）：先尝试加载 ASR 缓存
-      if (!await loadASRCacheIfAny()) {
+      if (await loadASRCacheIfAny()) {
+        _subOk = true;   // 371次：ASR 缓存已上屏，timedtext 重拉不再触发
+      } else {
         showNoSubtitle();
       }
       return;
@@ -377,6 +438,7 @@ export async function startVideoController(platform) {
           annotateRepeat: settings.annotateRepeat === true
         });
         console.log('[VocabRadar][video-controller] overlay-only：叠加字幕已启动（', subs.length, '条）');
+        _subOk = true;   // 371次：叠加字幕已在手，timedtext 重拉不再触发
       } catch (e) {
         console.error('[VocabRadar][video-controller] overlay-only 启动失败:', e);
       }
@@ -419,6 +481,7 @@ export async function startVideoController(platform) {
         console.log('[VocabRadar][video-controller] ASR 缓存命中, 优先加载 (coverage=' + asrResult.coverage.toFixed(2) + ')');
         setTracks(tracks, tracks ? tracks.length : 0, fetchFn);
         selectASRTrackAndContinue(asrResult.coverage);
+        _subOk = true;   // 371次：ASR 缓存已上屏，timedtext 重拉不再触发
       } else if (preferredIndex >= 0) {
         // 2. 无 ASR 缓存：有 learnLanguage 匹配轨道，优先使用
         console.log('[VocabRadar][video-controller] 无 ASR 缓存, 首选语言', learnLang, '匹配轨道 index=', preferredIndex);
@@ -432,6 +495,7 @@ export async function startVideoController(platform) {
         }
         if (subtitles && subtitles.length > 0) {
           await updateSubtitles(subtitles);
+          _subOk = true;   // 371次：字幕已上屏，timedtext 重拉不再触发
         } else {
           showNoSubtitle();
         }
@@ -440,6 +504,7 @@ export async function startVideoController(platform) {
         // 3. 无 ASR 缓存，无首选语言匹配，但有其他语言字幕
         console.log('[VocabRadar][video-controller] 无 ASR 缓存, 使用其他语言字幕:', subtitles.length, '条');
         await updateSubtitles(subtitles);
+        _subOk = true;   // 371次：字幕已上屏，timedtext 重拉不再触发
         setTracks(tracks, pickedIndex, fetchFn);
       } else if (tracks && tracks.length > 0 && fetchFn) {
         // 4. 有轨道但字幕为空：尝试 fetch 第一条
@@ -448,6 +513,7 @@ export async function startVideoController(platform) {
           const newSubs = await fetchFn(tracks[0]);
           if (newSubs && newSubs.length > 0) {
             await updateSubtitles(newSubs);
+            _subOk = true;   // 371次：字幕已上屏，timedtext 重拉不再触发
             setTracks(tracks, 0, fetchFn);
           } else {
             showNoSubtitle();

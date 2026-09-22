@@ -30,6 +30,8 @@ import { lemmaFamily } from '../../lib/lemmatizer.js';
 import { getPhonetic } from '../../lib/phonetics.js';
 import { t } from '../../lib/i18n.js';
 import { isBalancedParens, pickCleanShortTrans } from '../../lib/dict-clean.js';
+// 第三百七十二次：渲染层漏斗上报——计算层有产出但页面无高亮时区分三段过滤（译文/阈值/开关）
+import { reportRender } from '../../lib/ann-diag.js';
 // 2026-09-04（原形折叠）：diverse-lemmas 语言名单（纯数据无依赖），用于判定
 // 当前目标语是否有词形还原覆盖；无覆盖语种不显示常显原形（中/日原形即本身，无意义）。
 import { LANGUAGES } from '../../lib/vendor/diverse-lemmas/languages.js';
@@ -142,6 +144,11 @@ async function renderSubtitlePanel(keepAnnotations = false) {
   //     仅在"大间隔"变为"非大间隔"的转折点（即间断区间的起点）插入一个分隔符。
   const GAP_THRESHOLD = 5.0;
   let wasDiscontinuous = false;
+  // 第三百七十四次：先在 DocumentFragment 里建好全部行，循环结束一次性挂载。
+  //   原逐行 panel.appendChild 在超长字幕（json3 碎片 14331 条实测）下触发上千次
+  //   重排，是"等了很久也无注释"卡顿的放大器；碎片已由 parser 合并根治，此处
+  //   消除逐行挂载开销且不改变任何行为（第93次"可滚动查看全部"全量模式保留）。
+  const frag = document.createDocumentFragment();
   for (let i = 0; i < getSubtitlesRef().length; i++) {
     const sub = getSubtitlesRef()[i];
     let isDiscontinuous = false;
@@ -155,18 +162,21 @@ async function renderSubtitlePanel(keepAnnotations = false) {
     if (isDiscontinuous && !wasDiscontinuous) {
       const sep = document.createElement('div');
       sep.className = 'beaver-sub-gap';
-      panel.appendChild(sep);
+      frag.appendChild(sep);
     }
     wasDiscontinuous = isDiscontinuous;
     const slot = createEmptySlot();
     slot.dataset.idx = String(i);
     slot.querySelector('.beaver-sub-time').textContent = formatTime(sub.start || 0) + '\u00a0\u00a0';
     slot.querySelector('.beaver-sub-content').textContent = sub.text || '';
-    panel.appendChild(slot);
+    frag.appendChild(slot);
     _windowSlots.push(slot);
     _subEntries.push({ sub, annotations: null, el: slot, subIdx: i });
-    collectAnnotationsForSlot(slot, i);
   }
+  panel.appendChild(frag);
+  // 第三百七十五次：不再对全部行即时 fire 注释（5540 行会瞬间塞满 translator 串行队列），
+  //   改走懒注释（可视区滑入才算注 + 首屏直算当前播放附近行），见 armLazyAnnotation。
+  armLazyAnnotation();
 
   panel.onclick = onPanelClick;
 
@@ -191,6 +201,79 @@ function createEmptySlot() {
     <div class="beaver-ann-container"></div>
   `;
   return div;
+}
+
+// === 懒注释（第三百七十五次）===
+// YouTube json3 合并后仍有 5540 行（14331 碎片实测）：首屏对全部行 fire getAnnotations
+// 会把几千个生词瞬间塞进 translator 全局串行队列——一个慢词拖住全队列（诊断实测
+// 112~126s/词），侧栏又走低优先级更被页面高优先级插队 → 注释全卡在 pending，
+// 面板看似"无注释"（而网页提示因高优先级反而有释义）。
+// 改法：slot 滑入可视区（±400px 预取）才触发 collectAnnotationsForSlot；首屏另行直算
+// 当前播放附近 ±60 行＋顶部 40 行（面板初始在顶，observer 覆盖；播放跟随滚到中间时由滚动触发）。
+// ASR 单条插入仍直接注释（单行无队列压力）。无 IntersectionObserver 时回退全量（旧行为）。
+let _lazyObserver = null;
+
+/** 单槽触发注释（幂等：每槽只 arm 一次，触发后即 unobserve） */
+function lazyFireSlot(slot) {
+  if (!slot) return;
+  if (slot.dataset.annArmed === '1') return;
+  const idx = Number(slot.dataset.idx);
+  if (!isFinite(idx) || idx < 0) return;
+  slot.dataset.annArmed = '1';
+  try { if (_lazyObserver) _lazyObserver.unobserve(slot); } catch (_) { /* ignore */ }
+  collectAnnotationsForSlot(slot, idx);
+}
+
+/**
+ * 布防懒注释：近当前播放行/顶部行直接触发，其余交 observer。
+ * renderSubtitlePanel（全量重建）与 rerenderPanelOnly（开关切换重查）共用。
+ */
+function armLazyAnnotation() {
+  const root = getRoot();
+  const panel = root ? root.querySelector('#beaver-subtitle-panel') : null;
+  if (!panel || !_windowSlots || _windowSlots.length === 0) return;
+  try { if (_lazyObserver) _lazyObserver.disconnect(); } catch (_) { /* ignore */ }
+  _lazyObserver = null;
+  // 当前播放位置：优先注释用户实际在看的行附近
+  let curIdx = -1;
+  try {
+    const v = getActiveVideo();
+    const curT = (v && isFinite(v.currentTime)) ? v.currentTime : 0;
+    const subs = getSubtitlesRef();
+    for (let i = 0; i < subs.length; i++) {
+      const s = subs[i];
+      if (!s || typeof s.start !== 'number' || typeof s.end !== 'number') continue;
+      if (curT >= s.start && curT <= s.end) { curIdx = i; break; }
+    }
+    if (curIdx === -1 && curT > 0) {
+      for (let i = 0; i < subs.length; i++) {
+        if (subs[i] && typeof subs[i].start === 'number' && subs[i].start > curT) { curIdx = Math.max(0, i - 1); break; }
+      }
+    }
+  } catch (_) { /* ignore */ }
+  const NEAR = 60, HEAD = 40;
+  let observer = null;
+  if (typeof IntersectionObserver !== 'undefined') {
+    try {
+      observer = new IntersectionObserver((entries) => {
+        for (const en of entries) {
+          if (en.isIntersecting && en.target) lazyFireSlot(en.target);
+        }
+      }, { root: panel, rootMargin: '400px 0px', threshold: 0 });
+      _lazyObserver = observer;
+    } catch (_) { observer = null; }
+  }
+  for (let i = 0; i < _windowSlots.length; i++) {
+    const slot = _windowSlots[i];
+    if (!slot) continue;
+    slot.dataset.annArmed = '';
+    const nearCur = (curIdx >= 0 && Math.abs(i - curIdx) <= NEAR);
+    if (nearCur || i < HEAD || !observer) {
+      lazyFireSlot(slot);
+    } else {
+      try { observer.observe(slot); } catch (_) { lazyFireSlot(slot); }
+    }
+  }
 }
 
 // === 面板点击事件委托 ===
@@ -753,9 +836,8 @@ export function rerenderPanelOnly() {
   _collectedSubs = new WeakSet();
   _seenWords = new Set();
   // 遍历所有 slot 重新触发注释获取+回填
-  _windowSlots.forEach((slot, idx) => {
-    collectAnnotationsForSlot(slot, idx);
-  });
+  // 第三百七十五次：改走懒注释（全量 fire 会重演 5540 行堵队列，开关注换即卡死）
+  armLazyAnnotation();
   // 重新高亮当前行
   const v = getActiveVideo();
   const curT = (v && isFinite(v.currentTime)) ? v.currentTime : 0;
@@ -865,6 +947,17 @@ function fillSlotAnnotations(slot, sub, anns) {
   const validAnns = (anns || []).filter(a => pickCleanShortTrans(a.translations));
   // 第一百八十七次：字幕行与词表共用同一份阈值/表外词过滤，杜绝字幕注释高频词
   const shownAnns = filterByCurrentRank(validAnns);
+  // 第三百七十二次：渲染层漏斗上报——raw(计算层产出)→valid(有译文)→shown(过阈值)三段
+  //   递减定位丢在哪段；noAnn 开关单列。诊断窗「字幕注释」标签④尾部读取。
+  try {
+    reportRender({
+      text: String(sub.text || '').slice(0, 30),
+      noAnn: _noAnnotation === true,
+      raw: (anns || []).length,
+      valid: validAnns.length,
+      shown: shownAnns.length
+    });
+  } catch (_) {}
   // 反思（2026-07-22）：用户要求「字幕的单词注释跟在字幕正文里面的生词后，不另起一行，这是简略模式。
   //   详细模式是之前老版本」。
   //   简略模式：highlightWords 第三参 true，注释作为 inline span 跟在生词后；annContainer 清空。
@@ -1457,4 +1550,7 @@ export function resetRenderState() {
   _collectedSubs = new WeakSet();
   _windowSlots = [];
   _activeSubIdx = -1;
+  // 第三百七十五次：换集/销毁时断开懒注释 observer（防旧 slot 引用滞留）
+  try { if (_lazyObserver) _lazyObserver.disconnect(); } catch (_) { /* ignore */ }
+  _lazyObserver = null;
 }
