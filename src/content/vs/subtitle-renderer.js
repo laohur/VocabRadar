@@ -23,7 +23,7 @@
 
 import { log } from './logger.js';
 import { formatTime, copyToClipboard, flashButton, escapeHtml, escapeReg, cssEscape } from './dom-utils.js';
-import { pickRandomLinesForComment, findMainCommentContainer, expandCommentBox, fillCommentInput, scrollMinIntoView } from './comment-fill.js';
+import { pickRandomLinesForComment, findMainCommentContainer, ensureYtCommentsLoaded, expandCommentBox, fillCommentInput, scrollMinIntoView } from './comment-fill.js';
 import { autoExpandOnce, requestSyncHeightOnce } from './sidebar-layout.js';
 import { getAnnotations, getRankMax, rankToStage, resetDiag } from '../../lib/annotator.js';
 import { lemmaFamily } from '../../lib/lemmatizer.js';
@@ -1397,6 +1397,11 @@ export async function onCommentClick() {
 
   // 定位"视频正下方主评论框容器"：B站结构为 #commentapp > bili-comments，
   // 主评论框在 bili-comments 顶部（评论列表之上）。滚到该容器顶部而非底部。
+  // YouTube 评论区懒加载：未滚到时占位不在 DOM 里，旧流程第一次点击只滚加载、
+  // 第二次才真填。先主动等占位出现，一次点成。
+  if (/youtube\./.test(location.hostname)) {
+    await ensureYtCommentsLoaded(6000);
+  }
   const mainCommentContainer = findMainCommentContainer();
   if (mainCommentContainer) {
     scrollMinIntoView(mainCommentContainer);

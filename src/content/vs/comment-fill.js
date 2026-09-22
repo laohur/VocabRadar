@@ -59,14 +59,53 @@ export function findMainCommentContainer() {
   // 2. bili-comments 元素（顶部即主评论框，滚动到它而非其内部列表）
   const bc = document.querySelector('bili-comments');
   if (bc) return bc;
-  // 反思（2026-07-29）：用户反馈"youtube横屏找不到评论框"。
-  //   YouTube 评论区结构：ytd-comments > #comments > ytd-comment-simplebox-renderer（主评论框）
-  //   新增 YouTube 选择器。
+  // YouTube：未点开时只有占位 #placeholder-area/#simplebox-placeholder，
+  // 真正的 #contenteditable-root 点开后才挂载。容器定位优先认主框本体，
+  // 返回其外层 ytd-comments（滚动到评论区顶部，而非某个回复项）。
+  const ytSimplebox = document.querySelector('ytd-comment-simplebox-renderer')
+    || document.querySelector('ytd-commentbox')
+    || document.querySelector('#placeholder-area')
+    || document.querySelector('#simplebox-placeholder');
+  if (ytSimplebox) {
+    return ytSimplebox.closest?.('ytd-comments')
+      || ytSimplebox.closest?.('#comments')
+      || ytSimplebox;
+  }
   const ytComments = document.querySelector('ytd-comments')
     || document.querySelector('#comments');
   if (ytComments) return ytComments;
   // 3. 回退：第一个含 comment 的顶层容器
   return document.querySelector('[class*="comment-app"], [class*="comment-wrapper"], [class*="comment"]');
+}
+
+// === YouTube 评论区懒加载等待 ===
+// 未滚到评论区时 ytd-comments/simplebox 可能根本不在 DOM 里，
+// 第一次点击只起到"滚加载"作用，第二次才真填。改为主动滚触发加载并轮询等占位出现。
+export async function ensureYtCommentsLoaded(maxWaitMs = 6000) {
+  const ytHit = () => document.querySelector('ytd-comment-simplebox-renderer')
+    || document.querySelector('ytd-commentbox')
+    || document.querySelector('#placeholder-area')
+    || document.querySelector('#simplebox-placeholder')
+    || document.querySelector('ytd-commentbox #contenteditable-root')
+    || document.querySelector('#contenteditable-root')
+    || document.querySelector('ytd-comments')
+    || document.querySelector('#comments');
+  if (ytHit()) return ytHit();
+  const below = document.querySelector('#below');
+  if (below) below.scrollIntoView({ block: 'start' });
+  const t0 = Date.now();
+  let n = 0;
+  while (Date.now() - t0 < maxWaitMs) {
+    const hit = ytHit();
+    if (hit) return hit;
+    // 步进下滚触发懒加载（一次滚到底可能跳过挂载时机）
+    window.scrollBy({ top: 600 });
+    n++;
+    // 每滚几次把 #below 再拉回视口一次，防止滚过头
+    if (n % 5 === 0 && below) below.scrollIntoView({ block: 'start' });
+    await new Promise((r) => setTimeout(r, 250));
+  }
+  return ytHit();
 }
 
 // === 自动展开评论区 ===
@@ -88,7 +127,30 @@ export async function expandCommentBox() {
       return;
     }
   }
-  // 反思（2026-07-29）：YouTube 评论框需点击 simplebox 展开
+  // YouTube：未点开时只有占位文案"Add a comment..."，真正的
+  // #contenteditable-root 点占位后才挂载。旧实现点整个
+  // ytd-comment-simplebox-renderer 常展不开，改点最内层占位。
+  const ytHasEditor = () => !!document.querySelector('ytd-commentbox #contenteditable-root')
+    || !!document.querySelector('#contenteditable-root');
+  const ytPlaceholder = document.querySelector('ytd-comment-simplebox-renderer #placeholder-area')
+    || document.querySelector('#placeholder-area')
+    || document.querySelector('#simplebox-placeholder')
+    || document.querySelector('ytd-comment-simplebox-renderer');
+  if (ytPlaceholder) {
+    if (ytHasEditor()) return;
+    // 占位在视口外时点击可能被 YouTube 忽略，先滚进视口再点
+    try { ytPlaceholder.scrollIntoView({ block: 'center' }); } catch (e) {}
+    await new Promise((r) => setTimeout(r, 350));
+    ytPlaceholder.click();
+    log('YouTube 评论区触发点击: placeholder');
+    // 轮询等 #contenteditable-root 挂载（最多约 3s），不等死 500ms
+    for (let i = 0; i < 15; i++) {
+      await new Promise((r) => setTimeout(r, 200));
+      if (ytHasEditor()) return;
+    }
+    log('YouTube 占位已点但 #contenteditable-root 未出现');
+    return;
+  }
   const ytSimplebox = document.querySelector('ytd-comment-simplebox-renderer')
     || document.querySelector('#simplebox');
   if (ytSimplebox) {
@@ -122,7 +184,16 @@ function isInCommentItem(el) {
   while (p) {
     const tag = (p.tagName || '').toLowerCase();
     const cls = String(p.className || '').toLowerCase();
+    const id = String(p.id || '').toLowerCase();
     if (/bili-comment-thread|bili-comment-item|comment-item|reply-item|reply-list|bili-comments-list|bili-comment-reply/.test(tag + ' ' + cls)) {
+      return true;
+    }
+    // YouTube：评论项/回复项（主评论框 ytd-comment-simplebox-renderer 不在此列）
+    if (/ytd-comment-thread-renderer|ytd-comment-renderer|ytd-comment-replies-renderer/.test(tag)) {
+      return true;
+    }
+    if (/comment-replies|comment-thread/.test(cls + ' ' + id)) {
+      // 主框 simplebox 本身 id/class 含 simplebox，不含 thread/replies，可安全排除回复
       return true;
     }
     // 跨 shadow boundary
@@ -186,34 +257,65 @@ export async function fillCommentInput(text) {
       return true;
     }
   }
-  // 3. YouTube 评论框：contenteditable 元素在 ytd-comments 内
-  // 反思（2026-07-29）：YouTube 评论框是 [contenteditable=true]，
-  //   在 ytd-comment-simplebox-renderer 或 ytd-comments 内。
-  const ytComments = document.querySelector('ytd-comments') || document.querySelector('#comments');
-  if (ytComments) {
-    const ytEditor = ytComments.querySelector('[contenteditable=true]');
-    if (ytEditor && !isInCommentItem(ytEditor)) {
-      ytEditor.focus();
-      try {
-        const range = document.createRange();
-        range.selectNodeContents(ytEditor);
-        const sel = window.getSelection();
-        if (sel) {
-          sel.removeAllRanges();
-          sel.addRange(range);
+  // 3. YouTube 评论框：未点开时只有占位 #placeholder-area/#simplebox-placeholder，
+  // 点开后才挂载 ytd-commentbox #contenteditable-root。按"先真实编辑器、后占位回退"
+  // 顺序找；编辑器查找穿透 shadow DOM，且排除评论项内的回复框。
+  const ytEditor = deepQuery(document, 'ytd-commentbox #contenteditable-root')
+    || deepQuery(document, '#contenteditable-root')
+    || (() => {
+      const cands = deepQueryAll(document, '[contenteditable=true]');
+      const main = cands.find((el) => {
+        if (isInCommentItem(el)) return false;
+        let p = el;
+        while (p) {
+          const tag = (p.tagName || '').toLowerCase();
+          if (tag === 'ytd-comment-simplebox-renderer' || tag === 'ytd-commentbox') return true;
+          p = p.parentElement || (p.getRootNode && p.getRootNode().host);
         }
-        const lines = text.split('\n');
-        for (let i = 0; i < lines.length; i++) {
-          if (i > 0) document.execCommand('insertLineBreak');
-          document.execCommand('insertText', false, lines[i]);
-        }
-      } catch (e) {
-        ytEditor.innerText = text;
-        ytEditor.dispatchEvent(new Event('input', { bubbles: true }));
+        return false;
+      });
+      return main || cands.find((el) => !isInCommentItem(el)) || null;
+    })();
+  if (ytEditor) {
+    ytEditor.focus();
+    try {
+      const range = document.createRange();
+      range.selectNodeContents(ytEditor);
+      const sel = window.getSelection();
+      if (sel) {
+        sel.removeAllRanges();
+        sel.addRange(range);
       }
-      log('评论框命中: YouTube contenteditable');
-      return true;
+      const lines = text.split('\n');
+      for (let i = 0; i < lines.length; i++) {
+        if (i > 0) document.execCommand('insertLineBreak');
+        document.execCommand('insertText', false, lines[i]);
+      }
+    } catch (e) {
+      ytEditor.innerText = text;
+      ytEditor.dispatchEvent(new Event('input', { bubbles: true }));
     }
+    // 补一次 input 事件，让 YouTube polymer 同步内部 model
+    ytEditor.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: text }));
+    log('评论框命中: YouTube contenteditable');
+    return true;
+  }
+  // 3b. 占位还没点开（调用方 expand 失败/评论区懒加载时）：点占位再等编辑器出现后填入
+  const ytPlaceholder = document.querySelector('ytd-comment-simplebox-renderer #placeholder-area')
+    || document.querySelector('#placeholder-area')
+    || document.querySelector('#simplebox-placeholder');
+  if (ytPlaceholder) {
+    ytPlaceholder.click();
+    log('YouTube 占位补点，等待编辑器挂载');
+    for (let i = 0; i < 15; i++) {
+      await new Promise((r) => setTimeout(r, 200));
+      const retry = document.querySelector('ytd-commentbox #contenteditable-root')
+        || document.querySelector('#contenteditable-root');
+      if (retry && !isInCommentItem(retry)) {
+        return fillCommentInput(text);
+      }
+    }
+    log('YouTube 占位补点后仍无编辑器');
   }
   // 4. 递归穿透所有 shadow DOM（bili-comments 等嵌套组件）
   const bc = document.querySelector('bili-comments') || document.querySelector('[class*="comment"]');
