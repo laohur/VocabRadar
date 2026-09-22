@@ -1064,7 +1064,10 @@ async function toggleASR(clickX, clickY) {
           console.log('[VocabRadar][asr][' + _t + ']', '[' + s.stage + ']', s.info || '');
           // 第一百一十三次（用户裁定）：回退实时模式时漂浮几秒提示——即时识别落后播放，
           // 建议先下载识别再播放（下载失败可用录制工作流）。仅提示一次/会话。
-          if (s.stage === 'fallback-start' && !toggleASR._rtTipShown) {
+          // 378次：触发点从 fallback-start 移到 fallback——按下即录后 fallback-start 每次点击
+          //   都会立即出现（下载并行后台跑），此时弹"实时慢"提示会误导；改为确认下载失败、
+          //   录音兜底继续时才提示。
+          if (s.stage === 'fallback' && !toggleASR._rtTipShown) {
             toggleASR._rtTipShown = true;
             try { toast(t('asr.rtSlowTip'), { duration: 8000 }); } catch (e) { /* ignore */ }
           }
@@ -1570,10 +1573,11 @@ function applyColorSettings(settings) {
   rootStyle.setProperty('--beaver-first-fg', firstFg);
   rootStyle.setProperty('--beaver-later-bg', settings.hintLaterBg || firstBg);
   rootStyle.setProperty('--beaver-later-fg', settings.hintLaterFg || firstFg);
-  // 注释配色 = 单词配色的前后景互换（annFg=单词底色）。
-  // 302次（用户"注释也应当没有背景色"）：annBg 默认改透明（显式 popup 色此前已不读，保持）。
-  rootStyle.setProperty('--beaver-ann-bg', 'transparent');
-  rootStyle.setProperty('--beaver-ann-fg', firstBg);
+  // 378次（用户"注释没有跟随样式，而是变成了无色"）：删除本函数对
+  //   --beaver-ann-bg/fg 的硬写（旧值 transparent/firstBg）。
+  //   此处与 th/core.js applyColorVars 写同一 documentElement 节点，storage 监听
+  //   异步后写覆盖了条目样式（pickColors 条目优先）已写的注释色，导致有色条目注释无色。
+  //   默认值由 sidebar.css :root 兜底，注释色完全交由条目样式/pool CSS 提供。
 }
 
 /**

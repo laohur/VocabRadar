@@ -265,8 +265,13 @@ async function _hintBoot() {
         _impl.applyTextStyleClass(changes.textStyle.newValue);
       }
       // 301次：个性化/用户条目变化 → 刷新 extra 文本规则（无需重扫；类名不变即时生效）
+      // 377次：注释区字段改读 textStyle 同一条目，池条目编辑（annBg/annFg/圆角/字号/
+      //   斜体）也须重派颜色变量 → 补 updateColors
       if ('annotationCustom' in changes || 'annotationUserStyles' in changes) {
-        _hintGetSettings().then((s) => _impl.refreshAnnExtraCss(s.annotationCustom, s.annotationUserStyles));
+        _hintGetSettings().then((s) => {
+          _impl.refreshAnnExtraCss(s.annotationCustom, s.annotationUserStyles);
+          _impl.updateColors(s);
+        });
       }
       // 阈值变化 → 重扫
       if ('rankThreshold' in changes) {
@@ -300,9 +305,9 @@ async function _hintBoot() {
         'hintFirstEnabled', 'hintFirstBg', 'hintFirstFg',
         'hintLaterEnabled', 'hintLaterBg', 'hintLaterFg',
         // 侧邻注释（2026-08-05）：注释底色/字色变化热更新；开关变化需重扫
+        // 377次：annotationStyle（文本侧栏栏指派）移出——pickColors 不再读它，
+        //   web-sidebar.js 已独立监听该键（142行），文本侧栏不受影响
         'hintSideAnnotation', 'hintAnnotationBg', 'hintAnnotationFg',
-        // 279次：注释样式候选池——池 id 变化热更新 pickColors（无需重扫）
-        'annotationStyle',
         // 280次：统一池——textStyle 条目 wordBg/wordFg 参与变量派生，变化也热更
         'textStyle'
       ];

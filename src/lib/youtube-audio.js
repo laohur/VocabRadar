@@ -82,7 +82,9 @@ export async function getYoutubeAudioInfo() {
         if (!reasons.some((r) => r.startsWith(client + ':'))) reasons.push(client + ': no audio format' + ((info.playability_status && info.playability_status.status) ? (' playability=' + info.playability_status.status) : ''));
         continue;
       }
-      const url = fmt.decipher(yt.session.player);
+      // 378次（用户"识别按下并不开始录音，下载失败后才录"）：decipher 为 async，
+      //   此前漏 await 返回 Promise 恒真值，`!url` 检查失效、下载必败——补 await。
+      const url = await fmt.decipher(yt.session.player);
       if (!url) { reasons.push(client + ': decipher empty'); continue; }
       const title = info.basic_info?.title || info.page?.[0]?.video_details?.title || 'youtube_audio';
       console.log(`[VocabRadar][youtube-audio] 音频就绪 client=${client}:`, title, fmt.mime_type, Math.round((fmt.content_length || 0) / 1024) + 'KB');

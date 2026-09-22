@@ -284,12 +284,24 @@ export async function startASR(opts) {
   _running = true;
   _biliLoopAborted = false;
 
-  // 2. 并行准备 B站音频（下载+解码+重采样，不等模型就绪）
-  let audioInfo = null;
-  try {
-    audioInfo = await prepareBilibiliAudio(videoEl);
-  } catch (e) {
-    console.warn('[VocabRadar][asr-client][' + _ts() + '] B站音频准备失败:', e.message || e);
+  // 2. 按下即录（378次，用户"识别按下并不开始录音，而是尝试下载音频失败后才开始录音"）：
+  //   旧版串行 await prepareBilibiliAudio——下载准备（meta 15s 超时+分块下载）期间无任何
+  //   录音/识别活动，失败后才回退 captureStream。现改为：点击立即启动 captureStream 录音
+  //   （有 _pendingRecordedBlob 时除外——外部录音 Blob 解码快且确定，无需重复采集），
+  //   下载准备并行后台跑；就绪后停录音切换下载件识别，失败则录音继续（回退语义保留）。
+  let captureActive = false;
+  if (!_pendingRecordedBlob) {
+    try {
+      await startFallbackCapture(videoEl);
+      // 320次：capture 计数入 _methodFails（诊断用——capture 无同层替代方法，仅记录成败）。
+      _methodFails.capture = 0;
+      captureActive = true;
+    } catch (e) {
+      // 即时录音失败不整体失败（如跨域媒体无音轨）：下载路径仍可能成功；两者都失败
+      // 才在下方 else 分支终败（保持旧版「音频采集启动失败」语义）。
+      _methodFails.capture++;
+      console.warn('[VocabRadar][asr-client][' + _ts() + '] 即时录音启动失败，等待下载路径:', e.message || e);
+    }
   }
 
   // 3. 等 offscreen 就绪（识别段需要 offscreen 接收）
@@ -300,8 +312,24 @@ export async function startASR(opts) {
     throw new Error('ASR start failed in service worker: ' + ((started && started.error) || 'no response'));
   }
 
-  // 4. 音频已就绪 → 开始识别循环；否则回退到 captureStream
+  // 4. 下载准备并行后台跑（不等模型/录音；期间录音照常采集）
+  let audioInfo = null;
+  try {
+    audioInfo = await prepareBilibiliAudio(videoEl);
+  } catch (e) {
+    console.warn('[VocabRadar][asr-client][' + _ts() + '] B站音频准备失败:', e.message || e);
+  }
+
+  // 5. 下载就绪 → 停录音切换下载件识别；否则录音继续（按下即录兜底）
   if (audioInfo) {
+    if (captureActive) {
+      stopFallbackCapture();
+      captureActive = false;
+      // 切换前录音已发的段可能仍有在途响应（ASR_SEGMENT 按 videoKey 匹配即解除
+      // _pendingResolve），本就仅影响日志归因与重试自愈，不丢文本；缓存开启时
+      // bili 循环还会按已监听区间跳过重叠段。
+      pushStatusLocal('switch-download', 'downloaded audio ready, switched from realtime capture');
+    }
     // 第九十六次：立即建立播放闸门——前沿=点击位置所在段起始，
     // sidebar 收到 'gate' 状态即暂停视频等待首批（约 asrFirstChunkSec 秒）识别完成后放行。
     // 修复旧版「模型加载+下载期间视频照常跑几十秒 → 字幕永远追不上」。
@@ -313,15 +341,18 @@ export async function startASR(opts) {
       if (_onError) { try { _onError(e); } catch (e2) { /* ignore */ } }
     });
   } else {
-    pushStatusLocal('fallback', 'Bili pre-recognition unavailable, falling back to captureStream');
-    // 320次：capture 计数入 _methodFails（诊断用——capture 无同层替代方法，仅记录成败）。
-    try {
-      await startFallbackCapture(videoEl);
-      _methodFails.capture = 0;
-    } catch (e) {
-      _methodFails.capture++;
-      stopASR();
-      throw new Error('音频采集启动失败: ' + String(e.message || e));
+    pushStatusLocal('fallback', 'download unavailable, realtime capture continues');
+    if (!captureActive) {
+      // 即时录音未启动（recordedBlob 解码转常规后站点路径全败，或 captureStream 不可用）→
+      // 此处补启；再失败才整体失败。
+      try {
+        await startFallbackCapture(videoEl);
+        _methodFails.capture = 0;
+      } catch (e) {
+        _methodFails.capture++;
+        stopASR();
+        throw new Error('音频采集启动失败: ' + String(e.message || e));
+      }
     }
   }
 

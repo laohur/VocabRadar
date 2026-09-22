@@ -73,7 +73,8 @@ const ASR_INTERNAL_STAGES = new Set([
   'bili-dl', 'bili-dl-ok', 'bili-dl-retry',     // 后台下载细节
   'bili-backfill', 'bili-backfill-recog',       // 回填细节
   'yt-audio',                                   // YouTube 取流细节
-  'fallback', 'fallback-start', 'fallback-snap', 'fallback-silent', 'fallback-skip', 'fallback-pcm'
+  'fallback', 'fallback-start', 'fallback-snap', 'fallback-silent', 'fallback-skip', 'fallback-pcm',
+  'switch-download'                             // 378次：按下即录后下载就绪切换（紧随 gate 推送，无需上进度条）
 ]);
 // 第一百一十次：简单模板插值（'Recognizing {i}/{n}'）
 export function fmtTpl(tpl, params) {

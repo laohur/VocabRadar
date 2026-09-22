@@ -406,23 +406,28 @@ export function pickColors(s) {
   //   + 白字，用户反馈"为何把透明当作黑色——透明就透明，直视背景色，不要设定它色"。
   //   修正：底色非不透明时，注释底=transparent（直显页面背景），注释字=wordFg（可读同色系）；
   //   底色实底时保持"前后景互换"（注释底=wordFg，注释字=wordBg）。
-  // 反思（2026-08-18 第七十三次修正）：popup 可独立设置注释配色（hintAnnotationBg/Fg），
-  //   旧版忽略这两个字段永远用派生色 → "选的样式跟实际展现的没关系"。
-  //   修正：显式设置优先；未设置时仍走派生（实底→前后景互换，透明底→透明+同色系）。
+  // 377次（用户裁定"样式条目优先"；第376次方案撤销复盘）：注释区字段改读网页提示
+  //   自己的条目（txtSt，即 textStyle 指派）——旧版读 s.annotationStyle（文本侧栏
+  //   栏指派），换网页提示样式时释义纹丝不动；且 popup 显式值（默认 #ffffff）恒非空
+  //   把池条目永远压住。新优先级：条目显式定义（含 transparent）> popup 取色 > 派生。
+  //   无联动写：池卡/个性化/用户条目/诊断窗任何写入路径都自动生效。
+  //   合成组6条（fade/skew 等无颜色字段）条目值 undefined → popup 取色/派生接管。
   const explicitAnnBg = s.hintAnnotationBg;
   const explicitAnnFg = s.hintAnnotationFg;
-  // 279次：注释样式候选池共享——annotationStyle 命中池条目（ANN_STYLES）时，
-  //   侧邻注释色取条目 annBg/annFg；优先级：显式 hintAnnotationBg/Fg > 池条目 >
-  //   默认派生（'none' 无 annBg/annFg 字段，自然落到派生分支，行为与旧版一致）。
-  // 301次：同上走 resolveAnnEntry（custom/用户条目）。
-  const annSt = resolveAnnEntry(s.annotationStyle, s.annotationCustom, s.annotationUserStyles);
   const opaque = isOpaqueBg(wordBg);
-  // 302次（用户"注释也应当没有背景色"）：默认派生改透明底（显式设置与池条目照旧优先）。
+  // 302次（用户"注释也应当没有背景色"）：默认派生改透明底。
   // 308次：wordFg='inherit'（生词不变色条目）派生注释字色时无实色可用，
   //   回落主题绿 #2e6b43（与 Green Underline 自带 annFg 同值）。
-  const annBg = explicitAnnBg || (annSt && annSt.annBg) || 'transparent';
-  const annFg = explicitAnnFg || (annSt && annSt.annFg)
-    || (opaque ? wordBg : (wordFg === 'inherit' ? '#2e6b43' : wordFg));
+  const annBg = (txtSt && txtSt.annBg !== undefined) ? txtSt.annBg
+    : (explicitAnnBg || 'transparent');
+  const annFg = (txtSt && txtSt.annFg !== undefined) ? txtSt.annFg
+    : (explicitAnnFg || (opaque ? wordBg : (wordFg === 'inherit' ? '#2e6b43' : wordFg)));
+  // 377次：注释圆角/字号/斜体跟随同栏条目（用户裁定跟随）——经 applyColorVars
+  //   写 --beaver-ann-radius/-font-size/-font-style 变量生效（静态规则引用变量，
+  //   不产生 per-style 选择器，避免 .beaver-side-ann 共用类名泄漏到叠加字幕）。
+  const annRadius = txtSt && txtSt.radius;
+  const annFontSize = txtSt && txtSt.fontSize;
+  const annFontStyle = (txtSt && txtSt.italic) ? 'italic' : undefined;
   return {
     firstEnabled: true,          // 首次出现总是高亮（不再有开关）
     firstBg: wordBg,             // 生词底色（亮色高亮，吸睛）
@@ -433,7 +438,11 @@ export function pickColors(s) {
     // 侧邻注释：开关 + 注释底色/字色（自动派生自单词配色，前后景互换；透明底则透明+同色系）
     sideAnnotation: s.hintSideAnnotation === true,
     annBg,
-    annFg
+    annFg,
+    // 377次：注释形状跟随同栏条目（undefined 时 applyColorVars 侧回落默认值）
+    annRadius,
+    annFontSize,
+    annFontStyle
   };
 }
 
@@ -447,6 +456,24 @@ export function applyColorVars() {
   // 侧邻注释配色变量（视频提示字幕/视频内字幕复用）
   root.style.setProperty('--beaver-ann-bg', thState.colors.annBg);
   root.style.setProperty('--beaver-ann-fg', thState.colors.annFg);
+  // 377次：注释圆角/字号/斜体跟随网页提示同栏条目——条目未定义字段时移除变量，
+  //   静态规则回落默认值（radius 3px / 0.9em / normal）。仅本文件静态规则引用，
+  //   不外泄到视频侧栏（其 .beaver-ann-inline 只共用 bg/fg 两个变量）。
+  if (thState.colors.annRadius !== undefined) {
+    root.style.setProperty('--beaver-ann-radius', thState.colors.annRadius);
+  } else {
+    root.style.removeProperty('--beaver-ann-radius');
+  }
+  if (thState.colors.annFontSize !== undefined) {
+    root.style.setProperty('--beaver-ann-font-size', thState.colors.annFontSize);
+  } else {
+    root.style.removeProperty('--beaver-ann-font-size');
+  }
+  if (thState.colors.annFontStyle !== undefined) {
+    root.style.setProperty('--beaver-ann-font-style', thState.colors.annFontStyle);
+  } else {
+    root.style.removeProperty('--beaver-ann-font-style');
+  }
   // 反思（2026-08-06）：后续出现可见性由 CSS 类控制，不重扫
   //   laterEnabled=false → 加 .beaver-hide-later（后续高亮透明）
   //   laterEnabled=true  → 移除类（后续高亮正常显示）
@@ -569,10 +596,12 @@ export function injectStyles() {
     .${SIDE_ANN_CLASS} {
       background: var(--beaver-ann-bg, transparent) !important;
       color: var(--beaver-ann-fg, #2e6b43) !important;
-      border-radius: 3px !important;
+      /* 377次：圆角/字号/斜体经变量跟随同栏样式条目（变量未设时回落旧默认值） */
+      border-radius: var(--beaver-ann-radius, 3px) !important;
       padding: 0 2px !important;
       margin-left: 1px !important;
-      font-size: 0.9em !important;
+      font-size: var(--beaver-ann-font-size, 0.9em) !important;
+      font-style: var(--beaver-ann-font-style, normal) !important;
       font-weight: inherit !important;
     }
     /* 反思（2026-08-13 第五十一次）：文本样式差异化。
