@@ -326,6 +326,41 @@ function withContext(question) {
 }
 
 /**
+ * 第407次：流式聊天通道——用 chrome.runtime.connect({name:'llm-chat'}) 建长连，
+ *   SW 每收到一段 delta 就推一条 {type:'delta',text}，结束时发 {type:'done',...}。
+ *   一次性 runtime.sendMessage 无法承载多次推送，流式必须走 Port。
+ * @param {Array<{role: string, content: string}>} messages 对话上下文
+ * @param {(text: string) => void} onDelta 每收到一段增量文本回调一次
+ * @returns {Promise<{ok: boolean, content?: string, error?: string, needConfig?: boolean, partial?: boolean}>}
+ */
+function llmChatStream(messages, onDelta) {
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    const port = chrome.runtime.connect({ name: 'llm-chat' });
+    port.onMessage.addListener((msg) => {
+      if (!msg) return;
+      if (msg.type === 'delta') {
+        if (onDelta) onDelta(String(msg.text || ''));
+        return;
+      }
+      if (msg.type === 'done') {
+        settled = true;
+        resolve(msg);
+        port.disconnect();
+      }
+    });
+    port.onDisconnect.addListener(() => {
+      // SW 中途崩溃/重启：未等到 done 就断开，如实报错
+      if (!settled) {
+        settled = true;
+        reject(new Error('LLM channel closed unexpectedly'));
+      }
+    });
+    port.postMessage({ type: 'start', messages });
+  });
+}
+
+/**
  * 发送一条用户消息并渲染模型回复
  * @param {string} content 用户消息
  */
@@ -338,10 +373,22 @@ async function sendMessage(content) {
   _history.push({ role: 'user', content });
   const pending = appendMsg('bot', t('chat.thinking'));
   try {
-    const resp = await chrome.runtime.sendMessage({ type: 'LLM_CHAT', messages: _history });
-    if (resp && resp.ok && resp.content) {
+    // 第407次：走流式 Port 通道，气泡随 delta 原地增长，消除长输出黑盒等待
+    const bodyEl = _shadow.querySelector('.body');
+    let acc = '';
+    const resp = await llmChatStream(_history, (chunk) => {
+      acc += chunk;
+      pending.textContent = acc;
+      bodyEl.scrollTop = bodyEl.scrollHeight;
+    });
+    if (resp.ok && resp.content) {
       pending.textContent = resp.content;
       _history.push({ role: 'assistant', content: resp.content });
+    } else if (resp.partial && resp.content) {
+      // 已有部分输出后中断：保留已显示内容，附上原始错误（不遮蔽）；本轮不进上下文
+      pending.className = 'msg err';
+      pending.textContent = resp.content + '\n[' + t('chat.failed') + '：' + resp.error + ']';
+      _history.pop();
     } else {
       // 不遮蔽错误：把后台返回的原始错误原文显示出来，便于用户与诊断
       pending.className = 'msg err';

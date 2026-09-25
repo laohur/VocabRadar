@@ -2,20 +2,20 @@
 // 职责（供 parser.js 调用，不碰 Parser 的 DOM 状态机）：
 //   1) 录制（microphone/camera/screen）：复用 asr.js 的 acquireMediaStream/handleAcquireError
 //      （用户手势内取流、授权错误分类），MediaRecorder 收录，停止后产出 File 交回调；
-//      实时识别（256 次补回，用户"实时asr没有了"）：镜像 asr.js 引擎优先级——API 引擎已配置
+//      实时识别（256 次补回，用户"实时asr没有了"）：镜像 asr.js 引擎优先级——LLM 引擎已配置
 //      则不走实时（停止后整段转写）；否则 audio/video 且浏览器支持 SpeechRecognition 时
 //      实时识别，句子经 onLiveText 流入输出区；screen/不支持 → 停止后文件转写兜底；
-//   2) 音视频文件转写：走与 asr.js 文件 ASR 完全相同的后台消息协议
-//      （START_ASR → 本地 Whisper 分段 ASR_AUDIO_SEGMENT / API 引擎整段 ASR_LLM_FILE →
-//      ASR_SEGMENT/ASR_ERROR 回传 → STOP_ASR），只收纯文本、不挂侧栏不注释。
-// 255 次缺陷修复存档（用户报"pendingResolve is not defined"）：sendSegment 为模块级函数，
-//   却给 transcribeAvFile 函数本地的 pendingResolve 赋值——ESM 严格模式下对未声明标识符
-//   赋值直接 ReferenceError；改用调用方传入的 segState 载体对象共享（256 次）。
+//   2) 音视频文件转写：与 asr.js 文件 ASR 同一在线 LLM 整段路径
+//      （ASR_LLM_FILE → sendMessage 回包），只收纯文本、不挂侧栏不注释。
+// 第三百九十四次（plan 阶段二③，用户裁定"扩展不再保留这两个模型"）：whisper 本地分段
+//   路径（START_ASR/STOP_ASR 握手、段监听器、segState、sendSegment）随模型移除一并删除，
+//   只剩 ASR_LLM_FILE 整段单一路径；255/256 次的 sendSegment/segState 缺陷存档随之失锚，从略。
 
 import { t } from '../lib/i18n.js';
+import { resolveLlmConfig } from '../lib/llm.js';
 import { $, log, toast } from './guide-common.js';
 import {
-  acquireMediaStream, handleAcquireError, decodeFileToPcm, arrayBufferToBase64
+  acquireMediaStream, handleAcquireError, arrayBufferToBase64
 } from './asr.js';
 
 // === 录制状态（Parser 栏专用，独立于 ASR 栏的 S.recording* 状态） ===
@@ -91,18 +91,22 @@ export async function startParserRecording(kind, onLiveText, onStream) {
     rec.btn.textContent = '⏹ ' + t('ws.stop');
   }
   // 实时识别（256 次补回）：条件镜像 asr.js useBrowserAsr——
-  //   API 引擎已配置 → 不实时（停止后整段 API 转写）；screen → 不实时（停止后转写）；
+  //   LLM 引擎已配置 → 不实时（停止后整段 LLM 转写）；screen → 不实时（停止后转写）；
   //   其余 audio/video 且浏览器支持 SpeechRecognition → 实时识别，句子流入输出区。
   liveNetErrShown = false;
   let llmReady = false;
   let lang = 'en';
   try {
     const er = await chrome.storage.local.get({
-      asrEngine: 'local', asrLlmBaseUrl: '', asrLlmApiKey: '', learnLanguage: 'en'
+      asrLlmProvider: 'local-backend', asrLlmBaseUrl: '', asrLlmModel: '', asrLlmApiKey: '', learnLanguage: 'en'
     });
-    llmReady = (er.asrEngine === 'api' || er.asrEngine === 'llm') && !!(er.asrLlmBaseUrl || er.asrLlmApiKey);
+    const cfg = resolveLlmConfig({
+      llmProvider: er.asrLlmProvider, llmBaseUrl: er.asrLlmBaseUrl,
+      llmModel: er.asrLlmModel, llmApiKey: er.asrLlmApiKey
+    });
+    llmReady = !!cfg.baseUrl && !!cfg.model;
     lang = er.learnLanguage || 'en';
-  } catch (e) { /* 默认本地 */ }
+  } catch (e) { /* 保持 false，走浏览器 SR 或停止后转写报错 */ }
   const srSupported = !!(window.SpeechRecognition || window.webkitSpeechRecognition);
   if (kind !== 'screen' && !llmReady && srSupported && typeof onLiveText === 'function') {
     startLiveAsr(lang, onLiveText);
@@ -230,144 +234,27 @@ export async function stopParserRecording() {
 export async function transcribeAvFile(file, onStatus) {
   if (!chrome.runtime?.id) throw new Error(t('ws.extUpdated'));
   const report = typeof onStatus === 'function' ? onStatus : () => {};
-  const videoKey = 'parser-' + Date.now() + '-' + Math.random().toString(36).slice(2, 8);
 
-  // 段响应等待（镜像 asr.js sendSegmentAndWait：keepalive + 超时跳段，不遮蔽——超时打日志）
-  // 反思（256 次）：段解析器 sendSegment 是模块级函数，与监听器共享 pending 必须经调用方
-  //   传入的载体对象——255 次直接赋值模块级未声明标识符 pendingResolve，ESM 严格模式
-  //   ReferenceError（用户报"Parse failed: pendingResolve is not defined"根因）。
-  const segState = { pending: null };
-  const listener = (msg) => {
-    if (!msg || typeof msg !== 'object') return false;
-    if (msg.type === 'ASR_STATUS') {
-      // 广播消息（无 videoKey）：ready/loading/stage 转 onStatus 供输出区显示
-      if (msg.status === 'ready') report(t('ws.modelReady'), '');
-      else if (msg.status === 'loading') report(t('ws.modelDownloading', { pct: Math.round(msg.progress || 0) }), msg.file || '');
-      else if (msg.status === 'stage' && msg.stage) report(t('ws.stageRecognizingSeg'), msg.info || '');
-      return true;
-    }
-    if (msg.videoKey !== videoKey) return false;
-    if (msg.type === 'ASR_SEGMENT') {
-      if (segState.pending) { const r = segState.pending; segState.pending = null; r(msg); }
-      return true;
-    }
-    if (msg.type === 'ASR_ERROR') {
-      const errStr = String(msg.error || '');
-      report(t('ws.error'), errStr.slice(0, 60));
-      if (segState.pending) { const r = segState.pending; segState.pending = null; r(null); }
-      return true;
-    }
-    return false;
-  };
-  chrome.runtime.onMessage.addListener(listener);
-
-  const texts = [];
-  const takeText = (msg) => {
-    if (!msg) return;
-    if (msg.chunks && msg.chunks.length > 0) {
-      for (const chunk of msg.chunks) {
-        const text = (chunk.text || '').trim();
-        if (text) texts.push(text);
-      }
-    } else if (msg.text) {
-      const trimmed = String(msg.text).trim();
-      // 无 chunks 的整段回包（API 引擎/单段）：按句切分入列，与 asr.js 口径一致
-      if (trimmed) {
-        const lines = trimmed.split(/\n+|[。！？.!?]+/).map((s) => s.trim()).filter(Boolean);
-        if (lines.length === 0) texts.push(trimmed);
-        else texts.push(...lines);
-      }
-    }
-  };
-
-  try {
-    const startResp = await chrome.runtime.sendMessage({ type: 'START_ASR', videoKey });
-    if (!startResp || !startResp.ok) {
-      throw new Error(t('ws.asrStartFail') + ((startResp && startResp.error) || t('ws.noResponse')));
-    }
-    report(t('ws.decoding'), '');
-
-    // 引擎选择（与设定栏一致：api=OpenAI 兼容转写整段；其余=本地 Whisper 分段）
-    let asrLlmModel = null;
-    try {
-      const er = await chrome.storage.local.get({ asrEngine: 'local', asrLlmModel: 'whisper-1' });
-      if (er.asrEngine === 'api' || er.asrEngine === 'llm') asrLlmModel = er.asrLlmModel || 'whisper-1';
-    } catch (_) { /* 默认本地 */ }
-
-    if (asrLlmModel) {
-      report(t('ws.recognizing'), 'LLM');
-      const buf = await file.arrayBuffer();
-      const resp = await new Promise((resolve) => {
-        chrome.runtime.sendMessage({
-          type: 'ASR_LLM_FILE',
-          fileName: (file && file.name) || 'audio.webm',
-          audioB64: arrayBufferToBase64(buf),
-          model: asrLlmModel
-        }).then(resolve).catch((e) => resolve({ ok: false, error: String(e.message || e) }));
-      });
-      if (!resp || !resp.ok) throw new Error(String((resp && resp.error) || 'LLM 转写失败'));
-      takeText({ text: resp.text || '' });
-      report(t('ws.recognizeDone'), 'LLM');
-    } else {
-      const pcm = await decodeFileToPcm(file);
-      const SAMPLE_RATE = 16000;
-      const SEGMENT_SEC = 300;
-      const segLen = SEGMENT_SEC * SAMPLE_RATE;
-      const total = Math.max(1, Math.ceil(pcm.length / segLen));
-      for (let i = 0; i < pcm.length; i += segLen) {
-        const seg = pcm.slice(i, Math.min(i + segLen, pcm.length));
-        const start = i / SAMPLE_RATE;
-        const end = Math.min((i + segLen) / SAMPLE_RATE, pcm.length / SAMPLE_RATE);
-        report(t('ws.recognizing'), `${i / segLen + 1}/${total} ${t('ws.segments')}`);
-        const msg = await sendSegment(seg, start, end, videoKey, segState);
-        takeText(msg);
-      }
-      report(t('ws.recognizeDone'), `${total} ${t('ws.segments')}`);
-    }
-  } finally {
-    try { chrome.runtime.sendMessage({ type: 'STOP_ASR' }).catch(() => { /* ignore */ }); } catch (e) { /* ignore */ }
-    chrome.runtime.onMessage.removeListener(listener);
-  }
-  return texts.join('\n');
-}
-
-/** 单段发送并等待响应（含 ASR_CHECK keepalive 与超时，镜像 asr.js；pending 经 segState 共享） */
-function sendSegment(pcm, start, end, videoKey, segState) {
-  return new Promise((resolve) => {
-    let settled = false;
-    const segDur = Math.max(10, end - start);
-    const timeoutMs = Math.max(180000, segDur * 3 * 1000);
-    const keepAlive = setInterval(() => {
-      if (settled) { clearInterval(keepAlive); return; }
-      chrome.runtime.sendMessage({ type: 'ASR_CHECK' }).catch(() => {});
-    }, 20000);
-    const timeout = setTimeout(() => {
-      if (settled) return;
-      settled = true;
-      clearInterval(keepAlive);
-      segState.pending = null;
-      log('Parser 转写段超时(' + (timeoutMs / 1000) + 's), 跳过:', start + 's-' + end + 's');
-      resolve(null);
-    }, timeoutMs);
-    const resolveNow = (msg) => {
-      if (settled) return;
-      settled = true;
-      clearInterval(keepAlive);
-      clearTimeout(timeout);
-      resolve(msg);
-    };
-    segState.pending = resolveNow;
-    let pcmBuf = pcm;
-    if (pcm instanceof Float32Array && (pcm.byteOffset !== 0 || pcm.byteLength !== pcm.buffer.byteLength)) {
-      pcmBuf = pcm.slice();
-    }
+  // 在线 LLM 整段单一路径（镜像 asr.js 文件 ASR：ASR_LLM_FILE 直接 sendMessage 回包；
+  //   model 不随 payload 传——后台 resolveLlmEngineCfg 自取 ASR 引擎配置）
+  report(t('ws.recognizing'), 'LLM');
+  const buf = await file.arrayBuffer();
+  const resp = await new Promise((resolve) => {
     chrome.runtime.sendMessage({
-      type: 'ASR_AUDIO_SEGMENT',
-      videoKey,
-      start,
-      end,
-      audio: (pcmBuf instanceof Float32Array) ? pcmBuf.buffer : new Float32Array(pcmBuf).buffer,
-      returnTimestamps: true
-    }).catch((e) => log('Parser 转写段发送失败:', e));
+      type: 'ASR_LLM_FILE',
+      fileName: (file && file.name) || 'audio.webm',
+      audioB64: arrayBufferToBase64(buf)
+    }).then(resolve).catch((e) => resolve({ ok: false, error: String(e.message || e) }));
   });
+  if (!resp || !resp.ok) throw new Error(String((resp && resp.error) || 'LLM 转写失败'));
+  // 整段回包按句切分入列，与 asr.js 口径一致（无语音时空串，交调用方处理）
+  const texts = [];
+  const trimmed = String(resp.text || '').trim();
+  if (trimmed) {
+    const lines = trimmed.split(/\n+|[。！？.!?]+/).map((s) => s.trim()).filter(Boolean);
+    if (lines.length === 0) texts.push(trimmed);
+    else texts.push(...lines);
+  }
+  report(t('ws.recognizeDone'), 'LLM');
+  return texts.join('\n');
 }

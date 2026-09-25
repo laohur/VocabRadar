@@ -5,8 +5,8 @@
 //       HTML/正则/CSS 选择器转义。
 // 来源：拆分自 src/content/video-sidebar.js（2026-08-28 拆分第二刀，纯机械搬移）。
 // 关系：依赖 ./logger.js（copyToClipboard 内 log）。被门面与
-//       ./comment-fill.js、./playback-gate.js、./asr-stage.js、./record-workflow.js、
-//       ./ocr.js 引用。
+//       ./comment-fill.js、./playback-gate.js、./asr-stage.js、
+//       ./ocr.js 引用（record-workflow.js 已随第398次退役删除）。
 // =============================================================================
 
 import { log } from './logger.js';

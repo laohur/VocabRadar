@@ -1,0 +1,14 @@
+{
+  "backend": { "version": "0.1.0" },
+  "llamacpp": {
+    "release": "latest",
+    "_release_note": "latest release 仅挂 nightly-tag.txt（版本探测文件）；install.py 读其内容得 tag 后到该 tag 的 release 资产里按通配符匹配（2026-09-23 实机核实，b11118 起命名）。",
+    "assets": {
+      "win-x64": ["llama-*bin-win-vulkan-x64.zip"],
+      "win-x64-cuda": ["cudart-llama-bin-win-cuda-13.4-x64.zip", "llama-*bin-win-cuda-13.4-x64.zip"],
+      "win-x64-cpu": ["llama-*bin-win-cpu-x64.zip"],
+      "linux-x64": ["llama-*bin-ubuntu-x64.tar.gz"],
+      "osx-arm64": ["llama-*bin-macos-arm64.tar.gz"]
+    }
+  }
+}

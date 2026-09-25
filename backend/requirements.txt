@@ -1,0 +1,16 @@
+flask>=3.0
+yt-dlp
+huggingface_hub>=0.26
+requests>=2.31
+# ASR 引擎 faster-whisper（CTranslate2，档位全名如 large-v3-turbo；第404次：qwen3-asr 备选
+# 整体移除，见 change.log）；av 即 PyAV（PyPI 项目名是 av，pip 26 下别名 PyAV
+# 解析不到）为其解码依赖，webm/m4a 等非 wav 格式靠它（faster-whisper 自带
+# av 依赖声明，此处显式钉下限）
+av>=14.0
+faster-whisper>=1.1
+# OCR 备选引擎（plan-backend §2.5）：纯 CPU，PP-OCR 模型随包分发无需下载；
+# 默认引擎走 LLM 多模态（复用 llama-server + mmproj），不依赖本段
+rapidocr>=2.0
+onnxruntime
+# imageio-ffmpeg 不在本表（第404次）：系统 PATH 已有 ffmpeg 则不装；
+# 缺失时由 install.py 按需补装（yt-dlp 的 HLS/合流执行器兜底）

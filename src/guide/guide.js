@@ -133,22 +133,9 @@ const TRANS_CH_IDS = [['transChLlm', 'llm'], ['transChBuiltin', 'builtin'], ['tr
   ['transChYoudaodict', 'youdaodict'], ['transChMymemory', 'mymemory'], ['transChGoogle', 'google'],
   ['transChYoudao', 'youdao'], ['transChBaidu', 'baidu'], ['transChBing', 'bing'], ['transChLingva', 'lingva']];
 
-// 目标/释义/界面语言 → Tesseract 语言代码映射（覆盖 TRANSLATE_LANGS 全 42 种），
-// OCR 本地复选框（renderOcrLangRow）动态渲染用，不写死三种语言。
-// 反思（2026-09-07）：tessdata 已改 CDN 回退链加载（见 offscreen.js TESSDATA_SOURCES，
-//   本地 vendor/tessdata 已删）。但 offscreen.resolveTessLang 仍只映射 zh→chi_sim、
-//   其余→eng 两档，未映射语言的复选框仍须禁用，否则勾了也只会用 eng 识别（如实呈现）。
-const TESS_LANG_CODES = {
-  ar: 'ara', bg: 'bul', bn: 'ben', ca: 'cat', cs: 'ces', da: 'dan', de: 'deu', el: 'ell',
-  en: 'eng', es: 'spa', fa: 'fas', fi: 'fin', fil: 'fil', fr: 'fra', he: 'heb', hi: 'hin',
-  hu: 'hun', id: 'ind', is: 'isl', it: 'ita', ja: 'jpn', ko: 'kor', lt: 'lit', lv: 'lav',
-  mk: 'mkd', ms: 'msa', nb: 'nor', nl: 'nld', pl: 'pol', pt: 'por', ro: 'ron', ru: 'rus',
-  sh: 'hrv', sk: 'slk', sl: 'slv', sv: 'swe', ta: 'tam', tr: 'tur', uk: 'ukr', ur: 'urd',
-  vi: 'vie', zh: 'chi_sim'
-};
-// resolveTessLang 已映射的 tess 代码（eng/chi_sim 走 CDN 回退链拉取，见 offscreen.js；
-// 新增映射须同步 offscreen.resolveTessLang）
-const BUNDLED_TESS_PACKS = new Set(['eng', 'chi_sim']);
+// 第三百九十四次（plan 阶段二③，用户裁定「扩展不再保留这两个模型」）：Tesseract 移除，
+//   语言→tess 代码映射（TESS_LANG_CODES）、BUNDLED_TESS_PACKS、renderOcrLangRow/
+//   collectOcrLangs 及 ocrLanguages 存储随本地 OCR 一并退役。
 
 // 使用说明（说明栏），分节渲染
 const HELP = [
@@ -506,24 +493,30 @@ async function loadSettings() {
     //   两键故意不进 defaults——回填时 undefined 即回退旧 queryEnabled，老用户旧值自动沿用
     //   （进了 defaults 会被 get 填 true，旧关值会被掩盖）；旧 queryEnabled 保留只读作回退
     queryEnabled: true,
-    // 第一百七十次：与唯一来源 src/data/config.json 的 asrModelSize 保持一致（原写 base.en，
-    //   与 config.json 的 base 不符，未设置过的用户会看到与实际生效值不同的选项）
-    asrModelSize: 'base',
     // 第一百七十次：对话大模型配置（llmBaseUrl/llmModel 留空 = 用所选来源的预置值）
     llmProvider: LLM_DEFAULT_PROVIDER,
     llmBaseUrl: '',
     llmModel: '',
     llmApiKey: '',
+    // 第401次：本地后端地址填空（完整 URL 含协议主机端口；留空 = 默认 127.0.0.1:7777）
+    backendBaseUrl: '',
     chatWordPrompt: CHAT_WORD_PROMPT,
     chatSidebarPrompt: CHAT_SIDEBAR_PROMPT,
-    chatContextMaxBytes: 10000,   // 第二百一十二次：对话上下文字节上限（默认 1 万字节，用户三度确认 [10 000]）
+    // 第397次：对话上下文字节上限默认改十万（plan-backend §4.3.2；出厂 config.json 同值。
+    //   第212次曾定 1 万并由用户三度确认，第357次出厂值先行改为 100000，此处补齐对齐）
+    chatContextMaxBytes: 100000,
     // 第二百二十三次：引擎改下拉两行式；补齐 asrLlm*/ocrLlm* 六键与 translationChannels/llmTranslatePrompt 默认
-    ocrEngine: 'tesseract',   // OCR 引擎（tesseract | api；第二百二十五次：值 'llm' 改名 'api'）
-    asrEngine: 'local',   // ASR 引擎（local whisper | api 转写；同上改名）
-    asrLlmModel: 'whisper-1',   // LLM 转写模型（用户自管，有错就报）
+    // 第三百九十三次：asrLlmProvider 显式化（此前缺省由 service-worker get 兜底 'openai'）；
+    //   两 provider 键值域由格式名（openai|anthropic）扩展为 provider id（含 backend 组）——
+    //   旧值 openai/anthropic 本身即 provider id，天然兼容无需迁移
+    // 第三百九十四次：ocrEngine/asrEngine 引擎键退役（whisper/tesseract 移除，只剩在线
+    //   一路，无引擎可分）；asrLlmProvider 默认改 'local-backend'（用户裁定「local-backend，
+    //   没有免key后缀」）
+    asrLlmProvider: 'local-backend',   // ASR 转写 API 来源（provider id；本地后端免 Key）
+    asrLlmModel: 'whisper-1',   // LLM 转写模型（用户自管，有错就报；本地后端忽略此值）
     asrLlmBaseUrl: '',   // 转写 API 接口地址（后台 resolveLlmEngineCfg('asr') 消费，此前无 UI）
     asrLlmApiKey: '',    // 转写 API Key（此前无 UI）
-    ocrLlmProvider: 'openai',   // OCR 视觉识别 API 格式（openai | anthropic）
+    ocrLlmProvider: 'openai',   // OCR 视觉识别 API 来源（provider id；本地后端免 Key）
     ocrLlmBaseUrl: '',
     ocrLlmModel: '',
     ocrLlmApiKey: '',
@@ -625,24 +618,18 @@ function renderAll(res) {
   updateRankMaxMin(); // 上界 spinner 起步值随动下界
   refreshRankMaxPlaceholder();
   $('annotateOov').checked = !!res.annotateOov;
-  // 第二百二十五次：引擎存储值定名 'api'（与 UI 词、语义一致，《命名清查》裁定）。
-  // 兼容读旧残留：223~224 次存过 'llm'，读侧归一化为 'api' 并回写一次（同样式 id 清洗模式）。
-  // 第二百二十六次：每行=引擎单选+该引擎细项（两行常驻），不再做细项行显隐切换。
-  const asrEng = (res.asrEngine === 'llm' || res.asrEngine === 'api') ? 'api' : 'local';
-  if (res.asrEngine === 'llm') chrome.storage.local.set({ asrEngine: 'api' });
-  document.querySelectorAll('input[name="asrEngine"]').forEach((r) => { r.checked = (r.value === asrEng); });
-  const ocrEng = (res.ocrEngine === 'llm' || res.ocrEngine === 'api') ? 'api' : 'tesseract';
-  if (res.ocrEngine === 'llm') chrome.storage.local.set({ ocrEngine: 'api' });
-  document.querySelectorAll('input[name="ocrEngine"]').forEach((r) => { r.checked = (r.value === ocrEng); });
-  // OCR 本地语言复选（界面/目标/释义三角色，值动态映射 tess 代码，默认全选——见 renderOcrLangRow）
-  renderOcrLangRow(res);
-  // ASR API 细项回填（地址/Key 此前无 UI；模型名保留 whisper-1 兜底）
+  // 第三百九十四次：asrEngine/ocrEngine 引擎 radio 回填退役（引擎键已删，只剩在线一路）
+  // ASR API 细项回填（第三百九十三次：来源下拉接入 renderEngineProviderSelect——ASR 裁剪
+  // free/anthropic 组（免费轮替与 Anthropic 均无音频转写端点，选了必失败）；模型名保留 whisper-1 兜底）
+  renderEngineProviderSelect($('asrLlmProvider'), res.asrLlmProvider || 'local-backend', ['backend', 'openai']);
+  applyEngineProviderHints('asr', $('asrLlmProvider').value, 'whisper-1');
   $('asrLlmBaseUrl').value = res.asrLlmBaseUrl || '';
   $('asrLlmApiKey').value = res.asrLlmApiKey || '';
   $('asrLlmModel').value = res.asrLlmModel || 'whisper-1';
-  // OCR API 细项回填（格式下拉 openai/anthropic，缺省 openai；地址/模型 placeholder 随格式给预置值）
-  $('ocrLlmProvider').value = (res.ocrLlmProvider === 'anthropic') ? 'anthropic' : 'openai';
-  applyOcrProviderHints($('ocrLlmProvider').value);
+  // OCR API 细项回填（第三百九十三次：静态两选项改动态 provider id 下拉（全组——free 轮替
+  // 端点支持 image_url、anthropic 视觉均已实现）；地址/模型 placeholder 随来源给预置值）
+  renderEngineProviderSelect($('ocrLlmProvider'), res.ocrLlmProvider || 'openai');
+  applyEngineProviderHints('ocr', $('ocrLlmProvider').value);
   $('ocrLlmBaseUrl').value = res.ocrLlmBaseUrl || '';
   $('ocrLlmModel').value = res.ocrLlmModel || '';
   $('ocrLlmApiKey').value = res.ocrLlmApiKey || '';
@@ -677,14 +664,7 @@ function renderAll(res) {
   // 277次（用户"引导页 视频叠加字幕默认选中"）：默认开——未设置视为勾选（!== false）
   // 308次：改回默认关——未设置视为未勾选（=== true），与 video-sidebar.js / defaults 同口径
   $('hitOverlay').checked = res.overlayEnabled === true;
-  // Whisper 模型下拉回填（第二百二十六次：由单选铺开改回下拉；storage 残留 offscreen 不支持的值时回落 base）
-  $('asrModelSize').value = res.asrModelSize || 'base';
-  if (!$('asrModelSize').value) {
-    // 第二百二十九次：非法残留值（如下拉里见到页面 URL 之类的串）回落 base 并回写，
-    //   防止每次进入引导页都回落显示、storage 却永远是脏值。
-    $('asrModelSize').value = 'base';
-    chrome.storage.local.set({ asrModelSize: 'base' });
-  }
+  // 第三百九十四次：Whisper 模型下拉回填退役（asrModelSize 键与 offscreen SUPPORTED_MODELS 已删）
   // 第一百零二次：asrFirstChunkSec 引导页控件已移除（唯一来源 src/data/config.json）
 
   // 模型行（第一百七十次）：来源下拉 + API 配置回填
@@ -692,12 +672,13 @@ function renderAll(res) {
   $('llmBaseUrl').value = res.llmBaseUrl || '';
   $('llmModel').value = res.llmModel || '';
   $('llmApiKey').value = res.llmApiKey || '';
+  $('backendBaseUrl').value = res.backendBaseUrl || '';   // 第401次：本地后端地址回填
   $('chatWordPrompt').value = res.chatWordPrompt || CHAT_WORD_PROMPT;
   $('chatSidebarPrompt').value = res.chatSidebarPrompt || CHAT_SIDEBAR_PROMPT;
-  // 第二百零七次：对话上下文上限回填（空值显示默认 10000）
+  // 第397次：对话上下文上限回填（空值显示默认 100000，与 loadSettings 默认/出厂 config.json 对齐）
   // 第357次（用户："让 config.json 生效…我手动调的为准"）：三项对话参数实际生效以
   //   config.json 出厂值为第一优先，回填后异步用出厂值覆盖显示，保证"所见 = 实际生效"。
-  $('chatContextMaxBytes').value = res.chatContextMaxBytes || 10000;
+  $('chatContextMaxBytes').value = res.chatContextMaxBytes || 100000;
   readFactoryCfg().then((cfg) => {
     if (!cfg) return;
     const w = cfg.chatWordPrompt;
@@ -737,11 +718,15 @@ function renderAll(res) {
  * @param {string} id 当前选中的来源 id
  */
 // 第二百一十六次：引擎 LLM 配置的 Provider 选择渲染（通用版，供 ASR/OCR 复用）
-function renderEngineProviderSelect(sel, selected) {
+// 第三百九十二次：过滤支持 group 字段 —— provider 可归入与 format 不同的显示组（河狸后端组）
+// 第三百九十三次：第 3 参 allowedGroups 裁剪显示组（ASR 传 ['backend','openai']——free 轮替
+//   端点与 Anthropic 均无音频转写端点；OCR/主对话不传 = 全组）
+function renderEngineProviderSelect(sel, selected, allowedGroups) {
   if (!sel) return;
   sel.innerHTML = '';
   LLM_FORMAT_GROUPS.forEach((g) => {
-    const items = LLM_PROVIDERS.filter((p) => (p.format || 'openai') === g.format);
+    if (allowedGroups && !allowedGroups.includes(g.format)) return;
+    const items = LLM_PROVIDERS.filter((p) => (p.group || p.format || 'openai') === g.format);
     if (!items.length) return;
     const og = document.createElement('optgroup');
     og.label = g.label[getLangState()] || g.label.en;
@@ -761,7 +746,7 @@ function renderLlmProviderSelect(id) {
   if (!sel) return;
   sel.innerHTML = '';
   LLM_FORMAT_GROUPS.forEach((g) => {
-    const items = LLM_PROVIDERS.filter((p) => (p.format || 'openai') === g.format);
+    const items = LLM_PROVIDERS.filter((p) => (p.group || p.format || 'openai') === g.format);
     if (!items.length) return;
     const og = document.createElement('optgroup');
     og.label = g.label[getLangState()] || g.label.en;
@@ -787,63 +772,128 @@ function applyLlmProviderHints(id) {
   const p = getProvider(id);
   const base = $('llmBaseUrl');
   const model = $('llmModel');
-  const isFree = (p.format || 'openai') === 'free';
+  // 第三百九十二次：noKey 的来源（本地后端）与 free 同样隐藏 Key 输入——本地使用无需 Key
+  const isFree = (p.format || 'openai') === 'free' || !!p.noKey;
   if (base) base.placeholder = p.baseUrl || 'https://your-endpoint/v1';
   if (model) model.placeholder = p.model || 'model-name';
   const keyField = $('llmApiKeyField');
   if (keyField) keyField.style.display = isFree ? 'none' : '';
 }
 
-// 第二百二十四次（用户："三种语言界面 目标 释义，不要写死、不要特指，默认全选"；并纠正 223 次
-// 误把语言名 English/中文 当复选框标签）：复选框标签固定为角色名（界面/目标/释义，静态 HTML），
-// 各自的勾选"值"由本函数按当前设定动态映射——界面语言/目标语言/释义语言 → Tesseract 语言代码
-// （TESS_LANG_CODES），写入 checkbox.dataset.tess；storage 仍按代码存 ocrLanguages（后台直读同形）。
-// 默认全选：storage 无 ocrLanguages 时三个角色全部勾上（无语言包的角色除外——勾了必失败，
-// offscreen 的 langPath 仅指向本地 vendor，如实禁用并提示）。同一语言代码出现在多个角色时
-// 天然联动（如界面=释义=中文：勾/去勾任一，两处同态）。
-// 触发时机：renderAll、本页切换 目标/释义语言、跨标签页 storage 变化（onChanged → renderAll）。
-function renderOcrLangRow(res) {
-  const roles = [
-    ['ocrLangUi', res.uiLanguage || 'zh'],
-    ['ocrLangTarget', res.learnLanguage || 'en'],
-    ['ocrLangMeaning', res.meaningLanguage || 'zh']
-  ];
-  const stored = res.ocrLanguages;   // undefined=新用户（默认全选）；有值则按已存代码尊重
-  roles.forEach(([id, langCode]) => {
-    const cb = $(id);
-    if (!cb) return;
-    const tess = TESS_LANG_CODES[langCode];
-    cb.dataset.tess = tess || '';
-    const hasPack = !!tess;   // 42 语全映射，仅表外语言兜底禁用
-    cb.disabled = !hasPack;
-    const lbl = cb.closest('label.chk');
-    if (lbl) {
-      lbl.classList.toggle('disabled', !hasPack);
-      lbl.title = '';   // 42 语全放开后无"无包"场景（ocrLangNoPack 文案已删）
+// 第397次（plan-backend §4.4）：检测本地后端——fetch /api/health（返回 {ok,version,needs_setup}）。
+// 成功：显示版本，needs_setup=true 时追加"管理界面完成首次安装"引导；失败属正常状态
+// （未装/未启动 backend，扩展照常走免费轮替）不弹错，仅在当前对话来源=本地后端时提示
+// 安装入口（链到 vocabradar.com）。
+// 第401次：地址可配置——「本地后端地址」填空（完整 URL 含协议主机端口），留空回退默认
+// 127.0.0.1:7777。第406次：留空时检测自动发现端口——先探默认 7777，不通并行扫
+// 7778–7827（与 backend _pick_free_port 递延范围对齐；探测件镜像 service-worker.js，
+// guide 页不 import SW，复制维持，改动需两侧同步）。
+const BACKEND_BASE_DEFAULT = 'http://127.0.0.1:7777';
+
+function getBackendBase() {
+  return new Promise((resolve) => {
+    chrome.storage.local.get({ backendBaseUrl: BACKEND_BASE_DEFAULT }, (r) => {
+      const v = String((r && r.backendBaseUrl) || '').trim().replace(/\/+$/, '');
+      resolve(v || BACKEND_BASE_DEFAULT);
+    });
+  });
+}
+
+/** 单端口健康探测：GET /api/health 2xx 且 j.ok 才算命中，否则 reject（供 Promise.any）。
+ *  镜像 service-worker.js probeBackendHealth（超时 3s 与原 detectBackend 一致）。 */
+async function probeBackendHealth(base) {
+  const ctl = new AbortController();
+  const timer = setTimeout(() => ctl.abort(), 3000);
+  try {
+    const r = await fetch(base + '/api/health', { signal: ctl.signal });
+    const j = r.ok ? await r.json().catch(() => null) : null;
+    if (j && j.ok) return j;
+    throw new Error('not backend: ' + base);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/** 并行探测候选端口，返回首个命中的健康 JSON；全部不可达返回 null。 */
+async function scanBackendHealth(candidates) {
+  try {
+    return await Promise.any(candidates.map((p) => probeBackendHealth(p)));
+  } catch (_e) {
+    return null;
+  }
+}
+let _backendDetect = undefined;   // undefined=未检测 | null=不可达 | {version, needs_setup}
+
+function updateBackendHint() {
+  const hint = $('backendDetectHint');
+  if (!hint) return;
+  hint.textContent = '';
+  if (_backendDetect === undefined) return;
+  if (_backendDetect) {
+    let txt = m('backendOk').replace('{version}', _backendDetect.version);
+    if (_backendDetect.needs_setup) txt += ' ' + m('backendNeedsSetup');
+    hint.textContent = txt;
+    return;
+  }
+  if ($('llmProvider').value === 'local-backend') {
+    hint.append(m('backendMissing') + ' ');
+    const a = document.createElement('a');
+    a.href = 'https://vocabradar.com';
+    a.target = '_blank';
+    a.rel = 'noreferrer';
+    a.textContent = 'vocabradar.com';
+    hint.appendChild(a);
+  }
+}
+
+async function detectBackend() {
+  const btn = $('btnDetectBackend');
+  const hint = $('backendDetectHint');
+  if (btn) btn.disabled = true;
+  if (hint) hint.textContent = m('backendDetecting');
+  try {
+    // 第406次：读原始填空区分「用户手动配置」与「留空」——手动配置按原样探测
+    //   （不可达如实报 null，不遮蔽）；留空先探默认 7777，不通并行扫 7778–7827
+    const raw = await new Promise((resolve) => {
+      chrome.storage.local.get({ backendBaseUrl: '' }, (r) => {
+        resolve(String((r && r.backendBaseUrl) || '').trim().replace(/\/+$/, ''));
+      });
+    });
+    let j = null;
+    if (raw) {
+      j = await probeBackendHealth(raw).catch(() => null);
+    } else {
+      j = await scanBackendHealth([BACKEND_BASE_DEFAULT]);
+      if (!j) {
+        const candidates = [];
+        for (let p = 7778; p <= 7827; p++) candidates.push('http://127.0.0.1:' + p);
+        j = await scanBackendHealth(candidates);
+      }
     }
-    cb.checked = stored ? (!!tess && stored[tess] === true) : hasPack;
-  });
+    _backendDetect = j ? { version: j.version || '?', needs_setup: !!j.needs_setup } : null;
+  } catch {
+    _backendDetect = null;   // 不可达=正常状态（未装/未启动），静默提示不弹错
+  }
+  if (btn) btn.disabled = false;
+  updateBackendHint();
+  log('检测本地后端:', _backendDetect);
 }
 
-// 第二百二十四次：从三个角色复选框收集勾选并集（按 tess 代码），供 change 监听写 ocrLanguages
-function collectOcrLangs() {
-  const obj = {};
-  ['ocrLangUi', 'ocrLangTarget', 'ocrLangMeaning'].forEach((id) => {
-    const cb = $(id);
-    if (cb && cb.checked && cb.dataset.tess) obj[cb.dataset.tess] = true;
-  });
-  return obj;
-}
+// 第三百九十四次：renderOcrLangRow/collectOcrLangs 退役（Tesseract 语言三复选已随本地
+//   OCR 移除，ocrLanguages 存储不再读写）。
 
-// 第二百二十三次：OCR API 格式切换时更新地址/模型名 placeholder（镜像 applyLlmProviderHints 的交互；
-// 预置值来自 llm.js 同一张 LLM_PROVIDERS 表：openai → api.openai.com/v1 + gpt-4o-mini，
-// anthropic → api.anthropic.com + claude-3-5-haiku。用户手填值恒优先，留空回落预置）。
-function applyOcrProviderHints(id) {
-  const p = getProvider(id === 'anthropic' ? 'anthropic' : 'openai');
-  const base = $('ocrLlmBaseUrl');
-  const model = $('ocrLlmModel');
+// 第三百九十三次：ASR/OCR 引擎 API 来源提示通用化（原 applyOcrProviderHints 硬映射退役，
+//   镜像 applyLlmProviderHints 的交互）——placeholder 带来源预置地址/模型；noKey 来源
+//   （本地后端）与 free 同样整列隐藏 Key 输入。prefix='asr'|'ocr' 拼控件 id；
+//   modelPlaceholder 覆写模型提示（来源表预置的是对话模型名，ASR 转写恒提示 whisper-1）。
+function applyEngineProviderHints(prefix, id, modelPlaceholder) {
+  const p = getProvider(id);
+  const base = $(prefix + 'LlmBaseUrl');
+  const model = $(prefix + 'LlmModel');
   if (base) base.placeholder = p.baseUrl || 'https://your-endpoint/v1';
-  if (model) model.placeholder = p.model || 'model-name';
+  if (model) model.placeholder = modelPlaceholder || p.model || 'model-name';
+  const keyField = $(prefix + 'LlmApiKeyField');
+  if (keyField) keyField.style.display = (((p.format || 'openai') === 'free' || !!p.noKey) ? 'none' : '');
 }
 
 
@@ -924,37 +974,33 @@ async function init() {
     });
   });
 
-  // 源语言/目标语言/阈值/生词开关/ASR 模型
+  // 源语言/目标语言/阈值/生词开关
   $('learnLanguage').addEventListener('change', (e) => {
-    chrome.storage.local.set({ learnLanguage: e.target.value }, () => {
-      log('源语言=', e.target.value);
-      // 第二百二十三次：OCR 本地语言候选随目标语言变 → 重渲该行（勾选态按已存 ocrLanguages）
-      chrome.storage.local.get(null, (res) => renderOcrLangRow(res));
-    });
+    chrome.storage.local.set({ learnLanguage: e.target.value }, () => log('源语言=', e.target.value));
   });
   $('meaningLanguage').addEventListener('change', (e) => {
-    chrome.storage.local.set({ meaningLanguage: e.target.value }, () => {
-      log('释义语言=', e.target.value);
-      chrome.storage.local.get(null, (res) => renderOcrLangRow(res));
-    });
+    chrome.storage.local.set({ meaningLanguage: e.target.value }, () => log('释义语言=', e.target.value));
   });
   $('rankThreshold').addEventListener('change', (e) => {
     const v = parseInt(e.target.value, 10);
     chrome.storage.local.set({ rankThreshold: isFinite(v) ? v : 5000 }, () => log('词频阈值=', v));
     updateRankMaxMin(); // 下界变了 → 上界 spinner 起步值随动
   });
-  // 词频上界（0/空=回退到词典词频表上界；下界必须小于上界）
+  // 词频上界（0/空=未设上界=空集，全部词都值得注释；正数上界须大于下界）
   // 反思：修复"上界框不可点击调节"——根因是 Chrome 空值点 ▲ 从 min 起步，旧 min=0
   //   得 0，校验 `v<=0` 命中即清空输入框 → 数字闪一下就没了，永远调不上去。
-  //   现区分三种输入：留空=未设上界(∞)；合法值=直接存；非法（含 spinner 起步 0）
-  //   = 起步值自动补 下界+步长，手输非法恢复上次有效值（dataset.prev），不再清空。
+  //   现区分输入：留空/0=未设上界(空集)；合法值=直接存；非法=恢复上次有效值
+  //   （dataset.prev），无上次有效值回落 未设。
+  // 第397次（plan-backend §4.3.3）：显式键入 0 亦视为 未设上界（空集=∞，annotator.js
+  //   setRankMax 对 0/非正数即转 Infinity）——原 v===0 走"spinner 起步补下界"分支与
+  //   新语义冲突，删除（spinner min 由 updateRankMaxMin 恒设 下界+1000，起步值本就合法）。
   $('rankThresholdMax').addEventListener('change', (e) => {
     const raw = e.target.value;
     const v = parseInt(raw, 10);
     const low = parseInt($('rankThreshold').value, 10);
-    if (raw === '') {
-      // 留空 = 未设上界（∞）：存 0，输入框保持空显示占位 ∞
-      chrome.storage.local.set({ rankThresholdMax: 0 }, () => { refreshRankMaxPlaceholder(); log('词频上界重置为词频表上界'); });
+    if (raw === '' || v === 0) {
+      // 留空或 0 = 未设上界（空集=全部词都值得注释）：存 0，输入框保持空显示占位 ∞
+      chrome.storage.local.set({ rankThresholdMax: 0 }, () => { refreshRankMaxPlaceholder(); log('词频上界重置为未设（全部词都值得注释）'); });
       return;
     }
     if (isFinite(v) && v > 0 && !(isFinite(low) && v <= low)) {
@@ -962,10 +1008,9 @@ async function init() {
       chrome.storage.local.set({ rankThresholdMax: v }, () => log('词频上界=', v));
       return;
     }
-    // 非法输入：spinner 起步（v===0）自动补 下界+步长；其余恢复上次有效值
-    const floor = (isFinite(low) ? low : 0) + 1000;
+    // 非法输入：恢复上次有效值；无则回落 未设(∞)
     const prev = parseInt($('rankThresholdMax').dataset.prev || '0', 10);
-    const restore = (v === 0) ? floor : (isFinite(prev) && prev > 0 ? prev : 0);
+    const restore = (isFinite(prev) && prev > 0) ? prev : 0;
     $('rankThresholdMax').value = restore > 0 ? String(restore) : '';
     if (restore > 0) $('rankThresholdMax').dataset.prev = String(restore);
     chrome.storage.local.set({ rankThresholdMax: restore }, () => { refreshRankMaxPlaceholder(); log('词频上界非法，已恢复=', restore > 0 ? restore : '未设'); });
@@ -1015,12 +1060,19 @@ async function init() {
       $('llmBaseUrl').value = '';
       $('llmModel').value = '';
       applyLlmProviderHints(id);
+      updateBackendHint();   // 第397次：未检测到本地后端的提示仅在本地后端来源下显示，切来源即刷新
       log('对话模型来源=', id);
     });
   });
+  // 第397次：检测本地后端按钮（plan-backend §4.4）
+  $('btnDetectBackend').addEventListener('click', detectBackend);
   // 地址/模型/Key/提示词：change（失焦或回车）时保存，与本页其他控件一致
   $('llmBaseUrl').addEventListener('change', (e) => {
     chrome.storage.local.set({ llmBaseUrl: e.target.value.trim() }, () => log('接口地址已保存'));
+  });
+  // 第401次：本地后端地址（完整 URL 含协议主机端口；留空 = 默认 127.0.0.1:7777）
+  $('backendBaseUrl').addEventListener('change', (e) => {
+    chrome.storage.local.set({ backendBaseUrl: e.target.value.trim() }, () => log('本地后端地址已保存'));
   });
   $('llmModel').addEventListener('change', (e) => {
     chrome.storage.local.set({ llmModel: e.target.value.trim() }, () => log('模型名=', e.target.value.trim()));
@@ -1039,36 +1091,26 @@ async function init() {
     e.target.value = v;
     chrome.storage.local.set({ chatSidebarPrompt: v }, () => log('侧栏提示词=', v));
   });
-  // 第二百零七次：对话上下文上限（字节，下限 1000；非法输入回落默认 100000）
+  // 第397次：对话上下文上限（字节，下限 1000；非法输入回落默认 100000——第207次注释与代码
+  //   不一致回落 10000，本次一并修正；plan-backend §4.3.2）
   $('chatContextMaxBytes').addEventListener('change', (e) => {
     let v = parseInt(e.target.value, 10);
-    if (!Number.isFinite(v) || v < 1000) v = 10000;
+    if (!Number.isFinite(v) || v < 1000) v = 100000;
     e.target.value = v;
     chrome.storage.local.set({ chatContextMaxBytes: v }, () => log('对话上下文上限(字节)=', v));
   });
-  // 第二百二十六次：引擎单选（每行=引擎+该引擎细项，两行常驻，无显隐联动）——变更只保存。
-  // 第二百二十五次：radio value 定名 local/api（原 'llm'）。
-  document.querySelectorAll('input[name="asrEngine"]').forEach((r) => {
-    r.addEventListener('change', () => {
-      if (!r.checked) return;
-      chrome.storage.local.set({ asrEngine: r.value }, () => log('ASR 引擎=', r.value));
-    });
+  // ASR/OCR API 来源下拉（第三百九十三次：provider id 直存——'openai'/'anthropic' 旧值即
+  // provider id 天然兼容；change 时同步 placeholder 与 Key 框显隐。
+  // 第三百九十四次：引擎 radio 保存监听与 asrModelSize 下拉监听随引擎键退役）
+  $('asrLlmProvider').addEventListener('change', (e) => {
+    const v = e.target.value;
+    chrome.storage.local.set({ asrLlmProvider: v }, () => log('ASR API 来源=', v));
+    applyEngineProviderHints('asr', v, 'whisper-1');
   });
-  document.querySelectorAll('input[name="ocrEngine"]').forEach((r) => {
-    r.addEventListener('change', () => {
-      if (!r.checked) return;
-      chrome.storage.local.set({ ocrEngine: r.value }, () => log('OCR 引擎=', r.value));
-    });
-  });
-  // Whisper 模型下拉（value 保持 tiny/base/…，与 offscreen SUPPORTED_MODELS 一致）
-  $('asrModelSize').addEventListener('change', (e) => {
-    chrome.storage.local.set({ asrModelSize: e.target.value }, () => log('ASR 模型=', e.target.value));
-  });
-  // OCR API 格式下拉（openai/anthropic，视觉识别两种后台均已实现）
   $('ocrLlmProvider').addEventListener('change', (e) => {
-    const v = (e.target.value === 'anthropic') ? 'anthropic' : 'openai';
-    chrome.storage.local.set({ ocrLlmProvider: v }, () => log('OCR API 格式=', v));
-    applyOcrProviderHints(v);
+    const v = e.target.value;
+    chrome.storage.local.set({ ocrLlmProvider: v }, () => log('OCR API 来源=', v));
+    applyEngineProviderHints('ocr', v);
   });
   // ASR API 细项（OpenAI 兼容转写）：地址/模型/Key 保存（此前 asrLlmModel 无保存监听——缺口补齐）
   $('asrLlmBaseUrl').addEventListener('change', (e) => {
@@ -1089,14 +1131,6 @@ async function init() {
   });
   $('ocrLlmApiKey').addEventListener('change', (e) => {
     chrome.storage.local.set({ ocrLlmApiKey: e.target.value.trim() }, () => log('OCR API Key 已保存（长度', e.target.value.trim().length, '）'));
-  });
-  // OCR 本地语言复选（界面/目标/释义三角色，值=各自语言映射的 tess 代码，renderOcrLangRow 动态赋值）：
-  // 任一变化即收集三框勾选并集，写 ocrLanguages（对象 by tess 代码，后台 handleOcrRecognize 直读）
-  ['ocrLangUi', 'ocrLangTarget', 'ocrLangMeaning'].forEach((id) => {
-    $(id).addEventListener('change', () => {
-      const obj = collectOcrLangs();
-      chrome.storage.local.set({ ocrLanguages: obj }, () => log('OCR 语言=', Object.keys(obj).join('+') || '(无)'));
-    });
   });
   // 翻译渠道复选：补保存监听（第二百二十三次——此前勾选从不写 storage，设置形同虚设）。
   // 保存按 DOM 现状整表写入；「浏览器自身」在 Firefox 被禁用且未勾，写回 false 与实际一致。
@@ -1163,10 +1197,11 @@ async function init() {
       //   自写回声由 my-words.js 内部 _lastWriteAt 窗口抑制（防打断输入），不整页 renderAll。
       syncMyWordsFromStorage();
     } else if (changes.llmProvider || changes.llmBaseUrl || changes.llmModel
-               || changes.llmApiKey || changes.chatWordPrompt || changes.chatSidebarPrompt || changes.asrModelSize
-               || changes.asrEngine || changes.ocrEngine || changes.asrLlmModel || changes.asrLlmBaseUrl
+               || changes.llmApiKey || changes.backendBaseUrl
+               || changes.chatWordPrompt || changes.chatSidebarPrompt
+               || changes.asrLlmProvider || changes.asrLlmModel || changes.asrLlmBaseUrl
                || changes.asrLlmApiKey || changes.ocrLlmProvider || changes.ocrLlmBaseUrl || changes.ocrLlmModel
-               || changes.ocrLlmApiKey || changes.ocrLanguages || changes.translationChannels
+                 || changes.ocrLlmApiKey || changes.translationChannels
                 || changes.llmTranslatePrompt || changes.learnLanguage || changes.meaningLanguage
                 || changes.queryEnabled || changes.contextLookupEnabled || changes.queryBarEnabled
                 || changes.textHintEnabled || changes.webSidebarEnabled || changes.sidebarEnabled

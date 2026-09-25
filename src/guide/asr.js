@@ -1,10 +1,10 @@
 // VocabRadar 引导页 功能栏 ASR（语音识别 + 录音/录像/录屏 + 麦克风授权）
 // 反思（2026-08-20 第八十六次）：用户要求"asr-ocr.js 拆分为 asr.js + ocr.js + 公共模块"。
 //   本文件承载：
-//     - ASR 消息监听（START_ASR/ASR_AUDIO_SEGMENT 经 SW 中转，ASR_STATUS/ASR_SEGMENT/
-//       ASR_ERROR 回传本页，识别结果渲染见 guide-common.js appendResult）
-//     - 文件 ASR（Whisper 离线识别，段式发送）
-//     - 录音/录像/录屏（媒体流获取 + 浏览器 ASR 实时识别 / Whisper 流式分段）
+//     - ASR 消息监听（START_ASR/ASR_AUDIO_SEGMENT 经 SW 中转，ASR_SEGMENT 回传本页，
+//       识别结果渲染见 guide-common.js appendResult）
+//     - 文件 ASR（在线 LLM 整段上传——whisper 本地推理已随模型移除，第三百九十四次）
+//     - 录音/录像/录屏（媒体流获取 + 浏览器 ASR 实时识别 / LLM 流式分段）
 //     - 麦克风授权与错误分类（acquireMediaStream 在用户手势内直接 getUserMedia）
 //   公共基础设施见 guide-common.js（第二百五十三次由 asr-common.js 改名）；OCR 见 ocr.js（本文件不 import ocr.js）。
 // 第二百五十五次：为 Parser 栏导出四个复用件（parser-media.js 消费，避免复制粘贴漂移）——
@@ -12,33 +12,22 @@
 //   decodeFileToPcm（音视频→16k PCM）、arrayBufferToBase64（LLM 转写整段上传）。
 
 import { t } from '../lib/i18n.js';
+import { resolveLlmConfig } from '../lib/llm.js';
 import {
   S, $, log, toast, formatFileSize,
   showAsrProgress, hideAsrProgress, updateAsrProgressFill,
-  translateStage, clearResults, appendResult, setAsrControls,
+  clearResults, appendResult, setAsrControls,
   showVideoSidebarEmpty
 } from './guide-common.js';
 
 // === ASR 消息监听 ===
+// 第三百九十四次：whisper 移除后仅剩 ASR_SEGMENT 回传（SW handleSegmentByLlm 在线转写
+//   直发本 tab）；ASR_STATUS（offscreen 模型加载广播）与 ASR_ERROR（转发区）生产者已删，
+//   死分支一并移除。
 function ensureMessageListener() {
   if (S.msgListener) return;
   S.msgListener = (msg, sender, sendResponse) => {
     if (!msg || typeof msg !== 'object') return false;
-    // ASR_STATUS 不含 videoKey（offscreen 广播），豁免检查
-    if (msg.type === 'ASR_STATUS') {
-      if (msg.status === 'ready') {
-        if (S.recordingActive) showAsrProgress(t('ws.modelReady'), t('ws.recording'));
-        else showAsrProgress(t('ws.modelReady'), '');
-      } else if (msg.status === 'loading') {
-        const pct = Math.round(msg.progress || 0);
-        showAsrProgress(t('ws.modelDownloading', { pct }), msg.file || '');
-        updateAsrProgressFill(pct);
-      } else if (msg.status === 'stage' && msg.stage) {
-        showAsrProgress(translateStage(msg.stage), msg.info || '');
-      }
-      sendResponse({ ok: true });
-      return true;
-    }
     if (msg.videoKey !== S.videoKey) return false;
     if (msg.type === 'ASR_SEGMENT') {
       handleAsrResponse(msg);
@@ -46,22 +35,6 @@ function ensureMessageListener() {
         const resolve = S.pendingResolve;
         S.pendingResolve = null;
         resolve(msg);
-      }
-      sendResponse({ ok: true });
-      return true;
-    } else if (msg.type === 'ASR_ERROR') {
-      const errStr = String(msg.error || '');
-      const isFatal = errStr.includes('模型加载失败') || errStr.includes('whisper load failed');
-      showAsrProgress(isFatal ? t('ws.modelError') : t('ws.error'), errStr.slice(0, 60));
-      setTimeout(() => { if (!S.asrActive && !S.recordingActive) hideAsrProgress(); }, 5000);
-      if (isFatal) {
-        S.asrAborted = true;
-        toast(t('ws.asrModelFail'), { error: true, duration: 5000 });
-      }
-      if (S.pendingResolve) {
-        const resolve = S.pendingResolve;
-        S.pendingResolve = null;
-        resolve(null);
       }
       sendResponse({ ok: true });
       return true;
@@ -98,7 +71,7 @@ function handleAsrResponse(msg) {
   }
 }
 
-// === 文件 ASR（Whisper） ===
+// === 文件 ASR（在线 LLM 转写） ===
 // 反思（2026-08-14 第五十八次）：录制来源改为单选（录音/录像/录屏 radio），
 //   「开始识别」按钮统一触发：有文件→文件ASR；选了录制来源→先录制再识别。
 async function onAsrClick() {
@@ -114,8 +87,9 @@ async function onAsrClick() {
     toast(t('ws.extUpdated'), { error: true });
     return;
   }
-  // 反思（2026-08-16 第七十一次）：⑨ 在线/离线分离——有文件→离线 Whisper（startAsr）；
-  //   无文件→默认录音（浏览器 ASR），radio 选中 audio/video/screen 时用对应来源；
+  // 反思（2026-08-16 第七十一次）：⑨ 识别/录音分离——有文件→文件识别（startAsr，
+  //   第三百九十四次起为在线 LLM 整段转写）；无文件→默认录音（浏览器 ASR），
+  //   radio 选中 audio/video/screen 时用对应来源；
   //   删除 avStartTip 死路（旧版无文件无选择时只弹提示不动作）。
   if (S.currentFile && (S.currentFile.kind === 'video' || S.currentFile.kind === 'audio')) {
     await startAsr();
@@ -152,82 +126,45 @@ async function startAsr() {
     S.asrActive = true;
     started = true;
 
-    showAsrProgress(t('ws.decoding'), '');
-    const pcm = await decodeFileToPcm(S.currentFile.file);
-    if (S.asrAborted) return;
-    log('音频解码完成: 采样数=', pcm.length, '时长=', (pcm.length / 16000).toFixed(1) + 's');
-
     const SAMPLE_RATE = 16000;
-    const SEGMENT_SEC = 300;
-    const segLen = SEGMENT_SEC * SAMPLE_RATE;
-    S.asrTotalSegs = Math.max(1, Math.ceil(pcm.length / segLen));
-    S.asrSegCount = 0;
 
-    // 第二百一十五次（用户："asr模型可选本地whisper，也能选llm"；"离线整段，在线分片"）：
-    //   LLM 引擎离线＝**整段一个请求**——直接读原始上传文件（wav/mp3/m4a 均可）base64
-    //   一次发送，不再本地解码分片；回包（无 chunks 的整段文本）走 handleAsrResponse
+    // 第三百九十四次（用户裁定"扩展不再保留这两个模型"，whisper 本地推理移除）：
+    //   文件 ASR 只剩在线 LLM 单一路径——原始上传文件（wav/mp3/m4a 均可）base64
+    //   **整段一个请求**发送；回包（无 chunks 的整段文本）走 handleAsrResponse
     //   既有渲染路径（该函数已兼容无 chunks 的回包）。有错就报（不遮蔽）。
-    let asrLlmModel = null;
-    try {
-      const er = await new Promise((r) => chrome.storage.local.get({ asrEngine: 'local', asrLlmModel: 'whisper-1' }, r));
-      // 第二百二十五次：引擎值 'llm' 定名 'api'，读侧兼容旧残留 'llm'
-      if (er.asrEngine === 'api' || er.asrEngine === 'llm') asrLlmModel = er.asrLlmModel || 'whisper-1';
-    } catch (_) { /* 默认本地 */ }
-    if (asrLlmModel) {
-      showAsrProgress(t('ws.recognizing'), 'LLM');
-      const buf = await S.currentFile.file.arrayBuffer();
-      if (S.asrAborted) return;
-      const resp = await new Promise((resolve) => {
-        chrome.runtime.sendMessage({
-          type: 'ASR_LLM_FILE',
-          fileName: (S.currentFile.file && S.currentFile.file.name) || 'audio.wav',
-          audioB64: arrayBufferToBase64(buf),
-          model: asrLlmModel
-        }).then(resolve).catch((e) => resolve({ ok: false, error: String(e.message || e) }));
-      });
-      if (S.asrAborted) return;
-      if (!resp || !resp.ok) {
-        const errMsg = String((resp && resp.error) || 'LLM 转写失败');
-        showAsrProgress(t('ws.error'), errMsg.slice(0, 60));
-        toast('ASR(LLM): ' + errMsg.slice(0, 100), { error: true, duration: 5000 });
-        return;
-      }
-      const pcmAll = await decodeFileToPcm(S.currentFile.file);   // 仅取时长用于结果时间线
-      const duration = pcmAll.length / SAMPLE_RATE;
-      handleAsrResponse({ type: 'ASR_SEGMENT', videoKey: S.videoKey, start: 0, end: duration, text: resp.text });
-      updateAsrProgressFill(100);
-      showAsrProgress(t('ws.recognizeDone'), 'LLM');
-      setTimeout(() => { if (!S.asrActive) hideAsrProgress(); }, 2000);
+    //   原第二百一十五次"离线整段，在线分片"的 whisper 分片路径随模型移除一并删除。
+    showAsrProgress(t('ws.recognizing'), 'LLM');
+    const buf = await S.currentFile.file.arrayBuffer();
+    if (S.asrAborted) return;
+    const resp = await new Promise((resolve) => {
+      chrome.runtime.sendMessage({
+        type: 'ASR_LLM_FILE',
+        fileName: (S.currentFile.file && S.currentFile.file.name) || 'audio.wav',
+        audioB64: arrayBufferToBase64(buf)
+      }).then(resolve).catch((e) => resolve({ ok: false, error: String(e.message || e) }));
+    });
+    if (S.asrAborted) return;
+    if (!resp || !resp.ok) {
+      const errMsg = String((resp && resp.error) || 'LLM 转写失败');
+      showAsrProgress(t('ws.error'), errMsg.slice(0, 60));
+      toast('ASR(LLM): ' + errMsg.slice(0, 100), { error: true, duration: 5000 });
       return;
     }
-
-    for (let i = 0; i < pcm.length; i += segLen) {
-      if (S.asrAborted) break;
-      const seg = pcm.slice(i, Math.min(i + segLen, pcm.length));
-      const start = i / SAMPLE_RATE;
-      const end = Math.min((i + segLen) / SAMPLE_RATE, pcm.length / SAMPLE_RATE);
-      S.asrSegCount++;
-      showAsrProgress(t('ws.recognizing'), `${S.asrSegCount}/${S.asrTotalSegs} ${t('ws.segments')}`);
-      updateAsrProgressFill(Math.round(((S.asrSegCount - 1) / S.asrTotalSegs) * 100));
-      await sendSegmentAndWait(seg, start, end);
+    const pcmAll = await decodeFileToPcm(S.currentFile.file);   // 仅取时长用于结果时间线
+    const duration = pcmAll.length / SAMPLE_RATE;
+    handleAsrResponse({ type: 'ASR_SEGMENT', videoKey: S.videoKey, start: 0, end: duration, text: resp.text });
+    updateAsrProgressFill(100);
+    showAsrProgress(t('ws.recognizeDone'), 'LLM');
+    setTimeout(() => { if (!S.asrActive) hideAsrProgress(); }, 2000);
+    // 反思（2026-08-16 第七十一次）：⑧ 空结果完成态——识别完成但没有识别到语音时，
+    //   结果盒仍是初始空态，看起来像从未开始识别（2026-08-21 第八十九次：提示改走视频侧栏空态）。
+    if (S.asrResults.length === 0) {
+      showVideoSidebarEmpty(t('ws.asrEmptyDone'));
+      log('ASR 完成: 未识别到语音（0 句）');
+    } else {
+      log(`ASR 完成: ${S.asrResults.length} 句`);
     }
-
-    if (!S.asrAborted) {
-      updateAsrProgressFill(100);
-      showAsrProgress(t('ws.recognizeDone'), `${S.asrTotalSegs} ${t('ws.segments')}`);
-      setTimeout(() => { if (!S.asrActive) hideAsrProgress(); }, 2000);
-      // 反思（2026-08-16 第七十一次）：⑧ 离线 ASR 空结果完成态——识别完成但没有识别到语音时，
-      //   旧版结果盒仍是初始空态提示"识别出的句子将显示在这里"，看起来像从未开始识别。
-      //   修正：换"识别完成：未识别到语音"完成态提示 + 日志，明确"已跑完但无语音"。
-      if (S.asrResults.length === 0) {
-        // 反思（2026-08-21 第八十九次）：ASR 扁平结果列表已移除（结果展示在视频侧栏），
-        //   空结果完成态提示改走视频侧栏空态。
-        showVideoSidebarEmpty(t('ws.asrEmptyDone'));
-        log('ASR 完成: 未识别到语音（0 句）');
-      } else {
-        log(`ASR 完成: ${S.asrResults.length} 句`);
-      }
-    }
+    return;
   } catch (e) {
     const errMsg = String(e && e.message || e);
     log('ASR 失败:', errMsg);
@@ -299,10 +236,10 @@ export async function decodeFileToPcm(file) {
 }
 
 // 反思（2026-08-16 第七十次）：sendMessage 消息上限 64MiB——旧版 audio: Array.from(pcm)
-//   把整段 PCM 转成普通数字数组发送（每采样约 8+ 字节），文件 ASR 段为 300s（480 万元素），
-//   序列化后超限，报 "Message exceeded maximum allowed size of 64MiB"。
-//   修正：改发紧凑 ArrayBuffer（Float32 每采样 4 字节，300s 段约 19MB，远低于上限）；
-//   offscreen 接收端已支持 ArrayBuffer（new Float32Array(msg.audio)）。
+//   把整段 PCM 转成普通数字数组发送（每采样约 8+ 字节），录音分段 10s 约 64 万元素，
+//   序列化后偏大；修正：改发紧凑 ArrayBuffer（Float32 每采样 4 字节）。
+//   第三百九十四次：接收端由 offscreen（已删）改为 SW handleSegmentByLlm（同样支持
+//   ArrayBuffer，new Float32Array(msg.audio)）。
 //   若 pcm 是共享父 buffer 的视图（subarray），只取视图区间，避免整块父 buffer 一起发送。
 function pcmToArrayBuffer(pcm) {
   if (pcm instanceof Float32Array) {
@@ -310,54 +247,6 @@ function pcmToArrayBuffer(pcm) {
     return pcm.slice().buffer;
   }
   return new Float32Array(pcm).buffer;
-}
-
-function sendSegmentAndWait(pcm, start, end) {
-  return new Promise((resolve) => {
-    let settled = false;
-    const segDur = Math.max(10, end - start);
-    const timeoutMs = Math.max(180000, segDur * 3 * 1000);
-    const keepAlive = setInterval(() => {
-      if (settled || !S.asrActive) { clearInterval(keepAlive); return; }
-      chrome.runtime.sendMessage({ type: 'ASR_CHECK' }).catch(() => {});
-    }, 20000);
-    const timeout = setTimeout(() => {
-      if (settled) return;
-      settled = true;
-      clearInterval(keepAlive);
-      S.pendingResolve = null;
-      log('段识别超时(' + (timeoutMs / 1000) + 's), 跳过:', start + 's-' + end + 's');
-      resolve(null);
-    }, timeoutMs);
-    S.pendingResolve = (msg) => {
-      if (settled) return;
-      settled = true;
-      clearInterval(keepAlive);
-      clearTimeout(timeout);
-      resolve(msg);
-    };
-    const send = (retryCount) => {
-      chrome.runtime.sendMessage({
-        type: 'ASR_AUDIO_SEGMENT',
-        videoKey: S.videoKey,
-        start: start,
-        end: end,
-        audio: pcmToArrayBuffer(pcm),
-        returnTimestamps: true
-      }).catch((e) => {
-        if (settled) return;
-        log('发送段失败(第' + (retryCount + 1) + '次):', e);
-        if (retryCount < 2) {
-          setTimeout(() => {
-            if (settled || !S.asrActive || S.asrAborted) return;
-            log('重试发送段:', start + 's-' + end + 's');
-            send(retryCount + 1);
-          }, 2000);
-        }
-      });
-    };
-    send(0);
-  });
 }
 
 // === 麦克风未授权处理（2026-08-17 第七十二次补充） ===
@@ -507,7 +396,7 @@ async function startRecord(kind, preStream) {
 function startBrowserAsr(lang) {
   const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
   if (!SR) {
-    log('浏览器不支持 SpeechRecognition，回退到 Whisper 模型');
+    log('浏览器不支持 SpeechRecognition，改走分段管线（在线 LLM 转写）');
     toast(t('ws.browserAsrNotSupported'), { error: true });
     return false;
   }
@@ -550,7 +439,7 @@ function startBrowserAsr(lang) {
         //   语音服务，国内网络不可达为常态；旧逻辑 onend 无条件重启 → 无限
         //   「network→重启」循环，错误只进进度区（易被忽略）。改为：每次录制一次性
         //   toast 明示用户（带指引），并停止浏览器 ASR 阻断重启循环——mediaRecorder
-        //   录音不受影响，停止录制后可改用 API 引擎或本地 Whisper 识别整段音频。
+        //   录音不受影响，停止录制后可改用配置的 LLM 引擎（本地后端/官方/API）识别整段音频。
         if (!S.browserAsrNetErrShown) {
           S.browserAsrNetErrShown = true;
           toast(t('ws.browserAsrNetErr'), { error: true, duration: 10000 });
@@ -641,16 +530,18 @@ async function beginRecording(stream, kind) {
 
   // 第二百二十九次（用户："实时语言识别的模型优先级，LLM 浏览器 本地模型，有啥用啥"）：
   //   录音/录像的实时识别引擎按可用性择优——
-  //   ①LLM：引擎选了 API 且已配置 地址/Key → 走下方 START_ASR 分段管线（SW 按
-  //     asrEngine='api' 分流到 LLM 转写，实时分片）；
+  //   ①LLM：ASR 配置可解析出 地址+模型（第三百九十四次：改经 resolveLlmConfig 判定，
+  //     provider 默认 local-backend 即河狸后端；与聊天 llm* 配置互不影响）→ 走下方
+  //     START_ASR 分段管线（SW handleSegmentByLlm 在线 LLM 转写，实时分片）；
   //   ②浏览器：SpeechRecognition 可用 → 浏览器实时识别（本分支）；
-  //   ③本地：其余情况（含浏览器不支持）→ 同一分段管线走本地 whisper。
-  //   旧版浏览器不支持时直接 return，识别静默落空（与原注释声称的"回退 Whisper"不符）。
+  //   ③其余情况 → 仍走分段管线，配置缺失由 SW 如实报错（whisper 本地兜底已随模型移除，
+  //     不再有第三引擎）。
   let llmReady = false;
   try {
-    const er = await chrome.storage.local.get({ asrEngine: 'local', asrLlmBaseUrl: '', asrLlmApiKey: '' });
-    llmReady = (er.asrEngine === 'api' || er.asrEngine === 'llm') && !!(er.asrLlmBaseUrl || er.asrLlmApiKey);
-  } catch (e) { /* 默认本地 */ }
+    const er = await chrome.storage.local.get({ asrLlmProvider: 'local-backend', asrLlmBaseUrl: '', asrLlmModel: '', asrLlmApiKey: '' });
+    const cfg = resolveLlmConfig({ llmProvider: er.asrLlmProvider, llmBaseUrl: er.asrLlmBaseUrl, llmModel: er.asrLlmModel, llmApiKey: er.asrLlmApiKey });
+    llmReady = !!cfg.baseUrl && !!cfg.model;
+  } catch (e) { /* 保持 false，走浏览器 SR 或分段管线报错 */ }
   const srSupported = !!(window.SpeechRecognition || window.webkitSpeechRecognition);
   const useBrowserAsr = (kind === 'audio' || kind === 'video') && !llmReady && srSupported;
 
@@ -717,6 +608,12 @@ async function beginRecording(stream, kind) {
       throw new Error(t('ws.asrStartFail') + (startResp && startResp.error || t('ws.noResponse')));
     }
     started = true;
+
+    // 第三百九十四次：whisper 兜底移除——配置不全（llmReady=false）且浏览器 SR 不可用
+    //   （录屏恒不可用）时无引擎可用，如实报错而非静默空转（旧版此时走本地 whisper）。
+    if (!llmReady && (!srSupported || kind === 'screen')) {
+      throw new Error('无可用识别引擎：请先在下方配置转写模型（本地后端/官方/API），或改用支持语音识别的浏览器');
+    }
 
     S.recordingAudioCtx = new (window.AudioContext || window.webkitAudioContext)();
     if (S.recordingAudioCtx.state === 'suspended') {

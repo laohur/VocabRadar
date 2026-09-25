@@ -116,15 +116,28 @@ async function fetchBilibiliSubtitle(url) {
 }
 
 /**
- * 选字幕轨道：优先级 ai-en > en-* > ai-zh > zh-* > 第一条。
+ * 选字幕轨道：第419次起界面语言优先（ai-<ui> → <ui>），无则沿用旧回落
+ * ai-en > en-* > ai-zh > zh-* > 第一条。
  * 反思（2026-07-09 #70）：用户反馈「有中文字幕为何没抓出来？」。
  *   旧版（2026-07-07 回滚）只选英文，无英文返回 null，中文字幕完全不可用。
  *   修正：无英文时回退到中文字幕（ai-zh > zh-*），再无则取第一条。
  *   有字幕总比无字幕好，用户可在轨道下拉框切换。
  * @param {Array} list
+ * @param {string} [ui='en'] 界面语言主码（如 en/zh）
  */
-function pickSubtitleTrack(list) {
+function pickSubtitleTrack(list, ui = 'en') {
   if (!list || list.length === 0) return null;
+  // 第419次：界面语言轨道优先——机器轨 ai-<ui> 先，再 <ui> 人工轨（ui=en 时与旧首两级等价）
+  const aiUi = list.find((s) => s.lan === `ai-${ui}`);
+  if (aiUi) {
+    console.log(`[VocabRadar][bilibili] 命中轨道: ai-${ui} (${aiUi.lan_doc})`);
+    return aiUi;
+  }
+  const uiHit = list.find((s) => !s.lan.startsWith('ai-') && s.lan.startsWith(ui));
+  if (uiHit) {
+    console.log(`[VocabRadar][bilibili] 命中轨道: ${uiHit.lan} (${uiHit.lan_doc})`);
+    return uiHit;
+  }
   const aiEn = list.find((s) => s.lan === 'ai-en');
   if (aiEn) {
     console.log(`[VocabRadar][bilibili] 命中轨道: ai-en (${aiEn.lan_doc})`);
@@ -152,16 +165,17 @@ function pickSubtitleTrack(list) {
 }
 
 /**
- * 获取 B站字幕（自动选英文轨道，ai-en 优先，无英文回退中文）
+ * 获取 B站字幕（第419次：界面语言轨道优先，默认 en 时与旧 ai-en 优先行为一致）
  * 反思（2026-07-09 #72）：用户反馈「既然加载的是中文字幕，轨道咋还是asr？」。
  *   根因：旧版只返回 subtitles 数组，不返回 tracks 信息，video-controller.js
  *   把 Array 当 B站结果，tracks=null → setTracks 不调用 → 下拉框只有 ASR。
  *   修正：返回 {tracks, subtitles, pickedIndex} 格式（与 YouTube 一致），
  *   tracks 含 languageCode(lan) + name(lan_doc) + subtitle_url，
  *   setTracks 据此填充下拉框显示字幕轨道名（如"中文（自动生成）"）。
+ * @param {string} [uiLanguage='en'] 界面语言（默认首选轨道；bilibili-comment 不传保持英文提词）
  * @returns {Promise<{tracks:Array, subtitles:Array, pickedIndex:number}|null>}
  */
-export async function getBilibiliSubtitles() {
+export async function getBilibiliSubtitles(uiLanguage = 'en') {
   console.log('[VocabRadar][bilibili] 开始获取字幕');
   const ids = await getBilibiliIds();
   if (!ids) {
@@ -177,7 +191,7 @@ export async function getBilibiliSubtitles() {
   // 打印所有轨道便于排查
   console.log('[VocabRadar][bilibili] 所有字幕轨道:', list.map((s) => `${s.lan}=${s.lan_doc}${s.ai ? '(AI)' : ''}`).join(', '));
 
-  const track = pickSubtitleTrack(list);
+  const track = pickSubtitleTrack(list, uiLanguage);
   if (!track) return null;
 
   const subs = await fetchBilibiliSubtitle(track.subtitle_url);

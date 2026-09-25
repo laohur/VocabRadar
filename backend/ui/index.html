@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>VocabRadar Backend Admin</title>
+<link rel="stylesheet" href="/ui/admin.css">
+</head>
+<body>
+<div class="layout">
+  <nav class="sidebar">
+    <div class="brand">VocabRadar<br><small>Backend</small></div>
+    <button data-page="overview" class="active">Overview / Status</button>
+    <button data-page="llm">LLM</button>
+    <button data-page="translate">Translate</button>
+    <button data-page="asr">ASR</button>
+    <button data-page="ocr">OCR</button>
+    <button data-page="ytdl">Downloader</button>
+  </nav>
+  <main id="main"></main>
+</div>
+<script src="/ui/i18n.js"></script>
+<script src="/ui/admin.js"></script>
+<script src="/ui/pages.js"></script>
+</body>
+</html>

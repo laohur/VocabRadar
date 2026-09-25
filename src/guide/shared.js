@@ -61,13 +61,14 @@ const MSG = {
   subHeadAsr: { en: 'Speech Recognition Model', zh: '语音识别模型' },
   subHeadOcr: { en: 'OCR', zh: 'OCR' },
   subHeadTrans: { en: 'Translation', zh: '翻译' },
+  // 第三百九十三次：引擎 API 分支新增河狸后端选项（本地免 Key/官方），desc 同步
   asrModelDesc: {
-    en: 'Speech recognition engine: local Whisper (larger = more accurate but slower, downloaded on first use) or an OpenAI-compatible transcription API (endpoint / model / key). Unrelated to the chat LLM above.',
-    zh: '语音识别引擎：本地 Whisper（模型越大越准也越慢，首次使用需下载），或 OpenAI 兼容转写 API（填接口地址/模型名/Key）。与上面的对话模型互不相关。'
+    en: 'Speech recognition engine: local Whisper (larger = more accurate but slower, downloaded on first use) or an API source (VocabRadar backend — local needs no key — or an OpenAI-compatible transcription endpoint). Unrelated to the chat LLM above.',
+    zh: '语音识别引擎：本地 Whisper（模型越大越准也越慢，首次使用需下载），或 API 来源（河狸后端——本地免 Key，或 OpenAI 兼容转写接口）。与上面的对话模型互不相关。'
   },
   ocrEngineDesc: {
-    en: 'OCR engine for screenshots/video frames: local Tesseract (pick languages among the interface / target / definition languages), or a vision LLM API (needs image input support).',
-    zh: '截图/视频帧的文字识别引擎：本地 Tesseract（在界面/目标/释义三种语言中勾选要识别的语言），或大模型视觉识别 API（需模型支持图片输入）。'
+    en: 'OCR engine for screenshots/video frames: local Tesseract (pick languages among the interface / target / definition languages), or an API source (VocabRadar backend / vision LLM, needs image input support).',
+    zh: '截图/视频帧的文字识别引擎：本地 Tesseract（在界面/目标/释义三种语言中勾选要识别的语言），或 API 来源（河狸后端 / 大模型视觉识别，需模型支持图片输入）。'
   },
   modelDesc: {
     en: 'LLM endpoint used by the chat (💬) feature. Three API formats: free direct (no account), OpenAI-compatible, and Anthropic — the latter two need your own API key.',
@@ -77,6 +78,27 @@ const MSG = {
   fieldLlmModel: { en: 'Model', zh: '模型名' },
   fieldLlmBaseUrl: { en: 'Endpoint', zh: '接口地址' },
   fieldLlmApiKey: { en: 'API Key', zh: 'API Key' },
+  // 第397次：检测本地后端按钮与结果提示（plan-backend §4.4；结果区失败文案后接
+  //   vocabradar.com 链接，故 backendMissing 句尾不闭合）
+  btnDetectBackend: { en: 'Detect local backend', zh: '检测本地后端' },
+  // 第401次：本地后端地址填空（完整 URL 含协议主机端口；留空 = 默认 127.0.0.1:7777）
+  fieldBackendBaseUrl: {
+    en: 'Local backend URL (protocol + host + port)',
+    zh: '本地后端地址（协议+主机+端口）'
+  },
+  backendDetecting: { en: 'Detecting…', zh: '检测中…' },
+  backendOk: {
+    en: 'Local backend {version} is running — you can pick Local backend as a provider.',
+    zh: '本地后端 {version} 运行中——可在来源中选择本地后端。'
+  },
+  backendNeedsSetup: {
+    en: 'Models not downloaded yet — open the management page to finish first-time setup.',
+    zh: '模型尚未下载——请打开管理界面完成首次安装。'
+  },
+  backendMissing: {
+    en: 'Local backend not detected. To run models locally, get the backend from',
+    zh: '未检测到本地后端。如需本地推理，可从'
+  },
   // 第二百二十七次（用户："两种提示词，背景最大长度，都应当各自一行"）：改回各自一行，
   //   恢复完整标签（226 次的悬浮提示键 tipChat* 随之删除）；"Anthropic 兼容"表述对齐
   //   "OpenAI 兼容"（自定义网关同样可用，并非只有官方端点）。
@@ -163,9 +185,9 @@ const MSG = {
   asrEngineLocal: { en: 'Local', zh: '本地' },
   asrEngineApi: { en: 'API', zh: 'API' },
   fieldAsrLlmModel: { en: 'Transcription model', zh: '转写模型' },
-  ocrApiFmt: { en: 'API format', zh: 'API 格式' },
-  fmtOpenai: { en: 'OpenAI-compatible', zh: 'OpenAI 兼容' },
-  fmtAnthropic: { en: 'Anthropic-compatible', zh: 'Anthropic 兼容' },   // 第二百二十七次：对齐"OpenAI 兼容"表述（自定义网关可用，非仅官方端点）
+  // 第三百九十三次：ASR/OCR 来源下拉共用标签（原 ocrApiFmt + fmtOpenai/fmtAnthropic 随
+  //   静态两选项下拉退役——选项文案改由 LLM_PROVIDERS 表按界面语言动态生成）
+  engineApiFmt: { en: 'API source', zh: 'API 来源' },
   // 第一百零二次：asrFirstChunkSec 引导页输入已按用户裁定移除（唯一来源 config.json），
   // MSG 词条 fieldAsrFirstChunk/asrFirstChunkDesc 一并删除
   chkRareWords: { en: 'Annotate out-of-vocabulary words', zh: '注释表外词' },

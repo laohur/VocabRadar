@@ -198,6 +198,11 @@ function patchManifestForFirefox(distDir) {
   const manifestPath = path.join(distDir, 'manifest.json');
   const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
 
+  // 第401次：剥离 Chromium 专有的 "key" 字段（Edge 商店公钥，供本地加载复用商店
+  // ID 用，来由见 change.log 第401次）。Firefox 定位扩展用 gecko.id，不读 key；
+  // AMO addons-linter 对未知 manifest 键仅警告，剥离后包更干净。
+  delete manifest.key;
+
   // 1. background: service_worker → scripts
   if (manifest.background) {
     const bg = manifest.background;

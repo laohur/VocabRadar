@@ -4,10 +4,19 @@
 //   2. 注册右键菜单 🦫VocabRadar（i18n，随界面语言动态切换）
 //   3. 接收右键点击，把选中文本转发到当前 tab 的 text-hint content script
 //   4. 消息路由
-//   5. ASR 状态持久化（chrome.storage.session），防止 SW 重启后丢失 _asrActive
-//      反思（2026-08-08）：用户反馈「依旧asr经常停止」。根因：MV3 SW 会被 Chrome
-//      随时终止重启，内存中的 _asrActive=false 导致后续 ASR_AUDIO_SEGMENT 被静默丢弃。
-//      修正：_asrActive/_asrTabId 持久化到 session storage，SW 启动时恢复。
+// 第三百九十四次（plan 阶段二③，用户裁定"扩展不再保留这两个模型"）：
+//   offscreen Whisper/Tesseract 本地推理整链移除——START_ASR/STOP_ASR 会话状态机
+//   （_asrActive/_asrTabId/persistAsrState/restoreAsrState）、ASR_STATUS/ASR_SEGMENT/
+//   ASR_ERROR 转发区（生产者已无）、ASR_AUDIO_SEGMENT 的 local 分支（OFFSCREEN_ASR_RECOGNIZE）、
+//   OCR 的 tesseract 分支（OFFSCREEN_OCR）、整段转写的本地降级（OFFSCREEN_ASR_WEBM）全删。
+//   ASR/OCR 一律走在线引擎：分片 ASR_AUDIO_SEGMENT → handleSegmentByLlm，整段 ASR_LLM_FILE，
+//   OCR → handleOcrByLlm（引擎 provider 默认 local-backend）。offscreen document 仍保留
+//   （AUDIO_DECODE/EXTRACT_TEXT/PARSE_DOC 三类非模型能力 + PING 探针）。
+// 第398次（plan 阶段三2，用户裁定"扩展内音频下载管线全退役，backend 端到端任务式转写"）：
+//   FETCH_AUDIO/FETCH_AUDIO_META/FETCH_AUDIO_RANGE 代理通道删除（发送方 asr-client/
+//   record-workflow 的 B站/YouTube 音频管线同批退役）；新增 ASR_JOB_SUBMIT/ASR_JOB_POLL
+//   代理——content script 受页面 CSP 不能直连 backend，经 SW 调 POST /api/asr/jobs
+//   （提交 URL）与 GET /api/asr/jobs/<id>?after=N（增量轮询：下载/转写进度 + 新增转写段）。
 
 // 反思（2026-08-02）：import md5.js 作为副作用脚本，挂到 self.md5
 //   供 youdaoTranslate 的 sign 计算使用
@@ -193,7 +202,8 @@ const DEFAULT_SETTINGS = {
   //   用户指出命名错误。默认 false（注释表外词默认不选）。
   annotateOov: false,          // 是否注释表外词（词频词典之外的单词），默认不选
   uiLanguage: 'en',             // 界面语言，默认英文
-  asrModelSize: 'tiny'          // ASR 模型大小（从 config.json 读取覆盖）
+  // 第419次：默认档 tiny → large-v3-turbo（与后端 config.asr.whisper_model 默认一致）
+  asrModelSize: 'large-v3-turbo'  // ASR 模型大小（从 config.json 读取覆盖）
 };
 
 // 易坏参数键名（从 config.json 读取覆盖 DEFAULT_SETTINGS）
@@ -381,11 +391,10 @@ createContextMenus();
 //   （2026-08-08"中英文夹杂"修法）。标题已统一为固定格式 "VocabRadar: query {word}"，
 //   不再随界面语言分叉，监听失去存在意义，随菜单实现一并退役。
 
-// 反思（2026-07-06）：用户反馈"为啥每次开启 ASR 都要下载模型？"。
-// 根因：offscreen document 仅在 START_ASR 时创建，SW 被回收后 offscreen 也可能被回收，
-// 导致模型实例丢失。修正：扩展启动时预创建 offscreen document，整个会话期间复用，
-// 模型只需加载一次。ensureOffscreen 是幂等操作，反复调用安全。
-ensureOffscreen().catch(() => { /* 首次创建可能失败，不影响主流程 */ });
+// 反思（2026-07-06）：旧此处有扩展启动时预创建 offscreen document 的预热调用
+//   （起因是 whisper 模型实例希望整个会话复用）。第三百九十四次：whisper 移除后
+//   offscreen 只承载解码/正文提取/文档解析三类按需能力，ensureOffscreenHost
+//   在首次使用时自建，预热失去意义，删除。
 
 /**
  * 创建右键菜单
@@ -475,106 +484,37 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   // 第一百八十次：删除 ASR_FALLBACK_IFRAME 分支——该广播原用于请求页面/引导页创建
   //   Firefox 回退 iframe，现宿主已改建在后台页自身 document 内（ensureFallbackIframe），
   //   不再有此消息类型。
-  // ASR_STATUS / ASR_SEGMENT / ASR_ERROR 是 offscreen 发给 SW 的，
-  // SW 中转给 content script（offscreen 的 runtime.sendMessage 广播 content script 收不到，
-  // 必须由 SW 用 chrome.tabs.sendMessage 精准转发）
-  if (msg.type === 'ASR_STATUS' || msg.type === 'ASR_SEGMENT' || msg.type === 'ASR_ERROR') {
-    if (msg.type === 'ASR_STATUS') {
-      log('[VocabRadar][sw][' + _ts() + '] 转发 ASR_STATUS:', msg.stage, msg.info || msg.status || '');
-    } else if (msg.type === 'ASR_SEGMENT') {
-      // 反思（2026-07-09 #77）：用户反馈「字幕你全打印了，毫无意义」。
-      //   旧版 console.log('转发 ASR_SEGMENT:', msg.text) 全量打印每段识别文本，
-      //   ASR 持续识别时 service worker 控制台被字幕全文刷屏。
-      //   修正：只打印前 40 字符 + 总长度，足以确认识别在运转又不污染控制台。
-      log('[VocabRadar][sw][' + _ts() + '] 转发 ASR_SEGMENT:', (msg.text || '').slice(0, 40), 'len=', (msg.text || '').length);
-    } else {
-      log('[VocabRadar][sw][' + _ts() + '] 转发 ASR_ERROR:', msg.error);
-    }
-    // 转发给发起 ASR 的 tab
-    if (_asrTabId) {
-      chrome.tabs.sendMessage(_asrTabId, msg).catch(() => { /* tab 可能已关闭 */ });
-    }
-    return false;
-  }
+  // 第三百九十四次：删除 ASR_STATUS/ASR_SEGMENT/ASR_ERROR 转发区——旧生产者
+  //   （offscreen whisper 识别回传）已随本地模型移除消失；现 ASR_SEGMENT 由
+  //   handleSegmentByLlm 直发发起方 tab（sender.tab.id），无需中转。
   switch (msg.type) {
     case 'START_ASR':
-      handleStartASR(sender.tab?.id, msg.videoKey)
-        .then((r) => sendResponse(r))
-        .catch((e) => sendResponse({ ok: false, error: String(e.message || e) }));
-      return true;
-    case 'ASR_AUDIO_SEGMENT':
-      // content script 采集的音频段，转发给 offscreen 做 whisper 识别
-      // 不等待结果（offscreen 识别完成后会主动发 ASR_SEGMENT 回来）
-      // 反思（2026-07-04 重构）：新增 returnTimestamps 字段转发，
-      // B站预识别路径请求 chunk 级时间戳用于精确字幕定位。
-      // 反思（2026-08-08）：SW 重启后 _asrActive 可能未及时恢复（session.get 是异步的）。
-      //   若 _asrActive 为 false 但 offscreen 存在，仍尝试转发，避免丢段。
-      // 反思（2026-08-08 第二次）：用户持续反馈"asr经常停止"。
-      //   根因：SW 重启后 offscreen document 可能也被 Chrome 回收，
-      //   chrome.runtime.sendMessage({ type: 'OFFSCREEN_ASR_RECOGNIZE' }) 失败被 .catch 吞掉，
-      //   段被静默丢弃，content script 的 sendSegmentAndWait 超时后跳过当前段。
-      //   修正：转发前先 ensureOffscreen()，确保 offscreen 存在。
-      //   ensureOffscreen 内部先 hasDocument 检查（快），不存在才 createDocument。
-      (async () => {
-        // 第二百一十五次（用户："asr模型可选本地whisper，也能选llm"；"离线整段，在线分片"）：
-        //   ASR 引擎可选——'api' 走 OpenAI 兼容音频转写（在线分片：每段 Float32 PCM(16kHz)
-        //   现转 WAV 一次请求）；'local'（默认）走既有 offscreen whisper。
-        //   模型名用户自管（asrLlmModel，默认 whisper-1），有错就报（回包带 error 字段）。
-        // 第二百二十五次：引擎存储值 'llm' 改名 'api'（名实相符，《命名清查》裁定）——
-        //   它指"在线转写 API"，与聊天大模型无关；读侧兼容旧残留 'llm'/'api' 都视为 API。
-        let asrEngineSel = 'local';
-        let asrLlmModel = 'whisper-1';
-        try {
-          const er = await new Promise((r) => chrome.storage.local.get({ asrEngine: 'local', asrLlmModel: 'whisper-1' }, r));
-          asrEngineSel = (er.asrEngine === 'llm' || er.asrEngine === 'api') ? 'api' : 'local';
-          asrLlmModel = er.asrLlmModel || 'whisper-1';
-        } catch (_) { /* 默认本地 */ }
-        if (asrEngineSel === 'api') {
-          handleSegmentByLlm(msg, sender).catch((e) => {
-            console.warn('[VocabRadar][sw][' + _ts() + '] ASR(LLM) 段失败:', e);
-          });
-          sendResponse({ ok: true });
-          return;
-        }
-        if (_asrActive || _asrTabId) {
-          await ensureOffscreen().catch(() => { /* ignore */ });
-          chrome.runtime.sendMessage({
-            type: 'OFFSCREEN_ASR_RECOGNIZE',
-            videoKey: msg.videoKey,
-            start: msg.start,
-            end: msg.end,
-            audio: msg.audio,
-            // 第一百零四次（关键修复）：必须转发 audioB64——本中继是显式字段白名单，
-            // 第九十八次双通道修复只改了发送端与接收端，遗漏中间人，导致
-            // ArrayBuffer 在部分环境序列化丢失后 base64 兜底也被丢弃（ch=none samples=0）。
-            audioB64: msg.audioB64,
-            returnTimestamps: msg.returnTimestamps || false
-          }).catch(() => { /* offscreen 可能已关闭 */ });
-        } else {
-          // 兜底：尝试从 session 恢复状态后再转发
-          const res = await new Promise((r) => chrome.storage.session.get(['_asrActive', '_asrTabId'], r));
-          if (res && res._asrActive) {
-            _asrActive = true;
-            _asrTabId = res._asrTabId || null;
-            await ensureOffscreen().catch(() => { /* ignore */ });
-            chrome.runtime.sendMessage({
-              type: 'OFFSCREEN_ASR_RECOGNIZE',
-              videoKey: msg.videoKey,
-              start: msg.start,
-              end: msg.end,
-              audio: msg.audio,
-              audioB64: msg.audioB64, // 第一百零四次：同上，兜底路径同样转发
-              returnTimestamps: msg.returnTimestamps || false
-            }).catch(() => { /* offscreen 可能已关闭 */ });
-          }
-        }
-      })();
+      // 第三百九十四次：whisper 会话移除后轻量化——旧版在此创建 offscreen document
+      //   并预加载模型、维护 _asrActive 状态机。现 ASR 一律在线转写，分段请求自带
+      //   全部上下文（sender.tab 直发结果），START/STOP 只剩协议握手意义（调用方
+      //   asr-client.js/asr.js 仍以此判断链路可达），直接确认即可。
       sendResponse({ ok: true });
       return true;
+    case 'ASR_AUDIO_SEGMENT':
+      // content script 采集的音频段，在线转写（OpenAI 兼容 /audio/transcriptions）
+      // 不等待结果（转写完成后 handleSegmentByLlm 主动发 ASR_SEGMENT 回发起 tab）
+      // 反思（2026-08-08）：旧版此处有 _asrActive 状态检查与 session 恢复兜底、
+      //   引擎分流（local→OFFSCREEN_ASR_RECOGNIZE）。第三百九十四次：引擎单一化
+      //   （在线），状态机与 local 分支删除，段处理无条件走 handleSegmentByLlm。
+      (async () => {
+        try {
+          handleSegmentByLlm(msg, sender).catch((e) => {
+            console.warn('[VocabRadar][sw][' + _ts() + '] ASR(api) 段失败:', e);
+          });
+          sendResponse({ ok: true });
+        } catch (e) {
+          sendResponse({ ok: false, error: String(e.message || e) });
+        }
+      })();
+      return true;
     case 'STOP_ASR':
-      handleStopASR()
-        .then((r) => sendResponse(r))
-        .catch((e) => sendResponse({ ok: false, error: String(e.message || e) }));
+      // 第三百九十四次：同 START_ASR，轻量确认（无会话可停）
+      sendResponse({ ok: true });
       return true;
     case 'ASR_CHECK':
       sendResponse({ ok: true, supported: true });
@@ -589,21 +529,22 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         .then((r) => sendResponse(r))
         .catch((e) => sendResponse({ ok: false, error: String(e.message || e) }));
       return true;
-    case 'FETCH_AUDIO':
-      // B站预识别路径：代理下载音频文件（SW 不受 CORS 限制）；第九十六次支持 urls[] 多候选回退
-      handleFetchAudio(msg.url, msg.urls)
+    case 'ASR_JOB_SUBMIT':
+      // 第398次（阶段三2）：ASR 端到端任务提交——content script 受页面 CSP 限制
+      //   不能直连 backend，SW 代理 POST /api/asr/jobs（同 FETCH_SUBTITLE 的代理逻辑）
+      handleAsrJobSubmit(msg.url, msg.language)
         .then((r) => sendResponse(r))
         .catch((e) => sendResponse({ ok: false, error: String(e.message || e) }));
       return true;
-    case 'FETCH_AUDIO_META':
-      // 第九十五次（流式 ASR）：探测音频文件总字节数（HEAD，缺失时 Range bytes=0-0 读 content-range）
-      handleFetchAudioMeta(msg.url, msg.urls)
+    case 'ASR_JOB_POLL':
+      // 第398次：任务增量轮询——GET /api/asr/jobs/<id>?after=N（下载/转写进度+新增段）
+      handleAsrJobPoll(msg.id, msg.after)
         .then((r) => sendResponse(r))
         .catch((e) => sendResponse({ ok: false, error: String(e.message || e) }));
       return true;
-    case 'FETCH_AUDIO_RANGE':
-      // 第九十五次（流式 ASR）：按字节区间下载（借鉴 videoseek ChunkedDownloader 的分块 Range 方式）
-      handleFetchAudioRange(msg.url, msg.start, msg.end, msg.urls)
+    case 'YTDL_SUBTITLES':
+      // 第399次：字幕 backend 兜底——扩展五路全失败后 SW 代理 GET /api/ytdl/subtitles
+      handleYtdlSubtitles(msg.url, msg.lang)
         .then((r) => sendResponse(r))
         .catch((e) => sendResponse({ ok: false, error: String(e.message || e) }));
       return true;
@@ -794,33 +735,10 @@ async function handleOcrRecognize(imageDataUrl, lang) {
     log('[VocabRadar][sw][' + _ts() + '] OCR 图片缩放跳过（原图直送）: ' + ds.error);
   }
   imageDataUrl = ds.dataUrl;
-  // 第二百一十四次（用户："OCR可选 Tesseract LLM"）：引擎由 storage.ocrEngine 选择——
-  //   'tesseract'（默认，offscreen 本地识别）| 'api'（大模型视觉识别 API）。
-  //   第二百二十五次：值 'llm' 改名 'api'，读侧兼容旧残留 'llm'。
-  let engine = 'tesseract';
-  let tessLangs = 'eng';
-  try {
-    const er = await new Promise((resolve) => {
-      try { chrome.storage.local.get({ ocrEngine: 'tesseract', ocrLanguages: { eng: true } }, resolve); } catch (_) { resolve({}); }
-    });
-    engine = (er.ocrEngine === 'llm' || er.ocrEngine === 'api') ? 'api' : 'tesseract';
-    const ol = er.ocrLanguages || {};
-    const ls = Object.keys(ol).filter((k) => ol[k] === true);
-    if (ls.length > 0) tessLangs = ls.join('+');
-  } catch (_) { /* 默认 Tesseract + eng */ }
-  if (engine === 'api') {
-    return handleOcrByLlm(imageDataUrl, lang);
-  }
-  lang = tessLangs;   // 第二百一十九次：Tesseract 语言=引导页复选（42 语 tess 代码并集）
-  // F1：宿主统一选择（Chromium=offscreen document；Firefox=后台页内回退 iframe），不再报「offscreen API 不可用」
-  const host = await ensureOffscreenHost();
-  if (!host.ok) return { ok: false, error: host.error || 'offscreen 宿主不可用' };
-  const resp = await chrome.runtime.sendMessage({
-    type: 'OFFSCREEN_OCR',
-    imageDataUrl: imageDataUrl,
-    lang: lang
-  }).catch((e) => ({ ok: false, error: String(e.message || e) }));
-  return resp;
+  // 第三百九十四次：Tesseract 本地引擎移除（用户裁定"扩展不再保留这两个模型"），
+  //   OCR 一律走 LLM 视觉识别（provider 默认 local-backend，见 resolveLlmEngineCfg）。
+  //   第二百一十四次的引擎分流（storage.ocrEngine → OFFSCREEN_OCR）随之删除。
+  return handleOcrByLlm(imageDataUrl, lang);
 }
 
 // === G4（2026-09-08）：网站素材解析（vocabradar-bridge 转发的 PARSE_MATERIAL） ===
@@ -858,15 +776,12 @@ async function handleParseMaterial(kind, payload) {
   if (kind === 'asr') {
     // P 批（2026-09-11）：网站卷轴听说回退——浏览器 Web Speech 不可用时，网页把
     // 跟读录音（audio/webm dataURL）发来走扩展转写。
-    // Q 批完善：按用户 ASR 引擎设置分流（对齐扩展「本地whisper也能选llm」决策）——
-    // 'local'（默认）→ offscreen 本地 whisper 模型推理（OFFSCREEN_ASR_WEBM，解码重采样
-    // 16k 在 offscreen 做，识别同步响应回 SW）；'api'/'llm' → 在线 LLM 转写
-    // （resolveLlmEngineCfg('asr') + llmTranscribeBlob）。协议见桥接扩展.md §2.2。
-    // 312 批（2026-09-14 用户指令「解析音频，说过网络不好的时候改用模型推理」）：
-    //   api/llm 在线转写失败（网络不好等）自动降级本地 whisper 模型推理，降级也失败
-    //   才报错（两级错误都如实透出，不遮蔽）。顺带补做 310 批声称但未落盘的 mime 修复：
-    //   从 dataURL 头解析真实 mime，extMap 反查扩展名——blob type 与 fileName 不再
-    //   硬编码 audio/webm/audio.webm。
+    // 第三百九十四次（plan 阶段二③，用户裁定「扩展不再保留这两个模型」）：whisper
+    //   本地推理移除后此处只剩在线 LLM 转写单一路径（resolveLlmEngineCfg('asr') +
+    //   llmTranscribeBlob）。协议见桥接扩展.md §2.2。
+    // 第三百九十四次：312 批的「在线失败降级本地 whisper」随模型移除一并删除，
+    //   失败如实报错不遮蔽；mime 修复（310 批声称但未落盘）保留：从 dataURL 头解析
+    //   真实 mime，extMap 反查扩展名。
     const audioDataUrl = String((payload && payload.audioDataUrl) || '');
     // W批（2026-09-20）：lang 兜底改读扩展 learnLanguage——旧兜底硬编码 'en'，网页音视频
     //   路径不传 lang（undefined）时中文音频被强制英文转写 → whisper 返回空（本次
@@ -879,8 +794,6 @@ async function handleParseMaterial(kind, payload) {
       } catch (_) { lang = 'en'; }
     }
     if (!audioDataUrl) return { ok: false, error: 'asr payload missing audioDataUrl' };
-    let asrEngine = 'local';
-    try { asrEngine = (await new Promise((r) => chrome.storage.local.get({ asrEngine: 'local' }, r))).asrEngine || 'local'; } catch (_) { }
     const b64Part = audioDataUrl.replace(/^data:[^;]+;base64,/, '');
     // 312 批补做 310 丢失修复：dataURL 头解析 mime → 扩展名映射
     const mimeMatch = audioDataUrl.match(/^data:([^;,]+)/i);
@@ -891,45 +804,15 @@ async function handleParseMaterial(kind, payload) {
       'audio/ogg': 'ogg', 'audio/flac': 'flac', 'audio/x-flac': 'flac', 'audio/aac': 'aac',
     };
     const ext = EXT_BY_MIME[mime] || 'bin';
-    // 本地 whisper 模型推理：offscreen 解码重采样 16k 后识别（抽辅助函数，api 失败降级复用）
-    async function runLocalAsr() {
-      const host = await ensureOffscreenHost();
-      if (!host.ok) throw new Error('offscreen 宿主不可用：' + (host.error || 'unknown'));
-      const resp = await chrome.runtime.sendMessage({
-        type: 'OFFSCREEN_ASR_WEBM',
-        webmB64: b64Part,
-        lang: lang
-      }).catch((e) => ({ ok: false, error: String(e.message || e) }));
-      if (!resp || !resp.ok) return { ok: false, error: (resp && resp.error) || 'offscreen no response' };
-      // W批（2026-09-20 用户令「应该返回结构化信息啊，带时间戳，数组啊，识别结果的
-      // 信息都带回来。而不是纯文本」）：透传 offscreen 产出的 segments（带时间戳段数组）
-      // 与诊断字段 lang/samples/peak；空文本不再静默 ok——console.warn 留痕供 SW 控制
-      // 台定位，诊断字段让网页侧能区分「静音」与「有声但识别空」（peak）
-      const outText = String(resp.text || '').trim();
-      if (!outText) {
-        console.warn('[VocabRadar][sw] 本地转写空结果: lang=' + (resp.lang || lang) + ' samples=' + (resp.samples != null ? resp.samples : '?') + ' peak=' + (resp.peak != null ? resp.peak : '?') + '（空 segments+诊断随响应回传，网页侧按 asr-empty 引导）');
-      }
-      return {
-        ok: true,
-        text: outText,
-        segments: Array.isArray(resp.segments) ? resp.segments : null,
-        lang: resp.lang || lang,
-        samples: resp.samples,
-        peak: resp.peak
-      };
-    }
-    if (asrEngine === 'local') return runLocalAsr();
-    // api/llm 在线转写：失败（网络不好/端点错/配额）→ 降级本地模型推理（312 批用户令）
     let learn = lang;
     try { learn = (await new Promise((r) => chrome.storage.local.get({ learnLanguage: lang }, r))).learnLanguage || lang; } catch (_) { }
     try {
       const cfg = await resolveLlmEngineCfg('asr');
       // 316次（用户"送入模型之前应当转换，包括网页送入"）：网页送入的录音在送在线
       //   LLM 转写引擎前先客户端转换——原始 webm/opus 裸送既有模型端兼容性风险又
-      //   浪费带宽；先经 offscreen 解码+重采样 16k 单声道（对齐本地 whisper 口径，
-      //   与分片路径 handleSegmentByLlm 的 pcmF32ToWavBlob(pcm,16000) 同款），再编码
-      //   WAV 送转写。转换失败 console.warn 后回退原始 blob 直送（保底不阻断，
-      //   错误如实透出不遮蔽）。本地 whisper 路径本就 16k（runLocalAsr），无需改。
+      //   浪费带宽；先经 offscreen 解码+重采样 16k 单声道（与分片路径 handleSegmentByLlm
+      //   的 pcmF32ToWavBlob(pcm,16000) 同款），再编码 WAV 送转写。转换失败 console.warn
+      //   后回退原始 blob 直送（保底不阻断，错误如实透出不遮蔽）。
       // 317次（用户"只压缩，不扩增"）：转换不得让体积变大——16k 16bit WAV 恒定
       //   256kbps，原始低码率 webm/opus 常见约 32kbps，长录音转完反而扩增约 8 倍。
       //   编码前先估算（44 头 + pcm×2 字节，16bit；与 pcmF32ToWavBlob 产物严格一致）
@@ -974,15 +857,15 @@ async function handleParseMaterial(kind, payload) {
       }
       // 313 批（2026-09-14 用户报「Network is slow — 持续了很久，不报错也不转入本地
       // 推理」）：在线转写加 90s 超时——此前 fetch 无 signal，网络慢时无限挂起永不进
-      // catch，312 批的降级分支形同虚设。AbortController 中断后 AbortError 转可读
-      // 文案，与其它失败同样进外层 catch 降级 runLocalAsr
+      // catch。AbortController 中断后 AbortError 转可读文案，与其它失败同样进外层
+      // catch 如实报错（第三百九十四次：降级本地推理已随 whisper 移除）。
       const ctrl = new AbortController();
       const timer = setTimeout(() => ctrl.abort(), 90000);
       let text;
       try {
         text = await llmTranscribeBlob(blob, cfg, learn, fileName, ctrl.signal);
       } catch (err) {
-        if (err && err.name === 'AbortError') throw new Error('在线转写超时（90 秒）：网络过慢或端点无响应，改试本地模型推理');
+        if (err && err.name === 'AbortError') throw new Error('在线转写超时（90 秒）：网络过慢或端点无响应，请稍后重试或检查后端地址');
         throw err;
       } finally {
         clearTimeout(timer);
@@ -995,9 +878,8 @@ async function handleParseMaterial(kind, payload) {
       }
       return { ok: true, text: onlineText, segments: null };
     } catch (e) {
-      const local = await runLocalAsr();
-      if (local.ok) return local;
-      return { ok: false, error: '在线转写失败（' + String(e.message || e) + '）；本地模型推理也失败（' + (local.error || 'unknown') + '）' };
+      // 第三百九十四次：whisper 移除后无本地降级，失败如实透出（不遮蔽）
+      return { ok: false, error: '在线转写失败：' + String((e && e.message) || e) };
     }
   }
   if (kind === 'document') {
@@ -1200,21 +1082,31 @@ async function handleSegmentByLlm(msg, sender) {
 
 // 第二百一十六次（用户："可以下拉，可以单独配置，跟聊天的LLM不同"）：
 //   ASR-LLM 与 OCR-LLM 各自独立的 LLM 配置（asrLlm* / ocrLlm* 键），
-//   provider 缺省 openai（转写/视觉的主流候选），与聊天 llm* 配置互不影响。
+//   provider 缺省 local-backend（第三百九十四次：随用户裁定由 openai 改河狸后端），
+//   与聊天 llm* 配置互不影响。
 async function resolveLlmEngineCfg(engine) {
   const keys = (engine === 'asr')
     ? { p: 'asrLlmProvider', b: 'asrLlmBaseUrl', m: 'asrLlmModel', k: 'asrLlmApiKey' }
     : { p: 'ocrLlmProvider', b: 'ocrLlmBaseUrl', m: 'ocrLlmModel', k: 'ocrLlmApiKey' };
   const res = await new Promise((resolve) => {
     chrome.storage.local.get(
-      { [keys.p]: 'openai', [keys.b]: '', [keys.m]: '', [keys.k]: '' },
+      // 第三百九十四次：兜底 provider 随用户裁定（"local-backend，没有免key后缀"）由
+      //   'openai' 改 'local-backend'——storage 无值（从未打开引导页）时默认走河狸后端
+      { [keys.p]: 'local-backend', [keys.b]: '', [keys.m]: '', [keys.k]: '' },
       (r) => resolve(r || {})
     );
   });
-  return resolveLlmConfig({
+  const cfg = resolveLlmConfig({
     llmProvider: res[keys.p], llmBaseUrl: res[keys.b],
     llmModel: res[keys.m], llmApiKey: res[keys.k]
   });
+  // 第406次：ASR/OCR-LLM 默认走河狸后端且未手填地址时，同样经 getBackendBase 自动
+  //   发现端口（与聊天路径 handleLlmChat 覆写逻辑同构）——backend 递延换端口后，
+  //   转写/视觉识别无需手动改 asrLlmBaseUrl / ocrLlmBaseUrl
+  if (cfg.provider === 'local-backend' && !cfg.userBaseUrl) {
+    cfg.baseUrl = (await getBackendBase()) + '/v1';
+  }
+  return cfg;
 }
 
 async function handleAsrLlmFile(msg, sender) {
@@ -1249,7 +1141,9 @@ async function handleOcrByLlm(imageDataUrl, lang) {
  * @returns {Promise<{ok:boolean, content?:string, error?:string}>}
  */
 async function llmVisionOnce(cfg, prompt, imageDataUrl) {
-  const isFree = cfg.format === 'free';
+  // 第三百九十三次：noKey 来源（本地后端）与 free 同待遇——免 Key 强校验；
+  //   鉴权头仅在有 Key 时携带（镜像 llmTranscribeBlob），空 Bearer 不发给本地服务
+  const isFree = cfg.format === 'free' || !!cfg.noKey;
   const isAnthropic = cfg.format === 'anthropic';
   if (!isFree && !cfg.apiKey) return { ok: false, error: 'API Key 未配置' };
   if (!cfg.baseUrl) return { ok: false, error: 'Base URL 未配置' };
@@ -1267,7 +1161,7 @@ async function llmVisionOnce(cfg, prompt, imageDataUrl) {
     headers['x-api-key'] = cfg.apiKey;
     headers['anthropic-version'] = '2023-06-01';
     headers['anthropic-dangerous-direct-browser-access'] = 'true';
-  } else if (!isFree) {
+  } else if (!isFree && cfg.apiKey) {
     headers['Authorization'] = 'Bearer ' + cfg.apiKey;
   }
   let body;
@@ -1327,120 +1221,20 @@ async function llmVisionOnce(cfg, prompt, imageDataUrl) {
   }
 }
 
-// === ASR：offscreen 协调（音频捕获重构 2026-07-04）===
-// 旧方案：SW 调 tabCapture.getMediaStreamId → offscreen getUserMedia 采集
-// 新方案：content script 用 AudioContext + MediaElementAudioSourceNode 采集
-//   → 发 ASR_AUDIO_SEGMENT 到 SW → SW 转发 OFFSCREEN_ASR_RECOGNIZE 到 offscreen
-//   → offscreen 用 whisper 识别 → 回传 ASR_SEGMENT → SW 中转给 content script
-// SW 不再需要 tabCapture，只需创建 offscreen 供 whisper 运行
-let _asrActive = false;
-let _asrTabId = null;
+// === ASR 宿主生命周期（offscreen document / Firefox 回退 iframe）===
+// 第三百九十四次（plan 阶段二③，用户裁定「扩展不再保留这两个模型」）：whisper 会话
+//   状态机（_asrActive/_asrTabId/persistAsrState/restoreAsrState/handleStartASR/
+//   handleStopASR）随本地模型推理一并移除；仅保留宿主生命周期管理（OCR/EXTRACT_TEXT/
+//   PARSE_DOC 三路共用）与 PING 就绪探针（waitOffscreenReady）。
 // Firefox 回退（2026-08-15 第六十四次；2026-08-30 第一百八十次改宿主位置）：
-//   Firefox 无 chrome.offscreen，whisper 运行于**后台 event page 自身 document** 内的
+//   Firefox 无 chrome.offscreen，offscreen.js 宿主运行于**后台 event page 自身 document** 内的
 //   隐藏 iframe（旧版建在网页 DOM 里，被网页 CSP 拦，详见 ensureFallbackIframe）。
 // 第二百二十五次：删除死变量 _asrFallbackMode（五处赋值、零读取，《命名清查》裁定）。
 // 后台页内的 ASR 宿主 iframe 引用（仅 Firefox；Chromium 后台为 SW 无 DOM，恒为 null）
 let _asrFallbackFrame = null;
 
 /**
- * 持久化 ASR 状态到 chrome.storage.session
- * 反思（2026-08-08）：MV3 SW 被终止重启后 _asrActive 丢失，
- *   导致 ASR_AUDIO_SEGMENT 消息被 if(_asrActive) 拦截丢弃，表现为「ASR 经常停止」。
- *   session storage 在 SW 生命周期内持久，重启后可恢复。
- * @param {boolean} active
- * @param {number|null} tabId
- */
-function persistAsrState(active, tabId) {
-  try {
-    chrome.storage.session.set({ _asrActive: active, _asrTabId: tabId || null });
-  } catch (e) { /* ignore */ }
-}
-
-/**
- * 从 chrome.storage.session 恢复 ASR 状态
- * SW 重启时调用，恢复 _asrActive 和 _asrTabId
- */
-function restoreAsrState() {
-  try {
-    chrome.storage.session.get(['_asrActive', '_asrTabId'], (res) => {
-      if (res && res._asrActive) {
-        _asrActive = true;
-        _asrTabId = res._asrTabId || null;
-        log('[VocabRadar][sw][' + _ts() + '] ASR 状态已恢复: asrActive=true tabId=', _asrTabId);
-      }
-    });
-  } catch (e) { /* ignore */ }
-}
-// SW 启动时恢复 ASR 状态
-restoreAsrState();
-
-async function handleStartASR(tabId, videoKey) {
-  log('[VocabRadar][sw][' + _ts() + '] handleStartASR tabId=', tabId, 'videoKey=', videoKey, 'asrActive=', _asrActive);
-  // 反思（2026-08-15 第六十四次）：Firefox 回退——Firefox 不支持 chrome.offscreen API，
-  //   改由页面内隐藏 iframe（扩展页 src/offscreen/offscreen.html）承载 whisper：
-  //   - 扩展页拥有完整 chrome.runtime 消息能力，SW 的 OFFSCREEN_* 广播与 ASR_* 回传
-  //     转发链路（content script 收不到 offscreen 广播，需 SW 中转）与 offscreen 文档完全一致，
-  //     消息协议零改动。
-  //   - 扩展 CSP 已含 wasm-unsafe-eval，引导页 asr.js 已证明 Firefox 扩展页可运行 whisper。
-  const useFallback = typeof chrome.offscreen === 'undefined';
-  if (useFallback) {
-    const created = await ensureFallbackIframe();
-    if (!created.ok) {
-      const msg = 'Firefox 回退宿主创建失败（' + (created.error || '未知原因') + '）。请打开扩展引导页，在「ASR」栏上传音视频或录音识别。';
-      console.warn('[VocabRadar][sw][' + _ts() + '] ' + msg);
-      return { ok: false, error: msg };
-    }
-    log('[VocabRadar][sw][' + _ts() + '] Firefox 回退已启用（whisper 运行于后台页内隐藏 iframe）');
-  }
-  if (_asrActive) {
-    // 已在运行：先停
-    await handleStopASR();
-  }
-  _asrTabId = tabId || null;
-  persistAsrState(true, _asrTabId);
-
-  if (!useFallback) {
-    // 1. 确保已有 offscreen document（供 whisper 识别）
-    const offscreenReady = await ensureOffscreen();
-    log('[VocabRadar][sw][' + _ts() + '] ensureOffscreen =>', offscreenReady);
-    if (!offscreenReady) return { ok: false, error: 'offscreen create failed' };
-  }
-
-  // 2. 通知 offscreen/回退 iframe 初始化（预加载 whisper，不再有 streamId）
-  // 第一百七十九次（用户报障：火狐 "ASR start failed in service worker: no response"）：
-  //   回退模式下先等 whisper 宿主（后台页内隐藏 iframe 里的 offscreen.js）真正注册好
-  //   runtime.onMessage 监听器，再发 START。第一百八十次纠正：旧注释把失败归因于
-  //   "offscreen.js 是 ES module，监听器注册晚于 load"，但实测其顶层无 import、
-  //   无 top-level await，onMessage 注册很早；真因是页面内 iframe 被**网页 CSP** 拦
-  //   （详见 ensureFallbackIframe 注释），宿主根本没跑起来。PING 握手仍保留，
-  //   作为"宿主确已就绪"的唯一判据。
-  if (useFallback) {
-    const ready = await waitOffscreenReady(8000);
-    if (!ready) {
-      persistAsrState(false, null);
-      const msg = 'Firefox 回退宿主未就绪（8 秒内无 PING 应答；诊断：' + describeFallbackFrame()
-        + '）。请重试，或打开扩展引导页在「ASR」栏识别。';
-      console.warn('[VocabRadar][sw][' + _ts() + '] ' + msg);
-      return { ok: false, error: msg };
-    }
-  }
-  const resp = await chrome.runtime.sendMessage({
-    type: 'OFFSCREEN_ASR_START',
-    videoKey: videoKey || ''
-  }).catch((e) => {
-    console.warn('[VocabRadar][sw][' + _ts() + '] 通知 offscreen 失败:', e);
-    return { ok: false, error: 'OFFSCREEN_ASR_START 无接收方：' + String((e && e.message) || e) };
-  });
-  log('[VocabRadar][sw][' + _ts() + '] offscreen 响应:', resp);
-  _asrActive = !!(resp && resp.ok);
-  if (!_asrActive) { persistAsrState(false, null); }
-  // 第一百七十九次：resp 为 null/无 error 字段时也给出具体错因，不再把 null 抛给客户端
-  //   （客户端旧版据此拼出无信息量的 "no response"）。
-  return { ok: _asrActive, error: _asrActive ? undefined : ((resp && resp.error) || 'ASR 宿主未响应 OFFSCREEN_ASR_START（offscreen/回退 iframe 可能已被回收）') };
-}
-
-/**
- * 第一百七十九次：轮询 OFFSCREEN_PING，等待 whisper 宿主注册好消息监听器
+ * 第一百七十九次：轮询 OFFSCREEN_PING，等待宿主（offscreen.js）注册好消息监听器
  * @param {number} timeoutMs 总超时（毫秒）
  * @returns {Promise<boolean>} 就绪返回 true
  */
@@ -1459,18 +1253,6 @@ async function waitOffscreenReady(timeoutMs) {
   }
   console.warn('[VocabRadar][sw][' + _ts() + '] ASR 宿主 PING 超时，共尝试 ' + tries + ' 次');
   return false;
-}
-
-async function handleStopASR() {
-  if (_asrActive) {
-    try {
-      await chrome.runtime.sendMessage({ type: 'OFFSCREEN_ASR_STOP' });
-    } catch (e) { /* ignore */ }
-  }
-  _asrActive = false;
-  _asrTabId = null;
-  persistAsrState(false, null);
-  return { ok: true };
 }
 
 /**
@@ -1530,7 +1312,7 @@ async function ensureFallbackIframe() {
       console.warn('[VocabRadar][sw][' + _ts() + '] Firefox 回退 iframe 加载失败: ' + r.error);
       return r;
     }
-    log('[VocabRadar][sw][' + _ts() + '] Firefox 回退 iframe 已在后台页内加载完成（whisper 宿主）');
+    log('[VocabRadar][sw][' + _ts() + '] Firefox 回退 iframe 已在后台页内加载完成（offscreen.js 宿主）');
     return { ok: true };
   } catch (e) {
     const error = String((e && e.message) || e);
@@ -1565,17 +1347,17 @@ async function ensureOffscreen() {
     try {
       const existing = await chrome.offscreen.hasDocument();
       if (existing) {
-        log('[VocabRadar][sw][' + _ts() + '] offscreen 已存在（复用，模型应已缓存）');
+        log('[VocabRadar][sw][' + _ts() + '] offscreen 已存在（复用）');
         return true;
       }
     } catch (e) { /* 忽略，尝试创建 */ }
   }
-  log('[VocabRadar][sw][' + _ts() + '] offscreen 不存在，创建新 document（模型需重新加载）');
+  log('[VocabRadar][sw][' + _ts() + '] offscreen 不存在，创建新 document');
   try {
     await chrome.offscreen.createDocument({
       url: 'src/offscreen/offscreen.html',
-      reasons: ['BLOBS', 'WORKERS'],
-      justification: 'Real-time ASR: receive audio ArrayBuffer from content script + whisper pipeline (WASM/Workers)',
+      reasons: ['BLOBS', 'DOM_PARSER', 'WORKERS'],
+      justification: 'Audio decode/resample for LLM transcription, main-text extraction, and document (pdf/docx/epub) parsing',
     });
     return true;
   } catch (e) {
@@ -2141,78 +1923,154 @@ async function handleFetchSubtitle(url) {
   }
 }
 
-/**
- * 候选 URL 列表（第九十六次）：主 URL + backupUrls 去重（借鉴 videoseek/bilibili-evolved 多源回退）
- * @param {string} url 主 URL
- * @param {string[]} [urls] 完整候选列表（含主 URL）
- * @returns {string[]}
- */
-function candidateUrls(url, urls) {
-  const list = Array.isArray(urls) && urls.length > 0 ? urls : [url];
-  const seen = new Set();
-  const out = [];
-  for (const u of list) {
-    if (typeof u === 'string' && u && !seen.has(u)) { seen.add(u); out.push(u); }
-  }
-  return out.length > 0 ? out : (url ? [url] : []);
-}
+// === 第398次（阶段三2）：backend 代理（ASR 任务 + 第399次字幕兜底） ===
+// 背景：content script 受页面 CSP connect-src 限制无法直连 backend
+//   （同 FETCH_SUBTITLE 代理的原因），SW 有 host_permissions 可直接 fetch。
+// 第401次：地址可配置（引导页「本地后端地址」填空，完整 URL 含协议主机端口）。
+// 第406次：未手动填写时自动发现端口——先探默认 7777，不通则并行扫 7778–7827
+//   （与 backend _pick_free_port 的递延范围对齐），命中后缓存 60 秒。
+const BACKEND_BASE_DEFAULT = 'http://127.0.0.1:7777';
+const BACKEND_SCAN_START = 7778;        // backend 递延从 port+1 起试 50 个 → 7778..7827
+const BACKEND_SCAN_END = 7827;
+const BACKEND_SCAN_TIMEOUT_MS = 1200;   // 单端口探测超时；localhost 连接拒绝瞬时返回，超时仅兜底
+const BACKEND_CACHE_TTL_MS = 60000;     // 扫描结果缓存：有界陈旧可自愈，避免每请求全量扫描
 
-/**
- * 代理下载 B站音频文件（绕过 content script 的 CORS 限制）
- * B站预识别路径：content script 从 __playinfo__ 提取音频 URL，
- * 通过 SW 代理下载（SW 不受 CORS 限制，host_permissions 含 <all_urls>）。
- * 音频 URL 自带 auth_key 鉴权参数，无需额外 cookie。
- * 第九十六次：支持 urls[] 多候选依序尝试（主 URL 失败换 backupUrl）。
- * @param {string} url 音频流 URL（.m4s 格式）
- * @param {string[]} [urls] 候选 URL 列表
- * @returns {Promise<{ok: boolean, arrayBuffer?: ArrayBuffer, error?: string}>}
- */
-async function handleFetchAudio(url, urls) {
-  const candidates = candidateUrls(url, urls);
-  if (candidates.length === 0) {
-    console.warn('[VocabRadar][sw][' + _ts() + '] fetchAudio: empty url');
-    return { ok: false, error: 'empty url' };
-  }
-  log('[VocabRadar][sw][' + _ts() + '] fetchAudio:', candidates[0].slice(0, 120) + '...', '候选=' + candidates.length);
-  // 反思（2026-08-14 第五十四次修正）：Firefox 上偶发 "NetworkError when attempting
-  //   to fetch resource." 根因未定（疑 B站 CDN 对 SW 请求的 CORS/cookie 策略差异）。
-  //   修正：最多重试 2 次，第二次改用 credentials:'include' 携带站点 cookie
-  //   （auth_key 已内联鉴权，但部分 CDN 仍需 referer/cookie），并输出 host 便于诊断。
-  const attempts = [
-    { credentials: 'omit' },
-    { credentials: 'include' }
-  ];
-  let lastError = 'unreachable';
-  for (const cu of candidates) {
-    for (let i = 0; i < attempts.length; i++) {
-      const opts = { credentials: attempts[i].credentials };
-      try {
-        const res = await fetch(cu, opts);
-        log('[VocabRadar][sw][' + _ts() + '] fetchAudio 响应(第' + (i + 1) + '次):', res.status, res.statusText, 'size=' + res.headers.get('content-length'));
-        if (!res.ok) {
-          // 服务器返回 4xx/5xx：换凭据重试意义不大，直接失败
-          lastError = 'HTTP ' + res.status;
-          break;
-        }
-        const arrayBuffer = await res.arrayBuffer();
-        log('[VocabRadar][sw][' + _ts() + '] fetchAudio 成功(第' + (i + 1) + '次), 大小:', Math.round(arrayBuffer.byteLength / 1024) + 'KB');
-        // 2026-09-08 第二百四十次：base64 回传（chrome.runtime 消息默认 JSON 序列化，
-        //   ArrayBuffer 直传变 {}），页面端 asr-client.js b64ToU8 解码
-        return { ok: true, b64: abToB64(arrayBuffer), bytes: arrayBuffer.byteLength };
-      } catch (e) {
-        const host = safeHostOf(cu);
-        console.error('[VocabRadar][sw][' + _ts() + '] fetchAudio 异常(第' + (i + 1) + '次, host=' + host + ', credentials=' + attempts[i].credentials + '):', e);
-        lastError = String(e.message || e) + ' (host=' + host + ')';
-      }
+let _backendBaseCache = { base: null, ts: 0 };
+
+/** 单端口健康探测：GET /api/health 2xx 且 j.ok 视为河狸 backend；否则 reject（供 Promise.any）。 */
+async function probeBackendHealth(base) {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), BACKEND_SCAN_TIMEOUT_MS);
+  try {
+    const res = await fetch(base + '/api/health',
+      { signal: ctrl.signal, credentials: 'omit', cache: 'no-store' });
+    if (res.ok) {
+      const j = await res.json().catch(() => null);
+      if (j && j.ok) return base;
     }
-    if (cu !== candidates[candidates.length - 1]) log('[VocabRadar][sw][' + _ts() + '] fetchAudio 换备用 URL 重试');
+    throw new Error('not backend: ' + base);
+  } finally {
+    clearTimeout(timer);
   }
-  return { ok: false, error: lastError };
 }
 
-// 提取 URL host，便于异常诊断；失败返回 'unknown'
-function safeHostOf(url) {
-  try { return new URL(url).host; } catch (e) { return 'unknown'; }
+/** 并行探测候选端口，返回首个命中地址；全部不可达返回 null。 */
+async function scanBackendBase(candidates) {
+  try {
+    return await Promise.any(candidates.map((p) => probeBackendHealth(p)));
+  } catch (_e) {
+    return null;
+  }
+}
+
+/** 解析后端地址：用户手动填写（backendBaseUrl 非空）→ 原样用不探测，不可达也让
+ *  错误如实上抛；留空 → 先探默认 7777，不通并行扫 7778–7827。命中缓存 60 秒，
+ *  未命中每次现扫（backend 关闭时每请求 51 个并发探测，localhost 拒绝成本可忽略）。
+ *  全部不可达回默认地址，让后续请求报出真实连接错误（不遮蔽）。 */
+async function getBackendBase() {
+  const stored = await new Promise((resolve) => {
+    chrome.storage.local.get({ backendBaseUrl: '' }, (r) => {
+      resolve(String((r && r.backendBaseUrl) || '').trim().replace(/\/+$/, ''));
+    });
+  });
+  if (stored) return stored;
+  const now = Date.now();
+  if (_backendBaseCache.base && now - _backendBaseCache.ts < BACKEND_CACHE_TTL_MS) {
+    return _backendBaseCache.base;
+  }
+  let found = await scanBackendBase([BACKEND_BASE_DEFAULT]);
+  if (!found) {
+    const candidates = [];
+    for (let p = BACKEND_SCAN_START; p <= BACKEND_SCAN_END; p++) {
+      candidates.push('http://127.0.0.1:' + p);
+    }
+    found = await scanBackendBase(candidates);
+  }
+  if (found) _backendBaseCache = { base: found, ts: Date.now() };
+  return found || BACKEND_BASE_DEFAULT;
+}
+
+/**
+ * 提交 ASR 任务：POST /api/asr/jobs {url, language} → {ok, id, status, cached}
+ * @param {string} url 视频/音频页 URL（backend yt-dlp 解析下载）
+ * @param {string} [language] 识别语言（ISO 码，缺省自动检测）
+ * @returns {Promise<{ok: boolean, id?: string, status?: string, cached?: boolean, error?: string}>}
+ */
+async function handleAsrJobSubmit(url, language) {
+  if (!url) return { ok: false, error: 'empty url' };
+  try {
+    const base = await getBackendBase();
+    const res = await fetch(base + '/api/asr/jobs', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ url, language: language || undefined }),
+      credentials: 'omit', cache: 'no-store'
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      console.warn('[VocabRadar][sw][' + _ts() + '] asrJobSubmit HTTP ' + res.status + ':', data && data.error);
+      return { ok: false, error: (data && data.error) || ('HTTP ' + res.status), message: data && data.message };
+    }
+    return data;
+  } catch (e) {
+    // 不遮蔽：backend 未启动 / 网络不通原样上抛（调用方决定回退路径）
+    console.error('[VocabRadar][sw][' + _ts() + '] asrJobSubmit 异常:', e);
+    return { ok: false, error: String(e.message || e) };
+  }
+}
+
+/**
+ * 轮询 ASR 任务增量：GET /api/asr/jobs/<id>?after=N → 任务快照
+ * （status/progress{download,transcribe}/segments(新增段,带 start/end)/segments_total）
+ * @param {string} id 任务 id
+ * @param {number} [after] 游标：已取到的段数，只回其后新增段
+ * @returns {Promise<{ok: boolean, error?: string} & Record<string, unknown>>}
+ */
+async function handleAsrJobPoll(id, after) {
+  if (!id) return { ok: false, error: 'empty id' };
+  try {
+    const base = await getBackendBase();
+    const res = await fetch(base + '/api/asr/jobs/' + encodeURIComponent(id)
+      + '?after=' + (Number.isFinite(after) && after > 0 ? after : 0),
+      { credentials: 'omit', cache: 'no-store' });
+    const data = await res.json();
+    if (!res.ok) {
+      console.warn('[VocabRadar][sw][' + _ts() + '] asrJobPoll HTTP ' + res.status + ':', data && data.error);
+      return { ok: false, error: (data && data.error) || ('HTTP ' + res.status) };
+    }
+    return data;
+  } catch (e) {
+    console.error('[VocabRadar][sw][' + _ts() + '] asrJobPoll 异常:', e);
+    return { ok: false, error: String(e.message || e) };
+  }
+}
+
+/**
+ * 第399次：字幕 backend 兜底——GET /api/ytdl/subtitles?url=&lang=
+ * 扩展侧五路字幕全失败后经此代理调 backend yt-dlp 提取（纯文本直出）。
+ * @param {string} url 视频页 URL
+ * @param {string} [lang] 期望语言（zh/en…，缺省由 backend 取首个轨道）
+ * @returns {Promise<{ok: boolean, lang?: string, kind?: string, text?: string,
+ *   available?: object, error?: string, message?: string}>}
+ */
+async function handleYtdlSubtitles(url, lang) {
+  if (!url) return { ok: false, error: 'empty url' };
+  try {
+    const base = await getBackendBase();
+    const qs = '?url=' + encodeURIComponent(url)
+      + (lang ? '&lang=' + encodeURIComponent(lang) : '');
+    const res = await fetch(base + '/api/ytdl/subtitles' + qs,
+      { credentials: 'omit', cache: 'no-store' });
+    const data = await res.json();
+    if (!res.ok) {
+      console.warn('[VocabRadar][sw][' + _ts() + '] ytdlSubtitles HTTP ' + res.status + ':', data && data.error);
+      return { ok: false, error: (data && data.error) || ('HTTP ' + res.status), message: data && data.message };
+    }
+    return data;
+  } catch (e) {
+    console.error('[VocabRadar][sw][' + _ts() + '] ytdlSubtitles 异常:', e);
+    return { ok: false, error: String(e.message || e) };
+  }
 }
 
 // ArrayBuffer → base64（2026-09-08 第二百四十次）：扩展消息回传二进制的统一出口。
@@ -2229,111 +2087,6 @@ function abToB64(buf) {
     s += String.fromCharCode.apply(null, u8.subarray(i, i + 0x8000));
   }
   return btoa(s);
-}
-
-/**
- * 探测音频文件总字节数（第九十五次·流式 ASR；第九十六次支持多候选 URL）
- * 借鉴 videoseek ChunkedDownloader 的第一步：先拿 content-length 才能切 Range 区间表。
- * 优先 HEAD；部分 CDN 对 HEAD 不回 content-length，改发 Range bytes=0-0 从
- * Content-Range: bytes 0-0/TOTAL 解析总长（响应体 2 字节，读后即弃）。
- * 凭据策略与 handleFetchAudio 一致（omit 失败换 include 重试）；候选 URL 依序尝试。
- * @param {string} url 音频流 URL
- * @param {string[]} [urls] 候选 URL 列表
- * @returns {Promise<{ok: boolean, size?: number, error?: string}>}
- */
-async function handleFetchAudioMeta(url, urls) {
-  const candidates = candidateUrls(url, urls);
-  if (candidates.length === 0) return { ok: false, error: 'empty url' };
-  const attempts = [
-    { credentials: 'omit' },
-    { credentials: 'include' }
-  ];
-  let lastError = '无法确定文件大小';
-  for (const cu of candidates) {
-    for (let i = 0; i < attempts.length; i++) {
-      const opts = { credentials: attempts[i].credentials };
-      try {
-        // 第一步：HEAD 拿 content-length
-        const head = await fetch(cu, { ...opts, method: 'HEAD' });
-        const len = parseInt(head.headers.get('content-length') || '0', 10);
-        if (head.ok && len > 0) {
-          log('[VocabRadar][sw][' + _ts() + '] fetchAudioMeta(HEAD) 成功 size=' + len);
-          return { ok: true, size: len };
-        }
-        // 第二步：Range bytes=0-0 探测，Content-Range 携带总大小
-        const probe = await fetch(cu, { ...opts, headers: { Range: 'bytes=0-0' } });
-        let cr = '';
-        if (probe.status === 206) {
-          cr = probe.headers.get('content-range') || '';
-          const m = cr.match(/\/(\d+)\s*$/);
-          if (m) {
-            const total = parseInt(m[1], 10);
-            log('[VocabRadar][sw][' + _ts() + '] fetchAudioMeta(Range) 成功 size=' + total);
-            try { await probe.body?.cancel(); } catch (e) { /* ignore */ }
-            return { ok: true, size: total };
-          }
-        }
-        lastError = '未获得大小 status=' + probe.status + ' content-range=' + cr;
-        console.warn('[VocabRadar][sw][' + _ts() + '] fetchAudioMeta(第' + (i + 1) + '次) ' + lastError);
-      } catch (e) {
-        console.error('[VocabRadar][sw][' + _ts() + '] fetchAudioMeta 异常(第' + (i + 1) + '次, host=' + safeHostOf(cu) + '):', e);
-        lastError = String(e.message || e);
-      }
-    }
-  }
-  return { ok: false, error: lastError + ' (host=' + safeHostOf(candidates[0]) + ')' };
-}
-
-/**
- * 按字节区间下载音频（第九十五次·流式 ASR，借鉴 videoseek 分块 Range 下载；
- * 第九十六次支持多候选 URL 依序尝试）
- * 仅接受 206 Partial Content——若 CDN 忽略 Range 返回 200 全量，字节对齐假设被破坏，
- * 明确报 range-unsupported 让上层走整文件回退，绝不把全量响应当区间数据用。
- * @param {string} url 音频流 URL
- * @param {number} start 起始字节（含）
- * @param {number} end 结束字节（含）
- * @param {string[]} [urls] 候选 URL 列表
- * @returns {Promise<{ok: boolean, arrayBuffer?: ArrayBuffer, error?: string}>}
- */
-async function handleFetchAudioRange(url, start, end, urls) {
-  const candidates = candidateUrls(url, urls);
-  if (candidates.length === 0 || !(start >= 0) || !(end >= start)) {
-    return { ok: false, error: 'bad args' };
-  }
-  const range = 'bytes=' + start + '-' + end;
-  const attempts = [
-    { credentials: 'omit' },
-    { credentials: 'include' }
-  ];
-  // 第一百零七次（P0）：记录最后一次 HTTP 状态码——403=防盗链/referer、416=区间越界等，
-  // 归因 H2/H4 全靠它（此前最终错误只有笼统的 range fetch failed）
-  let lastStatus = 0;
-  for (const cu of candidates) {
-    for (let i = 0; i < attempts.length; i++) {
-      const opts = { credentials: attempts[i].credentials, headers: { Range: range } };
-      try {
-        const res = await fetch(cu, opts);
-        if (res.status === 206) {
-          const ab = await res.arrayBuffer();
-          log('[VocabRadar][sw][' + _ts() + '] fetchAudioRange[' + range + '] ' + Math.round(ab.byteLength / 1024) + 'KB');
-          // 2026-09-08 第二百四十次：base64 回传（同 fetchAudio），页面端解码
-          return { ok: true, b64: abToB64(ab), bytes: ab.byteLength };
-        }
-        if (res.status === 200) {
-          // CDN 不支持 Range：中止并放弃全量响应体
-          try { await res.body?.cancel(); } catch (e) { /* ignore */ }
-          console.warn('[VocabRadar][sw][' + _ts() + '] fetchAudioRange 返回200全量（不支持Range）');
-          return { ok: false, error: 'range-unsupported' };
-        }
-        lastStatus = res.status;
-        console.warn('[VocabRadar][sw][' + _ts() + '] fetchAudioRange HTTP ' + res.status + ' [' + range + '] host=' + safeHostOf(cu));
-      } catch (e) {
-        console.error('[VocabRadar][sw][' + _ts() + '] fetchAudioRange 异常(第' + (i + 1) + '次, host=' + safeHostOf(cu) + ', ' + range + '):', e);
-        lastStatus = -1;
-      }
-    }
-  }
-  return { ok: false, error: 'range fetch failed [' + range + ']' + (lastStatus ? (' HTTP' + lastStatus) : '') + (lastStatus === -1 ? '(网络异常)' : '') };
 }
 
 /**
@@ -2720,10 +2473,27 @@ async function handleLlmTranslate(text, target) {
   return { ok: true, text: String(out.content || '').trim() };
 }
 
-async function handleLlmChat(messages) {
+// 第407次（用户："对话中，翻译输出很长乃至于无响应……是否应该约束，硬约束和提示词优化"）：
+//   对话统一注入系统提示词——回答保持简洁；要求翻译时只输出译文本身
+//   （专门翻译窗口 handleLlmTranslate 的 "Output ONLY the translation" 正是对话
+//   链路缺的约束）；配合流式输出消除长输出黑盒等待，openai/free 请求体加
+//   max_tokens 1024 硬约束（与 anthropic 分支既有上限对齐）。
+const LLM_CHAT_SYSTEM = 'You are a concise assistant in a vocabulary-learning browser extension. '
+  + 'Keep answers short and to the point. '
+  + 'When the user asks for a translation, output ONLY the translation itself: '
+  + 'no commentary, no quotes, no explanations. '
+  + 'Respond in the language the user used unless they ask otherwise.';
+
+/**
+ * 第407次：新增可选 onDelta——传入即走流式（llmChatStreamOnce，SSE 逐 chunk 回调），
+ *   不传保持原非流式行为（LLM_TRANSLATE 词条翻译仍走非流式）。
+ */
+async function handleLlmChat(messages, onDelta) {
   if (!Array.isArray(messages) || messages.length === 0) {
     return { ok: false, error: 'empty messages' };
   }
+  // 系统提示词统一在此注入（anthropic 分支由请求体构造时提到顶层 system 字段）
+  const turns = [{ role: 'system', content: LLM_CHAT_SYSTEM }].concat(messages);
   // 读配置：引导页「模型」行写入的 llm* 键；缺省由 resolveLlmConfig 用来源预设补齐
   const res = await new Promise((resolve) => {
     chrome.storage.local.get(
@@ -2732,6 +2502,11 @@ async function handleLlmChat(messages) {
     );
   });
   const cfg = resolveLlmConfig(res);
+  // 第401次：本地后端地址可配置；第406次：未手动填写时经 getBackendBase 自动发现
+  //   端口（默认 7777 不通则并行扫 7778–7827），backend 递延换端口后无需手动改地址
+  if (cfg.provider === 'local-backend' && !cfg.userBaseUrl) {
+    cfg.baseUrl = (await getBackendBase()) + '/v1';
+  }
 
   // 第一百七十五次（用户裁定"默认轮替免费直连，除非用户配置 key"；实测 Pollinations 返回
   //   402 Payment Required 属匿名配额限流）：
@@ -2754,7 +2529,10 @@ async function handleLlmChat(messages) {
 
   let last = { ok: false, error: 'no attempt' };
   for (let i = 0; i < attempts.length; i++) {
-    last = await llmChatOnce(attempts[i], messages);
+    // 第407次：传了 onDelta 走流式；turns 已含系统提示词，两路都必须用 turns
+    last = onDelta
+      ? await llmChatStreamOnce(attempts[i], turns, onDelta)
+      : await llmChatOnce(attempts[i], turns);
     if (last.ok || !last.retryable) return last;
     log('[VocabRadar][sw][' + _ts() + '] llmChat 来源 ' + attempts[i].provider + ' 失败(' + last.error
       + ')，自动改试下一家免费直连');
@@ -2801,7 +2579,8 @@ async function llmChatOnce(cfg, messages) {
     if (sys) payload.system = sys;
     body = JSON.stringify(payload);
   } else {
-    body = JSON.stringify({ model: cfg.model, messages, stream: false });
+    // 第407次：max_tokens 1024 硬约束（与 anthropic 分支既有上限对齐），防对话翻译输出超长无响应
+    body = JSON.stringify({ model: cfg.model, messages, max_tokens: 1024, stream: false });
   }
 
   log('[VocabRadar][sw][' + _ts() + '] llmChat provider=' + cfg.provider + ' format=' + cfg.format
@@ -2840,3 +2619,133 @@ async function llmChatOnce(cfg, messages) {
     return { ok: false, error: String(e.message || e), retryable: true };
   }
 }
+
+/**
+ * 第407次：LLM 流式请求（单来源，不含轮替）——SSE 逐 chunk 经 onDelta 回调，
+ *   聊天气泡原地增长，消除长输出黑盒等待。请求形状与 llmChatOnce 一致
+ *   （system 提示词 + max_tokens 1024 硬约束 + stream: true）。
+ * 轮替语义：未产出任何 delta 前的失败（HTTP 非 200 / 返回非 SSE / SSE 无内容）
+ *   标记 retryable 可换下一家；已产出部分内容后中断则不轮替（换家重发会重复输出），
+ *   部分内容以 content 如实带回，由上层展示。
+ * @param {object} cfg 同 llmChatOnce
+ * @param {Array<{role: string, content: string}>} messages 已含 system 的对话上下文
+ * @param {(text: string) => void} onDelta 每收到一段增量文本回调一次
+ */
+async function llmChatStreamOnce(cfg, messages, onDelta) {
+  const isFree = cfg.format === 'free';
+  const isAnthropic = cfg.format === 'anthropic';
+  if (!isFree && !cfg.apiKey) return { ok: false, error: 'API Key 未配置', needConfig: true };
+  if (!cfg.baseUrl) return { ok: false, error: 'Base URL 未配置', needConfig: true };
+  if (!cfg.model) return { ok: false, error: '模型名未配置', needConfig: true };
+
+  const url = cfg.baseUrl + (isAnthropic ? '/v1/messages' : '/chat/completions');
+  const headers = { 'Content-Type': 'application/json' };
+  if (isAnthropic) {
+    headers['x-api-key'] = cfg.apiKey;
+    headers['anthropic-version'] = '2023-06-01';
+    headers['anthropic-dangerous-direct-browser-access'] = 'true';
+  } else if (!isFree) {
+    headers['Authorization'] = 'Bearer ' + cfg.apiKey;
+  }
+  let body;
+  if (isAnthropic) {
+    // Anthropic 的 system 提到顶层字段；max_tokens 必填（流式同样 1024 上限）
+    const sys = messages.filter((m) => m && m.role === 'system').map((m) => String(m.content || '')).join('\n');
+    const turns = messages.filter((m) => m && m.role !== 'system');
+    const payload = { model: cfg.model, max_tokens: 1024, messages: turns, stream: true };
+    if (sys) payload.system = sys;
+    body = JSON.stringify(payload);
+  } else {
+    body = JSON.stringify({ model: cfg.model, messages, max_tokens: 1024, stream: true });
+  }
+
+  log('[VocabRadar][sw][' + _ts() + '] llmChatStream provider=' + cfg.provider + ' format=' + cfg.format
+    + ' model=' + cfg.model + ' turns=' + messages.length);
+  let acc = '';
+  try {
+    const resp = await fetch(url, { method: 'POST', headers, credentials: 'omit', cache: 'no-store', body });
+    if (!resp.ok) {
+      const raw = await resp.text();
+      console.warn('[VocabRadar][sw][' + _ts() + '] llmChatStream HTTP ' + resp.status + ': ' + raw.slice(0, 300));
+      const retryable = resp.status === 402 || resp.status === 429 || resp.status >= 500;
+      return { ok: false, error: 'HTTP ' + resp.status + ' ' + raw.slice(0, 300), retryable };
+    }
+    // 来源不支持流式时回 JSON：整包解析，形状同非流式，一次性回调兜底
+    const ctype = resp.headers.get('content-type') || '';
+    if (!ctype.includes('text/event-stream')) {
+      const raw = await resp.text();
+      let data = null;
+      try { data = JSON.parse(raw); } catch (_e) {
+        return { ok: false, error: '响应不是 JSON：' + raw.slice(0, 200), retryable: true };
+      }
+      let content = '';
+      if (isAnthropic) {
+        content = Array.isArray(data && data.content)
+          ? data.content.filter((b) => b && b.type === 'text').map((b) => String(b.text || '')).join('')
+          : '';
+      } else {
+        content = data && data.choices && data.choices[0] && data.choices[0].message
+          ? String(data.choices[0].message.content || '')
+          : '';
+      }
+      if (!content) return { ok: false, error: '响应中无内容：' + raw.slice(0, 200), retryable: true };
+      if (onDelta) onDelta(content);
+      return { ok: true, content };
+    }
+    // SSE 逐 data: 行解析 delta（openai=choices[0].delta.content；anthropic=content_block_delta 的 delta.text）
+    const reader = resp.body.getReader();
+    const dec = new TextDecoder();
+    let buf = '';
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buf += dec.decode(value, { stream: true });
+      const lines = buf.split('\n');
+      buf = lines.pop(); // 半行留在缓冲，下轮拼接
+      for (const line of lines) {
+        const s = line.trim();
+        if (!s.startsWith('data:')) continue;
+        const payload = s.slice(5).trim();
+        if (payload === '[DONE]') continue;
+        let j = null;
+        try { j = JSON.parse(payload); } catch (_e) { continue; }
+        // anthropic 流式错误事件：如实带回（已有部分内容则不轮替）
+        if (isAnthropic && j.type === 'error') {
+          const msg = (j.error && j.error.message) ? j.error.message : JSON.stringify(j.error || j);
+          if (acc) return { ok: false, error: msg, content: acc };
+          return { ok: false, error: msg, retryable: true };
+        }
+        const piece = isAnthropic
+          ? (j.type === 'content_block_delta' && j.delta ? String(j.delta.text || '') : '')
+          : (j.choices && j.choices[0] && j.choices[0].delta ? String(j.choices[0].delta.content || '') : '');
+        if (piece) { acc += piece; if (onDelta) onDelta(piece); }
+      }
+    }
+    if (!acc) return { ok: false, error: 'SSE 无内容', retryable: true };
+    return { ok: true, content: acc };
+  } catch (e) {
+    console.error('[VocabRadar][sw][' + _ts() + '] llmChatStream 异常:', e);
+    if (acc) return { ok: false, error: String(e.message || e), content: acc }; // 已有部分：不轮替
+    return { ok: false, error: String(e.message || e), retryable: true };
+  }
+}
+
+// 第407次：聊天流式通道——chat.js 用 chrome.runtime.connect({name:'llm-chat'}) 建长连，
+//   delta 逐段推回前端气泡；sendMessage 一次性消息无法承载多次推送，故走 Port。
+chrome.runtime.onConnect.addListener((port) => {
+  if (port.name !== 'llm-chat') return;
+  port.onMessage.addListener((msg) => {
+    if (!msg || msg.type !== 'start') return;
+    const post = (m) => { try { port.postMessage(m); } catch (_e) { /* 端口已断 */ } };
+    handleLlmChat(msg.messages, (chunk) => post({ type: 'delta', text: chunk }))
+      .then((r) => {
+        post({ type: 'done', ok: !!r.ok, content: r.content || '', error: r.error || '',
+          needConfig: !!r.needConfig, partial: !r.ok && !!r.content });
+        port.disconnect();
+      })
+      .catch((e) => {
+        post({ type: 'done', ok: false, error: String(e.message || e) });
+        port.disconnect();
+      });
+  });
+});

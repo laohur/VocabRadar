@@ -5,15 +5,14 @@
  *   大杂烩的诊断窗口也拆分独立。都从一个诊断路由窗口启动。分别是视频侧栏注入时机、
  *   加载耗时、正文提取、AI上下文、下载音频。"
  *
- * 五个标签（点击标签显示对应内容，记忆上次所在标签）：
+ * 四个标签（点击标签显示对应内容，记忆上次所在标签）：
  *   1. 注入时机 —— vs/inject-timing.js 六档切换（原右下角独立浮窗撤除，档位能力并入此）
  *   2. 加载耗时 —— 提示链路分段时间线（原 main-text.js renderHintTiming 迁入，
  *      数据源 window.__beaverHintTiming / __beaverHintBoot / __beaverWsDedup 等全局）
  *   3. 正文提取 —— 四方案耗时对比 + 预览（原 main-text.js renderDiagRows 迁入，
  *      测量本体 measureMainTextExtractors 仍留在 main-text.js——迁走的是窗，留下的是测量）
  *   4. AI 上下文 —— 当前送给 AI 的正文来源/耗时/全文预览（同一次测算的 ai* 字段）
- *   5. 下载音频 —— 视频侧栏 ⋯ 菜单打开时注入 onDownloadAudioClick 回调；无视频语境
- *      （文本侧栏入口）显示说明
+ *   （第398次：原「下载音频」标签随下载音频/录音工作流一并退役）
  *
  * 显隐语义（沿第363次）：菜单调用（缺省）→ 强制显示并重测；快捷键 Ctrl+Shift+V
  *   （reveal:false）→ 纯切换，仅唤出时重测。原 main-text 窗与 inject-timing 浮窗
@@ -30,13 +29,12 @@ import { t } from '../lib/i18n.js';
 
 const DIAG_HOST_ID = 'beaver-diag-center';
 
-// 标签表：key ↔ i18n 键；timing/load/ann/audio 不需测算，extract/ai 共用一次 measureMainTextExtractors()
+// 标签表：key ↔ i18n 键；timing/load/ann 不需测算，extract/ai 共用一次 measureMainTextExtractors()
 const TABS = [
   ['timing', 'diag.tabTiming'],
   ['load', 'diag.tabLoad'],
   ['extract', 'diag.tabExtract'],
   ['ai', 'diag.tabAi'],
-  ['audio', 'diag.tabAudio'],
   ['ann', 'diag.tabAnn']
 ];
 
@@ -45,8 +43,6 @@ const TABS = [
 //   旧版默认 extract 还连带每次唤窗白跑四方案正文提取（第373次已改 ann，但仍带选中态）；
 //   现按批复改为无选中——内容区显示引导提示，点标签才加载对应诊断（全懒加载）。
 let _curTab = null;
-// 音频下载动作（视频侧栏 ⋯ 菜单打开时经 opts.audioDownload 注入；每次打开重建）
-let _audioDownload = null;
 
 // HTML 转义 / 毫秒格式化（各标签渲染共用）
 function esc(s) {
@@ -254,18 +250,6 @@ function renderAiTab(r) {
     + '<div class="pvt" data-pv="ai">' + esc(r.aiPreview) + '…</div></div>';
 }
 
-// === 标签 5：下载音频（视频语境＝动作按钮；无视频语境＝说明） ===
-function renderAudioTab() {
-  if (_audioDownload) {
-    return '<div class="pv"><b>⬇️ 下载音频</b><div class="pvt">功能本体在 vs/record-workflow.js'
-      + '（onDownloadAudioClick，取当前视频），进度条/报错走原链路。</div></div>'
-      + '<div class="tgbar"><button class="tgb" id="beaver-diag-audio-btn">'
-      + esc(_audioDownload.label || '⬇️ 下载音频') + '</button></div>';
-  }
-  return '<div class="pv"><b>⬇️ 下载音频</b><div class="pvt">本入口无视频语境——'
-    + '从视频侧栏 ⋯ 菜单 →「诊断中心」打开本窗，此标签才有下载动作。</div></div>';
-}
-
 // === 标签 6：字幕注释（第370次：ann-diag 四路证据——词典装载 / 字幕时间线 / 每句统计 / 翻译通道） ===
 // 数据源：window.__beaverAnnDiag()（lib/ann-diag.js 环形缓冲；打包版默认关日志也照常采集，
 // 本标签就是为「用户报字幕没注释+字幕晚到」取证据而生）。
@@ -410,28 +394,14 @@ async function renderTab(shadow, tab) {
     html = renderLoadTab();
   } else if (tab === 'ann') {
     html = renderAnnTab();
-  } else if (tab === null || tab === undefined) {
-    // 第三百七十四次：默认无选中标签——不预载任何诊断数据（含正文提取测算）
-    html = '<div class="tip">请点上方标签查看对应诊断（数据均为点击时才收集）。</div>';
   } else {
-    html = renderAudioTab();
+    // 第三百七十四次：默认（null）无选中标签——不预载任何诊断数据（含正文提取测算）；
+    // 第398次：audio 标签退役后未知键也落此兜底
+    html = '<div class="tip">请点上方标签查看对应诊断（数据均为点击时才收集）。</div>';
   }
   html += '<div class="tip">页面：' + esc(location.host) + ' ｜ ' + new Date().toLocaleTimeString()
     + ' ｜ 标题栏拖动移动 ｜ 右下角拖拽调大小 ｜ 「展开全文」看提取全文</div>';
   bd.innerHTML = html;
-  if (tab === 'audio' && _audioDownload) {
-    const btn = bd.querySelector('#beaver-diag-audio-btn');
-    if (btn) {
-      btn.addEventListener('click', () => {
-        try {
-          if (typeof _audioDownload.onClick === 'function') _audioDownload.onClick();
-        } catch (err) {
-          // 不遮蔽：动作自身抛错必须出声（窗内可见 + 控制台留痕）
-          console.error('[VocabRadar][diag-window] 下载音频动作执行失败:', err);
-        }
-      });
-    }
-  }
   // 字幕注释标签：清空按钮 → 重置 ann-diag 环形缓冲后重渲染本标签（取证可重复累积）
   if (tab === 'ann') {
     const rst = bd.querySelector('#beaver-ann-reset');
@@ -459,10 +429,9 @@ function switchTab(shadow, tab) {
 
 /**
  * 打开/复用「诊断中心」路由窗
- * @param {{audioDownload?: {label:string, title?:string, onClick:Function},
- *   reveal?: boolean}} opts
- *   audioDownload —— 视频侧栏入口注入的下载音频动作（点击回调走原 record-workflow 链路）；
+ * @param {{reveal?: boolean}} opts
  *   reveal=false（快捷键调用）→ 纯切换显隐；缺省（菜单调用）→ 强制显示并重测。
+ *   （第398次：audioDownload 注入参数随下载音频退役删除）
  * @returns {Promise<void>}
  */
 export async function openDiagCenter(opts = {}) {
@@ -597,8 +566,6 @@ export async function openDiagCenter(opts = {}) {
       btn.textContent = expandNow ? '收起' : '展开全文';
     });
   }
-  _audioDownload = (opts.audioDownload && typeof opts.audioDownload.onClick === 'function')
-    ? opts.audioDownload : null;
   // 显隐统一出口：菜单调用（缺省）→ 强制显示并重测；快捷键（reveal:false）→ 纯切换，仅唤出时重测
   const reveal = (opts.reveal === false) ? (host.style.display === 'none') : true;
   host.style.display = reveal ? 'block' : 'none';

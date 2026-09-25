@@ -1,0 +1,231 @@
+"""VocabRadar backend 入口：Flask 工厂 + Host 校验 + CORS + 蓝图注册。
+
+对外监听 127.0.0.1:7777（扩展与管理界面，地址可在扩展设置中任意配置）；
+可用 --port N 运行级指定端口（不写回 config.json）。端口被占时自动递延：
+默认模式写回 config.json，--port 模式仅本次运行生效。扩展端未手动配置
+地址时会扫描 7777–7827 自动发现新端口。
+LLM 由 llama-server 子进程承担（内部端口 7788，core/llm_engine.py），
+本进程只做反代与功能 API。
+"""
+
+import atexit
+import json
+import logging
+import os
+import sys
+import threading
+import webbrowser
+
+from flask import Flask, jsonify, request, send_from_directory
+
+import config
+import scripts.upgrade as upgrade
+from core.asr import AsrEngine
+from core.llm_engine import LlmEngine
+from core.logs import setup as setup_logs
+from core.ocr import OcrEngine
+from core.translate import TranslateEngine
+from api.admin import bp as admin_bp
+from api.asr import bp as asr_bp
+from api.asr_job import bp as asr_job_bp
+from api.llm import bp as llm_bp
+from api.ocr import bp as ocr_bp
+from api.translate import bp as translate_bp
+from api.upgrade import bp as upgrade_bp
+from api.ytdl import bp as ytdl_bp
+
+VERSION = "0.1.0"
+
+log = logging.getLogger("app")
+
+
+def create_app(cfg=None):
+    cfg = cfg or config.load()
+    app = Flask(__name__, static_folder=None)
+    app.config["CFG"] = cfg
+    app.config["VERSION"] = VERSION
+    # 引擎实例唯一属主挂在这里，蓝图经 current_app.extensions 取用
+    llm = LlmEngine(cfg.get("llm", {}))
+    app.extensions["engines"] = {
+        "llm": llm,
+        "asr": AsrEngine(cfg.get("asr", {})),
+        "ocr": OcrEngine(cfg.get("ocr", {}), llm),  # llm 引擎路径复用上方 LlmEngine
+        "translate": TranslateEngine(cfg.get("translate", {}), llm),
+    }
+
+    for bp in (admin_bp, llm_bp, asr_bp, asr_job_bp, ocr_bp, translate_bp,
+               ytdl_bp, upgrade_bp):
+        app.register_blueprint(bp)
+
+    app.register_error_handler(NotImplementedError, _not_implemented)
+    app.before_request(_make_host_guard(cfg))
+    app.after_request(_add_cors)
+
+    @app.route("/")
+    def index():
+        # max_age=0：发 must-revalidate，防浏览器启发式缓存旧 UI（第412次：
+        # 下拉列表无新模型即旧 JS 缓存所致）
+        return send_from_directory(config.UI_DIR, "index.html", max_age=0)
+
+    @app.route("/ui/<path:name>")
+    def ui_asset(name):
+        return send_from_directory(config.UI_DIR, name, max_age=0)
+
+    @app.route("/api/health")
+    def health():
+        return jsonify({"ok": True, "version": VERSION, "needs_setup": config.needs_setup()})
+
+    return app
+
+
+def _not_implemented(e):
+    """core 未实现的占位统一落到 501，路由层不用各自判断。"""
+    return jsonify({"ok": False, "error": "not_implemented", "message": str(e)}), 501
+
+
+def _make_host_guard(cfg):
+    """Host 头白名单，防 DNS rebinding（plan-backend §2.9/§3.5）。
+    每次请求按 cfg 现值求值：端口自动切换（main 改 cfg["port"]）后无需重建 app。"""
+    def guard():
+        allowed = {f"127.0.0.1:{cfg['port']}", f"localhost:{cfg['port']}"}
+        if request.host not in allowed:
+            return jsonify({"ok": False, "error": "bad_host"}), 403
+
+    return guard
+
+
+def _add_cors(resp):
+    """只放行浏览器扩展 origin；管理界面同源无需 CORS。"""
+    origin = request.headers.get("Origin", "")
+    if origin.startswith(("chrome-extension://", "moz-extension://")):
+        resp.headers["Access-Control-Allow-Origin"] = origin
+        resp.headers["Access-Control-Allow-Methods"] = "GET, POST, PUT, DELETE, OPTIONS"
+        resp.headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization"
+    return resp
+
+
+def _preload(engine, label):
+    """resident 模式后台预加载进程内模型；失败不阻塞启动（如依赖/模型未安装）。"""
+    try:
+        engine.ensure_loaded()
+    except Exception as e:
+        log.warning("%s预加载失败：%s", label, e)
+
+
+def _pick_free_port(start):
+    """从 start 起向后找首个可绑定端口（试绑后立即关闭；存在极小竞态窗口，够用）。"""
+    import socket
+    for port in range(start, start + 50):
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            try:
+                s.bind(("127.0.0.1", port))
+                return port
+            except OSError:
+                continue
+    return None
+
+
+def _persist_port(new_port):
+    """用户层 config.json 只增量更新 port 键，不固化完整配置。"""
+    try:
+        with open(config.CONFIG_PATH, "r", encoding="utf-8") as f:
+            disk = json.load(f)
+    except (OSError, ValueError):
+        disk = {}
+    if not isinstance(disk, dict):
+        disk = {}
+    disk["port"] = new_port
+    config.save(disk)
+
+
+def _parse_cli_port(argv):
+    """第406次：--port N / --port=N 运行级指定端口（不写回 config.json）；无参返回 None。
+    坏参直接退出而非回落默认——端口号写错还悄悄生效旧端口，用户难以察觉（不遮蔽）。"""
+    for i, a in enumerate(argv):
+        if a == "--port":
+            if i + 1 >= len(argv):
+                sys.exit("用法：python app.py [--port N]，--port 后需跟端口号")
+            raw = argv[i + 1]
+        elif a.startswith("--port="):
+            raw = a[len("--port="):]
+        else:
+            continue
+        try:
+            port = int(raw)
+        except ValueError:
+            sys.exit(f"--port 端口号无效：{raw!r}")
+        if not 1 <= port <= 65535:
+            sys.exit(f"--port 端口超出范围（1-65535）：{port}")
+        return port
+    return None
+
+
+def main():
+    setup_logs()  # 双通道日志（stderr + backend/logs/backend.log），见 core/logs.py
+    cfg = config.load()
+    cli_port = _parse_cli_port(sys.argv[1:])  # 第406次：--port 运行级覆盖，递延不写回
+    if cli_port is not None:
+        cfg["port"] = cli_port
+    app = create_app(cfg)
+    engines = app.extensions["engines"]
+    # 第419次：后端退出（正常退出/Ctrl+C）时自动终止 llama-server——manual=False
+    # 不置手动停机标志，下次启动照常惰性拉起；taskkill /F 强杀无法拦截，
+    # 该场景由 pid 文件兜底（core/llm_engine.py 下次 start() 先清残留）。
+    atexit.register(engines["llm"].stop, False)
+    # 第417次：LLM 不再随启动预拉——llama-server 加载重（显存紧张时启动即崩，
+    # 如 09-25 01:09 Qwen3.5-0.8B Vulkan ErrorOutOfDeviceMemory），对话/翻译/
+    # OCR(llm) 首请求时自动惰性拉起（api/llm.py、core/translate.py、core/ocr.py），
+    # 管理页可手动启停；其余引擎预加载照旧。
+    if not engines["llm"].auto_start_allowed():
+        log.info("LLM 引擎处于主动关停状态（llm.stopped=true），首次对话请求也不会拉起")
+    if engines["asr"].mode == "resident":  # resident 后台预加载 ASR 模型
+        if engines["asr"].status()["manual_stop"]:
+            log.info("ASR 引擎处于主动关停状态（asr.stopped=true），跳过自动预加载")
+        else:
+            threading.Thread(target=_preload, args=(engines["asr"], "ASR"),
+                             daemon=True).start()
+    ocr = engines["ocr"]  # ocr 配 rapidocr 且 resident 时后台预加载（llm 引擎归 LlmEngine 管）
+    if ocr.cfg.get("engine", "llm") == "rapidocr" and ocr.mode == "resident":
+        if ocr.status()["manual_stop"]:
+            log.info("OCR 引擎处于主动关停状态（ocr.stopped=true），跳过自动预加载")
+        else:
+            threading.Thread(target=_preload, args=(ocr, "OCR"),
+                             daemon=True).start()
+    # 升级静默检查（plan §5.5）：daemon 线程，有更新仅日志提示不打扰
+    threading.Thread(target=upgrade.silent_check, daemon=True).start()
+    url = f"http://{cfg['host']}:{cfg['port']}"
+    log.info(f"VocabRadar backend v{VERSION} -> {url}")
+
+    if os.environ.get("BACKEND_NO_BROWSER") != "1":
+        threading.Timer(1.5, webbrowser.open, args=(url,)).start()
+
+    while True:
+        try:
+            app.run(host=cfg["host"], port=cfg["port"], debug=False)
+            break
+        except OSError:
+            # 端口被占：自动换下一个可用端口，不让用户操作；实在没有才报错
+            new_port = _pick_free_port(cfg["port"] + 1)
+            if new_port is None:
+                log.error(f"端口 {cfg['port']} 被占用且后续端口也不可绑定。"
+                          f"请释放端口，或编辑 backend/config.json 的 port 字段后重试。")
+                sys.exit(1)
+            old = cfg["port"]
+            cfg["port"] = new_port
+            if cli_port is None:
+                _persist_port(new_port)
+                log.info(f"端口 {old} 被占用，已自动切换到 {new_port}"
+                         f"（已写回 backend/config.json，下次启动直接生效）。")
+            else:
+                log.info(f"指定端口 {old} 被占用，本次运行自动切换到 {new_port}"
+                         f"（--port 指定仅本次生效，不写回 config.json）。")
+            log.info(f"扩展未手动填写本地后端地址时会自动扫描 7777–7827 发现新端口；"
+                     f"已手动填写的需改为 http://127.0.0.1:{new_port}。")
+            url = f"http://{cfg['host']}:{new_port}"
+            log.info(f"VocabRadar backend v{VERSION} -> {url}")
+            if os.environ.get("BACKEND_NO_BROWSER") != "1":
+                threading.Timer(1.5, webbrowser.open, args=(url,)).start()
+
+
+if __name__ == "__main__":
+    main()

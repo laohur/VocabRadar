@@ -39,8 +39,6 @@ import { buildTopbarHTML, ensureTopbarCss } from '../lib/sidebar-topbar.js';
 import { initLang, getLang, setLang, onLangChange, t, UI_LANGS, TRANSLATE_LANGS, LANG_NAMES, LANG_NAMES_EN } from '../lib/i18n.js';
 import { summarize } from '../lib/summarizer.js';
 import { startASR, stopASR, isASRReady, hasASRCache, getCachedSubtitles, getASRCoverage, getASRFrontier, getASRStats } from '../lib/asr-client.js';
-// 第九十六次：下载音频按钮——B站音轨信息（urls[]/标题）；YouTube 走 youtube-audio.js 按需动态 import
-import { getBilibiliAudioInfo } from '../lib/bilibili-audio.js';
 // 第三百六十六次：词典就绪双钩子——YouTube 立即注入（第365次）后字幕渲染抢在词典
 //   冷装载（1~17s）之前，就绪后需补渲染才能出注释（ensureRanksReady/ensureReady/isLoaded）
 import { ensureReady, ensureRanksReady, isLoaded } from '../lib/dictionary.js';
@@ -67,7 +65,7 @@ import { startOverlay, stopOverlay, setSubtitles as overlaySetSubtitles, addSubt
 import { suppressionFor, upsertDeactivateRule } from '../lib/deactivate.js';
 // 第二百二十五次：删除本门面未使用的导入（pickCleanShortTrans/isBalancedParens 曾导入零调用）
 // 2026-08-28 拆分第二刀：按功能拆出 vs/* 子模块，本文件保留为门面（facade）。
-// 受控循环 import 说明：vs/playback-gate、vs/asr-stage、vs/record-workflow、vs/ocr
+// 受控循环 import 说明：vs/playback-gate、vs/asr-stage、vs/ocr
 // 需调用本门面导出的函数（getRoot/getActiveVideo/isASRActive/toast/getSubtitlesRef/
 // getVideoLearnLang/showNoSubtitle，均为函数声明、提升后可用）；这些子模块顶层仅
 // 初始化自身状态，对本门面绑定的调用全部发生在函数体内——运行时安全，无 TDZ 风险。
@@ -89,7 +87,6 @@ import {
 import { getInjectTiming, waitForBiliCommentsThen } from './vs/inject-timing.js';
 import { installPlaybackGate, uninstallPlaybackGate } from './vs/playback-gate.js';
 import { pushDiagLine, clearDiagLines, updateASRProgressFromStage } from './vs/asr-stage.js';
-import { onDownloadAudioClick, getRecordedBlobForASR, setRecordedBlobForASR } from './vs/record-workflow.js';
 import { onOcrClick } from './vs/ocr.js';
 // 2026-08-28 拆分第三刀：字幕渲染子模块（字幕/生词表面板渲染、注释获取缓存、
 // ASR 字幕插入、复制/评论/词单）；下列符号均为原门面内同名函数/状态接驳（机械搬移，行为不变）
@@ -183,7 +180,7 @@ let _cfg = {
 // 2026-08-28 拆分第二刀：log 移至 vs/logger.js（debug 开关经 setDebug() 同步）
 
 // 2026-08-28 拆分第二刀：模块级状态接驳导出（vs/* 子模块经受控循环 import 读取；
-// _root/_subtitles 归属门面，vs/record-workflow 与 vs/ocr 改读 getter，写仍走门面内部）
+// _root/_subtitles 归属门面，vs/ocr 改读 getter，写仍走门面内部）
 export function getRoot() { return _root; }
 export function getSubtitlesRef() { return _subtitles; }
 // 2026-08-28 拆分第三刀：vs/subtitle-renderer 读取的门面模块级状态 getter（只读接驳）
@@ -397,10 +394,9 @@ function buildSidebar() {
         <button id="beaver-learn-btn" data-i18n="btn.learn" title="Import draft & open My Scrolls">🎯 <span data-i18n="btn.learn">Learn</span></button>
       </div>
       <div class="beaver-footer-row">
-        <!-- 第二百七十一次：⬇️ 下载音频按钮移除（用户裁定"挪到诊断窗口中"）——
-             入口迁至诊断窗；第364次诊断窗拆分为诊断中心路由窗（openDiagCenter），
-             下载音频经 opts.audioDownload 注入「下载音频」标签（见 bindEvents 的
-             #beaver-diag-item 绑定）；功能本体 vs/record-workflow.js 不动 -->
+        <!-- 第398次：下载音频按钮 + 录音工作流一并退役（用户裁定）——
+             音频下载/转写统一由 backend yt-dlp 任务承担，扩展内不再有
+             下载与录制链路（vs/record-workflow.js 已删） -->
         <button class="beaver-icon-btn" id="beaver-ocr" data-i18n="btn.ocr" data-i18n-title="btn.ocrTitle" title="OCR current frame">📷</button>
         <!-- 第一百七十一次：评论按钮左侧新增对话按钮 -->
         <button id="beaver-chat" data-i18n="btn.chat">💬 Chat</button>
@@ -616,23 +612,11 @@ function bindEvents(options = {}) {
     }
   });
   // 菜单项：诊断中心路由窗（第364次改名「诊断中心」，原「正文提取诊断」）
-  // 下载音频动作经 opts.audioDownload 注入「下载音频」标签——动作闭包调
-  // vs/record-workflow 的 onDownloadAudioClick（同页上下文，getActiveVideo 取当前视频），
-  // 进度条/报错仍走原链路；文本侧栏入口不注入（无视频语境，标签内显示说明）。
+  // 第398次：下载音频退役——openDiagCenter 不再注入 audioDownload 动作。
   _root.querySelector('#beaver-diag-item').addEventListener('click', (e) => {
     e.stopPropagation();
     closeAllPopups();
-    openDiagCenter({
-      audioDownload: {
-        label: '⬇️ ' + t('btn.downloadAudio'),
-        title: t('btn.downloadAudioTitle') || 'Download audio',
-        onClick: () => {
-          try { onDownloadAudioClick(); } catch (err) {
-            log('诊断窗下载音频异常：' + String((err && err.message) || err));
-          }
-        }
-      }
-    }).catch((err) => {
+    openDiagCenter().catch((err) => {
       log('⋯菜单 诊断打开失败：' + String(err && err.message || err));
     });
   });
@@ -649,8 +633,7 @@ function bindEvents(options = {}) {
   });
 
   // 底部按钮：点击即触发
-  // 第九十六次：弹幕按钮移除。第二百七十一次：下载音频按钮移除——挪入诊断窗动作区，
-  //   此处不再查询 #beaver-dlaudio（模板与点击诊断数组同步移除）。
+  // 第九十六次：弹幕按钮移除。第398次：下载音频连同录音工作流一并退役。
   const btnCopy = _root.querySelector('#beaver-copy');
   const btnOcr = _root.querySelector('#beaver-ocr');
   const btnComment = _root.querySelector('#beaver-comment');
@@ -957,9 +940,8 @@ function speakWordVideo(word) {
 }
 
 // === ASR 识别：切换开关（预识别架构，与普通字幕同源处理） ===
-// 2026-07-04 重构：从实时采集改为预识别方案。
-//   B站路径：从 __playinfo__ 提取音频 URL → 下载 → 解码 → 按当前分钟开始预识别
-//   回退路径：captureStream + MediaRecorder 替代废弃的 ScriptProcessor
+// 2026-07-04 重构：从实时采集改为预识别方案；第398/399次后为 backend job 单路径
+//   （旧 B站下载管线与 captureStream 回退均已退役）。
 // 点击 ASR 按钮时触发：
 //   启动：保存当前字幕 → 清空面板 → asr-client 自动识别当前所在分钟并预识别后续分钟
 //   停止：停止识别 → 保留 ASR 字幕不清空
@@ -988,14 +970,11 @@ async function toggleASR(clickX, clickY) {
     _videoKey = makeVideoKey();
   }
   // 2026-07-04 重构：不再记录墙钟偏移。
-  // asr-client 的 onText 回调直接返回视频相对秒数（B站路径通过 PCM 偏移计算，
-  // 回退路径通过 video.currentTime 跟踪），appendASRSubtitle 直接使用。
+  // asr-client 的 onText 回调直接返回绝对视频秒数（backend 直出），appendASRSubtitle 直接使用。
   // 选中态：背景色
   const asrBtn = _root.querySelector('#beaver-asr-toggle');
   if (asrBtn) asrBtn.classList.add('active');
   _asrActive = true;
-  // 第一百一十五次：漂浮提示每会话一次——新会话重置
-  toggleASR._rtTipShown = false;
   // #85: 用户点 ASR 按钮启动，置标记防止后续 setTracks 覆盖轨道选中态
   _userPickedASR = true;
   // 同步轨道下拉框到 ASR 轨道（点击按钮启动时，下拉框也应切到 ASR）
@@ -1040,8 +1019,6 @@ async function toggleASR(clickX, clickY) {
       videoKey: _videoKey,
       videoElement: v,
       skipReplay,
-      // 第一百一十三次：录制工作流——若有留存录音，本次 ASR 直接解码识别（一次性消费）
-      recordedBlob: getRecordedBlobForASR(),
       onText: (seg) => {
         // appendASRSubtitle 为 async（getAnnotations 异步翻译），fire-and-forget + catch 防止 unhandledrejection
         appendASRSubtitle(seg).catch((e) => console.warn('[VocabRadar][asr][' + new Date().toLocaleTimeString('en-GB', { hour12: false }) + '.' + String(Date.now() % 1000).padStart(3, '0') + '] appendASRSubtitle 失败:', e));
@@ -1062,15 +1039,7 @@ async function toggleASR(clickX, clickY) {
           updateASRProgressFill(0);
         } else if (s.status === 'stage') {
           console.log('[VocabRadar][asr][' + _t + ']', '[' + s.stage + ']', s.info || '');
-          // 第一百一十三次（用户裁定）：回退实时模式时漂浮几秒提示——即时识别落后播放，
-          // 建议先下载识别再播放（下载失败可用录制工作流）。仅提示一次/会话。
-          // 378次：触发点从 fallback-start 移到 fallback——按下即录后 fallback-start 每次点击
-          //   都会立即出现（下载并行后台跑），此时弹"实时慢"提示会误导；改为确认下载失败、
-          //   录音兜底继续时才提示。
-          if (s.stage === 'fallback' && !toggleASR._rtTipShown) {
-            toggleASR._rtTipShown = true;
-            try { toast(t('asr.rtSlowTip'), { duration: 8000 }); } catch (e) { /* ignore */ }
-          }
+          // 第399次：回退实时模式提示（s.stage==='fallback' 弹 asr.rtSlowTip）随回退删除
           updateASRProgressFromStage(s);
         }
       },
@@ -1086,7 +1055,6 @@ async function toggleASR(clickX, clickY) {
     // 第一百三十四次：ASR 启动成功 → 本页会话冻结自动重塑（startSyncHeight/对位/补测停写）。
     // 不随 ASR 停止解冻——用户裁定"不因 asr 等活动重塑窗口"，解冻会让停止瞬间再次改写。
     setSizeFrozen(true);
-    setRecordedBlobForASR(null); // 录音已消费
     // 【第一百零一次 用户裁定】闸门停用——不再安装（原第九十六次行为，恢复见 _gateEnabled）
     installPlaybackGate();
   } catch (e) {
@@ -1099,8 +1067,11 @@ async function toggleASR(clickX, clickY) {
       return;
     }
     // 反思（2026-07-07）：用户要求"整个处理不了直接不显示窗口，别现眼"。
-    // ASR 启动失败（如无音轨、captureStream 不可用、B站音频下载失败且回退失败）
-    // 静默退出，不弹 toast。仅控制台保留 warn 日志供诊断。
+    // ASR 启动失败（如无音轨）静默退出，仅控制台保留 warn 日志供诊断。
+    // 第399次用户裁定：backend 是唯一路径，其不可用须如实报错引导启动 backend。
+    if (e.code === 'BACKEND_UNAVAILABLE' || String(e.message || e).includes('backend 不可用')) {
+      toast(String(e.message || e), { x: clickX, y: clickY, error: true, duration: 8000 });
+    }
     stopASRInternal();
   }
 }
@@ -1204,7 +1175,7 @@ export function clearLoading() {
  * _video 可能因 SPA 换集失效（旧 video 被移出 DOM），校验是否仍 connected，
  * 失效则重新查找 document.querySelector('video')。
  * 用于字幕点击跳转，避免设置失效元素的 currentTime 无效。
- * 2026-08-28 拆分第二刀：导出供 vs/* 子模块使用（playback-gate/asr-stage/record-workflow/ocr）
+ * 2026-08-28 拆分第二刀：导出供 vs/* 子模块使用（playback-gate/asr-stage/ocr）
  */
 export function getActiveVideo() {
   if (_video && document.contains(_video)) return _video;

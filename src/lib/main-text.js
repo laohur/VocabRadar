@@ -973,5 +973,6 @@ export async function measureMainTextExtractors() {
 
 // === 第364次：原 ③ 诊断悬浮窗段（renderDiagRows / renderHintTiming / openMainTextDiag /
 //   runDiagInto / Ctrl+Shift+V 注册 / DIAG_HOST_ID）整体迁至 src/content/diag-window.js
-//   诊断中心路由窗（五标签：注入时机/加载耗时/正文提取/AI上下文/下载音频）。
+//   诊断中心路由窗（四标签：注入时机/加载耗时/正文提取/AI上下文；第398次：原「下载音频」
+//   标签随下载音频/录音工作流一并退役）。
 //   本文件只留测量实现（迁走的是窗，留下的是测量）；getBatches import 随之撤除。

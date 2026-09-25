@@ -11,7 +11,7 @@
   "cacheAsr": true,
   "rankThreshold": 5000,
   "rankStep": 1000,
-  "asrModelSize": "base",
+  "asrModelSize": "large-v3-turbo",
   "annotateOov": false,
   "uiLanguage": "en",
   "textStyle": "green-background",

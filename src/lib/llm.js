@@ -21,13 +21,26 @@
  *   2) 原 'custom' 单项拆为 'custom-openai' / 'custom-anthropic' 两个自定义来源。
  *   3) 全表删除 keyUrl 字段（引导页"Get a key"入口一并移除）。
  *
+ * 第三百九十二次（plan 阶段二①）：新增「河狸后端」组两个来源 ——
+ *   local-backend（本地后端 http://127.0.0.1:7777/v1，OpenAI 格式，免 Key；第401次
+ *   起地址可被引导页「本地后端地址」填空的 backendBaseUrl 覆写）与
+ *   official-backend（官方后端，阶段三上线，先占位域名）。format 仍为 'openai'：
+ *   请求形状复用 service-worker 既有 openai 分支，无 Key 时不带 Authorization 头，
+ *   与本地后端（CORS/Host 已放行）天然兼容；且 format≠'free' 不触发免费轮替。
+ *   新增 group 字段供引导页下拉单独分组（不混入"需申请 Key"组），noKey 字段
+ *   供引导页隐藏 Key 输入框。默认免费轮替（LLM_FREE_ROTATION / LLM_DEFAULT_PROVIDER）
+ *   与免费项清单均不变。本地地址无需改 manifest：connect-src 已含 http:、
+ *   host_permissions 已有 <all_urls>。
+ *
  * 注意：新增来源域名必须同时写入 data/manifest.json 的
  *   content_security_policy.extension_pages 的 connect-src，否则后台 fetch 会被 CSP 拦截。
  */
 
 // 三类 API 格式的分组显示名：引导页下拉用 <optgroup> 按此分组，让"要不要账号"一眼可辨
+// 第三百九十二次：新增 'backend' 组（河狸后端：本地 / 官方），provider 以 group 字段归入此组
 export const LLM_FORMAT_GROUPS = [
   { format: 'free', label: { en: 'Free, no account needed', zh: '免费直连（无需账号 / 无需 Key）' } },
+  { format: 'backend', label: { en: 'VocabRadar backend', zh: '河狸后端（本地 / 官方）' } },
   { format: 'openai', label: { en: 'OpenAI-compatible (API key required)', zh: 'OpenAI 格式（需申请 Key）' } },
   { format: 'anthropic', label: { en: 'Anthropic (API key required)', zh: 'Anthropic 格式（需申请 Key）' } }
 ];
@@ -68,6 +81,31 @@ export const LLM_PROVIDERS = [
     label: { en: 'OVHcloud Mistral-7B (no key)', zh: 'OVHcloud Mistral-7B（免 Key）' },
     baseUrl: 'https://mistral-7b-instruct-v0-3.endpoints.kepler.ai.cloud.ovh.net/api/openai_compat/v1',
     model: 'Mistral-7B-Instruct-v0.3'
+  },
+  {
+    // 第三百九十二次（plan 阶段二①）：本地后端 —— backend 目录的 Flask 网关（默认对外 7777，
+    //   llama-server 内部 7788），/v1/chat/completions 为 OpenAI 格式（阶段一已实测）。
+    //   本地使用免 Key：无 Key 时 openai 分支不带 Authorization 头，与后端 CORS/Host 校验兼容。
+    //   第401次：baseUrl 仅默认预置——引导页「本地后端地址」（backendBaseUrl）非空时
+    //   由后台 handleLlmChat 覆写为 <backendBaseUrl>/v1（backend 换端口后免改代码）。
+    //   免费轮替条件为 format==='free'，本项不参与轮替。
+    id: 'local-backend',
+    format: 'openai',
+    group: 'backend',
+    noKey: true,
+    label: { en: 'Local backend', zh: '本地后端（需启动 backend）' },
+    baseUrl: 'http://127.0.0.1:7777/v1',
+    model: 'qwen3.5-0.8b'
+  },
+  {
+    // 官方后端占位（plan 阶段三上线）：域名未定，先占 api.vocabradar.com，上线时改此一处
+    //   即可（引导页 placeholder 随表走）。鉴权方式阶段三再定，暂按 openai 格式留 Key 框。
+    id: 'official-backend',
+    format: 'openai',
+    group: 'backend',
+    label: { en: 'VocabRadar official backend', zh: '官方后端（即将上线）' },
+    baseUrl: 'https://api.vocabradar.com/v1',
+    model: 'qwen3.5-0.8b'
   },
   {
     id: 'groq',
@@ -177,9 +215,11 @@ export function getFreeProviders() {
  *   （buildFirstPrompt 直接读 storage 的 chatWordPrompt/chatSidebarPrompt），
  *   后台 handleLlmChat 从不使用 cfg.prompt，留着只会误导且强绑单一模板常量。
  * @param {object} res chrome.storage.local 读出的设置对象
- * @returns {{provider:string, format:string, baseUrl:string, model:string, apiKey:string,
- *   userBaseUrl:boolean, userModel:boolean}}
- *   userBaseUrl/userModel 标记"是否为用户手填"，后台据此判断能否用轮替替换地址与模型
+ * @returns {{provider:string, format:string, noKey:boolean, baseUrl:string, model:string,
+ *   apiKey:string, userBaseUrl:boolean, userModel:boolean}}
+ *   userBaseUrl/userModel 标记"是否为用户手填"，后台据此判断能否用轮替替换地址与模型；
+ *   noKey（第三百九十三次）标记来源是否免 Key（本地后端）——后台 llmVisionOnce 据此
+ *   豁免 Key 强校验（与 free 同待遇），llmTranscribeBlob 鉴权头逻辑本就兼容无需改
  */
 export function resolveLlmConfig(res) {
   const p = getProvider(res && res.llmProvider);
@@ -192,6 +232,7 @@ export function resolveLlmConfig(res) {
   return {
     provider: p.id,
     format: p.format || 'openai',
+    noKey: !!p.noKey,
     baseUrl,
     model,
     apiKey,

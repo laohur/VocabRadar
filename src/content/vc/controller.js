@@ -68,8 +68,9 @@ function getSettings() {
       // 340次（My Words 过滤失效修复）：此前缺键 → getSettings 后转发 startOverlay 的
       //   myWords=undefined → subtitle-overlay 真值守卫不清空但也从不 setMyWords → 失效
       myWords: { new: [], known: [] },
-      learnLanguage: 'en',   // 所学语言（字幕轨道默认首选）
+      learnLanguage: 'en',   // 所学语言（第419次起字幕默认首选界面语言，此为次选）
       meaningLanguage: 'zh',   // 释义语言
+      uiLanguage: 'en',      // 界面语言（第419次：字幕默认轨道首选）
       sidebarEnabled: true,  // #88: 侧栏开关，默认显示
       annotateRepeat: false  // 第二百七十次：overlay-only 模式直启 overlay 时透传注释重复生词开关
     }, resolve);
@@ -320,7 +321,7 @@ export async function startVideoController(platform) {
           if (_ttRetryCount >= 3) return;            // 每视频限 3 次防风暴
           _ttRetryCount += 1;
           console.log('[VocabRadar][video-controller] timedtext 捕获信号 → 重拉 YouTube 轨道（第 ' + _ttRetryCount + '/3 次）');
-          const result2 = await getYouTubeSubtitles(settings.learnLanguage, settings.meaningLanguage);
+          const result2 = await getYouTubeSubtitles(settings.learnLanguage, settings.meaningLanguage, settings.uiLanguage);
           if (myRequestId !== _requestId) return;    // 重拉期间换集，丢弃
           const subs2 = result2 ? (Array.isArray(result2) ? result2 : (result2.subtitles || [])) : [];
           if (!subs2.length) {
@@ -353,9 +354,10 @@ export async function startVideoController(platform) {
 
     // waitForVideoReady 与字幕获取并行：字幕获取不依赖 video.duration
     // 超时降级：video 未就绪仍继续取字幕（overlay 跳转可能延迟，但 sidebar 字幕可显示）
+    // 第419次：默认轨道首选界面语言（YouTube 第三参 / B站 第一参）
     const subtitlesPromise = (platform === PLATFORM.BILIBILI)
-      ? getBilibiliSubtitles()
-      : getYouTubeSubtitles(settings.learnLanguage, settings.meaningLanguage);
+      ? getBilibiliSubtitles(settings.uiLanguage)
+      : getYouTubeSubtitles(settings.learnLanguage, settings.meaningLanguage, settings.uiLanguage);
 
     try {
       await waitForVideoReady(video);

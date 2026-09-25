@@ -125,7 +125,7 @@ const DICT = {
     'tool.export': 'Word List',
     'btn.copy': '📋 Copy',
     'btn.danmaku': '🎯 Danmaku',
-    'btn.downloadAudio': '⬇️ Audio',
+    // 第398次：btn.downloadAudio 随下载音频按钮退役删除
     // 第一百七十一次：💬 让位给 Chat 按钮，评论按钮改用 📝
     'btn.comment': '📝 Comment',
     'btn.chat': '💬 Chat',
@@ -177,62 +177,28 @@ const DICT = {
     'chat.failed': 'Request failed',
     'chat.openGuide': 'Open settings to configure the model',
     'chat.noText': 'No text to discuss',
-    // 第九十六次：下载音频按钮 toast（弹幕按钮已移除、弹幕模块已删除）
-    'toast.dlAudioBusy': 'Download already in progress...',
-    'toast.dlAudioOk': 'Audio saved',
-    'toast.dlAudioFail': 'Audio download failed: ',
+    // 第398次：toast.dlAudioBusy/Ok/Fail 随下载音频管线退役删除
     // 第一百一十次：ASR 进度提示（en 完整；其余语言回退 en）
     'asr.preparing': 'Preparing...',
     'asr.modelDownloading': 'Downloading model',
     'asr.modelReady': 'Model ready',
-    // 322次：prepStages 15 个孤儿键（fetchAudio/probeMeta/metaFail/parseHead/firstReady/
-    //   dlAudioFail/decoding/decodeDone/decodeFail/pcmReady/biliReuse/streamFallback/
-    //   directFail/ytAudio/prepRecog）已删——阶段标题改英文直文本（asr-stage.js）；
-    //   保留 dlAudioFile（record-workflow）/dlAudioDone（后台下载进度组）/fallbackMode（回退提示）
-    'asr.dlAudioFile': 'Downloading audio',
-    'asr.dlAudioDone': 'Audio downloaded',
-    'asr.fallbackMode': 'Fallback mode',
-    'asr.bgDownload': 'Background download',
-    'asr.bgInterrupted': 'Background download interrupted',
-    'asr.dlRetry': 'Download retrying',
-    'asr.backfillAudio': 'Backfilling start audio',
-    'asr.backfillRecog': 'Recognizing start (backfill)',
-    'asr.segRetry': 'Segment retrying',
+    // 第398次：prepStages 旧管线孤儿键（dlAudioFile/dlAudioDone/bgDownload/bgInterrupted/
+    //   dlRetry/backfillAudio/backfillRecog/segRetry）随 B站/YouTube 下载管线退役删除；
+    //   阶段标题改英文直文本（asr-stage.js prepStages：job-queued/job-download/job-transcribe）
+    // 第399次：fallbackMode/total/videoEnded/stopCapture/capturing/noAudioSeg/silentSkip/
+    //   rtPaused/rtResumed/rtSlowTip（回退路径键）随 captureStream 回退删除
     'asr.gating': 'Syncing subtitles',
     'asr.frontier': 'Frontier',
     'asr.buffer': 'Buffer',
     'asr.allDone': 'Recognition complete',
     'asr.inSync': 'Subtitles fully synced with playback',
-    'asr.recognizing': 'Recognizing {i}/{n}',
-    'asr.segDone': 'Segment {i}/{n} done',
-    'asr.total': 'total',
-    'asr.videoEnded': 'Video ended',
-    'asr.stopCapture': 'capture stopped',
-    'asr.capturing': 'Capturing {i}/{n}',
-    'asr.noAudioSeg': 'No audio {i}/{n}',
-    'asr.silentSkip': 'Silent skip {i}/{n}',
+    // 第398次：asr.recognizing/segDone（旧 bili-seg 分段进度）随管线退役删除
     'asr.errorLabel': 'Error',
-    'asr.rtPaused': 'Realtime fallback: recognition follows playback (direct download unavailable), pauses with video',
-    'asr.rtResumed': 'Playback resumed, recognizing',
-    'asr.dlGetInfo': 'Fetching audio track...',
-    'asr.sameOrigin': 'same-origin channel',
-    'asr.audioSaved': 'Audio saved',
+    // 第398次：asr.dlGetInfo/sameOrigin/audioSaved、dl.noTrack/ytFail/unsupportedSite/
+    //   metaProbeFail/chunkFail 随扩展内音频下载管线退役删除
     'asr.ctxInvalidated': 'Extension updated — reload this page (F5), then retry ASR',
-    'dl.noTrack': 'No audio track in __playinfo__',
-    'dl.ytFail': 'YouTube audio fetch failed',
-    'dl.unsupportedSite': 'Audio download not supported on this site',
-    'dl.metaProbeFail': 'Failed to probe audio size',
-    'dl.chunkFail': 'Chunk download failed @ {pos}',
-    // 第一百一十三次：录制工作流与回退提示
-    'asr.rtSlowTip': 'Realtime recognition lags playback by tens of seconds — prefer download-first recognition, then play in sync.',
-    'asr.recordOffer': 'Download unavailable. Record: play through once, audio kept for ASR.',
-    'asr.recordBtn': 'Record',
-    'asr.backBtn': 'Back',
-    'asr.recording': 'Recording',
-    'asr.recordingUntilEnd': 'Recording... an audio file will be generated when playback ends',
-    'asr.recSavedForAsr': 'Audio saved and kept for next ASR run',
-    'asr.recStop': 'Stop & download',
-'asr.longWarn': 'Long video: recording plus recognition takes roughly as long as the video itself — prefer direct download, or split the task',
+    // 第一百一十三次：录制工作流与回退提示——第398次：录制工作流（recordOffer/recBtn/backBtn/
+    //   recording/recordingUntilEnd/recSavedForAsr/recStop/longWarn）随录音工作流一并退役
     'btn.settings': 'Settings',
     'btn.close': 'Close (refresh to restore)',
     'btn.sync': 'Sync display',
@@ -294,12 +260,11 @@ const DICT = {
     'ws.openGuide': 'Open guide page',
     // 第364次：诊断窗拆分为诊断中心路由窗（openDiagCenter），侧栏菜单入口改名
     'ws.diagCenter': 'Diagnostics Hub',
-    // 诊断中心五标签（diag-window.js 路由窗）
+    // 诊断中心四标签（diag-window.js 路由窗）——第398次：audio 标签随下载音频退役删除
     'diag.tabTiming': 'Inject timing',
     'diag.tabLoad': 'Load timing',
     'diag.tabExtract': 'Main text',
     'diag.tabAi': 'AI context',
-    'diag.tabAudio': 'Audio download',
     'diag.tabAnn': 'Subtitle notes',
     'ws.resetLayout': 'Reset position & size',
     'ws.close': 'Close (refresh to restore)',
@@ -530,7 +495,7 @@ const DICT = {
     'tool.overlayToggle': '视频叠加字幕',
     'btn.copy': '📋 复制',
     'btn.danmaku': '🎯 弹幕',
-    'btn.downloadAudio': '⬇️ 音频',
+    // 第398次：btn.downloadAudio 随下载音频按钮退役删除
     'btn.comment': '📝 评论',
     'btn.chat': '💬 对话',
     // 308次：查询卡片 footer 中部"插入页面"按钮（th/panel.js show in page）
@@ -580,58 +545,28 @@ const DICT = {
     'chat.failed': '请求失败',
     'chat.openGuide': '打开设置配置模型',
     'chat.noText': '没有可讨论的文本',
-    // 第九十六次：下载音频按钮 toast（弹幕按钮已移除、弹幕模块已删除）
-    'toast.dlAudioBusy': '已有下载任务进行中...',
-    'toast.dlAudioOk': '音频已保存',
-    'toast.dlAudioFail': '音频下载失败：',
+    // 第398次：toast.dlAudioBusy/Ok/Fail 随下载音频管线退役删除
     // 第一百一十次：ASR 进度提示（与 en 键一一对应）
     'asr.preparing': '准备中...',
     'asr.modelDownloading': '模型下载',
     'asr.modelReady': '模型就绪',
-    'asr.dlAudioFile': '下载音频',
-    'asr.dlAudioDone': '音频下载完成',
-    'asr.fallbackMode': '回退模式',
-    'asr.bgDownload': '后台下载',
-    'asr.bgInterrupted': '后台下载中断',
-    'asr.dlRetry': '下载重试',
-    'asr.backfillAudio': '回填开头音频',
-    'asr.backfillRecog': '回填识别开头',
-    'asr.segRetry': '段重试',
+    // 第398次：prepStages 旧管线孤儿键（dlAudioFile/dlAudioDone/bgDownload/bgInterrupted/
+    //   dlRetry/backfillAudio/backfillRecog/segRetry）随 B站/YouTube 下载管线退役删除；
+    //   阶段标题改英文直文本（asr-stage.js prepStages：job-queued/job-download/job-transcribe）
+    // 第399次：fallbackMode/total/videoEnded/stopCapture/capturing/noAudioSeg/silentSkip/
+    //   rtPaused/rtResumed/rtSlowTip（回退路径键）随 captureStream 回退删除
     'asr.gating': '字幕同步中',
     'asr.frontier': '前沿',
     'asr.buffer': '缓冲',
     'asr.allDone': '识别完成',
     'asr.inSync': '字幕与播放完全同步',
-    'asr.recognizing': '识别中 {i}/{n}',
-    'asr.segDone': '段 {i}/{n} 完成',
-    'asr.total': '总长',
-    'asr.videoEnded': '视频已结束',
-    'asr.stopCapture': '停止采集',
-    'asr.capturing': '采集 {i}/{n}',
-    'asr.noAudioSeg': '无音频 {i}/{n}',
-    'asr.silentSkip': '静音跳过 {i}/{n}',
+    // 第398次：asr.recognizing/segDone（旧 bili-seg 分段进度）随管线退役删除
     'asr.errorLabel': '错误',
-    'asr.rtPaused': '回退实时模式：识别跟随播放（直连下载不可用），视频暂停即暂停',
-'asr.longWarn': '视频较长：录制加识别大约要花与视频相当的时间——建议优先直连下载，或分段处理',
-    'asr.rtResumed': '视频恢复，继续识别',
-    'asr.dlGetInfo': '获取音轨信息...',
-    'asr.sameOrigin': '同源通道',
-    'asr.audioSaved': '音频已保存',
+    // 第398次：asr.dlGetInfo/sameOrigin/audioSaved、dl.noTrack/ytFail/unsupportedSite/
+    //   metaProbeFail/chunkFail 随扩展内音频下载管线退役删除
     'asr.ctxInvalidated': '扩展已更新，请刷新页面（F5）后再使用 ASR',
-    'dl.noTrack': '__playinfo__ 无音轨',
-    'dl.ytFail': 'YouTube 音频获取失败',
-    'dl.unsupportedSite': '该站点暂不支持下载音频',
-    'dl.metaProbeFail': '探测音频大小失败',
-    'dl.chunkFail': '区间下载失败 @ {pos}',
-    // 第一百一十三次：录制工作流与回退提示
-    'asr.rtSlowTip': '即时识别很落后播放几十秒：可以先下载识别、再同步播放。',
-    'asr.recordOffer': '直连下载不可用，可点「录制」：原速播完自动存音频供识别。',
-    'asr.recordBtn': '录制',
-    'asr.backBtn': '返回',
-    'asr.recording': '录制中',
-    'asr.recordingUntilEnd': '录制中…播放结束时自动生成音频文件',
-    'asr.recSavedForAsr': '音频已生成并留存，下次点 🎤 将直接识别该录音',
-    'asr.recStop': '停止并下载',
+    // 第一百一十三次：录制工作流与回退提示——第398次：录制工作流（recordOffer/recBtn/backBtn/
+    //   recording/recordingUntilEnd/recSavedForAsr/recStop/longWarn）随录音工作流一并退役
     'btn.settings': '设定',
     'btn.close': '关闭（刷新恢复）',
     'btn.sync': '同步显示',
@@ -692,12 +627,11 @@ const DICT = {
     'ws.openGuide': '打开引导页',
     // 第364次：诊断窗拆分为诊断中心路由窗（openDiagCenter），侧栏菜单入口改名
     'ws.diagCenter': '诊断中心',
-    // 诊断中心五标签（diag-window.js 路由窗）
+    // 诊断中心四标签（diag-window.js 路由窗）——第398次：audio 标签随下载音频退役删除
     'diag.tabTiming': '注入时机',
     'diag.tabLoad': '加载耗时',
     'diag.tabExtract': '正文提取',
     'diag.tabAi': 'AI上下文',
-    'diag.tabAudio': '下载音频',
     'diag.tabAnn': '字幕注释',
     'ws.resetLayout': '重置位置与尺寸',
     'ws.close': '关闭（刷新恢复）',

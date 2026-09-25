@@ -294,7 +294,7 @@ export function bindEvents() {
     }
   });
   // 菜单项：诊断中心路由窗（第364次：openMainTextDiag 拆分为 openDiagCenter；
-  // 文本侧栏无视频语境，不传 audioDownload，音频标签自会渲染"无视频"提示）
+  // 第398次：audioDownload 注入参数随下载音频退役删除，两入口调用形态一致）
   _root.querySelector('#beaver-web-diag-item').addEventListener('click', () => {
     closeAllPopups();
     openDiagCenter().catch((e) => {

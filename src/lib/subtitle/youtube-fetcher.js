@@ -848,12 +848,13 @@ async function getYouTubeCaptionTracks() {
  * 反思：旧版硬编码优先 en、回退非 zh，无视用户在 popup 改的源语言，
  * 导致"字幕轨道可选，默认首选目标语言"未生效。
  *
- * @param {string} [learnLanguage='en'] 所学语言（默认首选轨道）
+ * @param {string} [learnLanguage='en'] 所学语言（次选轨道）
  * @param {string} [meaningLanguage='zh'] 释义语言（回退时避开）
+ * @param {string} [uiLanguage='en'] 界面语言（第419次起默认首选轨道）
  * @returns {Promise<{tracks: Array, subtitles: Array|null, pickedIndex: number}|null>}
  */
-export async function getYouTubeSubtitles(learnLanguage = 'en', meaningLanguage = 'zh') {
-  console.log('[VocabRadar][youtube] 开始获取字幕, learnLanguage=' + learnLanguage + ' meaningLanguage=' + meaningLanguage);
+export async function getYouTubeSubtitles(learnLanguage = 'en', meaningLanguage = 'zh', uiLanguage = 'en') {
+  console.log('[VocabRadar][youtube] 开始获取字幕, learnLanguage=' + learnLanguage + ' meaningLanguage=' + meaningLanguage + ' uiLanguage=' + uiLanguage);
   // 尽早注入页面主世界脚本，确保 YouTube 播放器的字幕请求能被拦截
   injectPageScript();
   console.log('[VocabRadar][youtube] 页面脚本注入完成, ready=', _pageScriptReady, '已有缓存=', _pageTimedtextCache.length, '条');
@@ -868,14 +869,24 @@ export async function getYouTubeSubtitles(learnLanguage = 'en', meaningLanguage 
     trackList = await fetchTrackListViaInnertube(videoId2);
     if (!trackList || trackList.length === 0) {
       console.warn('[VocabRadar][youtube] 字幕轨道列表为空（含 innertube 补拉）');
-      return null;
+      // 第399次：页面四路+innertube 全空 → backend yt-dlp 兜底（失败保持 return null 语义）
+      // 第419次：兜底语言同步改为界面语言（与默认选轨一致）
+      return await backendSubtitlesFallback(uiLanguage, null);
     }
   }
   console.log('[VocabRadar][youtube] 所有字幕轨道:', trackList.map((t) => `${t.languageCode}=${t.name}`).join(', '));
 
+  // 第419次：默认字幕改界面语言优先——uiLanguage 轨道（asr 自动优先）先选，
+  // 无则沿用原 learnLanguage 四级回落（asr → 任意 → 非 meaningLanguage → 首条）
+  let pickedIndex = trackList.findIndex((t) => t.kind === 'asr' && t.languageCode.startsWith(uiLanguage));
+  if (pickedIndex < 0) {
+    pickedIndex = trackList.findIndex((t) => t.languageCode.startsWith(uiLanguage));
+  }
   // 默认首选 learnLanguage 轨道；无则取非 meaningLanguage；再无则第一条
   // 第一百二十次：优先选择 ASR 自动字幕（kind=asr），无则按语言匹配
-  let pickedIndex = trackList.findIndex((t) => t.kind === 'asr' && t.languageCode.startsWith(learnLanguage));
+  if (pickedIndex < 0) {
+    pickedIndex = trackList.findIndex((t) => t.kind === 'asr' && t.languageCode.startsWith(learnLanguage));
+  }
   if (pickedIndex < 0) {
     pickedIndex = trackList.findIndex((t) => t.languageCode.startsWith(learnLanguage));
   }
@@ -888,9 +899,50 @@ const picked = trackList[pickedIndex];
 
   // 调用 fetchYouTubeTrack 下载默认轨道（避免重复 XML/JSON 解析逻辑）
   const subtitles = await fetchYouTubeTrack(picked);
+  if (!subtitles || subtitles.length === 0) {
+    // 第399次：轨道在但五路内容拉取全空（PoToken 语境常见）→ backend 兜底；
+    // 失败时保留原返回结构（轨道列表仍可用于下拉）
+    console.warn('[VocabRadar][youtube] 默认轨道内容拉取为空, backend 兜底');
+    return await backendSubtitlesFallback(uiLanguage, { tracks: trackList, subtitles: [], pickedIndex });
+  }
   return { tracks: trackList, subtitles, pickedIndex };
 }
 // 第一百二十三次自纠：此处原有上次会话遗留的两个孤立 '}'（ESM 解析失败），随修清除。
+
+// === 第399次：字幕 backend 兜底（扩展五路全失败后 SW 代理调 backend yt-dlp） ===
+// SW case 'YTDL_SUBTITLES' → GET /api/ytdl/subtitles?url=&lang= → backend 用
+// yt-dlp subtitles/automatic_captions 提取，直出结构化条目 {start,end,text}（秒）。
+// 成功返回与 getYouTubeSubtitles 同构结果（伪轨 _backend=true、baseUrl 空——
+// 条目已直出无需再拉）；backend 不可用/无字幕返回 prev（保持原失败语义）。
+async function fetchSubsViaBackend(lang) {
+  return await new Promise((resolve) => {
+    try {
+      chrome.runtime.sendMessage({ type: 'YTDL_SUBTITLES', url: location.href, lang },
+        (r) => resolve(chrome.runtime.lastError ? null : (r || null)));
+    } catch (e) {
+      console.warn('[VocabRadar][youtube] backend 兜底消息异常:', e);
+      resolve(null);
+    }
+  });
+}
+
+async function backendSubtitlesFallback(lang, prev) {
+  const resp = await fetchSubsViaBackend(lang);
+  if (resp && resp.ok && Array.isArray(resp.cues) && resp.cues.length) {
+    console.log('[VocabRadar][youtube] backend 兜底成功: lang=' + resp.lang + ' kind=' + resp.kind + ' cues=' + resp.cues.length);
+    return {
+      tracks: [{
+        languageCode: resp.lang || lang || '',
+        name: 'backend (' + (resp.kind || 'auto') + ')',
+        kind: 'asr', baseUrl: '', _backend: true,
+      }],
+      subtitles: resp.cues,
+      pickedIndex: 0,
+    };
+  }
+  console.warn('[VocabRadar][youtube] backend 兜底无字幕:', resp ? (resp.error || 'no cues') : 'no response');
+  return prev;
+}
 
 /**
  * 通过 service worker 代理下载字幕（绕过 content script 的 CORS 限制）
@@ -1422,7 +1474,14 @@ function buildTranscriptUrl(baseUrl) {
  * @returns {Promise<Array<{start, end, text}>|null>}
  */
 export async function fetchYouTubeTrack(track) {
-  if (!track || !track.baseUrl) return null;
+  if (!track || !track.baseUrl) {
+    // 第399次：backend 伪轨（无 baseUrl）——经 SW 代理重调 backend 直出条目
+    if (track && track._backend) {
+      const resp = await fetchSubsViaBackend(track.languageCode);
+      return (resp && resp.ok && Array.isArray(resp.cues) && resp.cues.length) ? resp.cues : null;
+    }
+    return null;
+  }
   console.log('[VocabRadar][youtube] fetchYouTubeTrack:', track.languageCode, 'url=', track.baseUrl);
 
   // 获取当前 videoId
