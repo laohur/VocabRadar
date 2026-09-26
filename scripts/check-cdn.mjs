@@ -18,15 +18,6 @@ const TARGETS = [
   { label: 'HF镜像-API',       url: 'https://hf-mirror.com/api/models?limit=1' },
   { label: 'HF镜像-文件resolve', url: 'https://hf-mirror.com/Xenova/whisper-tiny/resolve/main/config.json' },
   { label: 'HF官方-API',       url: 'https://huggingface.co/api/models?limit=1' },
-  { label: 'jsdelivr-npm',     url: 'https://cdn.jsdelivr.net/npm/tesseract.js@5/package.json' },
-  { label: 'jsdelivr-gh-OCR包', url: 'https://cdn.jsdelivr.net/gh/tesseract-ocr/tessdata_fast@main/eng.traineddata', range: true },
-  { label: 'jsdelivr-fastly',  url: 'https://fastly.jsdelivr.net/npm/tesseract.js@5/package.json' },
-  { label: 'jsdelivr-gcore',   url: 'https://gcore.jsdelivr.net/npm/tesseract.js@5/package.json' },
-  { label: 'unpkg',            url: 'https://unpkg.com/tesseract.js@5/package.json' },
-  { label: 'tessdata官方CDN',   url: 'https://tessdata.projectnaptha.com/4.0.0/eng.traineddata.gz', range: true },
-  { label: 'GitHub-raw',       url: 'https://raw.githubusercontent.com/tesseract-ocr/tessdata_fast/main/eng.traineddata', range: true },
-  { label: 'npmmirror-registry', url: 'https://registry.npmmirror.com/tesseract.js/latest' },
-  { label: 'npmmirror-文件服务', url: 'https://registry.npmmirror.com/tesseract.js/5.1.1/files/package.json' },
 ];
 
 /** 探测单个目标：返回 {ok,status,ms,acao,lenInfo,note}，任何网络层错误都透出 err.cause（不掩蔽） */

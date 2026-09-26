@@ -10,9 +10,12 @@
   主因）。复用
   AsrEngine.ensure_loaded 拿模型，但转写循环自持——core/asr.py 的 transcribe
   把生成器消费完才返回，不满足增量。
-- 下载复用 core/ytdl 的 yt-dlp 基础（_import_yt_dlp/_ensure_ffmpeg/_base_opts，
+- 下载复用 core/ytdl 的 yt-dlp 基础（_ensure_ffmpeg/_base_opts/_extract_info，
   固定 m4a 串原生流，PyAV 直解）。产物落进程临时目录，转写完成即删——音频
   只是中间产物，缓存只存 JSON 不存音频。
+- 第437次方案A（用户裁定）：下载音频前先查官方字幕（core.ytdl.subtitles），
+  有 cues 秒级直出（segments=官方字幕条目，缓存条目 engine=official），无才
+  走下载+转写——backend 已拿到现成字幕时不再干等慢速 CPU 转写。
 - 并发：全局信号量 1——CPU 转写单路即饱和，同刻只放行一个任务，其余停在
   queued 排队。任务表同 core/ytdl：内存态，进程重启即清，无持久化。
 - 缓存：读写在本模块（任务生命周期内：创建时查、转写完写；api 层 multipart
@@ -33,7 +36,8 @@ import uuid
 
 import config
 from core.asr import ASR_CACHE_DIR, _safe_key
-from core.ytdl import _base_opts, _ensure_ffmpeg, _import_yt_dlp
+from core.ytdl import (_base_opts, _ensure_ffmpeg, _extract_info,
+                       subtitles as _ytdl_subtitles)
 
 log = logging.getLogger(__name__)
 
@@ -133,17 +137,21 @@ def _run_file(job, asr_engine):
 
 
 def _pipeline_url(job, asr_engine):
-    yt_dlp = _import_yt_dlp()
-    _ensure_ffmpeg()  # 就绪保障：HLS/分段流站点需要（缺失不阻塞原生流下载）
     tmpdir = tempfile.mkdtemp(prefix="asrjob_")
     try:
+        # 第437次方案A：官方字幕秒级直出（命中则跳过下载+转写，异常不阻塞主线）
+        if _try_official_subtitles(job):
+            return
+        _ensure_ffmpeg()  # 就绪保障：HLS/分段流站点需要（缺失不阻塞原生流下载）
         job["status"] = "downloading"
-        # opts 构造含 cookiefile 配置校验，放 try 内统一记 job.error
-        opts = _base_opts(None)  # 默认 m4a 串：ASR 用途原生流，PyAV 直解
-        opts["outtmpl"] = os.path.join(tmpdir, f"{job['id']}.%(ext)s")
-        opts["progress_hooks"] = [_download_hook(job)]
-        with yt_dlp.YoutubeDL(opts) as ydl:
-            info = ydl.extract_info(job["url"], download=True)
+        def make_opts(_fresh=False):
+            # opts 构造含 cookiefile 配置校验，放 try 内统一记 job.error；
+            # _fresh 由 _extract_info 传（旧缓存 jar 失效重试时强制现取）
+            opts = _base_opts(None, fresh_cookie=_fresh)  # m4a 串：ASR 原生流直解
+            opts["outtmpl"] = os.path.join(tmpdir, f"{job['id']}.%(ext)s")
+            opts["progress_hooks"] = [_download_hook(job)]
+            return opts
+        info = _extract_info(make_opts, job["url"], download=True)
         if info.get("_type") == "playlist":  # 防御：noplaylist 之外的入口形态
             info = (info.get("entries") or [{}])[0]
         job["title"] = info.get("title")
@@ -161,6 +169,41 @@ def _pipeline_url(job, asr_engine):
     finally:
         job["finished_at"] = int(time.time())
         shutil.rmtree(tmpdir, ignore_errors=True)
+
+
+def _try_official_subtitles(job):
+    """第437次方案A：下载音频前先查官方字幕，有则秒级直出。
+
+    背景：字幕兜底链路（/api/ytdl/subtitles）与 ASR job 互不相通——backend
+    已拿到官方字幕时，扩展侧 ASR 激活期间会丢弃原生字幕覆盖（updateSubtitles
+    守卫），只能干等慢速 CPU 转写。官方字幕必须以 job 段形态走轮询直出路径。
+    有 cues：按 start 排序填 job、写缓存（engine=official）、completed、返回
+    True；查不到（无轨/站点不支持/网络异常）返回 False 落回转写主线，任何
+    异常只记日志不阻塞。"""
+    try:
+        sub = _ytdl_subtitles(job["url"], job["language"])
+    except Exception as e:
+        log.info("ASR 任务 %s 官方字幕探测未命中（%s），落回转写主线",
+                 job["id"], str(e)[:150])
+        return False
+    cues = (sub or {}).get("cues") or []
+    if not cues:
+        log.info("ASR 任务 %s 无可用官方字幕轨，落回转写主线", job["id"])
+        return False
+    cues.sort(key=lambda c: c.get("start", 0))
+    job["segments"] = [{"start": c["start"], "end": c["end"], "text": (c.get("text") or "").strip()}
+                       for c in cues if (c.get("text") or "").strip()]
+    if not job["segments"]:
+        return False  # cues 全空文（罕见）：等同无字幕，落回转写主线
+    job["detected_language"] = sub.get("lang")
+    job["progress"] = {"download": 100, "transcribe": 100}
+    job["text"] = " ".join(s["text"] for s in job["segments"])
+    if _cache_enabled():
+        _cache_put_official(job, sub.get("video_id"))
+    job["status"] = "completed"
+    log.info("ASR 任务 %s 官方字幕直出：%d 条（%s，%s）",
+             job["id"], len(job["segments"]), sub.get("kind"), sub.get("lang"))
+    return True
 
 
 def _pipeline_file(job, asr_engine):
@@ -184,8 +227,12 @@ def _transcribe(job, asr_engine, audio_path, video_id=None):
     """转写共用段（URL/文件两源）：逐段消费生成器、增量可见、完成写缓存。"""
     job["status"] = "transcribing"
     model, _ = asr_engine.ensure_loaded("faster-whisper")
+    # 第436次（用户"感觉后端比脚本asr慢"+乱序报障）：vad_filter=True 跳过静音段
+    #   （只转写有人声的部分，提速显著）并顺带压制静音段幻觉——幻觉是 whisper 段
+    #   时间戳紊乱（乱序）的主要来源。silero-vad onnx 已随 faster-whisper 包内置。
     segs_iter, tinfo = model.transcribe(audio_path,
-                                        language=job["language"] or None)
+                                        language=job["language"] or None,
+                                        vad_filter=True)
     job["detected_language"] = tinfo.language
     total = tinfo.duration or job["duration"]
     texts = []
@@ -248,8 +295,8 @@ def _cache_get_key(key, language):
             data = json.load(f)
     except (OSError, ValueError):
         return None
-    if data.get("engine") != "faster-whisper":  # 引擎不同不复用（同 api 层语义）
-        return None
+    if data.get("engine") not in ("faster-whisper", "official"):
+        return None  # 引擎不同不复用（同 api 层语义）；official=官方字幕直出（第437次）
     if language and data.get("req_language") != language:
         return None
     if not data.get("segments"):
@@ -261,16 +308,25 @@ def _cache_put(job, video_id):
     _cache_put_key(_cache_key(job["url"]), job, video_id)
 
 
-def _cache_put_key(key, job, video_id=None):
+def _cache_put_official(job, video_id):
+    """官方字幕直出条目（第437次方案A）：engine=official 如实标注来源，
+    读侧 _cache_get_key 同样放行——下次同 URL 秒级命中。"""
+    _cache_put_key(_cache_key(job["url"]), job, video_id, engine="official")
+
+
+def _cache_put_key(key, job, video_id=None, engine="faster-whisper"):
     entry = {
         "key": key,
         "video_id": video_id,
-        "engine": "faster-whisper",
+        "engine": engine,
         "req_language": job["language"],
         "ts": int(time.time()),
         "text": job["text"],
         "language": job["detected_language"],
-        "segments": job["segments"],
+        # 第436次：缓存条目段按 start 排序（whisper 幻觉期可能产出时间戳紊乱段）。
+        #   只排条目副本、不动 job["segments"] 本体——轮询协议按追加序切片
+        #   segs[after:]，完成时重排本体会使已发游标与切片错位（漏段/重复段）。
+        "segments": sorted(job["segments"], key=lambda s: s.get("start", 0)),
     }
     os.makedirs(ASR_CACHE_DIR, exist_ok=True)
     path = os.path.join(ASR_CACHE_DIR, _safe_key(key) + ".json")

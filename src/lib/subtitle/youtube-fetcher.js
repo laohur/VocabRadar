@@ -940,7 +940,14 @@ async function backendSubtitlesFallback(lang, prev) {
       pickedIndex: 0,
     };
   }
-  console.warn('[VocabRadar][youtube] backend 兜底无字幕:', resp ? (resp.error || 'no cues') : 'no response');
+  // 第435次：失败原因透出（不遮蔽）——backend 业务错误（error/message，如
+  // yt-dlp 撞 YouTube 机器人墙）与 SW 无响应（backend 未运行）分类如实打印
+  if (!resp) {
+    console.warn('[VocabRadar][youtube] backend 兜底失败: SW 无响应（backend 未运行或消息通道异常）');
+  } else {
+    console.warn('[VocabRadar][youtube] backend 兜底失败: ' + (resp.error || 'no cues')
+      + (resp.message ? ' — ' + resp.message : ''));
+  }
   return prev;
 }
 
@@ -1478,7 +1485,12 @@ export async function fetchYouTubeTrack(track) {
     // 第399次：backend 伪轨（无 baseUrl）——经 SW 代理重调 backend 直出条目
     if (track && track._backend) {
       const resp = await fetchSubsViaBackend(track.languageCode);
-      return (resp && resp.ok && Array.isArray(resp.cues) && resp.cues.length) ? resp.cues : null;
+      if (resp && resp.ok && Array.isArray(resp.cues) && resp.cues.length) return resp.cues;
+      // 第435次：伪轨重调失败原因透出（不遮蔽）
+      console.warn('[VocabRadar][youtube] 伪轨重调 backend 失败: '
+        + (resp ? (resp.error || 'no cues') + (resp.message ? ' — ' + resp.message : '')
+                : 'SW 无响应（backend 未运行或消息通道异常）'));
+      return null;
     }
     return null;
   }

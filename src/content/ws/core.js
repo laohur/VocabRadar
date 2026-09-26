@@ -259,11 +259,14 @@ export function cssEscape(s) {
 }
 
 export function formatTime(sec) {
+  // 第436次：≥1 小时用 h:mm:ss（与视频侧栏 dom-utils.js 同行为），不足仍 m:ss
   if (sec == null || isNaN(sec)) return '0:00';
   const total = Math.max(0, Math.floor(sec));
-  const m = Math.floor(total / 60);
+  const h = Math.floor(total / 3600);
+  const m = Math.floor((total % 3600) / 60);
   const s = total % 60;
-  return `${m}:${String(s).padStart(2, '0')}`;
+  const mm = h > 0 ? String(m).padStart(2, '0') : String(m);
+  return (h > 0 ? `${h}:` : '') + `${mm}:${String(s).padStart(2, '0')}`;
 }
 
 function flashButton(btn) {

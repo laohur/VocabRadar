@@ -67,14 +67,25 @@ export function flashButton(btn) {
   setTimeout(() => { btn.style.background = ''; }, 300);
 }
 
-// === 时间格式化 mm:ss ===
+// === 时间格式化 m:ss（小时级面板统一 h:mm:ss）===
+// 第436次：超小时视频改用 h:mm:ss（用户裁定，推翻早期「不要加小时」）。
+//   面板级开关 _hourly：视频时长≥1h 时整面板统一 h:mm:ss（与主流播放器一致，
+//   避免 m:ss/h:mm:ss 混排导致 grid 时间列宽窄不齐）；_hourly=false 时逐条
+//   判定（start≥1h 的条目仍显示小时位，兜底 duration 未知场景）。
+let _hourly = false;
+
+/** 面板级小时格式开关（renderSubtitlePanel/appendASRSubtitle 依视频时长设置） */
+export function setHourlyFormat(v) { _hourly = !!v; }
+
 export function formatTime(sec) {
-  // mm:ss 格式（用户要求：不要加小时）
   if (sec == null || isNaN(sec)) return '0:00';
   const total = Math.max(0, Math.floor(sec));
-  const m = Math.floor(total / 60);
+  const h = Math.floor(total / 3600);
+  const m = Math.floor((total % 3600) / 60);
   const s = total % 60;
-  return `${m}:${String(s).padStart(2, '0')}`;
+  const useH = _hourly || h > 0;
+  const mm = useH ? String(m).padStart(2, '0') : String(m);
+  return (useH ? `${h}:` : '') + `${mm}:${String(s).padStart(2, '0')}`;
 }
 
 // 第二百二十五次：删除转发包装 pickRandomShortTrans（《命名清查》裁定：语义早已收敛到

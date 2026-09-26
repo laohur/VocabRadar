@@ -22,7 +22,7 @@
 // ============================================================================
 
 import { log } from './logger.js';
-import { formatTime, copyToClipboard, flashButton, escapeHtml, escapeReg, cssEscape } from './dom-utils.js';
+import { formatTime, setHourlyFormat, copyToClipboard, flashButton, escapeHtml, escapeReg, cssEscape } from './dom-utils.js';
 import { pickRandomLinesForComment, findMainCommentContainer, ensureYtCommentsLoaded, expandCommentBox, fillCommentInput, scrollMinIntoView } from './comment-fill.js';
 import { autoExpandOnce, requestSyncHeightOnce } from './sidebar-layout.js';
 import { getAnnotations, getRankMax, rankToStage, resetDiag } from '../../lib/annotator.js';
@@ -134,6 +134,18 @@ async function renderSubtitlePanel(keepAnnotations = false) {
     return;
   }
   clearLoading();
+
+  // 第436次（用户裁定"超过小时的，用时分秒时间"）：面板级小时格式开关。
+  //   视频 duration ≥1h 或已有字幕段最大 start ≥1h → 整面板统一 h:mm:ss，
+  //   避免逐条判定造成的 m:ss/h:mm:ss 混排（grid 时间列宽窄不齐）。
+  //   ref 最大 start 兜底 duration 未知场景（ASR 段已推进到小时级）。
+  {
+    const dv = getActiveVideo();
+    const maxStart = getSubtitlesRef().reduce((mx, s) => Math.max(mx, s.start || 0), 0);
+    const useH = (dv && isFinite(dv.duration) && dv.duration >= 3600) || maxStart >= 3600;
+    setHourlyFormat(useH);
+    getRoot().classList.toggle('beaver-hourly', useH);
+  }
 
   // 全量渲染所有字幕（2026-07-13 #93）
   // 反思（2026-07-28 #bug3 三次修正）：
@@ -1443,6 +1455,12 @@ export async function appendASRSubtitle(seg) {
   let videoEnd = (typeof seg.end === 'number' && isFinite(seg.end)) ? seg.end : (videoStart + 5);
   if (videoStart < 0) videoStart = 0;
   if (videoEnd <= videoStart) videoEnd = videoStart + 1;
+  // 第436次：ASR 段推进到小时级 → 切整面板 h:mm:ss（只开不关——时长一旦过小时，
+  //   不会回落；renderSubtitlePanel 全量渲染时会按最新时长重新判定/复位）。
+  if (videoStart >= 3600) {
+    setHourlyFormat(true);
+    getRoot().classList.toggle('beaver-hourly', true);
+  }
   const sub = {
     start: videoStart,
     end: videoEnd,

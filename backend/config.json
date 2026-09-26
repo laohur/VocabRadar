@@ -7,7 +7,7 @@
     "ctx": 16384,
     "mode": "resident",
     "idle_timeout": 600,
-    "model": "unsloth/Qwen3-0.6B-GGUF:Q4_K_M",
+    "model": "unsloth/Qwen3.5-2B-GGUF:Q4_K_M",
     "cards": [
       {
         "name": "unsloth/Qwen3-0.6B-GGUF:Q4_K_M",
@@ -84,7 +84,8 @@
           "repeat_penalty": 1.1
         }
       }
-    ]
+    ],
+    "stopped": true
   },
   "asr": {
     "engine": "faster-whisper",
@@ -102,7 +103,7 @@
   "ytdl": {
     "format": "m4a",
     "cookiefile": "",
-    "cookies_from_browser": ""
+    "cookies_from_browser": "auto"
   },
   "binaries": {
     "gpu": "auto"

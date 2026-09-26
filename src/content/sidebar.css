@@ -393,6 +393,15 @@
   margin-top: 2px;
 }
 
+/* 第436次（用户裁定"超过小时的，用时分秒时间"）：视频 ≥1h 时根节点挂
+ * .beaver-hourly（subtitle-renderer.js setHourlyFormat 同步切换），时间格式
+ * 统一为 h:mm:ss（最宽 10:00:00 共 8 字符 + 两空格），左列从 3em 加宽到 5em。
+ * 两处必须同步：字幕行与注释行左列是对齐的时间专用列。 */
+.beaver-hourly .beaver-sub-text,
+.beaver-hourly .beaver-ann-line {
+  grid-template-columns: 5em 1fr;
+}
+
 .beaver-ann-content {
   /* grid 第二列：释义内容，与正文对齐。
    * 显式指定 grid-column:2，左列(3em)严格留空给时间专用。

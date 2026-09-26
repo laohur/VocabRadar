@@ -40,9 +40,13 @@ DEFAULTS = {
     # 限制/机器人墙、B 站大会员清晰度等）；务必小号导出（主号自动化下载有风控
     # 封号风险），相对路径基于 backend/ 目录，路径不存在会报错；空 = 不携带
     # cookies_from_browser：自动取已登录浏览器的 cookie（yt-dlp 原生
-    # --cookies-from-browser），空 = 关闭；与 cookiefile 二选一，cookiefile 优先。
-    # Windows 上 Chrome 127+ 因 App-Bound Encryption 解密会失败，Firefox 最稳，
-    # Edge/Brave 视版本而定；成功与否取决于浏览器已登录目标站点
+    # --cookies-from-browser，每次运行直读浏览器 cookie 库＝现用现取，
+    # 无静态文件过期问题）；值可为浏览器名（firefox/chrome/edge/brave/
+    # vivaldi/chromium…yt-dlp 支持名单）或 auto＝第435次自动探测本机
+    # 已装浏览器（Firefox 无加密最稳故最优先），空 = 关闭；与 cookiefile
+    # 二选一，cookiefile 优先。Windows 上 Chrome 127+ 因 App-Bound
+    # Encryption 解密会失败，Edge/Brave 视版本而定；成功与否取决于
+    # 浏览器已登录目标站点
     "ytdl": {"format": "m4a", "cookiefile": "", "cookies_from_browser": ""},
     "binaries": {"gpu": "auto"},                   # auto | vulkan | cuda | cpu
 }

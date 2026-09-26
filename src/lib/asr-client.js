@@ -176,6 +176,12 @@ async function pollJobOnce() {
 
   // 增量段（绝对时间戳）：直出字幕 + 入缓存（静音间隙折入监听窗口）+ 推进前沿
   const segs = Array.isArray(resp.segments) ? resp.segments : [];
+  // 第436次（用户报障"后端转写字幕并不总是按照时间顺序"）：batch 内按 start 排序
+  //   再直出——whisper 幻觉期可能产出时间戳紊乱段，到达序未必等于时间序；
+  //   下游 appendASRSubtitle 二分插入按 start，入参有序才能保证数组与 DOM 全程有序。
+  if (segs.length > 1) {
+    segs.sort((a, b) => ((a.start || 0) - (b.start || 0)));
+  }
   if (segs.length > 0) {
     _jobAfter += segs.length;
     const batch = [];
@@ -186,7 +192,11 @@ async function pollJobOnce() {
       if (text && end > batchEnd) batchEnd = end;
       batch.push({ start: s.start, end, text });
     }
-    const msgStart = _jobListenEnd;
+    // 第437次：msgStart 改用本批最小 start（batch 已按 start 排序，取 batch[0]），
+    //   不再用 _jobListenEnd——后者只增不减，幻觉段把窗口推后后，后续正常段的
+    //   timestamp 全被 Math.max(0,·) 钳 0，mergeOrAddSegment 反算绝对时间堆错
+    //   （缓存回放时间戳错乱的根因）。batchEnd/_jobListenEnd 闸门语义不变。
+    const msgStart = batch.length > 0 ? (batch[0].start || 0) : _jobListenEnd;
     _jobListenEnd = Math.max(_jobListenEnd, batchEnd);
     for (const seg of batch) {
       if (!seg.text) continue;

@@ -11,10 +11,15 @@ imageio-ffmpeg 包内执行器（可选依赖：系统无 ffmpeg 时 install.py 
 wheel 自带 exe 零网络；包未装则保持缺失由 yt-dlp 报错）。
 
 客户端信息：全局兜底 http_headers（UA + Accept-Language，提取器自带各站
-专属头优先）；可选 Netscape cookie 文件（config ytdl.cookiefile，仅登录
-墙内容需要，建议小号导出）——配置即读即用，路径缺失报错不静默。
+专属头优先）；cookie 携带（YouTube 机器人墙等登录墙场景需要，配置即读
+即用）：Netscape cookiefile（config ytdl.cookiefile，建议小号导出，路径
+缺失报错不静默）或 cookies_from_browser（浏览器名直读，或 auto＝第435次
+自动探测本机已装浏览器；第437次：每次直读浏览器 cookie 库逐条解密太慢，
+改旧缓存优先——backend/cache/ytdl-cookies.txt 存在先用，yt-dlp 报错则删
+jar 现取重试一次（_extract_info 统一入口），失败如实上抛不静默）。
 """
 
+import glob
 import os
 import re
 import shutil
@@ -115,6 +120,13 @@ def _ensure_ffmpeg():
     return shutil.which("ffmpeg") is not None
 
 
+# 第437次：cookies_from_browser 模式的进程外缓存 jar（Netscape 格式）。
+# 每次直读浏览器 cookie 库要逐条解密（上千条，秒级开销），改「旧缓存优先，
+# 失败失效现取」：jar 存在先用（统一走 _extract_info），yt-dlp 报错删 jar
+# 现取重试一次，成功回写。jar 含会话 cookie 明文，置于 backend/cache/ 不出目录。
+_COOKIE_CACHE = os.path.join(config.CACHE_DIR, "ytdl-cookies.txt")
+
+
 def _get_cookiefile():
     """cookiefile 配置解析：空返回 None；配了但文件缺失即报错（不静默忽略）。
 
@@ -133,7 +145,64 @@ def _get_cookiefile():
     return path
 
 
-def _base_opts(fmt, height=None, abr=None):
+# cookies_from_browser=auto 的探测候选（顺序即优先级）：Firefox cookie 库
+# 无加密、运行中锁库由 yt-dlp 复制临时文件规避，最稳故最优先；Chromium 系
+# 在 Windows 上可能因 App-Bound Encryption 解密失败。浏览器名须为 yt-dlp
+# --cookies-from-browser 支持值。(浏览器名, 环境变量, 相对路径段, 库类型)
+_BROWSER_HINTS = [
+    ("firefox", "APPDATA", ("Mozilla", "Firefox", "Profiles"), "firefox"),
+    ("chrome", "LOCALAPPDATA", ("Google", "Chrome", "User Data"), "chromium"),
+    ("edge", "LOCALAPPDATA", ("Microsoft", "Edge", "User Data"), "chromium"),
+    ("brave", "LOCALAPPDATA", ("BraveSoftware", "Brave-Browser", "User Data"), "chromium"),
+    ("vivaldi", "LOCALAPPDATA", ("Vivaldi", "User Data"), "chromium"),
+    ("chromium", "LOCALAPPDATA", ("Chromium", "User Data"), "chromium"),
+]
+
+# auto 探测结果进程内缓存：浏览器安装状态进程生命周期内不变，探测纯文件
+# 系统检查，缓存后 /api/status 透出解析结果零重复开销
+_AUTO_BROWSER = {"done": False, "name": None}
+
+
+def _pick_browser_auto():
+    """cookies_from_browser=auto 的本机浏览器探测（第435次）。
+
+    按 _BROWSER_HINTS 顺序查 cookie 库文件存在性（只查文件不做解密验证，
+    实际读取由 yt-dlp 自行处理）；命中返回浏览器名。全无候选返回 None
+    （不带 cookie 直连——非错误，撞墙时 yt-dlp 报错自会透出）。结果缓存。
+    """
+    if not _AUTO_BROWSER["done"]:
+        for name, env_key, parts, kind in _BROWSER_HINTS:
+            base = os.path.join(os.environ.get(env_key, ""), *parts)
+            if not os.path.isdir(base):
+                continue
+            if kind == "firefox":
+                hit = any(os.path.isfile(os.path.join(p, "cookies.sqlite"))
+                          for p in glob.glob(os.path.join(base, "*"))
+                          if os.path.isdir(p))
+            else:  # chromium 系：Default 或 Profile*/Network/Cookies（老版 Default/Cookies）
+                probes = [os.path.join(base, "Default", "Network", "Cookies"),
+                          os.path.join(base, "Default", "Cookies")]
+                probes += [os.path.join(p, "Network", "Cookies")
+                           for p in glob.glob(os.path.join(base, "Profile*"))
+                           if os.path.isdir(p)]
+                hit = any(os.path.isfile(p) for p in probes)
+            if hit:
+                _AUTO_BROWSER["name"] = name
+                break
+        _AUTO_BROWSER["done"] = True
+    return _AUTO_BROWSER["name"] or None
+
+
+def _browser_cookie_name():
+    """cookies_from_browser 配置 → 浏览器名（auto＝第435次 _pick_browser_auto）；
+    未配置或未发现浏览器返回 None。仅在 cookiefile 未显式配置时被调用。"""
+    browser = (config.load().get("ytdl") or {}).get("cookies_from_browser") or ""
+    if browser.strip().lower() == "auto":
+        browser = _pick_browser_auto() or ""
+    return browser.strip() or None
+
+
+def _base_opts(fmt, height=None, abr=None, fresh_cookie=False):
     opts = {
         "quiet": True,
         "no_warnings": True,
@@ -152,13 +221,70 @@ def _base_opts(fmt, height=None, abr=None):
     else:
         # 第407次：cookies_from_browser——自动取已登录浏览器的 cookie
         # （等价 yt-dlp --cookies-from-browser 的 Python API 形式，一元组即可）。
-        # cookiefile 显式配置时优先（二选一）；浏览器名非法或未登录目标站点时
-        # yt-dlp 自行报错，如实向上抛（RuntimeError 由 API 层映射 503）。
+        # cookiefile 显式配置时优先（二选一，用户自管 jar 不参与缓存策略）。
+        # auto＝第435次探测本机已装浏览器（_browser_cookie_name），未发现浏览器
+        # 则不带 cookie 直连。浏览器名非法或未登录目标站点时 yt-dlp 自行报错，
+        # 如实向上抛（RuntimeError 由 API 层映射 503）。
         # 注意：Windows 上 Chrome 127+ 因 App-Bound Encryption 解密会失败，Firefox 最稳。
-        browser = (config.load().get("ytdl") or {}).get("cookies_from_browser") or ""
+        # 第437次：直读浏览器逐条解密慢——旧 jar 优先在 _extract_info 统一处理；
+        # fresh_cookie=True 强制现取（首次无缓存或旧 jar 失效重试走这路）。
+        browser = _browser_cookie_name()
         if browser:
-            opts["cookiesfrombrowser"] = (browser,)
+            if not fresh_cookie and os.path.isfile(_COOKIE_CACHE):
+                opts["cookiefile"] = _COOKIE_CACHE  # 旧 jar 快路径（零解密开销）
+            else:
+                opts["cookiesfrombrowser"] = (browser,)
     return opts
+
+
+def _extract_info(make_opts, url, download=False):
+    """统一 extract_info 入口：浏览器 cookie 旧缓存优先，失败失效现取（第437次）。
+
+    make_opts(fresh) 构造 yt-dlp opts（闭包携带业务参数；fresh=True 强制
+    现取直读浏览器）。本次用旧缓存 jar（cookiefile == _COOKIE_CACHE）且
+    yt-dlp 报错（YoutubeDLError：下载失败/旧 jar 过期损坏）时：删 jar、
+    fresh 现取重试一次，重试仍失败如实上抛；现取成功回写缓存 jar。
+    显式 cookiefile 与无 cookie 模式不经重试逻辑，错误原样上抛（调用方
+    既有 DownloadError 翻译语义不变）。
+    """
+    yt_dlp = _import_yt_dlp()
+    opts = make_opts(False)
+    try:
+        with yt_dlp.YoutubeDL(opts) as ydl:
+            info = ydl.extract_info(url, download=download)
+            _save_cookie_cache(opts, ydl.cookiejar)
+        return info
+    except yt_dlp.utils.YoutubeDLError:
+        if opts.get("cookiefile") != _COOKIE_CACHE:
+            raise  # 非旧缓存路径：不重试，原样上抛
+        _drop_cookie_cache()  # 旧 jar 失效/损坏：删掉，现取重试一次
+    opts = make_opts(True)
+    with yt_dlp.YoutubeDL(opts) as ydl:
+        info = ydl.extract_info(url, download=download)
+        _save_cookie_cache(opts, ydl.cookiejar)
+    return info
+
+
+def _save_cookie_cache(opts, jar):
+    """现取成功回写缓存 jar（含会话 cookie）。失败静默——缓存只是加速手段，
+    写失败不影响本次结果。仅浏览器现取路径回写（旧 jar 快路径下 yt-dlp 关闭
+    时自带回写同一路径，顺带保鲜）。tmp + os.replace 原子落盘防并发写坏。"""
+    if not opts.get("cookiesfrombrowser"):
+        return
+    try:
+        os.makedirs(config.CACHE_DIR, exist_ok=True)
+        tmp = _COOKIE_CACHE + ".tmp"
+        jar.save(tmp, ignore_discard=True, ignore_expires=True)
+        os.replace(tmp, _COOKIE_CACHE)
+    except Exception:
+        pass
+
+
+def _drop_cookie_cache():
+    try:
+        os.remove(_COOKIE_CACHE)
+    except OSError:
+        pass
 
 
 def resolve(url, fmt=None, height=None, abr=None):
@@ -172,8 +298,8 @@ def resolve(url, fmt=None, height=None, abr=None):
     yt_dlp = _import_yt_dlp()
     _ensure_ffmpeg()  # 就绪保障：HLS/分段流站点需要；缺失不阻塞原生流下载
     try:
-        with yt_dlp.YoutubeDL(_base_opts(fmt, height, abr)) as ydl:
-            info = ydl.extract_info(url, download=False)
+        info = _extract_info(lambda _fresh=False: _base_opts(fmt, height, abr),
+                             url, download=False)
     except yt_dlp.utils.DownloadError as e:
         raise RuntimeError(f"resolve 失败：{e}") from e
     out = {
@@ -222,8 +348,8 @@ def subtitles(url, lang=None):
     """
     yt_dlp = _import_yt_dlp()
     try:
-        with yt_dlp.YoutubeDL(_base_opts(None)) as ydl:
-            info = ydl.extract_info(url, download=False)
+        info = _extract_info(lambda _fresh=False: _base_opts(None),
+                             url, download=False)
     except yt_dlp.utils.DownloadError as e:
         raise RuntimeError(f"字幕提取失败：{e}") from e
     manual = info.get("subtitles") or {}
@@ -251,6 +377,8 @@ def subtitles(url, lang=None):
         "kind": kind,  # manual=站方手动轨 auto=机器生成
         "cues": _vtt_to_cues(content),
         "available": {"manual": list(manual), "auto": list(auto)},
+        # 第437次方案A：asr_job 官方字幕直出写缓存用（条目 video_id 字段）
+        "video_id": info.get("id"),
     }
 
 
@@ -331,7 +459,6 @@ def download(url, fmt=None, height=None, abr=None):
 
     abr（第409次）：音频 fmt 音质上限（kbps），同 height 模式透传。
     """
-    yt_dlp = _import_yt_dlp()
     _ensure_ffmpeg()  # 就绪保障：HLS/分段流站点需要；缺失不阻塞原生流下载
     try:
         h = int(height or 0) or None
@@ -358,19 +485,20 @@ def download(url, fmt=None, height=None, abr=None):
     }
     with _lock:
         _tasks[task_id] = task
-    threading.Thread(target=_run_download, args=(yt_dlp, task), daemon=True).start()
+    threading.Thread(target=_run_download, args=(task,), daemon=True).start()
     return task_id
 
 
-def _run_download(yt_dlp, task):
+def _run_download(task):
     task["state"] = "running"
     try:
         # opts 构造含 cookiefile 等配置校验，放 try 内统一记 task.error
-        opts = _base_opts(task["format"], task.get("height"), task.get("abr"))
-        opts["outtmpl"] = os.path.join(config.MEDIA_DIR, f"{task['id']}.%(ext)s")
-        opts["progress_hooks"] = [_progress_hook(task)]
-        with yt_dlp.YoutubeDL(opts) as ydl:
-            info = ydl.extract_info(task["url"], download=True)
+        def make_opts(_fresh=False):
+            opts = _base_opts(task["format"], task.get("height"), task.get("abr"))
+            opts["outtmpl"] = os.path.join(config.MEDIA_DIR, f"{task['id']}.%(ext)s")
+            opts["progress_hooks"] = [_progress_hook(task)]
+            return opts
+        info = _extract_info(make_opts, task["url"], download=True)
         if info.get("_type") == "playlist":  # 防御：noplaylist 之外的入口形态
             info = (info.get("entries") or [{}])[0]
         task["title"] = info.get("title")

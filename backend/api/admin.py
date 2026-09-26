@@ -140,11 +140,18 @@ def _ytdl_status(cfg):
     """ytdl 无引擎对象（模块函数式）：给配置摘要 + yt-dlp 版本。
 
     importlib.metadata 只查元数据不 import 包本体（yt_dlp import 近秒级，
-    /api/status 是总览页与扩展健康检查共用的高频接口）。
+    /api/status 是总览页与扩展健康检查共用的高频接口）。cookies_from_browser
+    原值透出；auto 时附 auto_browser＝第435次探测解析到的浏览器名（core.ytdl
+    结果缓存，零重复探测；空＝未发现已装浏览器，不带 cookie 直连）。
     """
     from importlib.metadata import version
+    cb = (cfg["ytdl"].get("cookies_from_browser") or "").strip()
     info = {"engine": "yt-dlp", "format": cfg["ytdl"]["format"],
-            "cookiefile": bool(cfg["ytdl"].get("cookiefile"))}
+            "cookiefile": bool(cfg["ytdl"].get("cookiefile")),
+            "cookies_from_browser": cb}
+    if cb.lower() == "auto":
+        from core import ytdl as ytdl_core  # 局部 import：与 api.ytdl 同惯用
+        info["auto_browser"] = ytdl_core._pick_browser_auto() or ""
     try:
         info["version"] = version("yt-dlp")
     except Exception:

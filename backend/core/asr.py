@@ -168,7 +168,11 @@ class AsrEngine:
         engine 参数作签名兼容（api 层已校验合法值），一律走 faster-whisper。
         """
         model, _engine = self.ensure_loaded(engine)
-        segs, info = model.transcribe(audio_path, language=language or None)
+        # 第436次（用户"感觉后端比脚本asr慢"+乱序报障）：vad_filter=True 跳过静音段
+        #   （只转写有人声的部分，提速显著）并顺带压制静音段幻觉——幻觉是 whisper 段
+        #   时间戳紊乱（乱序）的主要来源。silero-vad onnx 已随 faster-whisper 包内置。
+        segs, info = model.transcribe(audio_path, language=language or None,
+                                      vad_filter=True)
         items, text = [], []
         for s in segs:  # 生成器，须消费
             items.append({"start": round(s.start, 3), "end": round(s.end, 3),

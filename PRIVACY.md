@@ -1,7 +1,7 @@
 # Privacy Policy — VocabRadar
 
 > 语言：English / 中文（见下方中文版）
-> Last updated: 2026-09-05
+> Last updated: 2026-09-26
 
 VocabRadar is a browser extension that helps you discover and learn new words while watching videos or reading web pages.
 
@@ -14,7 +14,7 @@ VocabRadar is a browser extension that helps you discover and learn new words wh
 ## Network requests the extension may make
 - **Dictionary & translation lookups**: when you look up a word or chat with the AI helper, the extension sends only the text you explicitly selected to the translation/AI endpoint in use (a public dictionary service, or the endpoint **you** configured in settings).
 - **Video subtitles**: on video sites (Bilibili, YouTube), the extension requests publicly available subtitle data from those sites' public web APIs so it can annotate words.
-- **Speech recognition & OCR**: microphone recordings and camera captures are used **only after you click the record/capture button**, and are processed **locally** by bundled Whisper / Tesseract models. Audio and images are never uploaded, stored, or kept after processing.
+- **Speech recognition & OCR**: microphone recordings and video-frame captures are used **only after you click the record/capture button**, and are sent to the recognition service **you** configured — the locally running VocabRadar backend (processed on your own machine, never leaves it), or your own API endpoint. They are never sent to third parties, and are not stored after processing.
 
 ## Permissions
 Each permission is used only for the purpose stated in the store listing (see the "Privacy" tab of the store page):
@@ -22,7 +22,7 @@ Each permission is used only for the purpose stated in the store listing (see th
 - `activeTab` / `scripting` — annotate the page you are viewing; read player/subtitle info on Bilibili/YouTube tabs in response to your actions.
 - `cookies` — a one-time boolean check for a Bilibili login cookie (so your own subtitle list can be fetched); the value is never read, stored, or transmitted.
 - `contextMenus` — right-click "look up selection".
-- `offscreen` + `audioCapture` / `videoCapture` — run local speech recognition and OCR in an offscreen page, on your click only.
+- `offscreen` + `audioCapture` / `videoCapture` — capture microphone/camera in an offscreen page, on your click only.
 - Host permissions — needed to annotate pages and fetch subtitles across sites.
 
 ## Contact
@@ -43,10 +43,10 @@ VocabRadar 是一款帮助你在看视频、读网页时发现并学习生词的
 ## 扩展可能发起的网络请求
 - **词典与翻译查询**：仅当你主动查词或使用 AI 对话时，把你选中的文本发送给当前使用的翻译/AI 服务（公共词典服务，或你在设置里自己配置的接口）。
 - **视频字幕**：在视频网站（B站、YouTube）上，通过其公开 Web API 获取公开字幕数据，用于生词标注。
-- **语音识别与 OCR**：仅在你点击录音/拍摄按钮后使用麦克风/摄像头，由**本地内置**的 Whisper / Tesseract 模型处理；音频与图像不上传、不存储、处理完即弃。
+- **语音识别与 OCR**：仅在你点击录音/拍摄按钮后使用麦克风/摄像头，发送给你在设置中配置的识别服务——本地运行的河狸后端（在你自己机器上处理，不出本机），或你自备的 API 接口；不发送给任何第三方，处理完即弃。
 
 ## 权限用途
-每项权限仅用于商店页面"Privacy"页签所述用途：本地存储、当前页标注与视频站播放器信息读取、B站登录态布尔判断（不读取 cookie 值）、右键查词、本地语音识别与 OCR、跨站标注与字幕获取所需的主机权限。
+每项权限仅用于商店页面"Privacy"页签所述用途：本地存储、当前页标注与视频站播放器信息读取、B站登录态布尔判断（不读取 cookie 值）、右键查词、语音识别与 OCR（经你配置的本地后端或自有接口处理）、跨站标注与字幕获取所需的主机权限。
 
 ## 联系方式
 如对本政策有疑问，请通过项目仓库提交 Issue，或通过商店页面联系开发者。

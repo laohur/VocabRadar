@@ -59,7 +59,7 @@ export async function onOcrClick() {
     const dataUrl = canvas.toDataURL('image/png');
     console.log('[VocabRadar][video-sidebar] OCR 截帧完成: dataUrl 长度=' + dataUrl.length + ' (' + ((dataUrl.length / 1024).toFixed(0)) + 'KB)');
 
-    // 通过 SW 转发到 offscreen 运行 Tesseract.js
+    // 经 SW 转发给 OCR 引擎（LLM 视觉识别；本地 Tesseract 已随第394次裁定移除）
     console.log('[VocabRadar][video-sidebar] OCR 发送 OCR_RECOGNIZE 消息到 SW');
     const resp = await chrome.runtime.sendMessage({
       type: 'OCR_RECOGNIZE',

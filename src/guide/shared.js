@@ -62,13 +62,14 @@ const MSG = {
   subHeadOcr: { en: 'OCR', zh: 'OCR' },
   subHeadTrans: { en: 'Translation', zh: '翻译' },
   // 第三百九十三次：引擎 API 分支新增河狸后端选项（本地免 Key/官方），desc 同步
+  // 第434次：本地 Whisper/Tesseract 随第394次裁定移除，en/zh 与 guide.html 权威文案对齐
   asrModelDesc: {
-    en: 'Speech recognition engine: local Whisper (larger = more accurate but slower, downloaded on first use) or an API source (VocabRadar backend — local needs no key — or an OpenAI-compatible transcription endpoint). Unrelated to the chat LLM above.',
-    zh: '语音识别引擎：本地 Whisper（模型越大越准也越慢，首次使用需下载），或 API 来源（河狸后端——本地免 Key，或 OpenAI 兼容转写接口）。与上面的对话模型互不相关。'
+    en: 'Speech recognition: OpenAI-compatible transcription (endpoint/model name/key; source: VocabRadar backend — local or official — or your own API). Unrelated to the chat LLM above.',
+    zh: '语音识别：OpenAI 兼容转写（接口地址/模型名/Key；来源可选河狸后端本地/官方，或自备 API）。与上面的对话模型互不相关。'
   },
   ocrEngineDesc: {
-    en: 'OCR engine for screenshots/video frames: local Tesseract (pick languages among the interface / target / definition languages), or an API source (VocabRadar backend / vision LLM, needs image input support).',
-    zh: '截图/视频帧的文字识别引擎：本地 Tesseract（在界面/目标/释义三种语言中勾选要识别的语言），或 API 来源（河狸后端 / 大模型视觉识别，需模型支持图片输入）。'
+    en: 'Text recognition for screenshots/video frames: vision LLM (source: VocabRadar backend — local or official — or your own API; needs image input support).',
+    zh: '截图/视频帧的文字识别：大模型视觉识别（来源可选河狸后端本地/官方，或自备 API，需模型支持图片输入）。'
   },
   modelDesc: {
     en: 'LLM endpoint used by the chat (💬) feature. Three API formats: free direct (no account), OpenAI-compatible, and Anthropic — the latter two need your own API key.',
@@ -149,20 +150,9 @@ const MSG = {
   fieldChatContextMax: { en: 'Background (web/subtitle text) sent to the chat: at most', zh: '送入对话的作为背景的网页/字幕正文至多' },
   guideContextBytesSuffix: { en: 'bytes.', zh: '字节。' },
   // 第二百二十三次（用户："翻译行挪入模型分组；OCR 引擎改下拉两行式"）：
-  //   subHeadTrans/transDesc 为翻译小节标题与说明；OCR 引擎下拉选项 ocrEngineLocal/ocrEngineApi；
-  //   原 fieldTransChannels 行标签文案并入 transDesc（键删除）；ocrLanguages 复选动态渲染（不写死）。
-  // 第二百二十六次：引擎单选文字精简为 本地/API；fieldOcrEngine 行标签键随行结构删除。
-  ocrEngineLocal: { en: 'Local', zh: '本地' },
-  ocrEngineApi: { en: 'API', zh: 'API' },
-  // 第二百二十八次（用户裁定文案）：OCR 行读作"Tesseract 支持 界面/目标/释义 语言"
-  fieldOcrLangs: { en: 'Tesseract supporting', zh: 'Tesseract 支持' },
-  ocrLangsSuffix: { en: 'language', zh: '语言' },
-  // 第二百二十四次（用户："界面 目标 释义，不要写死、不要特指，默认全选"）：OCR 语言复选的角色名标签
-  //   ——标签恒为角色名，勾选"值"由 JS 按当前 界面/目标/释义 语言动态映射 tess 代码
-  ocrRoleUi: { en: 'Interface', zh: '界面' },
-  ocrRoleTarget: { en: 'Target', zh: '目标' },
-  ocrRoleMeaning: { en: 'Meaning', zh: '释义' },
-  ocrLangNoPack: { en: 'No local language pack', zh: '本地未内置该语言包' },
+  //   subHeadTrans/transDesc 为翻译小节标题与说明；原 fieldTransChannels 行标签文案并入 transDesc（键删除）。
+  // 第434次：ocrEngineLocal/ocrEngineApi/fieldOcrLangs/ocrLangsSuffix/ocrRole*/ocrLangNoPack
+  //   等 Tesseract 本地引擎时代的键随第394次裁定移除（guide.js 渲染函数早已退役，零引用）。
   transDesc: {
     en: 'Online channels for word meanings (checked = enabled, tried in order). The LLM channel uses the chat LLM above and is off by default; the others are on by default.',
     zh: '生词释义的在线翻译渠道（勾选启用，按序回退）：LLM 渠道走上方对话大模型，默认不选；其余渠道默认全启用。'
