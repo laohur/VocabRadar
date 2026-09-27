@@ -1418,7 +1418,7 @@ input::placeholder { color: var(--g-muted); opacity: 1; }
   color: var(--g-text);
   text-align: center;
 }
-/* 生词栏头顶词表快捷选择器 chips（CET4/…/GRE，勾选并入文本框、取消移除） */
+/* 生词栏头顶词表快捷选择器 chips（IELTS/…/SAT，勾选并入文本框、取消移除） */
 /* 342次：固定高两行——chips 换行增多时栏内滚动，两栏（含 Known 空占位）恒等高，
    两栏 textarea 顶边严格水平对齐（此前 min-height 随换行数变高，顶边会错位） */
 .mw-presets {

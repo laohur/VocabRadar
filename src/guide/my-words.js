@@ -4,7 +4,7 @@
 //   IELTS 等，默认都不选"）：
 //   - 两栏 textarea 是唯一真源：手动编辑即时写 storage.myWords={new:[],known:[]}
 //     （小写单词数组），复制/导出所见即所得；
-//   - 词表快捷选择器 chips（wordlists.jsonl 的 10 个标签）：勾选→该表全部单词并入
+//   - 词表快捷选择器 chips（wordlists.jsonl 的 5 个标签）：勾选→该表全部单词并入
 //     生词文本框（去重）；取消→移除"仅属于该表"的词（仍属其他勾选词表的词保留）；
 //     勾选态持久化 storage.myWordsPresetSel，默认全不选；
 //   - 复制=clipboard 写入；导出=txt 文件下载；
@@ -18,8 +18,9 @@
 import { $, log, markOwnWrite } from './shared.js';
 import { ensureReady, getWordsByTag } from '../lib/dictionary.js';
 
-// 词表快捷选择器标签清单（wordlists.jsonl 2026-09-18 现有 10 个标签，专有名词不做 i18n）
-const PRESET_TAGS = ['CET4', 'CET6', 'TEM4', 'TEM8', 'GRADUATE', 'IELTS', 'TOEFL', 'GRE', 'GMAT', 'SAT'];
+// 词表快捷选择器标签清单（wordlists.jsonl 2026-09-27 起 5 个标签，专有名词不做 i18n；
+// 2026-09-27 用户裁定移除 CET4/CET6/TEM4/TEM8/GRADUATE，存量勾选态由 fillFromStorage 清洗）
+const PRESET_TAGS = ['IELTS', 'TOEFL', 'GRE', 'GMAT', 'SAT'];
 const ECHO_MS = 1200;           // 自写回声抑制窗口（与 sub-style.js 同款）
 const SAVE_DEBOUNCE_MS = 500;   // 逐键写 storage 防抖（与 subSampleText 同款）
 

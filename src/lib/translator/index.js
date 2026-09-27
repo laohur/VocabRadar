@@ -60,6 +60,9 @@ function curTransChannels() {
  * 从统一词典读取翻译缓存
  * 反思（2026-08-12）：替代 word-cache.js 的 getWordCached。
  *   word-db.js 按 lang|word_lower 主键存储，translation 字段缓存译文，translationLang 校验语言对。
+ * 反思（2026-09-27）：补 targetScriptOk 文字系统校验——旧版渠道缺陷曾把中文释义写成
+ *   任意 translationLang（存量脏缓存），仅语言对校验拦不住；校验不过视为无缓存，
+ *   走在线重翻后以正确语言覆盖写回，存量自动修复。
  * @param {string} src 源语言
  * @param {string} tgt 目标语言
  * @param {string} word 小写单词
@@ -68,7 +71,7 @@ function curTransChannels() {
 async function getWordCached(src, tgt, word) {
   try {
     const record = await dbGetWord(src, word);
-    if (record && record.translation && record.translationLang === tgt) {
+    if (record && record.translation && record.translationLang === tgt && targetScriptOk(record.translation, tgt)) {
       return record.translation;
     }
   } catch (_) { /* ignore */ }
@@ -414,4 +417,5 @@ async function translateWithLemma(word) {
 // === 目录统一出口：re-export 其余原导出符号（符号名不变） ===
 export { getLastTranslateChannel, getMeaningLang } from './shared.js';
 // 2026-09-09 第二百四十二次：primeTranslator 手势入口 prime（th/panel.js 查词/OCR 面板用）
-export { getAvailability, primeTranslator } from './builtin-translator.js';
+// 2026-09-27：targetScriptOk 缓存读侧文字系统校验（annotator.js 经门面取用）
+export { getAvailability, primeTranslator, targetScriptOk } from './builtin-translator.js';

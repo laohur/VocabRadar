@@ -348,11 +348,6 @@ export function pointerOutOfTooltipZone() {
 }
 
 export function onWordHover(e) {
-  // 第二百四十三次：温和 prime 内置翻译（不清冷却）。hover 本身不产生 user activation
-  //   （浏览器只认 click/keydown 等），但用户近 5s 内点过页面时 isActive 有效 → create 成功；
-  //   点击高亮词是 click 手势，activation 必定有效。冷却期内快速 return，实例就绪后零开销。
-  primeTranslator();
-  if (thState.hideTimer) { clearTimeout(thState.hideTimer); thState.hideTimer = null; }
   const el = e.currentTarget;
   // 校验 span 仍有效：框架可能改动 textContent，失效则清理且不显示 tooltip
   // （杜绝"凭空造词"位置的 NaN/错乱数据显示）
@@ -360,6 +355,11 @@ export function onWordHover(e) {
     unwrapSingle(el);
     return;
   }
+  // 第二百四十三次：温和 prime 内置翻译（不清冷却）。hover 本身不产生 user activation
+  //   （浏览器只认 click/keydown 等），但用户近 5s 内点过页面时 isActive 有效 → create 成功；
+  //   点击高亮词是 click 手势，activation 必定有效。冷却期内快速 return，实例就绪后零开销。
+  primeTranslator();
+  if (thState.hideTimer) { clearTimeout(thState.hideTimer); thState.hideTimer = null; }
   thState.tooltipTargetEl = el;
   const data = {
     word: el.dataset.word,

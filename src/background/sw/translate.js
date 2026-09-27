@@ -49,6 +49,11 @@ export function isUntranslated(text, word, src, tgt) {
  * 校验译文是否含目标语言的代表性字符（文字系统）
  * 反思（2026-08-06）：精确匹配漏掉"同语言不同词"，需文字系统校验兜底。
  *   源语言与目标语言同文字系统时（如 en→es），返回 true（无法区分，回退精确匹配）。
+ * 反思（2026-09-27）：用户反馈"释义语言并没有跟随设定"。
+ *   根因之一：拉丁目标语言（en/es/fr 等，SCRIPT_MAP 无条目）恒放行，百度联想 sug /
+ *   有道词典 jsonapi 恒返回的中文释义被当作任意目标语言的译文采纳并写脏缓存。
+ *   修正：加 CJK 反向规则——目标语言本身非 CJK（SCRIPT_MAP 无条目）而译文含
+ *   CJK 字符（假名/注音/汉字/兼容汉字/谚文）→ 判未翻译。
  * @param {string} text 译文
  * @param {string} tgt 目标语言码
  * @returns {boolean} true=含目标文字系统（或无法判断），false=不含（未翻译）
@@ -67,8 +72,11 @@ export function targetScriptOk(text, tgt) {
     hi: '\\u0900-\\u097f', bn: '\\u0980-\\u09ff',       // 天城文/孟加拉文
     ta: '\\u0b80-\\u0bff', te: '\\u0c00-\\u0c7f', ml: '\\u0d00-\\u0d7f', // 泰米尔/泰卢固/马拉雅拉姆
   };
+  // CJK 字符（假名/注音符号/汉字扩展/兼容汉字/谚文）：渠道中文释义泄漏的指纹
+  const CJK_RE = /[\u3040-\u30ff\u3100-\u312f\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff\uac00-\ud7af]/;
   const range = SCRIPT_MAP[tgt];
-  if (!range) return true; // 拉丁字母语言（en/es/fr/de 等）无法区分，回退精确匹配
+  // 拉丁字母语言（en/es/fr/de 等）：反向规则——译文含 CJK 即中文泄漏（如 baidusug/youdaodict 恒返回中文），判未翻译
+  if (!range) return !CJK_RE.test(text);
   const re = new RegExp('[' + range + ']');
   return re.test(text);
 }
@@ -108,9 +116,12 @@ export async function handleTranslateText(word, source, target, channels) {
   }
 
   // 渠道 1：百度联想 sug（单词中文释义，国内快、无需 key/签名）
+  // 反思（2026-09-27）：端点无目标语言参数、恒返回中文释义，仅 zh 目标可参与；
+  //   其他目标语言放行会产出脏缓存（释义语言不跟随设定），故加语言门控。
   let bdsErr = null;
   try {
     if (!chGate('baidusug')) throw new Error('渠道未启用');
+    if (tgt !== 'zh') throw new Error('不支持目标语言(' + tgt + ')（端点恒返回中文释义）');
     const bds = await baiduSugTranslate(word, src, tgt);
     if (bds && !isUntranslated(bds, word, src, tgt)) return { ok: true, text: bds, channel: 'BaiduSug' };
     bdsErr = bds ? '返回原文未翻译' : '返回空结果';
@@ -120,9 +131,11 @@ export async function handleTranslateText(word, source, target, channels) {
   }
 
   // 渠道 2：有道词典 jsonapi（单词中文释义，国内快、无需 key/签名）
+  // 反思（2026-09-27）：同 baidusug，端点恒返回中文释义，仅 zh 目标可参与。
   let yddErr = null;
   try {
     if (!chGate('youdaodict')) throw new Error('渠道未启用');
+    if (tgt !== 'zh') throw new Error('不支持目标语言(' + tgt + ')（端点恒返回中文释义）');
     const ydd = await youdaoDictTranslate(word, src, tgt);
     if (ydd && !isUntranslated(ydd, word, src, tgt)) return { ok: true, text: ydd, channel: 'YoudaoDict' };
     yddErr = ydd ? '返回原文未翻译' : '返回空结果';
@@ -222,15 +235,17 @@ export async function handleBridgeTranslation(payload) {
   const tgt = (String((payload && payload.target) || 'zh').split('-')[0] || 'zh').toLowerCase();
   if (!word) return { ok: false, error: 'translation payload missing word' };
 
-  // ① 词典缓存直读（translationLang 校验语言对；原形回退：屈折词借原形缓存）
+  // ① 词典缓存直读（translationLang 校验语言对 + targetScriptOk 校验文字系统，
+  //   存量脏缓存——旧版把中文释义写成任意 translationLang——在此自动失效走在线重翻；
+  //   原形回退：屈折词借原形缓存）
   try {
     const rec = await getWord(src, word);
-    if (rec && rec.translation && rec.translationLang === tgt) {
+    if (rec && rec.translation && rec.translationLang === tgt && targetScriptOk(rec.translation, tgt)) {
       return { ok: true, text: cleanDictEntry(rec.translation), channel: '缓存' };
     }
     if (rec && rec.lemma && rec.lemma !== word.toLowerCase()) {
       const lem = await getWord(src, rec.lemma);
-      if (lem && lem.translation && lem.translationLang === tgt) {
+      if (lem && lem.translation && lem.translationLang === tgt && targetScriptOk(lem.translation, tgt)) {
         const t = cleanDictEntry(lem.translation);
         await updateFields(src, word, { translation: t, translationLang: tgt }); // 回写原词，下次直接命中
         return { ok: true, text: t, channel: '缓存(原形:' + rec.lemma + ')' };
@@ -253,10 +268,12 @@ export async function handleBridgeTranslation(payload) {
       backendTranslateOnce(word, src, tgt).then((t) => { clearTimeout(timer); resolve(t); },
         (e) => { clearTimeout(timer); reject(e); });
     }), word, src, tgt));
-  if (ch.baidusug !== false) tasks.push(_bridgeTryChannel('BaiduSug', baiduSugTranslate(word, src, tgt), word, src, tgt));
-  if (ch.youdaodict !== false) tasks.push(_bridgeTryChannel('YoudaoDict', youdaoDictTranslate(word, src, tgt), word, src, tgt));
+  // 反思（2026-09-27）：baidusug/youdaodict 恒返回中文释义，非 zh 目标不参与并行
+  //   （与 handleTranslateText 渠道门控同口径），否则中文释义会被写脏缓存。
+  if (ch.baidusug !== false && tgt === 'zh') tasks.push(_bridgeTryChannel('BaiduSug', baiduSugTranslate(word, src, tgt), word, src, tgt));
+  if (ch.youdaodict !== false && tgt === 'zh') tasks.push(_bridgeTryChannel('YoudaoDict', youdaoDictTranslate(word, src, tgt), word, src, tgt));
   // 343 次·裁定：失败返回 ok:true+空 text（空文本降级，见上方分支注释），error 照带不遮蔽
-  if (!tasks.length) return { ok: true, text: '', error: '快渠道均未启用（backend/baidusug/youdaodict 已在扩展设置勾选关闭）' };
+  if (!tasks.length) return { ok: true, text: '', error: '快渠道均不可用（backend 未勾选或超预算；baidusug/youdaodict 需勾选启用且目标语言为中文）' };
   const results = await Promise.all(tasks);
   const hit = results.find(Boolean);
   if (!hit) return { ok: true, text: '', error: '快渠道（' + (ch.backend === true ? 'Backend/' : '') + 'BaiduSug/YoudaoDict）均失败——网站侧降级其自身 API' };

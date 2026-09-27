@@ -952,20 +952,21 @@ function updateSlotContent(slot, subIdx) {
 function fillSlotAnnotations(slot, sub, anns) {
   const contentSpan = slot.querySelector('.beaver-sub-content');
   const annContainer = slot.querySelector('.beaver-ann-container');
-  // 反思（2026-07-22）：用户要求「有些生词没注释，没翻译的就不要显示了」。
-  //   过滤掉无翻译的词（pickCleanShortTrans 返回空），字幕区不高亮、不显示注释。
-  //   pending 表外词初始 translations=[] 被过滤，翻译成功后 onAsyncTranslate 触发重绘显示。
-  //   生词表仍保留所有生词（createWordPanelItem 不过滤），仅字幕区过滤。
-  const validAnns = (anns || []).filter(a => pickCleanShortTrans(a.translations));
+  // 2026-09-27（用户"无论有没有释义，提示都应当有"）：正文高亮不再过滤无译文词
+  //   （高亮 span 自带 dataset，hover 弹卡兜底查询）。注释行仍仅渲染有译文/pending
+  //   的词，维持 2026-07-22「没翻译的不要显示」要求（见下方注释行循环头部守卫）。
+  //   validAnns 保留"有译文"口径供漏斗上报（诊断连续性），不再参与正文过滤。
+  const annList = anns || [];
+  const validAnns = annList.filter(a => pickCleanShortTrans(a.translations));
   // 第一百八十七次：字幕行与词表共用同一份阈值/表外词过滤，杜绝字幕注释高频词
-  const shownAnns = filterByCurrentRank(validAnns);
-  // 第三百七十二次：渲染层漏斗上报——raw(计算层产出)→valid(有译文)→shown(过阈值)三段
-  //   递减定位丢在哪段；noAnn 开关单列。诊断窗「字幕注释」标签④尾部读取。
+  const shownAnns = filterByCurrentRank(annList);
+  // 第三百七十二次：渲染层漏斗上报——raw(计算层产出)→valid(有译文)→shown(过阈值)
+  //   定位丢在哪段；2026-09-27 起 shown 为高亮口径（含无译文词），valid 仍为有译文数。
   try {
     reportRender({
       text: String(sub.text || '').slice(0, 30),
       noAnn: _noAnnotation === true,
-      raw: (anns || []).length,
+      raw: annList.length,
       valid: validAnns.length,
       shown: shownAnns.length
     });
@@ -991,6 +992,9 @@ function fillSlotAnnotations(slot, sub, anns) {
   //   简略模式：注释跟在生词后（inline），仅随机短义项，不另起一行。
   //   详细模式：独立成行，显示 Rank、标签、完整释义。
   for (const a of shownAnns) {
+    // 2026-09-27：无译文且非 pending 的词不渲染注释行（维持 2026-07-22
+    //   「没翻译的不要显示」；正文已高亮可 hover 弹卡）。pending 显示"翻译中..."。
+    if (!pickCleanShortTrans(a.translations) && !a.pending) continue;
     const line = document.createElement('div');
     line.className = 'beaver-ann-line' + (a.pending ? ' pending' : '');
     line.dataset.word = a.word || '';
@@ -1519,13 +1523,15 @@ export async function appendASRSubtitle(seg) {
   // 全量渲染模式：直接创建字幕条目并追加到面板（2026-07-13 #93）
   const panel = getRoot().querySelector('#beaver-subtitle-panel');
   if (panel) {
+    // 2026-09-27（bug2：ASR 前台一直无更新的分支空洞）：加载占位在场或尚无任何槽位
+    //   都强制走全量渲染。旧版外层"占位||无槽位"、内层再判"无槽位"，组合出
+    //   "占位在场但已有槽位"时既不重渲染也不追加的空洞段（seg 只进了 ref，
+    //   面板永不显示）。合并后占位必被 renderSubtitlePanel 清除，段必上屏。
     if (panel.querySelector('.beaver-loading') || _windowSlots.length === 0) {
-      if (_windowSlots.length === 0) {
-        // 首批 ASR 结果：初始化全量渲染面板
-        // 反思（2026-07-13 #92）：传 keepAnnotations=true 保留 collectAnnotations 已收集的生词，
-        //   避免 renderSubtitlePanel 清空 _allAnnotations 后生词表丢失已收集的内容。
-        renderSubtitlePanel(true);
-      }
+      // 首批 ASR 结果：初始化全量渲染面板
+      // 反思（2026-07-13 #92）：传 keepAnnotations=true 保留 collectAnnotations 已收集的生词，
+      //   避免 renderSubtitlePanel 清空 _allAnnotations 后生词表丢失已收集的内容。
+      renderSubtitlePanel(true);
     } else {
       // 后续 ASR 结果：直接追加到面板末尾（全量渲染模式）
       const slot = createEmptySlot();

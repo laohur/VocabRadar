@@ -15,7 +15,10 @@
 //   3. 段直接 _onText + 入缓存（listen 窗口 = 上一段终点→本段终点，静音间隙
 //      折入监听窗口）；
 //      _recogFrontier 按段 end 推进（播放闸门遥测，playback-gate 默认停用）
-//   4. 连续 3 次轮询失败 → 视为 backend 失联，onError 收场（不静默）；
+//   4. 轮询失败不收场：只记日志，继续固定轮询（识别多少送多少，backend 恢复
+//      自然接续）；job 丢失（backend 重启致内存任务表清空，404）→ 重提同 URL
+//      接续（结果缓存落盘固定键，重提命中即接续；已收段按 start|end|text 去重
+//      防重复上屏）；重提失败或任务 failed → stopASR + onError；
 //      提交失败 → stopASR + 抛错（如实报错引导启动 backend）
 // 第399次（用户裁定）：captureStream 实时识别回退（asr-fallback-capture.js）删除——
 //   backend 是唯一路径，不再静默兜底。
@@ -55,12 +58,13 @@ let _recogDoneAll = false;         // 全部段识别完成 → 闸门解除
 
 // === backend job 轮询状态（路径 A）===
 const JOB_POLL_MS = 5000;          // 定时轮询间隔（第441次用户裁定 5s；定时轮询增量返回）
-const JOB_POLL_MAX_FAILS = 3;      // 连续失败上限：视为 backend 失联，onError 收场
 let _jobId = null;                 // backend 任务 id
 let _jobAfter = 0;                 // 游标：已取到的段数（backend 按 after 切片）
 let _jobTimer = null;              // setInterval id
-let _jobFailStreak = 0;            // 连续轮询失败计数
+let _jobFailStreak = 0;            // 连续轮询失败计数（仅日志展示，不影响轮询）
+let _jobBusy = false;              // in-flight 守卫：上一轮未返回时不重入（防响应乱序）
 let _jobListenEnd = 0;             // 已入缓存的监听窗口终点（秒）——job 段静音间隙折入窗口用
+let _jobSeenSegs = new Set();      // 已收段键（start|end|text）——job 重提后 backend 从头重发已收段，去重防重复上屏
 
 // === ASR 缓存（增量识别）===
 // 缓存格式 {segments:[{listenStart,listenEnd,speechStart,speechEnd,text,chunks}],
@@ -120,6 +124,7 @@ export async function startASR(opts) {
   _running = true;
   _recogFrontier = -1;
   _recogDoneAll = false;
+  _jobSeenSegs = new Set();        // 新会话重建已收段表（防跨会话误去重）
 
   // job 提交（SW 代理 POST /api/asr/jobs，提交页面 URL——backend yt-dlp 自取音频）。
   // 第399次用户裁定：回退路径删除，提交失败如实报错（引导启动 backend），不再静默兜底。
@@ -149,6 +154,7 @@ function startJobPolling(jobId) {
   _jobAfter = 0;
   _jobListenEnd = 0;
   _jobFailStreak = 0;
+  _jobBusy = false; // 清守卫：防上次会话遗留的挂起轮询阻塞新会话
   _jobTimer = setInterval(pollJobOnce, JOB_POLL_MS);
   pollJobOnce();
 }
@@ -161,22 +167,37 @@ function stopJobPolling() {
   _jobFailStreak = 0;
 }
 
-/** 单次轮询：增量取段 → 直出字幕 + 入缓存 + 推进闸门遥测；进度入状态时间线 */
+/** 单次轮询入口：in-flight 守卫——上一轮未返回时跳过本轮，防响应乱序重入 */
 async function pollJobOnce() {
+  if (_jobBusy) return;
+  _jobBusy = true;
+  try {
+    await pollJobOnceInner();
+  } finally {
+    _jobBusy = false;
+  }
+}
+
+/** 单次轮询主体：增量取段 → 直出字幕 + 入缓存 + 推进闸门遥测；进度入状态时间线 */
+async function pollJobOnceInner() {
   if (!_running || !_jobId) return;
   const resp = await sendMessage({ type: 'ASR_JOB_POLL', id: _jobId, after: _jobAfter });
   if (!_running) return; // 轮询期间 stopASR → 丢弃响应
   if (!resp || !resp.ok) {
-    _jobFailStreak++;
-    console.warn('[VocabRadar][asr-client][' + _ts() + '] job 轮询失败(' + _jobFailStreak + '/' + JOB_POLL_MAX_FAILS + '):', (resp && resp.error) || 'no response');
-    pushStatusLocal('job-poll-fail', 'poll ' + _jobFailStreak + '/' + JOB_POLL_MAX_FAILS + ' failed: ' + ((resp && resp.error) || 'no response'));
-    if (_jobFailStreak >= JOB_POLL_MAX_FAILS) {
-      // 不遮蔽：连续失联明确报错收场（stopASR 会清回调，先捕获再通知）
-      const msg = 'backend job 轮询失联: ' + ((resp && resp.error) || 'no response');
-      const cb = _onError;
-      stopASR();
-      if (cb) { try { cb(new Error(msg)); } catch (e) { /* ignore */ } }
+    const errMsg = (resp && resp.error) || 'no response';
+    // 404 = backend 重启丢内存任务表（job id 随机 uuid 不落盘）。结果缓存落盘
+    //   且 key 固定（site-vid slug）→ 重提同 URL 可接续：命中缓存即建"已完成"
+    //   任务首轮拿全量段，未命中重头转写；已收段由 _jobSeenSegs 去重不重复上屏。
+    if (errMsg === 'not_found') {
+      await resubmitJobAfter404();
+      return;
     }
+    // 其余失败（backend 失联/网络抖动）不收场（用户裁定"轮询后台，识别多少
+    //   送多少；失败就说失败"）：只记日志与状态时间线，继续固定间隔轮询，
+    //   backend 恢复后自然接续
+    _jobFailStreak++;
+    console.warn('[VocabRadar][asr-client][' + _ts() + '] job 轮询失败(' + _jobFailStreak + '):', errMsg);
+    pushStatusLocal('job-poll-fail', 'poll ' + _jobFailStreak + ' failed: ' + errMsg);
     return;
   }
   _jobFailStreak = 0;
@@ -203,6 +224,11 @@ async function pollJobOnce() {
     for (const s of segs) {
       const text = (s.text || '').trim();
       const end = (typeof s.end === 'number') ? s.end : 0;
+      // 段去重：404 重提后 backend 从头重发已收段（缓存命中全量/重转写复现），
+      //   按 start|end|text 过滤，防止重复上屏与重复入缓存
+      const segKey = (s.start || 0) + '|' + end + '|' + text;
+      if (_jobSeenSegs.has(segKey)) continue;
+      _jobSeenSegs.add(segKey);
       if (text && end > batchEnd) batchEnd = end;
       batch.push({ start: s.start, end, text });
     }
@@ -234,7 +260,7 @@ async function pollJobOnce() {
       }
     }
     if (batchEnd > _recogFrontier) _recogFrontier = batchEnd;
-    pushStatusLocal('gate', 'job +' + segs.length + ' segs', { frontier: _recogFrontier });
+    pushStatusLocal('gate', 'job +' + batch.length + ' segs', { frontier: _recogFrontier });
   }
 
   // 进度遥测：backend progress{download,transcribe}（百分比）→ 状态时间线
@@ -258,6 +284,28 @@ async function pollJobOnce() {
     stopJobPolling(); // 任务终态：停轮询，会话保留（由用户停止）
   } else if (resp.status === 'failed') {
     const msg = 'backend job 失败: ' + (resp.error || 'unknown');
+    console.warn('[VocabRadar][asr-client][' + _ts() + ']', msg);
+    const cb = _onError;
+    stopASR();
+    if (cb) { try { cb(new Error(msg)); } catch (e) { /* ignore */ } }
+  }
+}
+
+/** 404（backend 重启丢内存任务表）→ 重提同 URL 接续；重提失败不可挽回 → 停 + 报错 */
+async function resubmitJobAfter404() {
+  console.warn('[VocabRadar][asr-client][' + _ts() + '] job 丢失(404)，重提接续');
+  const submit = await sendMessage({ type: 'ASR_JOB_SUBMIT', url: location.href });
+  if (!_running) return; // 重提期间 stopASR → 丢弃
+  if (submit && submit.ok && submit.id) {
+    // 只复位游标态，不动定时器：下一 tick 自然轮新 id（最多延迟一个 JOB_POLL_MS，
+    //   不立即首轮——避免与既有 tick 竞争重入）；已收段由 _jobSeenSegs 去重
+    _jobId = submit.id;
+    _jobAfter = 0;
+    _jobListenEnd = 0;
+    _jobFailStreak = 0;
+    pushStatusLocal('job-submitted', 'job ' + submit.id + ' (resubmit)', { jobId: submit.id });
+  } else {
+    const msg = 'backend job 丢失且重提失败: ' + ((submit && submit.error) || 'no response');
     console.warn('[VocabRadar][asr-client][' + _ts() + ']', msg);
     const cb = _onError;
     stopASR();

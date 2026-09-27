@@ -3,8 +3,8 @@
  * VocabRadar 浏览器扩展 预处理脚本（Node ESM，2026-09-05 自 preprocess.py 迁移）
  *
  * 输入（发布代码不含本地绝对路径：外部源路径一律经命令行参数提供，默认值见配置段）:
- *   - 10个英文词表文件 (--wordlist-dir，默认 ../VocabRadar/preprocess/word_list/*.txt)
- *     每行一个英文单词，对应 CET4/CET6/TEM4/TEM8/GRADUATE/IELTS/TOEFL/GRE/GMAT/SAT
+ *   - 5个英文词表文件 (--wordlist-dir，默认 ../VocabRadar/preprocess/word_list/*.txt)
+ *     每行一个英文单词，对应 IELTS/TOEFL/GRE/GMAT/SAT
  *   - 图标源图 (--logo，默认 ../文档/logo.png)
  *   - 英中翻译包 (--translation-src，默认 ../VocabRadar/data/translations/en_zh.jsonl)，
  *     JSONL 每行 {"word": "小写英文词", "defs": ["中文释义"...]}，由 VocabRadar 仓
@@ -41,7 +41,7 @@
  * 设计：
  *   - 词频 rank 由前端运行时按 frequency 降序排序后构建 Map<word, rank>
  *     （数据构建在公开仓库 clean.js，本脚本不参与）
- *   - 词表标签仅针对英文（CET4等），其他语言的词频文件不含词表
+ *   - 词表标签仅针对英文（IELTS等），其他语言的词频文件不含词表
  *   - 释义不再打包，改由前端在线查询后 fnv1aHash 100分桶缓存本地
  *   - wordbank.json 弃用，不再生成
  *
@@ -117,11 +117,6 @@ const DEFAULT_TRANSLATION_SRC = path.join(PROJECT_ROOT, '..', 'VocabRadar', 'dat
 // 词表配置（与前端 lemmatizer.js 词表标签匹配一致）
 // id -> 文件名
 const WORD_LISTS = {
-  CET4: 'CET4.txt',
-  CET6: 'CET6.txt',
-  TEM4: 'TEM4.txt',     // VocabRadar 词表为直名（旧 BeaverWord 源叫 Level4.txt）
-  TEM8: 'TEM8.txt',     // 同上（旧 Level8.txt）
-  GRADUATE: '考研.txt',
   IELTS: 'IELTS.txt',
   TOEFL: 'TOEFL.txt',
   GRE: 'GRE.txt',
@@ -138,7 +133,7 @@ function warn(msg) { console.warn(`[${nowStamp()}] [警告] ${msg}`); }
 function error(msg) { console.error(`[${nowStamp()}] [错误] ${msg}`); }
 
 function loadWordlists(wordlistDir) {
-  // 加载10个英文词表，返回 {id: Set(words)}
+  // 加载5个英文词表，返回 {id: Set(words)}
   const wordlists = {};
   for (const [listId, filename] of Object.entries(WORD_LISTS)) {
     const p = path.join(wordlistDir, filename);

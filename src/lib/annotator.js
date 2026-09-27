@@ -10,7 +10,7 @@
 import { lookup, lookupWithLemmatizer, getLearnLang, setQuietBatch, isLoaded } from './dictionary.js';
 // 第一百九十九次：hasCachedLemma 守卫已删除（自败守卫，见 getAnnotationsInner 内注释）
 import { extractEnglishWords } from './tokenizer.js';
-import { translate, getMeaningLang } from './translator.js';
+import { translate, getMeaningLang, targetScriptOk } from './translator.js';
 import { getWordsBatch, updateFields } from './word-db.js';
 // 反思（2026-08-16 第七十次）：词典层数据来源账本——getAnnotations 每次处理
 //   真实计数 文本字符/分词/去重单词 与 各属性(rank/lemma/tags/释义) 来自统一词典(IDB)
@@ -333,8 +333,10 @@ async function getAnnotationsInner(text, rankThreshold = 0, seen = new Set(), on
     //   缓存永远视为未命中 → 每次都走异步 translate（即使词典已有译文）。
     //   修正：用 translator 当前目标语言比对，命中则直接取词典译文，符合
     //   "找单词数据只有找词典，词典是缓存层，找不着了再去原始渠道并回填"。
+    // 反思（2026-09-27）：补 targetScriptOk 文字系统校验——旧渠道缺陷的存量脏缓存
+    //   （中文释义配任意 translationLang）在此失效，走 translate 重翻后覆盖修复。
     const meaningLang = getMeaningLang();
-    const idbTrans = (rec && rec.translation && rec.translationLang === meaningLang) ? rec.translation : null;
+    const idbTrans = (rec && rec.translation && rec.translationLang === meaningLang && targetScriptOk(rec.translation, meaningLang)) ? rec.translation : null;
     if (idbTrans) {
       const cleanTrans = cleanDictEntry(idbTrans);
       if (cleanTrans) {

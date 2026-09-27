@@ -152,10 +152,12 @@ export async function toggleASR(clickX, clickY) {
       },
       onError: (err) => {
         console.warn('[VocabRadar][asr][' + new Date().toLocaleTimeString('en-GB', { hour12: false }) + '.' + String(Date.now() % 1000).padStart(3, '0') + '] ASR 错误:', err);
-        // 反思（2026-07-07）：用户要求"偶然局部问题进度条那报错5秒"，不弹 toast。
-        // ASR 运行中的局部错误（如某段识别失败）仅在进度条显示5秒，不打断 ASR 运行。
+        // asr-client 的 onError 仅在终态触发（backend job failed / job 丢失且重提失败），
+        //   lib 层轮询已停，此处必须同步复位按钮态（旧版不复位 → 按钮卡在 active）
+        stopASRInternal();
+        // 进度条显示错误 5 秒后收起（stopASRInternal 已置非 active，不能再用 isASRActive 守卫，否则永不隐藏）
         showASRProgress(t('asr.errorLabel'), String(err.message || err).slice(0, 60));
-        setTimeout(() => { if (isASRActive()) hideASRProgress(); }, 5000);
+        setTimeout(() => { hideASRProgress(); }, 5000);
       }
     });
     console.log('[VocabRadar][asr][' + new Date().toLocaleTimeString('en-GB', { hour12: false }) + '.' + String(Date.now() % 1000).padStart(3, '0') + '] 已启动');

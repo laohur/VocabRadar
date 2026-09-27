@@ -177,6 +177,8 @@ export function primeTranslator(opts = {}) {
  * 反思（2026-08-06）：与 service-worker.js targetScriptOk 同逻辑。
  *   精确匹配漏掉"同语言不同词"（en->zh running->run），需文字系统校验。
  *   源/目标同文字系统时（en->es）返回 true（无法区分，回退精确匹配）。
+ * 反思（2026-09-27）：与 SW 侧同步加 CJK 反向规则——拉丁目标语言（SCRIPT_MAP
+ *   无条目）译文含 CJK 字符（假名/汉字/谚文等）即中文泄漏，判未翻译。
  */
 export function targetScriptOk(text, tgt) {
   if (!text) return false;
@@ -191,7 +193,10 @@ export function targetScriptOk(text, tgt) {
     hi: '\\u0900-\\u097f', bn: '\\u0980-\\u09ff',
     ta: '\\u0b80-\\u0bff', te: '\\u0c00-\\u0c7f', ml: '\\u0d00-\\u0d7f',
   };
+  // CJK 字符（假名/注音符号/汉字扩展/兼容汉字/谚文）：渠道中文释义泄漏的指纹
+  const CJK_RE = /[\u3040-\u30ff\u3100-\u312f\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff\uac00-\ud7af]/;
   const range = SCRIPT_MAP[tgt];
-  if (!range) return true;
+  // 拉丁字母语言（en/es/fr/de 等）：反向规则——译文含 CJK 即中文泄漏，判未翻译
+  if (!range) return !CJK_RE.test(text);
   return new RegExp('[' + range + ']').test(text);
 }
