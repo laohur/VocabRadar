@@ -1,8 +1,8 @@
 """VocabRadar backend 安装器（幂等；首次部署手动运行一次，日常启动无需再跑）。
 
 流程（plan-backend §5.3）：
-0. 状态检查：backend/.installed.json 存在且解释器未变 → 直接退出（二次启动秒过；
-   删除该文件可强制重装）
+0. 状态检查：backend/.installed.json 存在且解释器未变 → 跳过安装流程直接退出
+   （第401次；第443次：老用户重跑亦不再补跑任何注册）
 1. 检查 Python >= 3.10（不内置 Python；脚本能跑即有解释器，环境用户自备不代管）
 2. 用当前 Python 环境装依赖（已满足时 pip 自动跳过）；imageio-ffmpeg 按需
    装——系统 PATH 已有 ffmpeg 则跳过，缺失才补装（yt-dlp 执行器兜底）
@@ -10,6 +10,10 @@
    （已存在跳过 → 支持离线手动放置）
 4. 健康自检（llama-server --version），写安装状态到 backend/.installed.json
    （模型 GGUF 不归本脚本管，第431次：llama-server -hf 自动下载进 HF hub 缓存）
+
+第443次（用户裁定）：NM 自动唤起整套撤销——扩展不再经 Native Messaging 拉起
+backend，日常启动由用户手动执行 python backend/app.py；原步骤 4 的 NM 注册
+（backend/scripts/native-messaging/）随之整体删除。
 """
 
 import fnmatch
@@ -121,8 +125,9 @@ def load_state():
 
 
 def step0_check_state():
-    """已装且解释器未变 → 直接退出（run.* 二次启动秒过）；解释器变了（用户换环境）
-    → 打印提示后照常重装依赖。强制重装：删除 backend/.installed.json。"""
+    """已装且解释器未变 → 跳过安装流程直接退出（第401次：二次启动秒过；
+    第443次：NM 注册撤销后不再补跑任何步骤）；解释器变了（用户换环境）→
+    打印提示后照常重装依赖。强制重装：删除 backend/.installed.json。"""
     st = load_state()
     if not st:
         return
@@ -356,7 +361,12 @@ def remove_quarantine(dest):
                            capture_output=True)
 
 
-def step4_selfcheck():
+# 第443次（用户裁定）：原 step4_register_nm 已删——NM 自动唤起整套撤销（原实现注册
+# Native Messaging host 供扩展「自动唤起 backend」用，host 脚本曾位于
+# backend/scripts/native-messaging/）。日常启动由用户手动执行 python backend/app.py。
+
+
+def step5_selfcheck():
     info("健康自检 ...")
     ok = True
     server = find_llama_server()
@@ -387,7 +397,7 @@ def main():
     step2_prepare_env()
     manifest = load_manifest()
     step3_install_llamacpp(manifest)
-    step4_selfcheck()
+    step5_selfcheck()  # 第443次：NM 注册步骤撤销（用户裁定），仅保留健康自检
     record_state()  # 第401次：记录环境与安装状态，供下次启动跳过
 
 

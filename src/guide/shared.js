@@ -63,43 +63,34 @@ const MSG = {
   subHeadTrans: { en: 'Translation', zh: '翻译' },
   // 第三百九十三次：引擎 API 分支新增河狸后端选项（本地免 Key/官方），desc 同步
   // 第434次：本地 Whisper/Tesseract 随第394次裁定移除，en/zh 与 guide.html 权威文案对齐
+  // 第444次：来源分组整改（分组名简化 + ASR/OCR 放开免费直连组）后描述同步
+  // 第445次（用户裁定「asr ocr llm都裁掉free组」）：描述去「免费直连/Free direct」，
+  //   组名改 OpenAI Chat Completion Style / Anthropic Messages Style
   asrModelDesc: {
-    en: 'Speech recognition: OpenAI-compatible transcription (endpoint/model name/key; source: VocabRadar backend — local or official — or your own API). Unrelated to the chat LLM above.',
+    en: 'Speech recognition: OpenAI-compatible transcription (endpoint/model name/key; source: VocabRadar backend (local/official) or your own API). Unrelated to the chat LLM above.',
     zh: '语音识别：OpenAI 兼容转写（接口地址/模型名/Key；来源可选河狸后端本地/官方，或自备 API）。与上面的对话模型互不相关。'
   },
   ocrEngineDesc: {
-    en: 'Text recognition for screenshots/video frames: vision LLM (source: VocabRadar backend — local or official — or your own API; needs image input support).',
+    en: 'Text recognition for screenshots/video frames: vision LLM (source: VocabRadar backend (local/official) or your own API; needs image input support).',
     zh: '截图/视频帧的文字识别：大模型视觉识别（来源可选河狸后端本地/官方，或自备 API，需模型支持图片输入）。'
   },
   modelDesc: {
-    en: 'LLM endpoint used by the chat (💬) feature. Three API formats: free direct (no account), OpenAI-compatible, and Anthropic — the latter two need your own API key.',
-    zh: '对话（💬）功能所用的大模型接口。按 API 格式分三类：免费直连（无需账号）、OpenAI 格式、Anthropic 格式；后两类需自行申请 Key。'
+    en: 'LLM endpoint used by the chat (💬) feature. Provider groups: VocabRadar backend, OpenAI Chat Completion Style, Anthropic Messages Style — the latter two need your own API key.',
+    zh: '对话（💬）功能所用的大模型接口。来源分三组：河狸后端、OpenAI Chat Completion 格式、Anthropic Messages 格式；后两类需自行申请 Key。'
   },
-  fieldLlmProvider: { en: 'Chat Provider', zh: '对话模型来源' },
+  // 第444次（用户裁定「Chat Provider API source 都改称 Provider，放在填空上」）：
+  //   对话模型来源标签改称 Provider；第443次的「检测后端」按钮与 backend* 结果
+  //   文案随引导页该行删除（backend 连通性改由各服务行「检测」覆盖），
+  //   backendDetecting/backendOk/backendNeedsSetup/backendMissing/backendRemoteFail
+  //   五键一并删除。
+  fieldLlmProvider: { en: 'Provider', zh: 'Provider' },
   fieldLlmModel: { en: 'Model', zh: '模型名' },
   fieldLlmBaseUrl: { en: 'Endpoint', zh: '接口地址' },
   fieldLlmApiKey: { en: 'API Key', zh: 'API Key' },
-  // 第397次：检测本地后端按钮与结果提示（plan-backend §4.4；结果区失败文案后接
-  //   vocabradar.com 链接，故 backendMissing 句尾不闭合）
-  btnDetectBackend: { en: 'Detect local backend', zh: '检测本地后端' },
-  // 第401次：本地后端地址填空（完整 URL 含协议主机端口；留空 = 默认 127.0.0.1:7777）
-  fieldBackendBaseUrl: {
-    en: 'Local backend URL (protocol + host + port)',
-    zh: '本地后端地址（协议+主机+端口）'
-  },
-  backendDetecting: { en: 'Detecting…', zh: '检测中…' },
-  backendOk: {
-    en: 'Local backend {version} is running — you can pick Local backend as a provider.',
-    zh: '本地后端 {version} 运行中——可在来源中选择本地后端。'
-  },
-  backendNeedsSetup: {
-    en: 'Models not downloaded yet — open the management page to finish first-time setup.',
-    zh: '模型尚未下载——请打开管理界面完成首次安装。'
-  },
-  backendMissing: {
-    en: 'Local backend not detected. To run models locally, get the backend from',
-    zh: '未检测到本地后端。如需本地推理，可从'
-  },
+  // 第443次：各模型服务「检测」按钮文案（单位是服务；backend 组连通性亦由此覆盖）
+  btnDetectService: { en: 'Test', zh: '检测' },
+  // 第445次：fieldBackendBaseUrl 键删除——「本地后端地址」独立填空裁撤，
+  //   backend 组形制与其他 LLM API 一致（预置 baseUrl 即默认地址，Endpoint 填空可改）
   // 第二百二十七次（用户："两种提示词，背景最大长度，都应当各自一行"）：改回各自一行，
   //   恢复完整标签（226 次的悬浮提示键 tipChat* 随之删除）；"Anthropic 兼容"表述对齐
   //   "OpenAI 兼容"（自定义网关同样可用，并非只有官方端点）。
@@ -177,7 +168,8 @@ const MSG = {
   fieldAsrLlmModel: { en: 'Transcription model', zh: '转写模型' },
   // 第三百九十三次：ASR/OCR 来源下拉共用标签（原 ocrApiFmt + fmtOpenai/fmtAnthropic 随
   //   静态两选项下拉退役——选项文案改由 LLM_PROVIDERS 表按界面语言动态生成）
-  engineApiFmt: { en: 'API source', zh: 'API 来源' },
+  // 第444次（用户裁定）：标签改称 Provider，与对话行统一。
+  engineApiFmt: { en: 'Provider', zh: 'Provider' },
   // 第一百零二次：asrFirstChunkSec 引导页输入已按用户裁定移除（唯一来源 config.json），
   // MSG 词条 fieldAsrFirstChunk/asrFirstChunkDesc 一并删除
   chkRareWords: { en: 'Annotate out-of-vocabulary words', zh: '注释表外词' },

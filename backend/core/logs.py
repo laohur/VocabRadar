@@ -15,7 +15,9 @@ from logging.handlers import RotatingFileHandler
 
 _LOG_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
                         "logs")
-_FMT = "%(asctime)s [%(levelname)s] %(name)s: %(message)s"
+# 第440次：格式加 (funcName:lineno)——报错能直接定位到输出行（用户反馈：
+#   「首先看不出来哪行输出的」）。
+_FMT = "%(asctime)s [%(levelname)s] %(name)s (%(funcName)s:%(lineno)d): %(message)s"
 _DATEFMT = "%m-%d %H:%M:%S"
 
 

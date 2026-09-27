@@ -45,6 +45,7 @@ const ZH = {
   '· model {m}': '· 模型 {m}',
   '· loaded {e}': '· 已加载 {e}',
   'llama-server running': 'llama-server 运行中',
+  'llama-server starting': 'llama-server 启动中',  // 第446次：三态（进程活但 /health 未 200）
   'not running': '未运行',
   'Uses the LLM engine; start/stop on the LLM row': '使用 LLM 引擎；在 LLM 行启动/关停',
   'default format {f}': '默认格式 {f}',

@@ -84,8 +84,7 @@
           "repeat_penalty": 1.1
         }
       }
-    ],
-    "stopped": true
+    ]
   },
   "asr": {
     "engine": "faster-whisper",

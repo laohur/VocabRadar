@@ -186,7 +186,9 @@ class AsrEngine:
 
 
 def _safe_key(key):
-    return re.sub(r"[^A-Za-z0-9_-]", "_", key)[:120]
+    # 第441次：通用站 key 前缀是裸 host（含点，如 example.com-…），白名单
+    #   放行单个 `.` 保落盘文件名可读；连续 `.`（`..` 路径穿越成分）归 `_`。
+    return re.sub(r"\.{2,}", "_", re.sub(r"[^A-Za-z0-9_.-]", "_", key))[:120]
 
 
 def cache_list():
@@ -206,7 +208,11 @@ def cache_list():
                 "video_id": data.get("video_id"),
                 "engine": data.get("engine"),
                 "language": data.get("language"),
-                "preview": (data.get("text") or "")[:80],
+                "duration": data.get("duration"),
+                # 第440次：条目去 text，preview 改从 segments 拼（字段名保持）。
+                "preview": " ".join(
+                    (s.get("text") or "").strip()
+                    for s in (data.get("segments") or []))[:80],
                 "size": os.path.getsize(path),
                 "ts": data.get("ts"),
             })

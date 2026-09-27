@@ -28,8 +28,8 @@ import { handleWordDbMessage, clearAll as clearIdbAll, warmupDictProjection, get
 // 反思（2026-08-16 第六十六次）：词典渠道返回的释义清洗（去除"原形(释义)的屈折说明"夹杂）
 import { cleanDictEntry } from '../lib/dict-clean.js';
 // 第一百七十一次：LLM 对话（Chat）配置解析——引导页「模型」行写入 storage，此处解析成请求参数
-// 第一百七十五次：getFreeProviders 提供免费直连轮替清单，供 402/429 自动回退
-import { resolveLlmConfig, getFreeProviders } from '../lib/llm.js';
+// 第445次：getFreeProviders 移除（free 组裁撤，不再有免费直连轮替）
+import { resolveLlmConfig } from '../lib/llm.js';
 // 第二百四十六次：词典门面静态引入（原为 onInstalled 内动态 import，被
 //   ServiceWorkerGlobalScope 禁止——HTML 规范 w3c/ServiceWorker#1356，本机 Chrome
 //   实测报错，后台初始化沦为死路）。增量仅 dictionary 门面+projection/query/state/
@@ -530,9 +530,10 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         .catch((e) => sendResponse({ ok: false, error: String(e.message || e) }));
       return true;
     case 'ASR_JOB_SUBMIT':
-      // 第398次（阶段三2）：ASR 端到端任务提交——content script 受页面 CSP 限制
-      //   不能直连 backend，SW 代理 POST /api/asr/jobs（同 FETCH_SUBTITLE 的代理逻辑）
-      handleAsrJobSubmit(msg.url, msg.language)
+      // 第398次（阶段三2）：ASR 端点提交——content script 受页面 CSP 限制
+      //   不能直连 backend，SW 代理 POST /api/asr/jobs（同 FETCH_SUBTITLE 的代理逻辑）；
+      //   第443次（用户裁定）：第442次的 NM 唤起包装撤销，失败如实上抛不自动拉起
+      submitAsrJobOnce(msg.url, msg.language)
         .then((r) => sendResponse(r))
         .catch((e) => sendResponse({ ok: false, error: String(e.message || e) }));
       return true;
@@ -1049,7 +1050,8 @@ async function llmTranscribeBlob(blob, cfg, lang, fileName, signal) {
   if (lang) fd.append('language', String(lang).split('-')[0]);
   fd.append('response_format', 'json');
   const headers = {};
-  if (cfg.format !== 'free' && cfg.apiKey) headers['Authorization'] = 'Bearer ' + cfg.apiKey;
+  // 第445次：free 格式判断删除（free 组裁撤）；有 Key 即带 Bearer（noKey 来源无 Key 不带）
+  if (cfg.apiKey) headers['Authorization'] = 'Bearer ' + cfg.apiKey;
   const resp = await fetch(url, { method: 'POST', headers, credentials: 'omit', cache: 'no-store', body: fd, signal });
   const raw = await resp.text();
   if (!resp.ok) throw new Error('HTTP ' + resp.status + ' ' + raw.slice(0, 300));
@@ -1100,12 +1102,8 @@ async function resolveLlmEngineCfg(engine) {
     llmProvider: res[keys.p], llmBaseUrl: res[keys.b],
     llmModel: res[keys.m], llmApiKey: res[keys.k]
   });
-  // 第406次：ASR/OCR-LLM 默认走河狸后端且未手填地址时，同样经 getBackendBase 自动
-  //   发现端口（与聊天路径 handleLlmChat 覆写逻辑同构）——backend 递延换端口后，
-  //   转写/视觉识别无需手动改 asrLlmBaseUrl / ocrLlmBaseUrl
-  if (cfg.provider === 'local-backend' && !cfg.userBaseUrl) {
-    cfg.baseUrl = (await getBackendBase()) + '/v1';
-  }
+  // 第445次：getBackendBase 覆写分支删除——backend 组预置 baseUrl 即默认 7777 地址，
+  //   不再有「自动发现端口」（backend 启动前端口预检，占用即失败；扩展端不再范围尝试）
   return cfg;
 }
 
@@ -1141,11 +1139,12 @@ async function handleOcrByLlm(imageDataUrl, lang) {
  * @returns {Promise<{ok:boolean, content?:string, error?:string}>}
  */
 async function llmVisionOnce(cfg, prompt, imageDataUrl) {
-  // 第三百九十三次：noKey 来源（本地后端）与 free 同待遇——免 Key 强校验；
+  // 第三百九十三次：noKey 来源（本地后端）免 Key 强校验；
   //   鉴权头仅在有 Key 时携带（镜像 llmTranscribeBlob），空 Bearer 不发给本地服务
-  const isFree = cfg.format === 'free' || !!cfg.noKey;
+  // 第445次：free 格式判断删除（free 组裁撤），仅按 noKey
+  const noKey = !!cfg.noKey;
   const isAnthropic = cfg.format === 'anthropic';
-  if (!isFree && !cfg.apiKey) return { ok: false, error: 'API Key 未配置' };
+  if (!noKey && !cfg.apiKey) return { ok: false, error: 'API Key 未配置' };
   if (!cfg.baseUrl) return { ok: false, error: 'Base URL 未配置' };
   if (!cfg.model) return { ok: false, error: '模型名未配置' };
 
@@ -1161,7 +1160,7 @@ async function llmVisionOnce(cfg, prompt, imageDataUrl) {
     headers['x-api-key'] = cfg.apiKey;
     headers['anthropic-version'] = '2023-06-01';
     headers['anthropic-dangerous-direct-browser-access'] = 'true';
-  } else if (!isFree && cfg.apiKey) {
+  } else if (!noKey && cfg.apiKey) {
     headers['Authorization'] = 'Bearer ' + cfg.apiKey;
   }
   let body;
@@ -1926,80 +1925,25 @@ async function handleFetchSubtitle(url) {
 // === 第398次（阶段三2）：backend 代理（ASR 任务 + 第399次字幕兜底） ===
 // 背景：content script 受页面 CSP connect-src 限制无法直连 backend
 //   （同 FETCH_SUBTITLE 代理的原因），SW 有 host_permissions 可直接 fetch。
-// 第401次：地址可配置（引导页「本地后端地址」填空，完整 URL 含协议主机端口）。
-// 第406次：未手动填写时自动发现端口——先探默认 7777，不通则并行扫 7778–7827
-//   （与 backend _pick_free_port 的递延范围对齐），命中后缓存 60 秒。
+// 第445次（用户裁定「扩展端不再范围尝试」）：第401次「backendBaseUrl 可配置」与
+//   第406次「7778–7827 端口自动发现」（probeBackendHealth/scanBackendBase/
+//   getBackendBase/_backendBaseCache 及扫描常量）整套删除——backend 固定 7777
+//   （backend 启动前端口预检，占用即失败、由用户解除占用或指定端口，不再递延），
+//   任务地址一律 BACKEND_BASE_DEFAULT，连接错误如实上抛。
 const BACKEND_BASE_DEFAULT = 'http://127.0.0.1:7777';
-const BACKEND_SCAN_START = 7778;        // backend 递延从 port+1 起试 50 个 → 7778..7827
-const BACKEND_SCAN_END = 7827;
-const BACKEND_SCAN_TIMEOUT_MS = 1200;   // 单端口探测超时；localhost 连接拒绝瞬时返回，超时仅兜底
-const BACKEND_CACHE_TTL_MS = 60000;     // 扫描结果缓存：有界陈旧可自愈，避免每请求全量扫描
 
-let _backendBaseCache = { base: null, ts: 0 };
-
-/** 单端口健康探测：GET /api/health 2xx 且 j.ok 视为河狸 backend；否则 reject（供 Promise.any）。 */
-async function probeBackendHealth(base) {
-  const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), BACKEND_SCAN_TIMEOUT_MS);
-  try {
-    const res = await fetch(base + '/api/health',
-      { signal: ctrl.signal, credentials: 'omit', cache: 'no-store' });
-    if (res.ok) {
-      const j = await res.json().catch(() => null);
-      if (j && j.ok) return base;
-    }
-    throw new Error('not backend: ' + base);
-  } finally {
-    clearTimeout(timer);
-  }
-}
-
-/** 并行探测候选端口，返回首个命中地址；全部不可达返回 null。 */
-async function scanBackendBase(candidates) {
-  try {
-    return await Promise.any(candidates.map((p) => probeBackendHealth(p)));
-  } catch (_e) {
-    return null;
-  }
-}
-
-/** 解析后端地址：用户手动填写（backendBaseUrl 非空）→ 原样用不探测，不可达也让
- *  错误如实上抛；留空 → 先探默认 7777，不通并行扫 7778–7827。命中缓存 60 秒，
- *  未命中每次现扫（backend 关闭时每请求 51 个并发探测，localhost 拒绝成本可忽略）。
- *  全部不可达回默认地址，让后续请求报出真实连接错误（不遮蔽）。 */
-async function getBackendBase() {
-  const stored = await new Promise((resolve) => {
-    chrome.storage.local.get({ backendBaseUrl: '' }, (r) => {
-      resolve(String((r && r.backendBaseUrl) || '').trim().replace(/\/+$/, ''));
-    });
-  });
-  if (stored) return stored;
-  const now = Date.now();
-  if (_backendBaseCache.base && now - _backendBaseCache.ts < BACKEND_CACHE_TTL_MS) {
-    return _backendBaseCache.base;
-  }
-  let found = await scanBackendBase([BACKEND_BASE_DEFAULT]);
-  if (!found) {
-    const candidates = [];
-    for (let p = BACKEND_SCAN_START; p <= BACKEND_SCAN_END; p++) {
-      candidates.push('http://127.0.0.1:' + p);
-    }
-    found = await scanBackendBase(candidates);
-  }
-  if (found) _backendBaseCache = { base: found, ts: Date.now() };
-  return found || BACKEND_BASE_DEFAULT;
-}
-
-/**
- * 提交 ASR 任务：POST /api/asr/jobs {url, language} → {ok, id, status, cached}
+/** 单次提交 ASR 任务：POST /api/asr/jobs {url, language} → {ok, id, status, cached}。
+ *  网络层失败标 net=true（backend 根本没跑通），HTTP 层错误不标（backend 在跑）
+ *  ——第443次唤起撤销，net 仅供调用方提示用语区分，不再触发自动拉起。
  * @param {string} url 视频/音频页 URL（backend yt-dlp 解析下载）
  * @param {string} [language] 识别语言（ISO 码，缺省自动检测）
- * @returns {Promise<{ok: boolean, id?: string, status?: string, cached?: boolean, error?: string}>}
+ * @returns {Promise<{ok: boolean, id?: string, status?: string, cached?: boolean, error?: string, net?: boolean}>}
  */
-async function handleAsrJobSubmit(url, language) {
+async function submitAsrJobOnce(url, language) {
   if (!url) return { ok: false, error: 'empty url' };
   try {
-    const base = await getBackendBase();
+    // 第445次：backend 固定 7777（BACKEND_BASE_DEFAULT），不再自动发现端口
+    const base = BACKEND_BASE_DEFAULT;
     const res = await fetch(base + '/api/asr/jobs', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -2015,9 +1959,14 @@ async function handleAsrJobSubmit(url, language) {
   } catch (e) {
     // 不遮蔽：backend 未启动 / 网络不通原样上抛（调用方决定回退路径）
     console.error('[VocabRadar][sw][' + _ts() + '] asrJobSubmit 异常:', e);
-    return { ok: false, error: String(e.message || e) };
+    return { ok: false, error: String(e.message || e), net: true };
   }
 }
+
+// 第443次（用户裁定）：第442次的 NM 自动唤起整套撤销（host 目录删除、扩展侧
+//   BACKEND_WAKE/wakeBackend/autoWakeEnabled 等一并移除，manifest 的
+//   optional_permissions 同步收回）——backend 由用户手动启动，连通性检测
+//   收编进引导页各来源的「检测」按钮（√/× 结果），失败如实上抛不自动拉起。
 
 /**
  * 轮询 ASR 任务增量：GET /api/asr/jobs/<id>?after=N → 任务快照
@@ -2029,7 +1978,8 @@ async function handleAsrJobSubmit(url, language) {
 async function handleAsrJobPoll(id, after) {
   if (!id) return { ok: false, error: 'empty id' };
   try {
-    const base = await getBackendBase();
+    // 第445次：backend 固定 7777（BACKEND_BASE_DEFAULT），不再自动发现端口
+    const base = BACKEND_BASE_DEFAULT;
     const res = await fetch(base + '/api/asr/jobs/' + encodeURIComponent(id)
       + '?after=' + (Number.isFinite(after) && after > 0 ? after : 0),
       { credentials: 'omit', cache: 'no-store' });
@@ -2056,7 +2006,8 @@ async function handleAsrJobPoll(id, after) {
 async function handleYtdlSubtitles(url, lang) {
   if (!url) return { ok: false, error: 'empty url' };
   try {
-    const base = await getBackendBase();
+    // 第445次：backend 固定 7777（BACKEND_BASE_DEFAULT），不再自动发现端口
+    const base = BACKEND_BASE_DEFAULT;
     const qs = '?url=' + encodeURIComponent(url)
       + (lang ? '&lang=' + encodeURIComponent(lang) : '');
     const res = await fetch(base + '/api/ytdl/subtitles' + qs,
@@ -2450,11 +2401,12 @@ chrome.alarms.onAlarm.addListener((alarm) => {
  * 代理 LLM 对话请求
  * 第一百七十一次：content script 受宿主页面 CSP 限制无法 fetch 第三方 API，
  *   统一由 SW 代理（扩展 CSP 的 connect-src 已加入各来源域名）。
- * 第一百七十四次：来源按 format 分三类（见 lib/llm.js），请求差异集中在本函数：
- *   - 'openai' / 'free'：POST {baseUrl}/chat/completions，取 choices[0].message.content；
- *                        'free' 不带任何鉴权头、也不要求 Key。
- *   - 'anthropic'      ：POST {baseUrl}/v1/messages，x-api-key + anthropic-version 头，
- *                        system 消息须单列、max_tokens 必填，取 content[0].text。
+ * 第一百七十四次：来源按 format 分两类（见 lib/llm.js），请求差异集中在本函数：
+ *   - 'openai'   ：POST {baseUrl}/chat/completions，取 choices[0].message.content，
+ *                  Authorization: Bearer 头（noKey 的 backend 组不带头）。
+ *   - 'anthropic'：POST {baseUrl}/v1/messages，x-api-key + anthropic-version 头，
+ *                  system 消息须单列、max_tokens 必填，取 content[0].text。
+ * 第445次：'free' 格式与轮替机制随 free 组裁撤删除，只请求用户所选来源本身。
  * @param {Array<{role: string, content: string}>} messages 对话上下文
  * @returns {Promise<{ok: boolean, content?: string, error?: string, needConfig?: boolean}>}
  *   needConfig=true 表示尚未配置，前端应显示"打开设置"按钮而非只报错
@@ -2502,30 +2454,11 @@ async function handleLlmChat(messages, onDelta) {
     );
   });
   const cfg = resolveLlmConfig(res);
-  // 第401次：本地后端地址可配置；第406次：未手动填写时经 getBackendBase 自动发现
-  //   端口（默认 7777 不通则并行扫 7778–7827），backend 递延换端口后无需手动改地址
-  if (cfg.provider === 'local-backend' && !cfg.userBaseUrl) {
-    cfg.baseUrl = (await getBackendBase()) + '/v1';
-  }
-
-  // 第一百七十五次（用户裁定"默认轮替免费直连，除非用户配置 key"；实测 Pollinations 返回
-  //   402 Payment Required 属匿名配额限流）：
-  //   免费来源且用户未手填地址/模型时，构造"轮替尝试清单"——从上次用过的下一家开始，
-  //   遇 402/429/网络错就换下一家；用户手填了地址或模型、或选了需 Key 的来源，则只试其本身
-  //   （不擅自改用户配置，也不遮蔽其错误）。
-  let attempts = [cfg];
-  if (cfg.format === 'free' && !cfg.userBaseUrl && !cfg.userModel) {
-    const frees = getFreeProviders();
-    if (frees.length > 1) {
-      const start = _llmFreeCursor % frees.length;
-      _llmFreeCursor = (_llmFreeCursor + 1) % frees.length;
-      attempts = [];
-      for (let i = 0; i < frees.length; i++) {
-        const p = frees[(start + i) % frees.length];
-        attempts.push(Object.assign({}, cfg, { provider: p.id, baseUrl: p.baseUrl, model: p.model }));
-      }
-    }
-  }
+  // 第445次（free 组裁撤 + 扩展端不再范围尝试）：原「local-backend 未手填地址则
+  //   经 getBackendBase 自动发现端口覆写」与「free 组轮替清单（_llmFreeCursor 游标
+  //   + 遇 402/429 换下一家免费直连）」整套删除——backend 预置 baseUrl 即 7777 地址，
+  //   只尝试用户所选来源本身，失败如实上抛不换家。
+  const attempts = [cfg];
 
   let last = { ok: false, error: 'no attempt' };
   for (let i = 0; i < attempts.length; i++) {
@@ -2534,28 +2467,25 @@ async function handleLlmChat(messages, onDelta) {
       ? await llmChatStreamOnce(attempts[i], turns, onDelta)
       : await llmChatOnce(attempts[i], turns);
     if (last.ok || !last.retryable) return last;
-    log('[VocabRadar][sw][' + _ts() + '] llmChat 来源 ' + attempts[i].provider + ' 失败(' + last.error
-      + ')，自动改试下一家免费直连');
+    log('[VocabRadar][sw][' + _ts() + '] llmChat 来源 ' + attempts[i].provider + ' 失败(' + last.error + ')');
   }
   // 全部失败：把最后一次的原始错误如实返回（不遮蔽），并去掉内部标记字段
   return { ok: false, error: last.error, needConfig: !!last.needConfig };
 }
 
-// 免费直连轮替游标：模块级，SW 存活期间逐次前移，实现"默认轮替"而非总打头一家
-let _llmFreeCursor = 0;
-
 /**
- * 发起一次 LLM 请求（单来源，不含轮替）
- * @param {object} cfg resolveLlmConfig 的结果（或轮替时替换过 provider/baseUrl/model 的副本）
+ * 发起一次 LLM 请求（单来源）
+ * @param {object} cfg resolveLlmConfig 的结果
  * @param {Array<{role: string, content: string}>} messages 对话上下文
  * @returns {Promise<{ok: boolean, content?: string, error?: string, needConfig?: boolean, retryable?: boolean}>}
- *   retryable=true 表示"本家限流/不通，换一家可能成"（402/429/5xx/网络错），交由上层轮替
+ *   retryable=true 表示"本家限流/不通"（402/429/5xx/网络错）；第445次轮替已删，仅保留语义字段
  */
 async function llmChatOnce(cfg, messages) {
-  const isFree = cfg.format === 'free';
+  // 第445次：free 格式删除，是否需要 Key 只看 noKey（backend 组）
+  const noKey = !!cfg.noKey;
   const isAnthropic = cfg.format === 'anthropic';
   // 不遮蔽错误：缺 baseUrl / 缺 model 都明确告知；Key 只对需账号的两类强制要求
-  if (!isFree && !cfg.apiKey) return { ok: false, error: 'API Key 未配置', needConfig: true };
+  if (!noKey && !cfg.apiKey) return { ok: false, error: 'API Key 未配置', needConfig: true };
   if (!cfg.baseUrl) return { ok: false, error: 'Base URL 未配置', needConfig: true };
   if (!cfg.model) return { ok: false, error: '模型名未配置', needConfig: true };
 
@@ -2567,7 +2497,7 @@ async function llmChatOnce(cfg, messages) {
     headers['anthropic-version'] = '2023-06-01';
     // 浏览器环境直连 Anthropic 需显式声明，否则被其 CORS 策略拒绝
     headers['anthropic-dangerous-direct-browser-access'] = 'true';
-  } else if (!isFree) {
+  } else if (!noKey) {
     headers['Authorization'] = 'Bearer ' + cfg.apiKey;
   }
   let body;
@@ -2591,13 +2521,13 @@ async function llmChatOnce(cfg, messages) {
     const raw = await resp.text();
     if (!resp.ok) {
       console.warn('[VocabRadar][sw][' + _ts() + '] llmChat HTTP ' + resp.status + ': ' + raw.slice(0, 300));
-      // 402=匿名配额耗尽、429=限流、5xx=服务端故障 → 标记可重试，上层换下一家免费直连
+      // 402=配额耗尽、429=限流、5xx=服务端故障 → 标记可重试（第445次轮替已删，仅保留语义字段）
       const retryable = resp.status === 402 || resp.status === 429 || resp.status >= 500;
       return { ok: false, error: 'HTTP ' + resp.status + ' ' + raw.slice(0, 300), retryable };
     }
     let data = null;
     try { data = JSON.parse(raw); } catch (e) {
-      // 返回体不是 JSON（常见于网关错误页/限流页）→ 也算本家不通，可换下一家
+      // 返回体不是 JSON（常见于网关错误页/限流页）→ 如实带回可重试标记
       return { ok: false, error: '响应不是 JSON：' + raw.slice(0, 200), retryable: true };
     }
     // 响应解析：Anthropic 是 content[] 数组（取所有 text 块拼接），OpenAI 形状是 choices[0].message.content
@@ -2621,20 +2551,21 @@ async function llmChatOnce(cfg, messages) {
 }
 
 /**
- * 第407次：LLM 流式请求（单来源，不含轮替）——SSE 逐 chunk 经 onDelta 回调，
+ * 第407次：LLM 流式请求（单来源）——SSE 逐 chunk 经 onDelta 回调，
  *   聊天气泡原地增长，消除长输出黑盒等待。请求形状与 llmChatOnce 一致
  *   （system 提示词 + max_tokens 1024 硬约束 + stream: true）。
- * 轮替语义：未产出任何 delta 前的失败（HTTP 非 200 / 返回非 SSE / SSE 无内容）
- *   标记 retryable 可换下一家；已产出部分内容后中断则不轮替（换家重发会重复输出），
- *   部分内容以 content 如实带回，由上层展示。
+ * 第445次（轮替已删，语义保留）：未产出任何 delta 前的失败（HTTP 非 200 /
+ *   返回非 SSE / SSE 无内容）标记 retryable；已产出部分内容后中断则不重试
+ *   （重发会重复输出），部分内容以 content 如实带回，由上层展示。
  * @param {object} cfg 同 llmChatOnce
  * @param {Array<{role: string, content: string}>} messages 已含 system 的对话上下文
  * @param {(text: string) => void} onDelta 每收到一段增量文本回调一次
  */
 async function llmChatStreamOnce(cfg, messages, onDelta) {
-  const isFree = cfg.format === 'free';
+  // 第445次：free 格式删除，是否需要 Key 只看 noKey（backend 组）
+  const noKey = !!cfg.noKey;
   const isAnthropic = cfg.format === 'anthropic';
-  if (!isFree && !cfg.apiKey) return { ok: false, error: 'API Key 未配置', needConfig: true };
+  if (!noKey && !cfg.apiKey) return { ok: false, error: 'API Key 未配置', needConfig: true };
   if (!cfg.baseUrl) return { ok: false, error: 'Base URL 未配置', needConfig: true };
   if (!cfg.model) return { ok: false, error: '模型名未配置', needConfig: true };
 
@@ -2644,7 +2575,7 @@ async function llmChatStreamOnce(cfg, messages, onDelta) {
     headers['x-api-key'] = cfg.apiKey;
     headers['anthropic-version'] = '2023-06-01';
     headers['anthropic-dangerous-direct-browser-access'] = 'true';
-  } else if (!isFree) {
+  } else if (!noKey) {
     headers['Authorization'] = 'Bearer ' + cfg.apiKey;
   }
   let body;

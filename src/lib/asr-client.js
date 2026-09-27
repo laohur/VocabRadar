@@ -23,6 +23,13 @@
 // === 时间戳 ===
 //   job 段：backend 直出绝对视频秒，无需转换。
 //
+// === 覆盖（第439次，两维度规定）===
+//   覆盖时间（coverage）与识别结果时间（segment start/end）是两个维度，
+//   禁止混用。backend 轮询响应带 coverage=[[a,b],...]（VAD 送识别的音频
+//   区间秒值数组，含空洞补转后并入的区间），随缓存条目保存；
+//   getASRCoverage 优先用后端真值精确计算，旧缓存无 coverage 时回退
+//   listenStart/listenEnd 推断。
+//
 // === 缓存 ===
 //   增量缓存：{segments:[{listenStart,listenEnd,speechStart,speechEnd,
 //   text,chunks}], totalListened, modelSize}，累积超 asrCacheSegmentSec 写 storage，
@@ -47,7 +54,7 @@ let _recogFrontier = -1;
 let _recogDoneAll = false;         // 全部段识别完成 → 闸门解除
 
 // === backend job 轮询状态（路径 A）===
-const JOB_POLL_MS = 2000;          // 定时轮询间隔（用户裁定形态：定时轮询增量返回）
+const JOB_POLL_MS = 5000;          // 定时轮询间隔（第441次用户裁定 5s；定时轮询增量返回）
 const JOB_POLL_MAX_FAILS = 3;      // 连续失败上限：视为 backend 失联，onError 收场
 let _jobId = null;                 // backend 任务 id
 let _jobAfter = 0;                 // 游标：已取到的段数（backend 按 after 切片）
@@ -173,6 +180,13 @@ async function pollJobOnce() {
     return;
   }
   _jobFailStreak = 0;
+
+  // 第439次：backend 下发覆盖真值（coverage=[[a,b],...]，VAD 送识别区间，
+  //   含空洞补转并入）——覆盖维度独立于 segments，随缓存条目保存，
+  //   getASRCoverage 据此精确算覆盖率。整体替换，不与段数据混算。
+  if (Array.isArray(resp.coverage) && resp.coverage.length > 0 && _cache) {
+    _cache.coverage = resp.coverage;
+  }
 
   // 增量段（绝对时间戳）：直出字幕 + 入缓存（静音间隙折入监听窗口）+ 推进前沿
   const segs = Array.isArray(resp.segments) ? resp.segments : [];
@@ -399,10 +413,11 @@ export async function hasASRCache(videoKey) {
 }
 
 /**
- * 获取 ASR 缓存的覆盖率（已监听时长 / 视频总时长）
+ * 获取 ASR 缓存的覆盖率（已覆盖时长 / 视频总时长）
  * 反思（2026-07-10 #86）：用户要求「若asr轨道不完整，则自动asr」。
- *   合并 segments 的 listenStart/listenEnd 为不重叠范围计算覆盖时长。
- *   job 段静音间隙折入监听窗口。
+ * 第439次（两维度规定）：缓存条目带 coverage（backend VAD 覆盖真值，含空洞
+ *   补转并入）时优先按它精确计算；旧条目无 coverage 才回退 listenStart/
+ *   listenEnd 合并推断。覆盖时间与识别结果时间是两个维度，禁止混用。
  * @param {string} videoKey
  * @param {number} videoDuration - 视频总时长（秒）
  * @returns {Promise<number>} 覆盖率 0-1（0=无缓存或无效，1=完全覆盖）
@@ -412,6 +427,18 @@ export async function getASRCoverage(videoKey, videoDuration) {
   try {
     const cache = await loadCache(videoKey);
     if (!cache.segments || cache.segments.length === 0) return 0;
+    // 后端覆盖真值优先：[[a,b],...] 秒区间
+    if (Array.isArray(cache.coverage) && cache.coverage.length > 0) {
+      const ranges = cache.coverage
+        .filter((r) => Array.isArray(r) && r.length === 2)
+        .map((r) => ({ start: r[0], end: r[1] }));
+      if (ranges.length > 0) {
+        const merged = mergeRanges(ranges);
+        const covered = merged.reduce((sum, r) => sum + Math.max(0, r.end - r.start), 0);
+        return Math.min(1, covered / videoDuration);
+      }
+    }
+    // 回退：listenStart/listenEnd 推断（旧缓存）
     const ranges = cache.segments.map((s) => ({ start: s.listenStart, end: s.listenEnd }));
     const merged = mergeRanges(ranges);
     const covered = merged.reduce((sum, r) => sum + Math.max(0, r.end - r.start), 0);
@@ -449,26 +476,26 @@ export async function getCachedSubtitles(videoKey) {
  * @returns {Promise<{segments:Array, totalListened:number}>}
  */
 async function loadCache(videoKey) {
-  if (!videoKey) return { segments: [], totalListened: 0 };
+  if (!videoKey) return { segments: [], totalListened: 0, coverage: null };
   try {
     const key = `asr_cache_${videoKey}`;
     // 反思（2026-08-21 第八十九次）：内联读当前模型——本函数可能在 loadSegmentConfig
     //   之前被调用（侧栏 loadASRCacheIfAny 页面加载路径），不能依赖 _currentModelSize 已初始化。
     const res = await new Promise((r) => chrome.storage.local.get([key, 'asrModelSize'], r));
     const cached = res[key];
-    if (!cached) return { segments: [], totalListened: 0 };
+    if (!cached) return { segments: [], totalListened: 0, coverage: null };
     const curModel = (res.asrModelSize && typeof res.asrModelSize === 'string') ? res.asrModelSize : 'large-v3-turbo';
     // 缓存按模型失效——缓存记录的产出模型与当前模型不一致（或旧缓存未记录模型）时
     //   整体丢弃，全部段用当前模型重新识别，避免"切换模型后回放旧模型结果"。
     if (cached.modelSize !== curModel) {
       console.log('[VocabRadar][asr-client][' + _ts() + '] 缓存模型不符（缓存=' + (cached.modelSize || '未知') + ' 当前=' + curModel + '），丢弃旧缓存，将全量重新识别');
       try { await new Promise((r) => chrome.storage.local.remove(key, r)); } catch (e2) { /* ignore */ }
-      return { segments: [], totalListened: 0 };
+      return { segments: [], totalListened: 0, coverage: null };
     }
-    // 新格式
+    // 新格式（coverage=backend 覆盖真值，第439次；旧条目无此字段为 null）
     if (cached.segments && Array.isArray(cached.segments)) {
       console.log('[VocabRadar][asr-client][' + _ts() + '] 加载缓存(新格式): ' + cached.segments.length + ' 段 totalListened=' + cached.totalListened);
-      return { segments: cached.segments, totalListened: cached.totalListened || 0 };
+      return { segments: cached.segments, totalListened: cached.totalListened || 0, coverage: Array.isArray(cached.coverage) ? cached.coverage : null };
     }
     // 旧格式兼容：数组 of {startSec,endSec,segments/chunks/text,complete}
     if (Array.isArray(cached)) {
@@ -482,10 +509,10 @@ async function loadCache(videoKey) {
       }
       const totalListened = segments.reduce((s, x) => s + (x.listenEnd - x.listenStart), 0);
       console.log('[VocabRadar][asr-client][' + _ts() + '] 旧格式缓存转换: ' + segments.length + ' 段 totalListened=' + totalListened.toFixed(0) + 's');
-      return { segments, totalListened };
+      return { segments, totalListened, coverage: null };
     }
   } catch (e) { /* ignore */ }
-  return { segments: [], totalListened: 0 };
+  return { segments: [], totalListened: 0, coverage: null };
 }
 
 /**
@@ -530,9 +557,10 @@ async function saveCache(videoKey, cache) {
   try {
     const key = `asr_cache_${videoKey}`;
     // 反思（2026-08-21 第八十九次）：缓存记录产出模型，供 loadCache 按模型失效
-    let toSave = { modelSize: _currentModelSize, segments: cache.segments, totalListened: cache.totalListened };
+    // 第439次：coverage（backend 覆盖真值）随条目保存，getASRCoverage 优先消费
+    let toSave = { modelSize: _currentModelSize, segments: cache.segments, totalListened: cache.totalListened, coverage: cache.coverage || null };
     if (cache.segments.length > 2000) {
-      toSave = { modelSize: _currentModelSize, segments: cache.segments.slice(cache.segments.length - 2000), totalListened: cache.totalListened };
+      toSave = { modelSize: _currentModelSize, segments: cache.segments.slice(cache.segments.length - 2000), totalListened: cache.totalListened, coverage: cache.coverage || null };
     }
     await new Promise((r) => chrome.storage.local.set({ [key]: toSave }, r));
     console.log('[VocabRadar][asr-client][' + _ts() + '] 缓存写入: ' + toSave.segments.length + ' 段 totalListened=' + toSave.totalListened.toFixed(0) + 's model=' + toSave.modelSize);

@@ -1,15 +1,16 @@
 """VocabRadar backend 入口：Flask 工厂 + Host 校验 + CORS + 蓝图注册。
 
 对外监听 127.0.0.1:7777（扩展与管理界面，地址可在扩展设置中任意配置）；
-可用 --port N 运行级指定端口（不写回 config.json）。端口被占时自动递延：
-默认模式写回 config.json，--port 模式仅本次运行生效。扩展端未手动配置
-地址时会扫描 7777–7827 自动发现新端口。
+可用 --port N 运行级指定端口（不写回 config.json）。
+第445次（用户裁定「启动之前先检测端口，占用就失败。用户自行处理，解除占用
+或者指定端口」）：原「端口被占自动递延换端口（试绑扫描 + 写回 config.json +
+扩展端 7777–7827 范围发现）」整套删除——backend 固定监听配置端口，占用即失败
+退出；扩展端只认固定地址，不再范围尝试。
 LLM 由 llama-server 子进程承担（内部端口 7788，core/llm_engine.py），
 本进程只做反代与功能 API。
 """
 
 import atexit
-import json
 import logging
 import os
 import sys
@@ -85,7 +86,7 @@ def _not_implemented(e):
 
 def _make_host_guard(cfg):
     """Host 头白名单，防 DNS rebinding（plan-backend §2.9/§3.5）。
-    每次请求按 cfg 现值求值：端口自动切换（main 改 cfg["port"]）后无需重建 app。"""
+    每次请求按 cfg 现值求值：--port 覆写（main 预检前改 cfg["port"]）无需重建 app。"""
     def guard():
         allowed = {f"127.0.0.1:{cfg['port']}", f"localhost:{cfg['port']}"}
         if request.host not in allowed:
@@ -112,30 +113,22 @@ def _preload(engine, label):
         log.warning("%s预加载失败：%s", label, e)
 
 
-def _pick_free_port(start):
-    """从 start 起向后找首个可绑定端口（试绑后立即关闭；存在极小竞态窗口，够用）。"""
+def _port_in_use(host, port):
+    """第445次：启动前端口预检（用户裁定「占用就失败」，不再自动递延）。
+    连接探测 + 试绑双重判断——Windows 上先到进程若带 SO_REUSEADDR 可被二次
+    绑定（本机曾出现两个 python 同听 7777 的双绑），仅 bind 成功不足以证明
+    空闲，故先 connect 探测。"""
     import socket
-    for port in range(start, start + 50):
-        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-            try:
-                s.bind(("127.0.0.1", port))
-                return port
-            except OSError:
-                continue
-    return None
-
-
-def _persist_port(new_port):
-    """用户层 config.json 只增量更新 port 键，不固化完整配置。"""
-    try:
-        with open(config.CONFIG_PATH, "r", encoding="utf-8") as f:
-            disk = json.load(f)
-    except (OSError, ValueError):
-        disk = {}
-    if not isinstance(disk, dict):
-        disk = {}
-    disk["port"] = new_port
-    config.save(disk)
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.settimeout(0.3)
+        if s.connect_ex((host, port)) == 0:
+            return True
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        try:
+            s.bind((host, port))
+            return False
+        except OSError:
+            return True
 
 
 def _parse_cli_port(argv):
@@ -163,7 +156,7 @@ def _parse_cli_port(argv):
 def main():
     setup_logs()  # 双通道日志（stderr + backend/logs/backend.log），见 core/logs.py
     cfg = config.load()
-    cli_port = _parse_cli_port(sys.argv[1:])  # 第406次：--port 运行级覆盖，递延不写回
+    cli_port = _parse_cli_port(sys.argv[1:])  # 第406次：--port 运行级覆盖，不写回 config.json
     if cli_port is not None:
         cfg["port"] = cli_port
     app = create_app(cfg)
@@ -196,35 +189,17 @@ def main():
     url = f"http://{cfg['host']}:{cfg['port']}"
     log.info(f"VocabRadar backend v{VERSION} -> {url}")
 
+    # 第445次（用户裁定「启动之前先检测端口，占用就失败。用户自行处理，
+    #   解除占用或者指定端口」）：预检失败即退出，不再自动递延换端口。
+    if _port_in_use(cfg["host"], cfg["port"]):
+        log.error(f"端口 {cfg['port']} 已被占用（常见原因：另一个 backend 实例仍在运行）。"
+                  f"请先解除占用（结束占用进程），或用 --port 指定其他端口后重试。")
+        sys.exit(1)
+
     if os.environ.get("BACKEND_NO_BROWSER") != "1":
         threading.Timer(1.5, webbrowser.open, args=(url,)).start()
 
-    while True:
-        try:
-            app.run(host=cfg["host"], port=cfg["port"], debug=False)
-            break
-        except OSError:
-            # 端口被占：自动换下一个可用端口，不让用户操作；实在没有才报错
-            new_port = _pick_free_port(cfg["port"] + 1)
-            if new_port is None:
-                log.error(f"端口 {cfg['port']} 被占用且后续端口也不可绑定。"
-                          f"请释放端口，或编辑 backend/config.json 的 port 字段后重试。")
-                sys.exit(1)
-            old = cfg["port"]
-            cfg["port"] = new_port
-            if cli_port is None:
-                _persist_port(new_port)
-                log.info(f"端口 {old} 被占用，已自动切换到 {new_port}"
-                         f"（已写回 backend/config.json，下次启动直接生效）。")
-            else:
-                log.info(f"指定端口 {old} 被占用，本次运行自动切换到 {new_port}"
-                         f"（--port 指定仅本次生效，不写回 config.json）。")
-            log.info(f"扩展未手动填写本地后端地址时会自动扫描 7777–7827 发现新端口；"
-                     f"已手动填写的需改为 http://127.0.0.1:{new_port}。")
-            url = f"http://{cfg['host']}:{new_port}"
-            log.info(f"VocabRadar backend v{VERSION} -> {url}")
-            if os.environ.get("BACKEND_NO_BROWSER") != "1":
-                threading.Timer(1.5, webbrowser.open, args=(url,)).start()
+    app.run(host=cfg["host"], port=cfg["port"], debug=False)
 
 
 if __name__ == "__main__":

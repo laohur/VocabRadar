@@ -109,40 +109,42 @@
           <!-- 2026-09-02 模型子栏取消分割线改用不同底色 + 小标题样式 -->
           <div class="model-subsec model-subsec-chat">
             <div class="sub-head" data-key="subHeadChat">对话大模型</div>
-            <p class="style-desc" data-key="modelDesc">对话（💬）功能所用的大模型接口。按 API 格式分三类：免费直连（无需账号）、OpenAI 格式、Anthropic 格式；后两类需自行申请 Key。</p>
+            <p class="style-desc" data-key="modelDesc">对话（💬）功能所用的大模型接口。来源分三组：河狸后端、OpenAI Chat Completion 格式、Anthropic Messages 格式；后两类需自行申请 Key。</p>
+            <!-- 第444次（用户裁定「缩短Endpoint，key之后增加 detect按钮，右侧显示结果
+                 √×彩色图示字符。从供应商到结果都在同一行」＋「Chat Provider 改称
+                 Provider，放在填空上」）：标签一律在填空上方，Endpoint 收窄、
+                 Model/Key 定宽并放开全局 min-width，供应商→结果单行排布 -->
+            <!-- 第445次（用户裁定）：free 组裁撤；「本地后端地址」独立填空删除（backend
+                 组预置地址即默认 7777，Endpoint 填空可改，形制与其他 LLM API 一致）；
+                 Endpoint 定宽不再撑满行（上轮 flex:1 违背「缩短」裁定），Test 按钮不贴行尾，
+                 结果 span flex:1 留位 -->
+            <!-- 第446次（用户裁定「API Key 过短，这一行很长，你预估各字段长度，不用拥挤」）：
+                 按各字段典型内容重新分配宽度——模型名 18ch（claude-sonnet-4-5=17ch）、
+                 API Key 22ch（密码点要能看出 Key 形态），Endpoint 28ch 维持第445次裁定 -->
             <div class="field-row tight">
             <div class="field">
-              <label for="llmProvider" data-key="fieldLlmProvider">对话模型来源</label>
+              <label for="llmProvider" data-key="fieldLlmProvider">Provider</label>
               <select id="llmProvider"></select>
             </div>
             <div class="field">
               <label for="llmModel" data-key="fieldLlmModel">模型名</label>
-              <input id="llmModel" type="text" placeholder="">
+              <input id="llmModel" type="text" placeholder="" style="width:18ch; min-width:12ch;">
             </div>
-            <!-- 第二百二十七次（用户："空大，网址可以长点"）：接口地址弹性加长，吃掉行尾空白 -->
-            <div class="field" style="flex:1 1 240px;">
+            <div class="field" style="flex:0 1 auto;">
               <label for="llmBaseUrl" data-key="fieldLlmBaseUrl">接口地址</label>
-              <input id="llmBaseUrl" type="text" placeholder="">
+              <input id="llmBaseUrl" type="text" placeholder="" style="width:28ch; min-width:20ch;">
             </div>
             <div class="field" id="llmApiKeyField">
               <label for="llmApiKey" data-key="fieldLlmApiKey">API Key</label>
-              <input id="llmApiKey" type="password" placeholder="sk-...">
+              <input id="llmApiKey" type="password" placeholder="sk-..." style="width:22ch; min-width:12ch;">
             </div>
+            <!-- 第443次：每个模型服务配「检测」按钮（检测单位是服务=当前选中的
+                 provider，不是模型）；第444次随行内收窄保留；第445次结果 span 留位 -->
+            <button id="btnDetectLlm" type="button" class="mw-btn" data-key="btnDetectService">检测</button>
+            <span id="spanDetectLlm" class="style-desc" style="margin:0; flex:1 1 auto; min-width:4em;"></span>
           </div>
-          <!-- 第401次：本地后端地址填空（完整 URL 含协议主机端口，留空=默认 7777；
-               backend 换端口后在此同步改地址即可，SW/检测/LLM 三路共用此键） -->
-          <div class="field-row tight">
-            <div class="field inline" style="flex:1 1 480px;">
-              <label for="backendBaseUrl" data-key="fieldBackendBaseUrl">本地后端地址（协议+主机+端口）</label>
-              <input id="backendBaseUrl" type="text" placeholder="http://127.0.0.1:7777" style="flex:1 1 200px; min-width:200px;">
-            </div>
-          </div>
-          <!-- 第397次（plan-backend §4.4）：检测本地后端——fetch /api/health；
-               成功显示版本与首次安装引导，失败属正常状态不弹错，仅本地后端来源下提示安装入口 -->
-          <div class="field-row tight">
-            <button id="btnDetectBackend" type="button" class="mw-btn" data-key="btnDetectBackend">检测本地后端</button>
-            <span id="backendDetectHint" class="style-desc" style="margin:0;"></span>
-          </div>
+          <!-- 第445次：原第401次「本地后端地址」填空行删除（backendBaseUrl 键、
+               guide.js 存取、SW 端口扫描一并裁撤，backend 组形制统一） -->
           <div class="field-row tight">
             <div class="field inline" style="flex:1 1 480px;">
               <label for="chatWordPrompt" data-key="fieldChatWordPrompt">单词类查询提示词（{} = 选中文本，{lang} = 释义语言）</label>
@@ -188,55 +190,62 @@
           <div class="model-subsec model-subsec-asr">
             <div class="sub-head" data-key="subHeadAsr">语音识别模型</div>
           <!-- 第三百九十四次（plan 阶段二③，用户裁定「扩展不再保留这两个模型」）：本地
-               Whisper 行与引擎 radio 退役——只剩在线转写一路（API 来源下拉：河狸后端
-               本地/官方，或自备 API；renderEngineProviderSelect 动态分组渲染，
-               ASR 裁剪 free/anthropic——均无音频转写端点）。选中本地后端时隐藏 Key 输入。 -->
+               Whisper 行与引擎 radio 退役——只剩在线转写一路（renderEngineProviderSelect
+               动态分组渲染）。第444次（用户裁定「asr ocr 目前供应商填写和检测样式都同上
+               〔对话行〕」）：行结构与对话行统一——标签在填空上方、Key 后「检测」按钮 +
+               √/× 结果，整行单行。本地后端隐藏 Key 输入。第445次：free 组裁撤，
+               Endpoint 定宽不撑满、结果 span 留位（同对话行）。 -->
           <p class="style-desc" data-key="asrModelDesc">语音识别：OpenAI 兼容转写（接口地址/模型名/Key；来源可选河狸后端本地/官方，或自备 API）。与上面的对话模型互不相关。</p>
           <div class="field-row tight">
-            <div class="field inline">
-              <label for="asrLlmProvider" data-key="engineApiFmt">API 来源</label>
+            <div class="field">
+              <label for="asrLlmProvider" data-key="engineApiFmt">Provider</label>
               <select id="asrLlmProvider"></select>
             </div>
-            <!-- 2026-09-02 asr api 网址默认 60 字符，细项紧邻 -->
-            <div class="field inline" style="flex:0 0 60ch; min-width:28ch;">
+            <div class="field" style="flex:0 1 auto;">
               <label for="asrLlmBaseUrl" data-key="fieldLlmBaseUrl">接口地址</label>
-              <input id="asrLlmBaseUrl" type="text" placeholder="https://api.openai.com/v1" size="60" style="width:60ch; max-width:100%;">
+              <input id="asrLlmBaseUrl" type="text" placeholder="https://api.openai.com/v1" style="width:28ch; min-width:20ch;">
             </div>
-            <div class="field inline" style="flex:0 1 18ch; min-width:14ch;">
+            <div class="field">
               <label for="asrLlmModel" data-key="fieldAsrLlmModel">转写模型</label>
-              <input id="asrLlmModel" type="text" placeholder="whisper-1" style="width:18ch;">
+              <input id="asrLlmModel" type="text" placeholder="whisper-1" style="width:18ch; min-width:12ch;">
             </div>
-            <div class="field inline" style="flex:0 1 18ch; min-width:14ch;" id="asrLlmApiKeyField">
+            <div class="field" id="asrLlmApiKeyField">
               <label for="asrLlmApiKey" data-key="fieldLlmApiKey">API Key</label>
-              <input id="asrLlmApiKey" type="password" placeholder="sk-...">
+              <input id="asrLlmApiKey" type="password" placeholder="sk-..." style="width:22ch; min-width:12ch;">
             </div>
+            <button id="btnDetectAsr" type="button" class="mw-btn" data-key="btnDetectService">检测</button>
+            <span id="spanDetectAsr" class="style-desc" style="margin:0; flex:1 1 auto; min-width:4em;"></span>
           </div>
           </div><!-- /.model-subsec-asr -->
           <div class="model-subsec model-subsec-ocr">
             <div class="sub-head" data-key="subHeadOcr">OCR</div>
           <!-- 第三百九十四次（plan 阶段二③）：本地 Tesseract 行（含语言三复选
                renderOcrLangRow）与引擎 radio 退役——只剩大模型视觉识别一路
-               （API 来源下拉：河狸后端本地/官方，视觉走 /v1/chat/completions + mmproj；
-               或自备 API，需模型支持图片输入）。选中本地后端时隐藏 Key 输入。 -->
+               （视觉走 /v1/chat/completions + mmproj）。第444次：行结构与对话行
+               统一（同 ASR，Provider 标签在填空上方，Key 后「检测」+ √/× 结果，
+               整行单行）。第445次：free 组裁撤，Endpoint 定宽不撑满、结果 span
+               留位（同对话行）。第446次（用户裁定「形制一样，无论啥来源」）：
+               本地后端不再隐藏 Key 输入，Key 框占位符显示 no need。 -->
           <p class="style-desc" data-key="ocrEngineDesc">截图/视频帧的文字识别：大模型视觉识别（来源可选河狸后端本地/官方，或自备 API，需模型支持图片输入）。</p>
           <div class="field-row tight">
-            <div class="field inline">
-              <label for="ocrLlmProvider" data-key="engineApiFmt">API 来源</label>
+            <div class="field">
+              <label for="ocrLlmProvider" data-key="engineApiFmt">Provider</label>
               <select id="ocrLlmProvider"></select>
             </div>
-            <!-- 2026-09-02 ocr api 网址默认 60 字符，细项紧邻 -->
-            <div class="field inline" style="flex:0 0 60ch; min-width:28ch;">
+            <div class="field" style="flex:0 1 auto;">
               <label for="ocrLlmBaseUrl" data-key="fieldLlmBaseUrl">接口地址</label>
-              <input id="ocrLlmBaseUrl" type="text" size="60" style="width:60ch; max-width:100%;">
+              <input id="ocrLlmBaseUrl" type="text" style="width:28ch; min-width:20ch;">
             </div>
-            <div class="field inline" style="flex:0 1 18ch; min-width:14ch;">
+            <div class="field">
               <label for="ocrLlmModel" data-key="fieldLlmModel">模型名</label>
-              <input id="ocrLlmModel" type="text" style="width:18ch;">
+              <input id="ocrLlmModel" type="text" style="width:18ch; min-width:12ch;">
             </div>
-            <div class="field inline" style="flex:0 1 18ch; min-width:14ch;" id="ocrLlmApiKeyField">
+            <div class="field" id="ocrLlmApiKeyField">
               <label for="ocrLlmApiKey" data-key="fieldLlmApiKey">API Key</label>
-              <input id="ocrLlmApiKey" type="password" placeholder="sk-...">
+              <input id="ocrLlmApiKey" type="password" placeholder="sk-..." style="width:22ch; min-width:12ch;">
             </div>
+            <button id="btnDetectOcr" type="button" class="mw-btn" data-key="btnDetectService">检测</button>
+            <span id="spanDetectOcr" class="style-desc" style="margin:0; flex:1 1 auto; min-width:4em;"></span>
           </div>
           </div><!-- /.model-subsec-ocr -->
         </div>

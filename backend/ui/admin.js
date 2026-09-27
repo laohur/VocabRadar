@@ -151,7 +151,9 @@ async function renderOverview(main) {
   const rows = [
     ['LLM', eng.llm, eng.llm && eng.llm.engine, eng.llm && (eng.llm.running ?? eng.llm.loaded),
       eng.llm && (t('mode={m} · internal port {p}', { m: eng.llm.mode, p: eng.llm.port })
-        + (eng.llm.model ? ' ' + t('· model {m}', { m: eng.llm.model }) : '')), 'llm'],
+        + (eng.llm.model ? ' ' + t('· model {m}', { m: eng.llm.model }) : '')
+        // 第446次：启动中（进程活但 /health 未 200）detail 提示；badge 仍按 running
+        + (eng.llm.starting ? ' · ' + t('llama-server starting') : '')), 'llm'],
     ['ASR', eng.asr, eng.asr && eng.asr.engine, eng.asr && (eng.asr.loaded || eng.asr.loading),
       eng.asr && (t('mode={m}', { m: eng.asr.mode })
         + (eng.asr.loaded ? ' ' + t('· loaded {e}', { e: eng.asr.loaded_engine || '' }) : '')

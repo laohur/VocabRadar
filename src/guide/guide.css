@@ -166,8 +166,17 @@ body {
 }
 .field-row.tight { gap: 6px; padding: 2px 0; }
 .field-row.tight .field.inline { gap: 4px 6px; }
-/* ASR/OCR API 网址默认 60 字符宽度 */
-#asrLlmBaseUrl, #ocrLlmBaseUrl { width: 60ch; max-width: 100%; min-width: 28ch; }
+/* 第444次：#asrLlmBaseUrl/#ocrLlmBaseUrl 的 60ch 定宽规则删除——三模型行统一
+    「标签在上、Endpoint 弹性收窄、单行排布」结构，宽度改由行内样式管控 */
+/* 第445次（用户裁定「LLM api分组的组名都是左对齐，你为啥改？」）：显式声明
+    optgroup 组名与选项一律左对齐——组名顶格加粗、正文色，选项仅小幅缩进 */
+.field select optgroup {
+  text-align: left;
+  font-weight: 600;
+  color: var(--g-text);
+  font-style: normal;
+}
+.field select optgroup option { text-align: left; padding-left: 8px; }
 /* 占位符灰色仅此处，输入框内文字保持正文色 */
 input::placeholder { color: var(--g-muted); opacity: 1; }
 .field { display: flex; flex-direction: column; gap: 4px; }

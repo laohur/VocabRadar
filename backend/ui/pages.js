@@ -57,7 +57,9 @@ PAGES.llm = async function (main) {
   }, hint)); // 第431次：通用设定卡保存仍热重载 llama-server
   setCard.prepend(el('div', { class: 'hint' },
     t('Status: {s} · internal port {p} · saving General Settings auto-reloads llama-server · MiniCPM is text-only (no vision OCR; use Qwen for vision)', {
-      s: st.running ? t('llama-server running') : t('not running'),
+      // 第446次：三态——running=探活 200；starting=进程活但未就绪（下载/加载模型中）
+      s: st.running ? t('llama-server running')
+        : st.starting ? t('llama-server starting') : t('not running'),
       p: st.port ?? cfg.llm?.port ?? 7788,
     })));
   left.append(setCard);

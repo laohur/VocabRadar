@@ -3,6 +3,7 @@
 
 import hashlib
 import json
+import logging
 import os
 import tempfile
 import time
@@ -10,6 +11,8 @@ import time
 from flask import Blueprint, current_app, jsonify, request
 
 from core.asr import ASR_CACHE_DIR, _safe_key, cache_clear, cache_list
+
+log = logging.getLogger(__name__)  # 第446次：同步转写完成日志（视频任务路径已有，此处此前缺失）
 
 bp = Blueprint("asr", __name__)
 
@@ -80,6 +83,7 @@ def _transcribe_multipart():
             if hit is not None:
                 return {"ok": True, "cached": True, **hit}, 200
         try:
+            t0 = time.time()
             result = current_app.extensions["engines"]["asr"].transcribe(
                 tmp_path, engine=engine_name, language=language)
         except RuntimeError as e:  # 模型缺失 / 加载互斥
@@ -90,6 +94,12 @@ def _transcribe_multipart():
                     "message": str(e)}, 400
         if use_cache:
             _cache_put(key, video_id, eff_engine, language, result)
+        # 第446次：同步转写完成日志（key/语言/段数/字符数/耗时），
+        #   对齐视频任务路径 core/asr_job.py 的「转写完成」日志
+        log.info("同步转写完成：key=%s 引擎=%s 语言=%s 段数=%d 字符数=%d 耗时=%.1fs",
+                 key, eff_engine, result.get("language") or language or "auto",
+                 len(result.get("segments") or []),
+                 len(result.get("text") or ""), time.time() - t0)
         return {"ok": True, "cached": False, **result}, 200
     finally:
         try:
@@ -126,7 +136,14 @@ def _cache_get(key, engine, language):
         return None
     if language and data.get("req_language") != language:
         return None
-    return {k: data[k] for k in ("text", "segments", "language") if k in data}
+    # 第440次：条目去 text，但 OpenAI 形状响应仍要 text——从 segments 现拼，
+    #   不兜底旧条目的 text 字段。
+    return {
+        "text": " ".join((s.get("text") or "").strip()
+                         for s in (data.get("segments") or [])),
+        "segments": data.get("segments") or [],
+        "language": data.get("language"),
+    }
 
 
 def _cache_put(key, video_id, engine, language, result):
@@ -136,7 +153,7 @@ def _cache_put(key, video_id, engine, language, result):
         "engine": engine,
         "req_language": language,
         "ts": int(time.time()),
-        "text": result.get("text", ""),
+        # 第440次：条目去 text（读侧从 segments 现拼），对齐 asr_job 条目。
         "language": result.get("language"),
     }
     if result.get("segments") is not None:

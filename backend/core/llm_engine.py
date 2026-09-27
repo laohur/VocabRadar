@@ -3,8 +3,10 @@
 规划要点（plan-backend §3.2/§3.3）：
 - 启动：llama-server -hf <repo>:<quant>（第431次：卡片 command 即权威，模型
   交 llama.cpp 自动下载/管理，hub 缓存 %USERPROFILE%/.cache/huggingface/hub）
-- 三源健壮性（第431次裁定）：-hf 官方源 → 失败且无缓存时 MODEL_ENDPOINT 指向
-  hf-mirror 重试 → 仍失败且有 fallback_url 时 -mu/-mmu ModelScope 直链
+- 三源健壮性（第446次裁定「先探测三源，再选定启动」）：启动前串行探测
+  hf 官方 → hf-mirror → fallback_url，选定首个可达源仅启动一次，失败
+  如实上抛不换源（第431次「启动→失败→换源试错链」废除——每次失败启动
+  都在 hub 缓存制造 *.downloadInProgress 残骸）
 - 生命周期：resident（Flask 启动即后台拉起）/ on-demand（首请求拉起 + 空闲 idle_timeout 退出）
 - backend 对外反代其 /v1/*；7788 仅内部使用
 - b10964+ 包结构：llama-server.exe 为薄启动器，实现在 llama-server-impl.dll
@@ -38,6 +40,24 @@ _CMD_VALUE_FLAGS = {"-m", "--model", "--mmproj", "--host", "--port",
 # 第431次：三源重试链层②的镜像端点（llama.cpp 读 MODEL_ENDPOINT 重定向
 # repo 解析请求；hf-cache.cpp 实证 b10964 支持）。
 _HF_MIRROR = "https://hf-mirror.com/"
+
+# 第446次：三源探测端点（先探测后启动；repo 存在性走 API 端点，比整仓下载轻量）
+_HF_API = "https://huggingface.co/api/models/"
+_HF_MIRROR_API = "https://hf-mirror.com/api/models/"
+
+
+def _probe_http_ok(url, timeout=6):
+    """第446次：单 URL 可达性探测——GET + Range: bytes=0-0（API 端点忽略
+    Range 返 200；直链只取首分片，防整文件下载），200/206 即可达。"""
+    req = urllib.request.Request(url, headers={
+        "User-Agent": "VocabRadar-backend/1.0",
+        "Range": "bytes=0-0",
+    })
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            return r.status in (200, 206)
+    except Exception:
+        return False
 
 # -hf 的等价长形式（_swap_hf_to_url 识别用；llama.cpp -hf/-hfr/--hf-repo 同义）
 _HF_REPO_FLAGS = {"-hf", "-hfr", "--hf-repo"}
@@ -173,6 +193,32 @@ def _kill_orphan_llama():
             log.warning(f"终止进程 pid={pid} 失败：{e}")
 
 
+def _clean_download_stale():
+    """第446次：清理 hub 缓存中的 *.downloadInProgress 下载残骸——历次失败
+    启动在 blobs 留下的半成品，Windows 上与同名正式 blob rename 冲突（报
+    unable to rename file）。调用时机在 _kill_orphan_llama 清场之后，无并发
+    写者，删除安全；下次下载从头重建该分片。"""
+    root = _hub_cache_dir()
+    try:
+        entries = list(os.scandir(root))
+    except OSError:
+        return
+    for e in entries:
+        if not e.is_dir() or not e.name.startswith("models--"):
+            continue
+        blobs = os.path.join(e.path, "blobs")
+        try:
+            for b in os.scandir(blobs):
+                if b.is_file() and b.name.endswith(".downloadInProgress"):
+                    try:
+                        os.remove(b.path)
+                        log.info(f"清理下载残骸：{b.path}")
+                    except OSError as ex:
+                        log.warning(f"清理下载残骸失败 {b.path}：{ex}")
+        except OSError:
+            continue
+
+
 class LlmEngine:
     """llama-server 进程属主。实例挂在 app.extensions['engines']（唯一属主）。"""
 
@@ -195,8 +241,14 @@ class LlmEngine:
     # ---- 状态与路径 ----
 
     def status(self):
+        # 第446次（用户裁定「要真的能服务才算成功，启动中的状态不是成功是启动中」）：
+        # running 以 /health 200 为准（原进程存活即 running 为虚假成功根源——
+        # 下载/加载模型期进程活着但未监听/503）；活着未就绪=starting 三态。
+        alive = self.proc is not None and self.proc.poll() is None
+        running = alive and self._health_ok()
         return {
-            "running": self.proc is not None and self.proc.poll() is None,
+            "running": running,
+            "starting": alive and not running,  # 第446次：启动中（进程活但 /health 未 200）
             "engine": self.cfg.get("engine", "llamacpp"),
             "mode": self.cfg.get("mode", "resident"),
             "port": self.cfg.get("port", 7788),
@@ -204,6 +256,15 @@ class LlmEngine:
             "cards": self.list_cards(),            # 卡片只读清单（管理页展示，第431次替代 models 下拉）
             "manual_stop": self._manual_stop,      # 第409次：手动停机中（惰性拉起被抑制）
         }
+
+    def _health_ok(self):
+        """第446次：探活 /health——200 才算真的能服务（加载模型期 503、下载期
+        未监听均不算）；status() 三态与 start() 幂等判定共用。"""
+        try:
+            with urllib.request.urlopen(self.base_url() + "/health", timeout=0.8) as r:
+                return r.status == 200
+        except Exception:
+            return False
 
     def base_url(self):
         return f"http://127.0.0.1:{self.cfg.get('port', 7788)}"
@@ -319,21 +380,65 @@ class LlmEngine:
 
     # ---- 生命周期 ----
 
+    def _pick_source(self, card, args):
+        """第446次（用户裁定「先探测三源，再选定启动」）：启动前串行探测三个
+        下载源，选定首个可达源后仅启动一次，失败如实上抛不换源——替代
+        第431/445次的「逐源启动试错链」（每次失败启动都在 hub 缓存制造
+        *.downloadInProgress 残骸）。返回 (tag, env, argv)：
+        - hub 缓存命中：离线直启不探测（断网时探测反而误判，缓存本身够用）
+        - hf 官方 API 可达：原命令（-hf 官方源）
+        - hf-mirror API 可达：MODEL_ENDPOINT 指向镜像（llama.cpp 读它重定向）
+        - fallback_url 直链可达：-hf 换 -mu（多模态卡加 -mmu）
+        全不可达：RuntimeError 附各源探测结果。"""
+        repo = str(card.get("hf_repo") or "").strip()
+        if _repo_cache_path(repo) is not None:
+            log.info("hub 缓存命中 %s，离线直启（不探测）", repo)
+            return "hf", None, args
+        misses = []
+        if _probe_http_ok(_HF_API + repo):
+            return "hf", None, args
+        misses.append("hf 官方源不可达")
+        if _probe_http_ok(_HF_MIRROR_API + repo):
+            log.info("hf 官方源不可达，hf-mirror 可达，选定镜像源")
+            return "hf-mirror", dict(os.environ, MODEL_ENDPOINT=_HF_MIRROR), args
+        misses.append("hf-mirror 不可达")
+        fb = str(card.get("fallback_url") or "").strip()
+        if not fb:
+            misses.append("未配置 fallback_url")
+        else:
+            args3 = self._swap_hf_to_url(args, fb,
+                                         str(card.get("fallback_mmproj_url") or "").strip())
+            if args3 is None:
+                misses.append("卡片 command 未含 -hf，无法改写为 fallback_url 直链")
+            elif _probe_http_ok(fb):
+                log.info("hf/hf-mirror 均不可达，fallback_url 直链可达，选定直链源")
+                return "fallback_url", None, args3
+            else:
+                misses.append("fallback_url 不可达")
+        raise RuntimeError("三个下载源均不可达：" + "；".join(misses))
+
     def start(self, timeout=180):
         """拉起 llama-server 并等 /health 就绪（幂等，可并发调用）。
 
-        第431次三源健壮性：①卡片 command 原样（-hf 官方源，缓存命中离线
-        可用）；②失败且无缓存时 MODEL_ENDPOINT 指向 hf-mirror 重试同命令；
-        ③仍失败且有 fallback_url 时 -hf 换 -mu（多模态加 -mmu）走直链。
-        任一档就绪即返回；全败汇总报错（附尾部输出，不遮蔽）。下载/加载期
-        健康等待按 hub 缓存体积增长自动续期（首次自动下载远超 timeout）。"""
+        第446次（用户裁定）：①「先探测三源，再选定启动」——_pick_source 探测
+        可达源后仅启动一次，失败如实上抛不换源（第431/445次逐源启动试错链
+        废除，不再制造下载残骸）；②「要真的能服务才算成功」——幂等判定以
+        /health 200 为准，进程活着但未就绪（加载中）不算成功，清场走完整拉起；
+        ③启动中并发 start() 让位等待首个拉起结束再判成败（防双 Popen 双占
+        端口、防假成功提前返回）。下载/加载期健康等待按 hub 缓存体积增长
+        自动续期（首次自动下载远超 timeout）。"""
+        # 让位等待（锁外轮询）：启动中并发调用等首个拉起结束再判成败
+        while self._starting:
+            if self._manual_stop:  # 等待期间用户手动停机，不再继续
+                raise RuntimeError("llama-server 手动停机中")
+            time.sleep(0.5)
         with self.lock:
-            if self.proc is not None and self.proc.poll() is None:
-                self._manual_stop = False  # 已在运行，仅解除手动停机抑制
-                config.set_engine_stopped("llm", False)  # 第410次：同步清持久化标志
-                return True
             self._manual_stop = False  # 显式 start（管理页按钮）解除手动停机抑制
             config.set_engine_stopped("llm", False)  # 第410次：同步清持久化标志
+            if self.proc is not None and self.proc.poll() is None:
+                if self._health_ok():  # 第446次：探活 200 才算已在服务
+                    return True
+                self._stop_locked()  # 活而不健康（加载中/僵死）：清场走完整拉起
             exe = self.server_path()
             if not exe:
                 raise RuntimeError("未找到 llama-server（backend/bin/）。请先运行 backend/scripts/install.py。")
@@ -346,41 +451,11 @@ class LlmEngine:
                     f"卡片 {card.get('name')!r} 的 command 未配置或解析失败，无法拉起 llama-server")
             _kill_stale_pid()  # 第419次：拉起前终止残留旧进程（再次启动先关停旧进程）
             _kill_orphan_llama()  # 第424次：按映像名兜底清场——pid 文件丢失的孤儿占口不再漏网
+            _clean_download_stale()  # 第446次：清 .downloadInProgress 残骸（Windows rename 冲突祸源）
             self._starting = True  # 置位，idle_watch 在健康等待期避让
         try:
-            errors = []
-            # 第①源：官方 hf（llama.cpp 自管下载；缓存命中则离线可用）
-            try:
-                self._spawn_and_wait(args, None, "hf", exe, timeout)
-                return True
-            except RuntimeError as e:
-                errors.append(f"hf 源：{e}")
-                if self._manual_stop:  # 等待期间用户手动停机，不再重试
-                    raise
-            # 有缓存还失败 = 非下载问题（换源重试无意义），直接如实上报
-            if _repo_cache_path(card.get("hf_repo")):
-                raise RuntimeError("；".join(errors))
-            # 第②源：hf-mirror 镜像（MODEL_ENDPOINT 重定向 repo 解析）
-            try:
-                log.warning("hf 源失败且无本地缓存，改走 hf-mirror：%s", errors[-1])
-                self._spawn_and_wait(args, dict(os.environ, MODEL_ENDPOINT=_HF_MIRROR),
-                                     "hf-mirror", exe, timeout)
-                return True
-            except RuntimeError as e:
-                errors.append(f"hf-mirror 源：{e}")
-                if self._manual_stop:
-                    raise
-            # 第③源：fallback_url 直链（-hf 换 -mu，多模态卡加 -mmu）
-            fb = str(card.get("fallback_url") or "").strip()
-            if not fb:
-                raise RuntimeError("；".join(errors))
-            args3 = self._swap_hf_to_url(args, fb,
-                                         str(card.get("fallback_mmproj_url") or "").strip())
-            if args3 is None:
-                raise RuntimeError("；".join(errors)
-                                   + "；卡片 command 未含 -hf，无法改写为直链")
-            log.warning("hf-mirror 也失败，改走 fallback_url 直链：%s", errors[-1])
-            self._spawn_and_wait(args3, None, "fallback_url", exe, timeout)
+            tag, env, final_args = self._pick_source(card, args)
+            self._spawn_and_wait(final_args, env, tag, exe, timeout)
             return True
         except RuntimeError:
             with self.lock:
@@ -390,7 +465,7 @@ class LlmEngine:
             self._starting = False
 
     def _spawn_and_wait(self, args, env, tag, exe, timeout):
-        """Popen + 写 pid + 输出采集 + 等待 /health 就绪（三源重试链共用）。"""
+        """Popen + 写 pid + 输出采集 + 等待 /health 就绪（第446次起：选定源单次启动共用）。"""
         flags = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
         p = subprocess.Popen(args, cwd=os.path.dirname(exe), env=env,
                              stdout=subprocess.PIPE, stderr=subprocess.STDOUT,

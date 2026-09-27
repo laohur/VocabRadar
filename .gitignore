@@ -39,6 +39,7 @@ backend/cache/
 backend/bin/
 backend/.venv/
 backend/.installed.json
+backend/*.pid
 
 # ===== 工具/编辑器状态与缓存 =====
 node_modules/

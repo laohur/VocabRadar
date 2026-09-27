@@ -1247,20 +1247,40 @@ export async function onCopy() {
  *   旧版三方共用 buildPanelBody，切到生词表标签后点对话就把整张词汇表预填进输入框
  *   （用户："历史对话预填对话咋成了词汇表？"）。抽出此函数供对话单独调用，
  *   复制/导出的行为完全不变。
+ * 第四百四十五次（用户："字幕窗口复制，用的侧邻注释复制出来却是详细注释了"）：
+ *   注释行格式跟随页内详略模式——侧邻（简略）模式复制 `word(短释义)`，与页内
+ *   inline 注释同形；详细模式维持四段 `word | 释义 | 标签 | 词阶`。过滤口径同时
+ *   跟随页内显示（有译文 pickCleanShortTrans + filterByCurrentRank 过阈值），
+ *   所见即所得：页内没显示的词，复制里也不再出现。
+ * 第四百四十五次（用户："聊天窗口选取正文错误，带了注释"）：includeAnns=false
+ *   只出字幕正文（对话讨论的是原文，注释不属于正文），chat 调用点改传 false；
+ *   learn 草稿/复制/导出默认 true 行为不变。
+ * 第四百四十六次（用户："显示的是啥就是啥，注释按钮、详细按钮都应当作用"）：
+ *   复制内容完整跟随页内显示状态——注释按钮 off（_noAnnotation）时只出字幕
+ *   正文不带任何注释行；注释按钮 on 时格式随 _detailMode（简略=侧邻短释义 /
+ *   详细=四段完整格式）。显示口径唯一关口，杜绝"页内没注释、复制却带注释"。
+ * @param {boolean} [includeAnns=true] 是否携带注释行（仍受页内注释按钮开关约束）
  * @returns {Promise<string>} 字幕正文文本
  */
 // 274次：导出——视频侧栏 learn 草稿（文本=字幕正文）与 chat 共用同一正文源
-export async function buildSubtitleBody() {
+export async function buildSubtitleBody(includeAnns = true) {
   let body = '';
-  // 整个字幕面板：每条字幕 + 其下所有注释（含无译文词，释义列显示"-"）
+  // 整个字幕面板：每条字幕 + 其下所有注释（格式随详略模式，见函数头）
   for (let i = 0; i < getSubtitlesRef().length; i++) {
     const sub = getSubtitlesRef()[i];
     if (!sub) continue;
     body += `${formatTime(sub.start)} ${sub.text || ''}\n`;
+    // 第四百四十六次：includeAnns 且页内注释按钮开（!_noAnnotation）才带注释
+    //   （用户："显示的是啥就是啥"）——注释按钮 off 时复制只有正文，与页内一致
+    if (!includeAnns || _noAnnotation) continue;
     const annsP = _annotationsCache.get(sub);
     const anns = annsP ? await annsP : [];
-    for (const a of anns) {
-      body += `  ${formatAnnotationLine(a)}\n`;
+    // 第四百四十五次：口径对齐 fillSlotAnnotations——有译文 + 过阈值，仅出页内所显
+    const validAnns = (anns || []).filter(a => pickCleanShortTrans(a.translations));
+    for (const a of filterByCurrentRank(validAnns)) {
+      body += _detailMode
+        ? `  ${formatAnnotationLine(a)}\n`
+        : `  ${formatAnnotationSide(a)}\n`;
     }
   }
   return body;
@@ -1333,9 +1353,11 @@ export async function onExportFile() {
  *   故改为直接调 buildSubtitleBody（复制/导出仍走 buildPanelBody，行为不变）。
  * 第一百八十四次：传 kind='sidebar' —— 用 chatSidebarPrompt（"总结上文"），
  *   字幕全文由面板顶部「The context is」上下文区承载。
+ * 第四百四十五次（用户："聊天窗口选取正文错误，带了注释"）：buildSubtitleBody(false)
+ *   只取字幕正文——对话讨论的是原文，注释不是正文，且注释已随逐词渲染在页面上。
  */
 export async function onChatClickVs() {
-  const body = await buildSubtitleBody();
+  const body = await buildSubtitleBody(false);
   await openChatPanel(String(body || ''), 'sidebar');
 }
 
@@ -1358,6 +1380,12 @@ function formatAnnotationLine(a) {
   const tags = (a.tags && a.tags.length > 0) ? a.tags.join(',') : '-';
   const stage = (a.rank !== null && a.rank !== undefined) ? rankToStage(a.rank) : '表外';
   return `${a.word} | ${trans} | ${tags} | ${stage}`;
+}
+
+// 第四百四十五次：侧邻注释文本格式——与页内简略模式 inline 注释同形：word(短释义)
+// 调用方已保证 a 过滤自 validAnns（有译文），'|| -' 仅为不丢条目的兜底
+function formatAnnotationSide(a) {
+  return `${a.word}(${pickCleanShortTrans(a.translations) || '-'})`;
 }
 
 // 评论按钮：点击即把整个生词本填入"视频正下方主评论框"
