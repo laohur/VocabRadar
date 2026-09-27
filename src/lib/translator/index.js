@@ -40,11 +40,20 @@ try {
     }
   });
 } catch (e) { /* ignore */ }
-const DEFAULT_TRANS_CHANNELS = { llm: false, builtin: true, baidusug: true, youdaodict: true, mymemory: true, google: true, youdao: true, baidu: true, bing: true, lingva: true };
-function transChEnabled(id) {
-  // 第二百一十九次：llm 渠道默认不选（用户：LLM 行"默认没选"），其余缺省启用
-  const st = _transChannels || DEFAULT_TRANS_CHANNELS;
-  return st[id] !== false;
+// 第447次（用户裁定）：新增 backend 渠道——勾选后经后端翻译路由 POST /api/translate
+//   （对话行所选后端组来源的地址/Key，非 /v1/chat/completions 大模型路由）；默认不选。
+const DEFAULT_TRANS_CHANNELS = { llm: false, backend: false, builtin: true, baidusug: true, youdaodict: true, mymemory: true, google: true, youdao: true, baidu: true, bing: true, lingva: true };
+// 当前勾选状态整表（发 SW 的 channels 形参；单渠道判定即 out[id]）。
+// 第二百一十九次：LLM 缺省不选，其余缺省启用。第447次：backend 同为缺省不选——
+//   storage 里的旧表没有 backend 键，必须与缺省表合并后再判
+//   （直接拿旧表判 `!== false` 会让未升级用户默认全开）。
+// 第447次·修正历史瑕疵：原形回退 translateWithLemma 此前不传 channels——SW 的 chGate
+//   缺省全开，用户取消勾选的渠道在回退路径照样被调，本次补传，backend 缺省不选同受其约束。
+function curTransChannels() {
+  const st = Object.assign({}, DEFAULT_TRANS_CHANNELS, _transChannels || {});
+  const out = {};
+  for (const k of Object.keys(st)) out[k] = st[k] !== false;
+  return out;
 }
 
 /**
@@ -204,11 +213,7 @@ async function _translateInternal(word) {
   //   en->zh 时 running->run 仍是英文，精确匹配不成立但确实未翻译。
   //   新增 targetScriptOk：译文须含目标语言代表性字符。
   let result = null;
-  const _chOn = { llm: transChEnabled('llm'), builtin: transChEnabled('builtin'),
-    baidusug: transChEnabled('baidusug'), youdaodict: transChEnabled('youdaodict'),
-    mymemory: transChEnabled('mymemory'), google: transChEnabled('google'),
-    youdao: transChEnabled('youdao'), baidu: transChEnabled('baidu'),
-    bing: transChEnabled('bing'), lingva: transChEnabled('lingva') };
+  const _chOn = curTransChannels();
   try {
     if (!_chOn.builtin) throw new Error('渠道未启用（翻译渠道未勾选）');
     const translator = await getTranslator();
@@ -241,12 +246,14 @@ async function _translateInternal(word) {
     console.warn(`[VocabRadar][translator][${_ts()}] 渠道[浏览器内置翻译] 翻译 "${word}" 失败:`, e);
   }
 
-  // 3. 渠道 2：经 service worker 的在线渠道（MyMemory -> Google -> Youdao -> Baidu -> Bing -> Lingva）
+  // 3. 渠道 2：经 service worker 的在线渠道（后端 -> MyMemory -> Google -> Youdao -> Baidu -> Bing -> Lingva）
+  // 第447次：backend 为 SW 内渠道0（POST /api/translate 后端翻译路由），排在最前；
+  //   勾了 backend 时即便 8 个免费渠道全关，本消息仍须发出
   // 反思（2026-08-05）：service-worker.js handleTranslateText 已对每个渠道做 isUntranslated 校验，
   //   返回的成功结果必然非原文。此处仅校验非空即可。
   if (!result) {
     try {
-      if (!_chOn.baidusug && !_chOn.youdaodict && !_chOn.mymemory && !_chOn.google
+      if (!_chOn.backend && !_chOn.baidusug && !_chOn.youdaodict && !_chOn.mymemory && !_chOn.google
           && !_chOn.youdao && !_chOn.baidu && !_chOn.bing && !_chOn.lingva) {
         stepOnline = '未启用（在线渠道均未勾选）';
       } else {
@@ -389,7 +396,8 @@ async function translateWithLemma(word) {
         type: 'TRANSLATE_TEXT',
         word,
         source: transState.learnLang,
-        target: transState.meaningLang
+        target: transState.meaningLang,
+        channels: curTransChannels()   // 第447次：补传勾选状态（此前不传=SW 全渠道缺省开）
       });
       if (resp && resp.ok && resp.text) {
         result = cleanDictEntry(resp.text.trim());

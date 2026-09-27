@@ -168,7 +168,7 @@
           </div><!-- /.model-subsec-chat -->
           <div class="model-subsec model-subsec-trans">
             <div class="sub-head" data-key="subHeadTrans">翻译</div>
-          <p class="style-desc" data-key="transDesc">生词释义的在线翻译渠道（勾选启用，按序回退）：LLM 渠道走上方对话大模型，默认不选；其余渠道默认全启用。</p>
+          <p class="style-desc" data-key="transDesc">生词释义的在线翻译渠道（勾选启用，按序回退）：LLM 渠道走上方对话大模型；Backend 渠道走后端翻译接口（来源/地址/Key 取对话行所选后端组来源）；两者默认不选，其余渠道默认全启用。</p>
           <div class="field-row tight">
             <label class="chk"><input type="checkbox" id="transChLlm"><span data-key="transChLlm">LLM</span></label>
             <div class="field" style="flex:1 1 320px; min-width:240px;">
@@ -176,6 +176,7 @@
             </div>
           </div>
           <div class="field-row tight">
+            <label class="chk"><input type="checkbox" id="transChBackend"><span data-key="transChBackend">Backend</span></label>
             <label class="chk"><input type="checkbox" id="transChBuiltin"><span data-key="transChBuiltin">浏览器自身</span></label>
             <label class="chk"><input type="checkbox" id="transChBaidusug"><span data-key="transChBaidusug">百度联想</span></label>
             <label class="chk"><input type="checkbox" id="transChYoudaodict"><span data-key="transChYoudaodict">有道词典</span></label>

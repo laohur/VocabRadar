@@ -125,12 +125,13 @@ import { ensureReady, getDiagState, getMaxRank, getDictFieldStats } from '../lib
 // 注意：后台 handleLlmTranslate 目前用硬编码英文提示词、不消费此键——接线属后台改造（本次仅保存）。
 const LLM_TRANSLATE_PROMPT = 'Please translate "{text}" in {lang}.';
 
-// 翻译渠道缺省表（与 lib/translator/index.js 的 DEFAULT_TRANS_CHANNELS 一致：LLM 默认不选）。
+// 翻译渠道缺省表（与 lib/translator/index.js 的 DEFAULT_TRANS_CHANNELS 一致：LLM 与 Backend 默认不选）。
 // renderAll 回填与 loadSettings 默认共用；跨标签页 get(null) 拿不到默认键时也以它兜底。
-const DEFAULT_TRANS_CH = { llm: false, builtin: true, baidusug: true, youdaodict: true, mymemory: true, google: true, youdao: true, baidu: true, bing: true, lingva: true };
+const DEFAULT_TRANS_CH = { llm: false, backend: false, builtin: true, baidusug: true, youdaodict: true, mymemory: true, google: true, youdao: true, baidu: true, bing: true, lingva: true };
 
 // 翻译渠道复选框清单（元素 id ↔ translationChannels 键），回填与保存监听共用一份
-const TRANS_CH_IDS = [['transChLlm', 'llm'], ['transChBuiltin', 'builtin'], ['transChBaidusug', 'baidusug'],
+// （Backend 排首：回退顺序上它在最前，见 service-worker handleTranslateText 渠道0）
+const TRANS_CH_IDS = [['transChLlm', 'llm'], ['transChBackend', 'backend'], ['transChBuiltin', 'builtin'], ['transChBaidusug', 'baidusug'],
   ['transChYoudaodict', 'youdaodict'], ['transChMymemory', 'mymemory'], ['transChGoogle', 'google'],
   ['transChYoudao', 'youdao'], ['transChBaidu', 'baidu'], ['transChBing', 'bing'], ['transChLingva', 'lingva']];
 

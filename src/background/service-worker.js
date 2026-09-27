@@ -941,7 +941,8 @@ async function handleParseMaterial(kind, payload) {
 // === 343 次（2026-09-19）：网站桥接翻译快路径（kind:'translation' 实现） ===
 // 说人话：网站页面遇到生词，先问扩展「你有这个词的中文释义吗」——本函数就是
 //   扩展的应答器。三步：①查本地词典缓存（含原形，如 running→run 的缓存）；
-//   ②缓存没有就并行问两个最快的词典端点（百度联想 sug + 有道词典 jsonapi）；
+//   ②缓存没有就并行问快渠道（百度联想 sug + 有道词典 jsonapi；第447次起，
+//     勾选了 Backend 渠道则把后端翻译路由 /api/translate 一并列入并行，列首位）；
 //   ③拿到有效译文回写缓存（下次秒回）。全程尊重扩展设置里的渠道勾选
 //   （translationChannels，用户关掉的渠道不问）。
 // 为什么不用 handleTranslateText 全渠道：它串行跑 8 渠道最坏 55s，网站侧 3s 就
@@ -973,13 +974,24 @@ async function handleBridgeTranslation(payload) {
   let ch = {};
   try { ch = (await new Promise((r) => chrome.storage.local.get({ translationChannels: {} }, r))).translationChannels || {}; } catch (_) { }
   const tasks = [];
+  // 第447次（用户裁定「网站桥接也接上」「勾了就排最前」）：后端翻译路由并行候选，列首位
+  //   ——Promise.all 等齐后按数组序取第一个有效结果，故列首即"优先用后端"。门控用
+  //   `=== true`（backend 缺省不选，旧表无此键，沿用 `!== false` 会让未升级用户默认全开）。
+  //   单独 1.2s 上限：本路径有 2.2s 总预算，Promise.all 会等齐全部候选，后端在推理时
+  //   慢则整包超时，连本来能赢的百度联想也陪葬——故后端超时即判失败让位（用户已认此取舍）。
+  if (ch.backend === true) tasks.push(_bridgeTryChannel('Backend',
+    new Promise((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error('backend translate budget (1.2s) exceeded')), 1200);
+      backendTranslateOnce(word, src, tgt).then((t) => { clearTimeout(timer); resolve(t); },
+        (e) => { clearTimeout(timer); reject(e); });
+    }), word, src, tgt));
   if (ch.baidusug !== false) tasks.push(_bridgeTryChannel('BaiduSug', baiduSugTranslate(word, src, tgt), word, src, tgt));
   if (ch.youdaodict !== false) tasks.push(_bridgeTryChannel('YoudaoDict', youdaoDictTranslate(word, src, tgt), word, src, tgt));
   // 343 次·裁定：失败返回 ok:true+空 text（空文本降级，见上方分支注释），error 照带不遮蔽
-  if (!tasks.length) return { ok: true, text: '', error: '快渠道均未启用（baidusug/youdaodict 已在扩展设置勾选关闭）' };
+  if (!tasks.length) return { ok: true, text: '', error: '快渠道均未启用（backend/baidusug/youdaodict 已在扩展设置勾选关闭）' };
   const results = await Promise.all(tasks);
   const hit = results.find(Boolean);
-  if (!hit) return { ok: true, text: '', error: '快渠道（BaiduSug/YoudaoDict）均失败——网站侧降级其自身 API' };
+  if (!hit) return { ok: true, text: '', error: '快渠道（' + (ch.backend === true ? 'Backend/' : '') + 'BaiduSug/YoudaoDict）均失败——网站侧降级其自身 API' };
 
   // ③ 回写缓存（小写主键与 makeKey 口径一致），下次网站请求毫秒级命中
   try { await updateFields(src, word, { translation: hit.text, translationLang: tgt }); } catch (_) { /* ignore */ }
@@ -1445,6 +1457,45 @@ async function fetchWithTimeout(url, options = {}, timeout = 8000) {
   }
 }
 
+/**
+ * 第447次（用户裁定）：后端翻译渠道——POST {后端}/api/translate（**翻译路由**）。
+ * 说人话：跟「LLM」渠道不是一回事——LLM 渠道打的是 /v1/chat/completions（大模型路由，
+ *   走对话提示词）；本渠道打后端自己的翻译接口（backend/api/translate.py，引擎层
+ *   由后端自行编排），扩展侧不拼任何提示词。
+ * 地址与 Key 全部复用「对话」行（llmProvider/llmBaseUrl/llmApiKey）的配置——
+ *   翻译栏目只做勾选，不配置（用户裁定「这里只是选择，配置在 Chat LLM 中」）：
+ *   选 Local 预置 127.0.0.1:7777、选 Official 预置 api.vocabradar.com、
+ *   Endpoint 手填则用手填值；免 Key 来源不带鉴权头（同 llmChatOnce 口径）。
+ * @param {string} text 待译文本
+ * @param {string} [src] 源语言代码（缺省 auto）
+ * @param {string} tgt 目标语言代码
+ * @returns {Promise<string|null>} 译文；null=后端返回空译文
+ * @throws 地址/Key 未配置、网络不通、HTTP 非 2xx——由调用方捕获记入根因（不遮蔽）
+ */
+async function backendTranslateOnce(text, src, tgt) {
+  if (!text) return null;
+  const res = await new Promise((r) => chrome.storage.local.get(
+    { llmProvider: '', llmBaseUrl: '', llmModel: '', llmApiKey: '' }, (x) => r(x || {})));
+  const cfg = resolveLlmConfig(res);
+  // 预置 baseUrl 形如 http://127.0.0.1:7777/v1 —— 翻译路由不在 /v1 下，去尾再拼
+  const base = String(cfg.baseUrl || '').trim().replace(/\/+$/, '').replace(/\/v1$/i, '');
+  if (!base) throw new Error('Base URL 未配置');
+  if (!cfg.noKey && !cfg.apiKey) throw new Error('API Key 未配置');
+  const headers = { 'Content-Type': 'application/json' };
+  if (!cfg.noKey) headers['Authorization'] = 'Bearer ' + cfg.apiKey;
+  const resp = await fetchWithTimeout(base + '/api/translate', {
+    method: 'POST', headers, credentials: 'omit', cache: 'no-store',
+    body: JSON.stringify({ text, from: src || 'auto', to: tgt })
+  }, 8000);
+  let data = null;
+  try { data = await resp.json(); } catch (_) { /* 非 JSON 响应，下面按状态码报 */ }
+  if (!resp.ok) {
+    throw new Error('HTTP ' + resp.status + (data && data.error ? ' ' + data.error : ''));
+  }
+  const out = data && String(data.text || '').trim();
+  return out || null;
+}
+
 async function handleTranslateText(word, source, target, channels) {
   if (!word) return { ok: false, error: 'empty word' };
   // 第二百一十六次（用户："引导页增加翻译一行，后跟LLM、几个api、浏览器自身复选框"）：
@@ -1466,6 +1517,18 @@ async function handleTranslateText(word, source, target, channels) {
   //     渠道 1：百度联想 sug（fanyi.baidu.com/sug，POST kw，返回中文释义）
   //     渠道 2：有道词典 jsonapi（dict.youdao.com/jsonapi，返回中文释义）
   //   原 6 渠道保留为短语/句子兜底。
+
+  // 渠道 0（第447次，用户裁定「勾了就排最前」）：后端翻译路由 POST /api/translate
+  let beErr = null;
+  try {
+    if (!chGate('backend')) throw new Error('渠道未启用');
+    const be = await backendTranslateOnce(word, src, tgt);
+    if (be && !isUntranslated(be, word, src, tgt)) return { ok: true, text: be, channel: 'Backend' };
+    beErr = be ? '返回原文未翻译' : '返回空结果';
+  } catch (e) {
+    beErr = String(e.message || e);
+    console.warn('[VocabRadar][sw][' + _ts() + '] 渠道[Backend] 失败:', beErr);
+  }
 
   // 渠道 1：百度联想 sug（单词中文释义，国内快、无需 key/签名）
   let bdsErr = null;
@@ -1563,7 +1626,7 @@ async function handleTranslateText(word, source, target, channels) {
     console.warn('[VocabRadar][sw][' + _ts() + '] 渠道[Lingva] 失败:', lvErr);
   }
 
-  return { ok: false, error: 'BaiduSug: ' + bdsErr + '; YoudaoDict: ' + yddErr + '; MyMemory: ' + mmErr + '; Google: ' + ggErr + '; Youdao: ' + ydErr + '; Baidu: ' + bdErr + '; Bing: ' + bingErr + '; Lingva: ' + lvErr };
+  return { ok: false, error: 'Backend: ' + beErr + '; BaiduSug: ' + bdsErr + '; YoudaoDict: ' + yddErr + '; MyMemory: ' + mmErr + '; Google: ' + ggErr + '; Youdao: ' + ydErr + '; Baidu: ' + bdErr + '; Bing: ' + bingErr + '; Lingva: ' + lvErr };
 }
 
 /**

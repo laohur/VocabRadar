@@ -145,10 +145,12 @@ const MSG = {
   // 第434次：ocrEngineLocal/ocrEngineApi/fieldOcrLangs/ocrLangsSuffix/ocrRole*/ocrLangNoPack
   //   等 Tesseract 本地引擎时代的键随第394次裁定移除（guide.js 渲染函数早已退役，零引用）。
   transDesc: {
-    en: 'Online channels for word meanings (checked = enabled, tried in order). The LLM channel uses the chat LLM above and is off by default; the others are on by default.',
-    zh: '生词释义的在线翻译渠道（勾选启用，按序回退）：LLM 渠道走上方对话大模型，默认不选；其余渠道默认全启用。'
+    en: 'Online channels for word meanings (checked = enabled, tried in order). The LLM channel uses the chat LLM above; the Backend channel calls the backend translate API using the backend source selected in the chat row above. Both are off by default; the others are on by default.',
+    zh: '生词释义的在线翻译渠道（勾选启用，按序回退）：LLM 渠道走上方对话大模型；Backend 渠道走后端翻译接口（来源/地址/Key 取对话行所选后端组来源）；两者默认不选，其余渠道默认全启用。'
   },
   transChLlm: { en: 'LLM', zh: 'LLM' },
+  // 后端翻译渠道：走 backend POST /api/translate（翻译路由，非 /v1/chat/completions 大模型路由）
+  transChBackend: { en: 'Backend', zh: '后端' },
   transChBuiltin: { en: 'Browser built-in', zh: '浏览器自身' },
   // 第二百二十三次：无内置翻译 API 的浏览器（Firefox，typeof Translator === 'undefined'）灰显提示
   transChBuiltinNoFx: { en: 'This browser has no built-in translation (e.g. Firefox)', zh: '此浏览器无内置翻译（如 Firefox）' },
