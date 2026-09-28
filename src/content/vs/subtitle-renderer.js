@@ -26,6 +26,8 @@ import { formatTime, setHourlyFormat, copyToClipboard, flashButton, escapeHtml, 
 import { pickRandomLinesForComment, findMainCommentContainer, ensureYtCommentsLoaded, expandCommentBox, fillCommentInput, scrollMinIntoView } from './comment-fill.js';
 import { autoExpandOnce, requestSyncHeightOnce } from './sidebar-layout.js';
 import { getAnnotations, getRankMax, rankToStage, resetDiag } from '../../lib/annotator.js';
+// 第461次：视频侧栏字幕注释的翻译优先级档（2=视频侧栏，先于网页正文批量）
+import { PRIO_VIDEO } from '../../lib/translator.js';
 import { lemmaFamily } from '../../lib/lemmatizer.js';
 import { getPhonetic } from '../../lib/phonetics.js';
 import { t } from '../../lib/i18n.js';
@@ -1116,7 +1118,7 @@ function ensureAnnotations(sub) {
   const text = (typeof sub.text === 'string') ? sub.text : '';
   p = (_noAnnotation || !text)
     ? Promise.resolve([])
-    : getAnnotations(text, getRankThreshold(), _seenWords, onAsyncTranslate);
+    : getAnnotations(text, getRankThreshold(), _seenWords, onAsyncTranslate, PRIO_VIDEO);
   _annotationsCache.set(sub, p);
   return p;
 }

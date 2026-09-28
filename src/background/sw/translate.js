@@ -1,16 +1,16 @@
 // =============================================================================
 // SW 翻译编排（2026-09-27 拆分自 service-worker.js）
-// 职责：译文有效性判定（isUntranslated/targetScriptOk）、9 渠道串行编排
-//   （handleTranslateText，供页面 TRANSLATE_TEXT）、网站桥接快路径
-//   （handleBridgeTranslation，供 PARSE_MATERIAL kind:'translation'，2.2s 预算）。
-// 渠道实现见 translate-channels.js（本文件不含任何请求细节）。
+// 职责：译文分类判定（classifyTranslation/isUntranslated/targetScriptOk）、
+//   9 渠道表驱动串行编排 + 同形词跨渠道共识 + 渠道状态登记/熔断冷却（handleTranslateText，
+//   供页面 TRANSLATE_TEXT）、网站桥接快路径（handleBridgeTranslation，供 PARSE_MATERIAL
+//   kind:'translation'，2.2s 预算）。渠道实现见 translate-channels.js。
 // =============================================================================
 import { cleanDictEntry } from '../../lib/dict-clean.js';
 import { getWord, updateFields } from '../../lib/word-db.js';
 import { _ts, log } from './log.js';
 import {
   backendTranslateOnce, baiduSugTranslate, youdaoDictTranslate, mymemoryTranslate,
-  googleTranslate, youdaoTranslate, baiduTranslate, bingTranslate, lingvaTranslate
+  reversoTranslate, googleTranslate, youdaoTranslate, baiduTranslate, bingTranslate
 } from './translate-channels.js';
 
 // === 在线翻译（Translator API 不可用时的兜底渠道） ===
@@ -31,18 +31,50 @@ import {
 //   tgt=zh 须含汉字，tgt=ja 须含假名/汉字，tgt=ko 须含谚文，tgt=ru 须含西里尔等。
 //   不含目标文字系统 → 视为未翻译，换下一渠道。
 //   源语言与目标语言同文字系统时（如 en→es 均拉丁字母）回退到精确匹配校验。
-export function isUntranslated(text, word, src, tgt) {
-  if (!text) return true;
-  if (src === tgt) return false; // 同语言不校验
-  const trimmed = text.trim();
-  // 1. 精确匹配校验：译文=原文（trim+lowercase）→ 未翻译
-  if (trimmed.toLowerCase() === word.trim().toLowerCase()) return true;
-  // 2. 文字系统校验：译文须含目标语言代表性字符
+/**
+ * 译文分类器（2026-09-28 第四百六十次·同形词共识改制）。
+ * 说人话：把「译文可用性」细分成三档，供表驱动编排层按档处置——
+ *   'ok'       正常译文 → 立即采纳；
+ *   'same-form 译文与原文完全相同但文字系统合格（如 pt→pt 的 americanos 原样回显、
+ *              或 es→pt 外来语同形）→ 不立即采纳，记入跨渠道共识票，≥2 个独立
+ *              渠道投出同一文本才采纳（单渠道同形大概率是端点偷懒回显，不可信）；
+ *   'bad'      空结果/文字系统不符（如 en→zh 返回英文、渠道中文泄漏）→ 丢弃换渠道。
+ * 分类规则：src===tgt 一律 ok（同语言不校验）；先比 trim+lowercase 精确相等，
+ *   再跑 targetScriptOk 文字系统校验（不等但文字系统不符也是 bad——同语言不同词）。
+ * @param {string} text 译文（可为 null/空）
+ * @param {string} word 原文
+ * @param {string} src 源语言码
+ * @param {string} tgt 目标语言码
+ * @returns {'ok'|'same-form'|'bad'}
+ */
+export function classifyTranslation(text, word, src, tgt) {
+  if (!text) return 'bad';
+  if (src === tgt) return 'ok';
+  const trimmed = String(text).trim();
+  const same = trimmed.toLowerCase() === String(word || '').trim().toLowerCase();
+  if (same) return targetScriptOk(trimmed, tgt) ? 'same-form' : 'bad';
   if (!targetScriptOk(trimmed, tgt)) {
     console.warn(`[VocabRadar][sw][${_ts()}] 校验失败: 译文"${trimmed}" 不含目标语言(${tgt})文字系统，视为未翻译`);
-    return true;
+    return 'bad';
   }
-  return false;
+  return 'ok';
+}
+
+/**
+ * 译文是否视为未翻译（导出供桥接快路径 _bridgeTryChannel 等沿用旧口径）。
+ * 反思（2026-08-05 修正）：用户反馈"有些释义结果不正常，还是原来语言"。
+ *   根因：各渠道只校验"返回非空"，未校验"译文是否与原文相同（未翻译）"。
+ *   某些渠道（如百度语言码不匹配、MyMemory 限流返回原文）会返回原文未翻译，
+ *   被当作成功结果接受并缓存。修正：译文与原文完全相同且 src!==tgt → 未翻译。
+ * 反思（2026-08-06 修正）：漏掉"同语言不同词"（en→zh 时 running→run 仍是英文），
+ *   修正：加 targetScriptOk 文字系统校验——译文须含目标语言代表性字符；
+ *   源语言与目标语言同文字系统时（如 en→es 均拉丁字母）回退精确匹配校验。
+ * 第四百六十次：实现改为 classifyTranslation 的薄包装（语义不变：same-form/bad
+ *   均算未翻译——共识采纳与否由编排层 handleTranslateText 单独裁决）。
+ * @returns {boolean} true=未翻译（空/原文回显/文字系统不符）
+ */
+export function isUntranslated(text, word, src, tgt) {
+  return classifyTranslation(text, word, src, tgt) !== 'ok';
 }
 
 /**
@@ -81,152 +113,156 @@ export function targetScriptOk(text, tgt) {
   return re.test(text);
 }
 
-export async function handleTranslateText(word, source, target, channels) {
+// 渠道表（2026-09-28 第四百六十次·表驱动改制，消除 11 份重复 try/catch；
+//   第461次：-deepl/-mstrans（需 Key 渠道整体撤销）→ 9 渠道，串行保持）：
+//   顺序 = 用户裁定回退序：勾选的 Backend/词典快渠道 → 本次新修/新增的 Reverso/Bing →
+//   国内兜底（Google gtx 可能被墙，仍有有道/百度兜底）→ MyMemory 默认不选、末位手工兜底。
+//   lingva 公共实例不稳定，已摘除。zhOnly=端点恒返回中文释义，仅 zh 目标参与。
+//   每渠道单次 8 秒超时（translate-channels.js fetchWithTimeout），最坏 9×8=72s。
+const CHANNEL_TABLE = [
+  { id: 'backend', name: 'Backend', run: backendTranslateOnce },
+  { id: 'baidusug', name: 'BaiduSug', run: baiduSugTranslate, zhOnly: true },
+  { id: 'youdaodict', name: 'YoudaoDict', run: youdaoDictTranslate, zhOnly: true },
+  { id: 'reverso', name: 'Reverso', run: reversoTranslate },
+  { id: 'bing', name: 'Bing', run: bingTranslate },
+  { id: 'google', name: 'Google', run: googleTranslate },
+  { id: 'youdao', name: 'Youdao', run: youdaoTranslate },
+  { id: 'baidu', name: 'Baidu', run: baiduTranslate },
+  { id: 'mymemory', name: 'MyMemory', run: mymemoryTranslate }
+];
+
+// === 第461次（用户裁定「记录各个渠道状态」）：渠道状态登记 + 连败熔断 ===
+// 说人话：每次渠道尝试都记一笔账（成功/失败/连败数/最近错误/最近耗时/冷却截止），
+//   连败 ≥3 次进入 60 秒冷却——冷却期内直接跳过该渠道（不再白烧 8s 超时），
+//   冷却到期自动解除、连败清零重试。状态经 router.js 'CHANNEL_STATUS' 消息
+//   供引导页「翻译」分组状态行读取（guide/ch-health.js）。
+const CH_COOLDOWN_MS = 60 * 1000;
+const CH_FAIL_LIMIT = 3;
+const _chStatus = new Map(); // id → {name, ok, fail, consec, lastErr, lastMs, coolUntil, lastOk}
+
+/** 取渠道状态快照（数组序 = 渠道表序，供 CHANNEL_STATUS 消息返回） */
+export function getChannelStatus() {
+  const now = Date.now();
+  return CHANNEL_TABLE.map((c) => {
+    const s = _chStatus.get(c.id);
+    return {
+      id: c.id, name: c.name,
+      ok: s ? s.ok : 0, fail: s ? s.fail : 0,
+      consec: s && s.coolUntil <= now ? s.consec : (s ? s.consec : 0),
+      coolingMs: s && s.coolUntil > now ? s.coolUntil - now : 0,
+      lastErr: s ? s.lastErr : '', lastMs: s ? s.lastMs : 0, lastOk: s ? s.lastOk : 0
+    };
+  });
+}
+
+/** 记一次渠道成功（清连败与冷却） */
+function _chOk(id, name, ms) {
+  const s = _chStatus.get(id) || { name, ok: 0, fail: 0, consec: 0, lastErr: '', lastMs: 0, coolUntil: 0, lastOk: 0 };
+  s.ok++; s.consec = 0; s.coolUntil = 0; s.lastMs = ms; s.lastOk = Date.now(); s.lastErr = '';
+  _chStatus.set(id, s);
+}
+
+/** 记一次渠道失败（连败 ≥CH_FAIL_LIMIT 进入冷却） */
+function _chFail(id, name, err, ms) {
+  const s = _chStatus.get(id) || { name, ok: 0, fail: 0, consec: 0, lastErr: '', lastMs: 0, coolUntil: 0, lastOk: 0 };
+  s.fail++; s.consec++; s.lastErr = String(err || '').slice(0, 80); s.lastMs = ms;
+  if (s.consec >= CH_FAIL_LIMIT) s.coolUntil = Date.now() + CH_COOLDOWN_MS;
+  _chStatus.set(id, s);
+}
+
+/**
+ * 全渠道翻译编排（页面 TRANSLATE_TEXT 的执行体）。
+ * 第四百六十次（用户裁定「同形词跨渠道共识」）：
+ *   同形结果（译文=原文，classifyTranslation='same-form'）不再单渠道立即采纳、
+ *   也不再直接丢弃——记入共识票（Map<规范化译文, Set<渠道名>>），**≥2 个独立渠道
+ *   投出同一文本才采纳**（channel 标注 "A+B(同形词印证)"）；单渠道同形大概率是
+ *   端点偷懒回显原文，不可信。正常译文（'ok'）仍立即采纳；'bad' 丢弃换下一渠道。
+ *   内容侧浏览器内置（builtin Translator）判定出的同形结果经 prior 形参下传，
+ *   先计 1 票——builtin 与任一在线渠道同形即凑满 2 票采纳（内置优先的延伸）。
+ * 第461次（用户裁定「记录各个渠道状态」）：每次尝试写入 _chStatus 登记簿，
+ *   连败 ≥3 冷却 60s 跳过（见渠道表下方 _chOk/_chFail）；快照经 'CHANNEL_STATUS'
+ *   消息供引导页状态行（ch-health.js）读取。
+ * 第二百一十六次：每个渠道可勾选启停（缺省全启），未勾选报"渠道未启用"。
+ * 反思（2026-08-12）：渠道 fetch 一律 8 秒超时（channels 内 fetchWithTimeout），
+ *   防服务器不响应永久挂起阻塞翻译队列。
+ * 反思（2026-08-13 第五十一次）：旧渠道（MyMemory/Google/有道 translate_o/百度
+ *   transapi/Bing/Lingva）实测全失败，新增免签名国内快渠道 baidusug/youdaodict
+ *   （恒中文释义，zhOnly 门控，见 CHANNEL_TABLE）。
+ * @param {string} word 待译文本
+ * @param {string} [source] 源语言码（缺省 en）
+ * @param {string} [target] 目标语言码（缺省 zh）
+ * @param {Object} [channels] 渠道勾选表（transCh*；缺省全启）
+ * @param {Object} [prior] builtin 先验同形票 { text, channel }（见 index.js 下传）
+ * @returns {Promise<{ok:true,text,channel}|{ok:false,error}>}
+ */
+export async function handleTranslateText(word, source, target, channels, prior) {
   if (!word) return { ok: false, error: 'empty word' };
-  // 第二百一十六次（用户："引导页增加翻译一行，后跟LLM、几个api、浏览器自身复选框"）：
-  //   每个渠道可勾选启停（缺省全启）；未勾选的渠道直接跳过（报"渠道未启用"）。
   const chGate = (id) => (!channels || channels[id] !== false);
   const src = source || 'en';
   const tgt = target || 'zh';
-  // 反思（2026-08-12）：用户反馈"翻译一直 Translating..."。
-  //   根因：在线翻译 fetch 无超时，服务器不响应时永久挂起，阻塞翻译队列。
-  //   修正：所有翻译渠道用 fetchWithTimeout（8秒超时），超时返回 null 继续下一个渠道。
-  // 反思（2026-08-13 第五十一次）：用户反馈"翻译 quizzes 失败，请增加直接用的翻译渠道"。
-  //   旧渠道（MyMemory/Google/有道 translate_o/百度 transapi/Bing/Lingva）实测全失败：
-  //     - Google gtx 国内被墙（aborted）
-  //     - MyMemory 免费限流返回空
-  //     - 有道 translate_o 签名失效 NetworkError
-  //     - 百度 transapi 无签名端点在浏览器环境被反爬拒
-  //     - Bing 需 IG token 获取常失败、Lingva 公共实例不稳定
-  //   修正：新增两个免签名、国内直接可用的词典端点，放到最前（单词场景命中率最高）：
-  //     渠道 1：百度联想 sug（fanyi.baidu.com/sug，POST kw，返回中文释义）
-  //     渠道 2：有道词典 jsonapi（dict.youdao.com/jsonapi，返回中文释义）
-  //   原 6 渠道保留为短语/句子兜底。
+  const errs = [];
+  const votes = new Map(); // 同形词共识票：规范化译文(小写) → { text, chans:Set<渠道名> }
 
-  // 渠道 0（第447次，用户裁定「勾了就排最前」）：后端翻译路由 POST /api/translate
-  let beErr = null;
-  try {
-    if (!chGate('backend')) throw new Error('渠道未启用');
-    const be = await backendTranslateOnce(word, src, tgt);
-    if (be && !isUntranslated(be, word, src, tgt)) return { ok: true, text: be, channel: 'Backend' };
-    beErr = be ? '返回原文未翻译' : '返回空结果';
-  } catch (e) {
-    beErr = String(e.message || e);
-    console.warn('[VocabRadar][sw][' + _ts() + '] 渠道[Backend] 失败:', beErr);
+  // builtin 先验票：内容侧浏览器内置给出的同形结果（随 TRANSLATE_TEXT 下传）。
+  //   与在线渠道同口径过 classifyTranslation——文字系统不合格的（bad）不计票。
+  if (prior && prior.text && classifyTranslation(prior.text, word, src, tgt) === 'same-form') {
+    const k = String(prior.text).trim().toLowerCase();
+    votes.set(k, { text: String(prior.text).trim(), chans: new Set([prior.channel || '浏览器内置']) });
+    errs.push((prior.channel || '浏览器内置') + ': 同形词待印证(1/2)');
   }
 
-  // 渠道 1：百度联想 sug（单词中文释义，国内快、无需 key/签名）
-  // 反思（2026-09-27）：端点无目标语言参数、恒返回中文释义，仅 zh 目标可参与；
-  //   其他目标语言放行会产出脏缓存（释义语言不跟随设定），故加语言门控。
-  let bdsErr = null;
-  try {
-    if (!chGate('baidusug')) throw new Error('渠道未启用');
-    if (tgt !== 'zh') throw new Error('不支持目标语言(' + tgt + ')（端点恒返回中文释义）');
-    const bds = await baiduSugTranslate(word, src, tgt);
-    if (bds && !isUntranslated(bds, word, src, tgt)) return { ok: true, text: bds, channel: 'BaiduSug' };
-    bdsErr = bds ? '返回原文未翻译' : '返回空结果';
-  } catch (e) {
-    bdsErr = String(e.message || e);
-    console.warn('[VocabRadar][sw][' + _ts() + '] 渠道[BaiduSug] 失败:', bdsErr);
+  for (const c of CHANNEL_TABLE) {
+    if (!chGate(c.id)) { errs.push(c.name + ': 渠道未启用'); continue; }
+    if (c.zhOnly && tgt !== 'zh') {
+      errs.push(c.name + ': 不支持目标语言(' + tgt + ')（端点恒返回中文释义）');
+      continue;
+    }
+    // 第461次·熔断：连败 ≥3 次的渠道冷却 60s，期内跳过（不白烧 8s 超时）；
+    //   冷却到期自动解除并在首次重试前清零连败（_chOk/_chFail 维护）。
+    const preSt = _chStatus.get(c.id);
+    if (preSt && preSt.coolUntil > Date.now()) {
+      errs.push(c.name + ': 冷却中(' + Math.ceil((preSt.coolUntil - Date.now()) / 1000) + 's，连败' + preSt.consec + ')');
+      continue;
+    }
+    if (preSt && preSt.coolUntil && preSt.coolUntil <= Date.now()) { preSt.consec = 0; preSt.coolUntil = 0; } // 冷却到期重置
+    const t0 = Date.now();
+    try {
+      const t = await c.run(word, src, tgt);
+      const cls = classifyTranslation(t, word, src, tgt);
+      if (cls === 'ok') { _chOk(c.id, c.name, Date.now() - t0); return { ok: true, text: String(t).trim(), channel: c.name }; }
+      if (cls === 'same-form') {
+        const k = String(t).trim().toLowerCase();
+        const ent = votes.get(k) || { text: String(t).trim(), chans: new Set() };
+        ent.chans.add(c.name);
+        if (ent.chans.size >= 2) {
+          _chOk(c.id, c.name, Date.now() - t0);
+          return { ok: true, text: ent.text, channel: Array.from(ent.chans).join('+') + '(同形词印证)' };
+        }
+        _chOk(c.id, c.name, Date.now() - t0); // 同形待印证属"响应正常"，计成功不计失败
+        errs.push(c.name + ': 同形词待印证(1/2)');
+        continue;
+      }
+      _chFail(c.id, c.name, t ? '未通过文字系统校验' : '返回空结果', Date.now() - t0);
+      errs.push(c.name + ': ' + (t ? '未通过文字系统校验' : '返回空结果'));
+    } catch (e) {
+      const m = String(e.message || e);
+      _chFail(c.id, c.name, m, Date.now() - t0);
+      errs.push(c.name + ': ' + m);
+      console.warn('[VocabRadar][sw][' + _ts() + '] 渠道[' + c.name + '] 失败:', m);
+    }
   }
-
-  // 渠道 2：有道词典 jsonapi（单词中文释义，国内快、无需 key/签名）
-  // 反思（2026-09-27）：同 baidusug，端点恒返回中文释义，仅 zh 目标可参与。
-  let yddErr = null;
-  try {
-    if (!chGate('youdaodict')) throw new Error('渠道未启用');
-    if (tgt !== 'zh') throw new Error('不支持目标语言(' + tgt + ')（端点恒返回中文释义）');
-    const ydd = await youdaoDictTranslate(word, src, tgt);
-    if (ydd && !isUntranslated(ydd, word, src, tgt)) return { ok: true, text: ydd, channel: 'YoudaoDict' };
-    yddErr = ydd ? '返回原文未翻译' : '返回空结果';
-  } catch (e) {
-    yddErr = String(e.message || e);
-    console.warn('[VocabRadar][sw][' + _ts() + '] 渠道[YoudaoDict] 失败:', yddErr);
-  }
-
-  // 渠道 3：MyMemory（免费，无需 key，CORS 友好）
-  let mmErr = null;
-  try {
-    if (!chGate('mymemory')) throw new Error('渠道未启用');
-    const mm = await mymemoryTranslate(word, src, tgt);
-    if (mm && !isUntranslated(mm, word, src, tgt)) return { ok: true, text: mm, channel: 'MyMemory' };
-    mmErr = mm ? '返回原文未翻译' : '返回空结果';
-  } catch (e) {
-    mmErr = String(e.message || e);
-    console.warn('[VocabRadar][sw][' + _ts() + '] 渠道[MyMemory] 失败:', mmErr);
-  }
-
-  // 渠道 4：Google translate 公共端点（可能被限流，作为兜底）
-  let ggErr = null;
-  try {
-    if (!chGate('google')) throw new Error('渠道未启用');
-    const g = await googleTranslate(word, src, tgt);
-    if (g && !isUntranslated(g, word, src, tgt)) return { ok: true, text: g, channel: 'Google' };
-    ggErr = g ? '返回原文未翻译' : '返回空结果';
-  } catch (e) {
-    ggErr = String(e.message || e);
-    console.warn('[VocabRadar][sw][' + _ts() + '] 渠道[Google] 失败:', ggErr);
-  }
-
-  // 渠道 5：有道翻译（国内可用，作为最终兜底）
-  let ydErr = null;
-  try {
-    if (!chGate('youdao')) throw new Error('渠道未启用');
-    const yd = await youdaoTranslate(word, src, tgt);
-    if (yd && !isUntranslated(yd, word, src, tgt)) return { ok: true, text: yd, channel: 'Youdao' };
-    ydErr = yd ? '返回原文未翻译' : '返回空结果';
-  } catch (e) {
-    ydErr = String(e.message || e);
-    console.warn('[VocabRadar][sw][' + _ts() + '] 渠道[Youdao] 失败:', ydErr);
-  }
-
-  // 渠道 6：百度翻译（国内可用，最终兜底）
-  let bdErr = null;
-  try {
-    if (!chGate('baidu')) throw new Error('渠道未启用');
-    const bd = await baiduTranslate(word, src, tgt);
-    if (bd && !isUntranslated(bd, word, src, tgt)) return { ok: true, text: bd, channel: 'Baidu' };
-    bdErr = bd ? '返回原文未翻译' : '返回空结果';
-  } catch (e) {
-    bdErr = String(e.message || e);
-    console.warn('[VocabRadar][sw][' + _ts() + '] 渠道[Baidu] 失败:', bdErr);
-  }
-
-  // 渠道 7：Bing 翻译（Edge 浏览器用户优先可用）
-  let bingErr = null;
-  try {
-    if (!chGate('bing')) throw new Error('渠道未启用');
-    const bing = await bingTranslate(word, src, tgt);
-    if (bing && !isUntranslated(bing, word, src, tgt)) return { ok: true, text: bing, channel: 'Bing' };
-    bingErr = bing ? '返回原文未翻译' : '返回空结果';
-  } catch (e) {
-    bingErr = String(e.message || e);
-    console.warn('[VocabRadar][sw][' + _ts() + '] 渠道[Bing] 失败:', bingErr);
-  }
-
-  // 渠道 8：Lingva 翻译（Google 翻译代理，避免 Google 直接被墙）
-  let lvErr = null;
-  try {
-    if (!chGate('lingva')) throw new Error('渠道未启用');
-    const lv = await lingvaTranslate(word, src, tgt);
-    if (lv && !isUntranslated(lv, word, src, tgt)) return { ok: true, text: lv, channel: 'Lingva' };
-    lvErr = lv ? '返回原文未翻译' : '返回空结果';
-  } catch (e) {
-    lvErr = String(e.message || e);
-    console.warn('[VocabRadar][sw][' + _ts() + '] 渠道[Lingva] 失败:', lvErr);
-  }
-
-  return { ok: false, error: 'Backend: ' + beErr + '; BaiduSug: ' + bdsErr + '; YoudaoDict: ' + yddErr + '; MyMemory: ' + mmErr + '; Google: ' + ggErr + '; Youdao: ' + ydErr + '; Baidu: ' + bdErr + '; Bing: ' + bingErr + '; Lingva: ' + lvErr };
+  return { ok: false, error: errs.join('; ') };
 }
 
 // === 343 次（2026-09-19）：网站桥接翻译快路径（kind:'translation' 实现） ===
 // 说人话：网站页面遇到生词，先问扩展「你有这个词的中文释义吗」——本函数就是
 //   扩展的应答器。三步：①查本地词典缓存（含原形，如 running→run 的缓存）；
-//   ②缓存没有就并行问快渠道（百度联想 sug + 有道词典 jsonapi；第447次起，
-//     勾选了 Backend 渠道则把后端翻译路由 /api/translate 一并列入并行，列首位）；
+//   ②缓存没有就并行问快渠道（百度联想 sug + 有道词典 jsonapi，第460次起加 Reverso；
+//     第447次起，勾选了 Backend 渠道则把后端翻译路由 /api/translate 一并列入并行，
+//     列首位）；
 //   ③拿到有效译文回写缓存（下次秒回）。全程尊重扩展设置里的渠道勾选
 //   （translationChannels，用户关掉的渠道不问）。
-// 为什么不用 handleTranslateText 全渠道：它串行跑 8 渠道最坏 55s，网站侧 3s 就
+// 为什么不用 handleTranslateText 全渠道：它串行跑 9 渠道最坏 72s，网站侧 3s 就
 //   超时并熔断扩展通道（本会话不再用扩展翻译），违背本次供给初衷。
 export async function handleBridgeTranslation(payload) {
   const word = String((payload && payload.word) || '').trim();
@@ -272,11 +308,15 @@ export async function handleBridgeTranslation(payload) {
   //   （与 handleTranslateText 渠道门控同口径），否则中文释义会被写脏缓存。
   if (ch.baidusug !== false && tgt === 'zh') tasks.push(_bridgeTryChannel('BaiduSug', baiduSugTranslate(word, src, tgt), word, src, tgt));
   if (ch.youdaodict !== false && tgt === 'zh') tasks.push(_bridgeTryChannel('YoudaoDict', youdaoDictTranslate(word, src, tgt), word, src, tgt));
+  // 第四百六十次：Reverso（本次新增的免 key 翻译端点，响应快约 300ms）并入桥接并行组，
+  //   兜住 baidusug/youdaodict 只服务 zh 目标的缺口；不支持的语言对由渠道抛错、
+  //   _bridgeTryChannel 捕获记日志，不影响其他并行候选。
+  if (ch.reverso !== false) tasks.push(_bridgeTryChannel('Reverso', reversoTranslate(word, src, tgt), word, src, tgt));
   // 343 次·裁定：失败返回 ok:true+空 text（空文本降级，见上方分支注释），error 照带不遮蔽
-  if (!tasks.length) return { ok: true, text: '', error: '快渠道均不可用（backend 未勾选或超预算；baidusug/youdaodict 需勾选启用且目标语言为中文）' };
+  if (!tasks.length) return { ok: true, text: '', error: '快渠道均不可用（backend 未勾选或超预算；baidusug/youdaodict 需勾选启用且目标语言为中文；reverso 被取消勾选）' };
   const results = await Promise.all(tasks);
   const hit = results.find(Boolean);
-  if (!hit) return { ok: true, text: '', error: '快渠道（' + (ch.backend === true ? 'Backend/' : '') + 'BaiduSug/YoudaoDict）均失败——网站侧降级其自身 API' };
+  if (!hit) return { ok: true, text: '', error: '快渠道（' + (ch.backend === true ? 'Backend/' : '') + 'BaiduSug/YoudaoDict/Reverso）均失败——网站侧降级其自身 API' };
 
   // ③ 回写缓存（小写主键与 makeKey 口径一致），下次网站请求毫秒级命中
   try { await updateFields(src, word, { translation: hit.text, translationLang: tgt }); } catch (_) { /* ignore */ }

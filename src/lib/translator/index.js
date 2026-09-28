@@ -42,7 +42,10 @@ try {
 } catch (e) { /* ignore */ }
 // 第447次（用户裁定）：新增 backend 渠道——勾选后经后端翻译路由 POST /api/translate
 //   （对话行所选后端组来源的地址/Key，非 /v1/chat/completions 大模型路由）；默认不选。
-const DEFAULT_TRANS_CHANNELS = { llm: false, backend: false, builtin: true, baidusug: true, youdaodict: true, mymemory: true, google: true, youdao: true, baidu: true, bing: true, lingva: true };
+// 第460次（用户裁定）：-lingva（公共实例不稳定已摘除）；+reverso（默认启用）；mymemory 默认不选
+//   （质量差且 5000 字符/天限流，仅末位手工兜底）。
+// 第461次（用户裁定「撤销需要 key 的翻译接口」）：-deepl/-mstrans（渠道与 Key 全删）。
+const DEFAULT_TRANS_CHANNELS = { llm: false, backend: false, builtin: true, baidusug: true, youdaodict: true, reverso: true, mymemory: false, google: true, youdao: true, baidu: true, bing: true };
 // 当前勾选状态整表（发 SW 的 channels 形参；单渠道判定即 out[id]）。
 // 第二百一十九次：LLM 缺省不选，其余缺省启用。第447次：backend 同为缺省不选——
 //   storage 里的旧表没有 backend 键，必须与缺省表合并后再判
@@ -113,10 +116,25 @@ async function setWordCached(src, tgt, word, translation) {
 //   ASR/OCR 生词 priority=false 走普通队列。高优先级队列优先处理。
 const _pendingMap = new Map();  // word_lower -> Promise<string|null>
 
-// 优先级队列：高优先级（页面生词）先处理，低优先级（ASR/OCR）后处理
-const _highPriorityQueue = [];
-const _lowPriorityQueue = [];
+// 第461次（用户裁定「视频网站先处理视频侧栏，其次网页正文；悬停/查词仍最前」）：
+//   原二档队列升四档——3=交互（网页/侧栏悬停、查词面板：用户正盯着等的单个词）→
+//   2=视频侧栏/字幕层批量（vs/subtitle-renderer、subtitle-overlay）→ 1=网页正文批量
+//   （ws/scanner、th/scan）→ 0=其他（引导页预览/OCR）。档内仍串行（同词去重、
+//   单任务 45s 上限不变，用户裁定渠道分发保持串行）。布尔兼容：旧调用点 true→3、
+//   false/缺省→0（未改到的调用点不回退，仍是"高/最低"两极语义）。常量对外导出，
+//   调用方（vs/subtitle-renderer、subtitle-overlay、ws/scanner、th/scan）按档传值。
+export const PRIO_INTERACT = 3, PRIO_VIDEO = 2, PRIO_WEB = 1, PRIO_LOW = 0;
+const _prioQueues = [[], [], [], []];  // 下标=档位；_processQueue 高档先出
 let _queueProcessing = false;
+
+/** priority 归一到档位：true→3，false/null→0，数值夹取 0..3（向下取整） */
+function _prioLevel(priority) {
+  if (priority === true) return PRIO_INTERACT;
+  if (priority === false || priority == null) return PRIO_LOW;
+  const n = Number(priority);
+  if (!isFinite(n)) return PRIO_LOW;
+  return Math.max(PRIO_LOW, Math.min(PRIO_INTERACT, Math.floor(n)));
+}
 
 /**
  * 翻译单词（带本地缓存 + 多渠道兜底）
@@ -125,9 +143,11 @@ let _queueProcessing = false;
  * 是否需要翻译由调用方决定（如"注释生僻词"开关控制是否收集表外词到生词表）。
  *
  * 反思（2026-08-09）：添加 priority 参数，页面生词优先于 ASR/OCR 生词。
+ * 第461次：priority 升为档位（见上方 PRIO_* 常量），布尔仍兼容。
  *
  * @param {string} word 待翻译的单词
- * @param {boolean} [priority=false] 是否高优先级（页面文本生词=true，ASR/OCR=false）
+ * @param {boolean|number} [priority=false] 优先级档：true/3=交互（悬停/查词），
+ *   2=视频侧栏批量，1=网页正文批量，false/0=其他
  * @returns {Promise<string|null>} 译文或 null（所有渠道失败时返回 null）
  */
 export async function translate(word, priority = false) {
@@ -140,14 +160,10 @@ export async function translate(word, priority = false) {
     return _pendingMap.get(normalizedWord);
   }
 
-  // 优先级队列（2026-08-09）：高优先级（页面生词）插队到高优先级队列
+  // 优先级队列（第461次起四档，高档先出）
+  const level = _prioLevel(priority);
   const promise = new Promise((resolve) => {
-    const task = { word: normalizedWord, resolve };
-    if (priority) {
-      _highPriorityQueue.push(task);
-    } else {
-      _lowPriorityQueue.push(task);
-    }
+    _prioQueues[level].push({ word: normalizedWord, resolve });
     _processQueue();
   });
   _pendingMap.set(normalizedWord, promise);
@@ -159,17 +175,18 @@ export async function translate(word, priority = false) {
 }
 
 /**
- * 处理队列：高优先级先处理，然后低优先级，串行执行
+ * 处理队列：按档位从高到低取任务，串行执行
  */
 async function _processQueue() {
   if (_queueProcessing) return;
   _queueProcessing = true;
   try {
-    while (_highPriorityQueue.length > 0 || _lowPriorityQueue.length > 0) {
-      // 高优先级队列优先
-      const task = _highPriorityQueue.length > 0
-        ? _highPriorityQueue.shift()
-        : _lowPriorityQueue.shift();
+    for (;;) {
+      let task = null;
+      for (let lv = PRIO_INTERACT; lv >= PRIO_LOW; lv--) {
+        if (_prioQueues[lv].length) { task = _prioQueues[lv].shift(); break; }
+      }
+      if (!task) break;
       try {
         // 第三百七十五次：单任务加总超时——诊断实测单个黑洞词（TCP 挂起类无 signal 源，
         //   各渠道超时叠加＋原形回退）可拖 112~126s，串行队列队头一卡全队列陪葬，
@@ -217,6 +234,12 @@ async function _translateInternal(word) {
   //   新增 targetScriptOk：译文须含目标语言代表性字符。
   let result = null;
   const _chOn = curTransChannels();
+  // 第460次（同形词跨渠道共识）：浏览器内置给出的同形结果不再直接丢——暂存于此，
+  //   随 TRANSLATE_TEXT 下传 SW 作先验票（content 侧与 SW 里再凑 1 票即采纳）。
+  let builtinPrior = null;
+  // 第461次（用户裁定「若有缺口必然调用浏览器内置」）：内置被拒结果（同形/文字系统
+  //   不符）暂存到 .text，在线/LLM/原形全败时回收兜底（见函数尾「缺口兜底」块）。
+  const builtinFb = { text: null };
   try {
     if (!_chOn.builtin) throw new Error('渠道未启用（翻译渠道未勾选）');
     const translator = await getTranslator();
@@ -227,10 +250,13 @@ async function _translateInternal(word) {
         const trimmed = translated.trim();
         if (transState.learnLang !== transState.meaningLang &&
             trimmed.toLowerCase() === word.trim().toLowerCase()) {
-          stepBuiltin = '返回原文未翻译';
-          log(`[VocabRadar][translator][${_ts()}] 渠道[浏览器内置翻译] "${word}" 返回原文未翻译，切换在线渠道`);
+          stepBuiltin = '返回原文未翻译(记先验票待印证)';
+          builtinPrior = { text: trimmed, channel: '浏览器内置' };
+          builtinFb.text = trimmed;   // 第461次：同形结果兜底候选（在线全败时回收）
+          log(`[VocabRadar][translator][${_ts()}] 渠道[浏览器内置翻译] "${word}" 返回原文，记先验票转在线渠道共识`);
         } else if (transState.learnLang !== transState.meaningLang && !targetScriptOk(trimmed, transState.meaningLang)) {
           stepBuiltin = '译文不含目标语言(' + transState.meaningLang + ')文字';
+          builtinFb.text = trimmed;   // 第461次：文字系统不符结果兜底候选（缺口时回收，不写缓存）
           log(`[VocabRadar][translator][${_ts()}] 渠道[浏览器内置翻译] "${word}"->"${trimmed}" 不含目标语言(${transState.meaningLang})文字，切换在线渠道`);
         } else {
           result = cleanDictEntry(trimmed);
@@ -249,15 +275,18 @@ async function _translateInternal(word) {
     console.warn(`[VocabRadar][translator][${_ts()}] 渠道[浏览器内置翻译] 翻译 "${word}" 失败:`, e);
   }
 
-  // 3. 渠道 2：经 service worker 的在线渠道（后端 -> MyMemory -> Google -> Youdao -> Baidu -> Bing -> Lingva）
+  // 3. 渠道 2：经 service worker 的在线渠道（第461次序：backend -> 词典快渠道 ->
+  //   Reverso -> Bing -> Google -> Youdao -> Baidu -> MyMemory）
   // 第447次：backend 为 SW 内渠道0（POST /api/translate 后端翻译路由），排在最前；
-  //   勾了 backend 时即便 8 个免费渠道全关，本消息仍须发出
+  //   勾了 backend 时即便免费渠道全关，本消息仍须发出
+  // 第461次：下方"全关"判定随 CHANNEL_TABLE 增删（-lingva -deepl -mstrans +reverso）
   // 反思（2026-08-05）：service-worker.js handleTranslateText 已对每个渠道做 isUntranslated 校验，
   //   返回的成功结果必然非原文。此处仅校验非空即可。
   if (!result) {
     try {
-      if (!_chOn.backend && !_chOn.baidusug && !_chOn.youdaodict && !_chOn.mymemory && !_chOn.google
-          && !_chOn.youdao && !_chOn.baidu && !_chOn.bing && !_chOn.lingva) {
+      if (!_chOn.backend && !_chOn.baidusug && !_chOn.youdaodict
+          && !_chOn.reverso && !_chOn.mymemory && !_chOn.google
+          && !_chOn.youdao && !_chOn.baidu && !_chOn.bing) {
         stepOnline = '未启用（在线渠道均未勾选）';
       } else {
         const resp = await sendMessage({
@@ -265,7 +294,8 @@ async function _translateInternal(word) {
           word,
           source: transState.learnLang,
           target: transState.meaningLang,
-          channels: _chOn
+          channels: _chOn,
+          prior: builtinPrior   // 第460次：builtin 同形先验票（SW 计入跨渠道共识）
         });
         if (resp && resp.ok && resp.text) {
           result = cleanDictEntry(resp.text.trim());
@@ -336,8 +366,9 @@ async function _translateInternal(word) {
         _setLastChannel('原形回退:缓存');
         return lemmaClean;
       }
-      // 用 lemma 重新走所有渠道（Translator API + 在线）
-      const lemmaResult = await translateWithLemma(lemma);
+      // 用 lemma 重新走所有渠道（Translator API + 在线）；第461次：传 builtinFb 收集
+      //   lemma 自己被拒的内置结果（原词与 lemma 的候选都留作缺口兜底）
+      const lemmaResult = await translateWithLemma(lemma, builtinFb);
       if (lemmaResult) {
         // 写入原词和 lemma 的缓存
         const lemmaClean = cleanDictEntry(lemmaResult);
@@ -355,6 +386,38 @@ async function _translateInternal(word) {
     stepLemma = '异常: ' + String(e && e.message || e);
     console.warn(`[VocabRadar][translator][${_ts()}] 原形回退失败:`, e);
   }
+
+  // 6. 缺口兜底（第461次，用户裁定「若有缺口必然调用浏览器内置」——内置本地推理、
+  //   无网络配额，可充分优先利用）：在线/LLM/原形全败后，内置若曾产出非空结果
+  //   （同形或文字系统不符被拒、存于 builtinFb.text）直接回收；若一次都没产出
+  //   （当时未就绪/超时），此处必然再调一次（本地、无第三方限流；Firefox 无
+  //   Translator API 则 getTranslator 为空，兜底同样为空——浏览器限制，无法承诺必然成功）。
+  //   采纳结果标注'浏览器内置(兜底)'；文字系统不合格的兜底结果只本次返回、不写缓存
+  //   （防错误脚本译文驻留词典被反复读出），合格则照常回写。
+  if (!result && _chOn.builtin) {
+    try {
+      let cand = builtinFb.text;
+      if (!cand) {
+        const tr = await getTranslator();
+        if (tr) {
+          const t2 = await withTimeout(tr.translate(word), 10000, 'Translator.translate(fallback)');
+          if (t2 && t2.trim()) cand = t2.trim();
+        }
+      }
+      if (cand) {
+        result = cleanDictEntry(cand);
+        _setLastChannel('浏览器内置(兜底)');
+        log(`[VocabRadar][translator][${_ts()}] 缺口兜底：采纳内置译文 "${word}"->"${result}"`);
+        if (targetScriptOk(result, transState.meaningLang)) {
+          await setWordCached(transState.learnLang, transState.meaningLang, word, result);
+        }
+        return result;
+      }
+    } catch (e) {
+      console.warn(`[VocabRadar][translator][${_ts()}] 缺口兜底（内置）失败:`, e);
+    }
+  }
+
   // 反思（2026-08-13 第四十九次）：用户要求"instantly 翻译失败的根因要查清"。
   //   返回 null 前输出各步骤汇总，一条日志定位根因（错误信息，不依赖 _debug）。
   console.warn(`[VocabRadar][translator][${_ts()}] 翻译失败根因 "${word}" -> 缓存=${stepCache} | 内置API=${stepBuiltin} | 在线=${stepOnline} | LLM=${stepLlm} | 原形回退=${stepLemma}`);
@@ -365,11 +428,14 @@ async function _translateInternal(word) {
  * 用指定词走所有翻译渠道（Translator API + 在线），不递归原形回退
  * 供 translate 函数的原形回退逻辑调用，避免无限递归
  * @param {string} word
+ * @param {{text:string|null}} [fb] 第461次：缺口兜底候选收集器——lemma 被拒的内置
+ *   结果写入 fb.text（仅首个非空候选，调用方在线全败时回收）
  * @returns {Promise<string|null>}
  */
-async function translateWithLemma(word) {
+async function translateWithLemma(word, fb) {
   // 渠道 1：Translator API
   let result = null;
+  let lemmaPrior = null;   // 第460次：lemma 的 builtin 同形先验票（随消息下传 SW）
   try {
     const translator = await getTranslator();
     if (translator) {
@@ -379,8 +445,11 @@ async function translateWithLemma(word) {
         const trimmed = translated.trim();
         if (transState.learnLang !== transState.meaningLang &&
             trimmed.toLowerCase() === word.trim().toLowerCase()) {
-          log(`[VocabRadar][translator][${_ts()}] 渠道[浏览器内置翻译] lemma "${word}" 返回原文未翻译`);
+          lemmaPrior = { text: trimmed, channel: '浏览器内置' };
+          if (fb && !fb.text) fb.text = trimmed;   // 第461次：缺口兜底候选
+          log(`[VocabRadar][translator][${_ts()}] 渠道[浏览器内置翻译] lemma "${word}" 返回原文，记先验票待印证`);
         } else if (transState.learnLang !== transState.meaningLang && !targetScriptOk(trimmed, transState.meaningLang)) {
+          if (fb && !fb.text) fb.text = trimmed;   // 第461次：缺口兜底候选
           log(`[VocabRadar][translator][${_ts()}] 渠道[浏览器内置翻译] lemma "${word}"->"${trimmed}" 不含目标文字`);
         } else {
           result = cleanDictEntry(trimmed);
@@ -400,7 +469,8 @@ async function translateWithLemma(word) {
         word,
         source: transState.learnLang,
         target: transState.meaningLang,
-        channels: curTransChannels()   // 第447次：补传勾选状态（此前不传=SW 全渠道缺省开）
+        channels: curTransChannels(),   // 第447次：补传勾选状态（此前不传=SW 全渠道缺省开）
+        prior: lemmaPrior               // 第460次：builtin 同形先验票
       });
       if (resp && resp.ok && resp.text) {
         result = cleanDictEntry(resp.text.trim());

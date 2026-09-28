@@ -265,6 +265,10 @@ input::placeholder { color: var(--g-muted); opacity: 1; }
 }
 /* 子栏内 field-row 保持紧邻语义：细项之间紧邻（gap 收紧） */
 .model-subsec .field-row { gap: 6px; padding: 2px 12px; }
+/* 第460次（用户裁定「亲疏远近有间距」）：翻译区分组间距——组内紧邻（2px padding），
+   跨组（免配置/免费在线/需 Key 三组 + LLM 行）拉开 14px，距离即亲疏。
+   .trans-grp 挂在 guide.html 翻译区第 2 行起的每个分组行上。 */
+.model-subsec-trans .trans-grp { margin-top: 14px; }
 .model-subsec .style-desc { color: var(--g-text); }
 /* Tesseract supporting language 行不使用小标题样式，用普通正文标签 */
 .ocr-lang-label {

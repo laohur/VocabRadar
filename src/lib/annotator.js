@@ -158,7 +158,8 @@ export function lookupWord(word, threshold = 0) {
  * @param {Set<string>} seen 去重集合（跨字幕共享，由调用方维护）
  * @param {(ann:{word,tags,translations,rank,pending:boolean})=>void} [onAsyncTranslate]
  *        单词异步翻译完成回调（非阻塞模式）。不传则用阻塞模式。
- * @param {boolean} [priority=false] 翻译优先级（页面文本=true 优先于 ASR/OCR=false）
+ * @param {boolean|number} [priority=false] 翻译优先级档（第461次起为档位、布尔兼容，
+ *        原样透传 translate()：true/3=交互，2=视频侧栏，1=网页正文，false/0=其他）
  * @returns {Promise<Array<{word, tags, translations, rank, pending?}>>}
  */
 export async function getAnnotations(text, rankThreshold = 0, seen = new Set(), onAsyncTranslate = null, priority = false) {

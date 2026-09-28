@@ -30,7 +30,7 @@ import { lookupFull, prefetchFull, getDiagState as getDictDiagState, ensureReady
 //   （30s 门闸 console.error 保留，不可讳疾忌医）。
 import { isDebugLog } from '../../lib/log-flag.js';
 import { getDiagState as getLemmatizerDiagState } from '../../lib/lemmatizer.js';
-import { translate } from '../../lib/translator.js';
+import { translate, PRIO_WEB } from '../../lib/translator.js';
 import { initLang } from '../../lib/i18n.js';
 import { isBalancedParens, pickCleanShortTrans } from '../../lib/dict-clean.js';
 import { beginBatch, countChars, countTokens, countUnique, incField, incScalar, getBatches, logBatch } from '../../lib/dict-stats.js';
@@ -978,7 +978,8 @@ export async function queryWord(lower, original, stats) {
   if (!isContextValid()) return result;
   // 释义账：词典无目标语言译文 → 需在线翻译获取（结果写回 IDB，下次直读）
   if (stats) incField(stats, 'trans', 'asm');
-  translate(original).then((translated) => {
+  // 第461次：网页正文高亮批量释义走档1（悬停/查词档3、视频侧栏档2在其前）
+  translate(original, PRIO_WEB).then((translated) => {
     if (translated) {
       // 更新缓存：下次该词出现时直接命中
       thState.wordCache.set(lower, {

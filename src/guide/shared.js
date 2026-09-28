@@ -144,9 +144,16 @@ const MSG = {
   //   subHeadTrans/transDesc 为翻译小节标题与说明；原 fieldTransChannels 行标签文案并入 transDesc（键删除）。
   // 第434次：ocrEngineLocal/ocrEngineApi/fieldOcrLangs/ocrLangsSuffix/ocrRole*/ocrLangNoPack
   //   等 Tesseract 本地引擎时代的键随第394次裁定移除（guide.js 渲染函数早已退役，零引用）。
+  // 第460次（2026-09-28）：transDesc 改述分组与回退序（guide.html 翻译区分组重排：
+  //   免配置组 → 免费在线组；Lingva 摘除、MyMemory 挪在线组末位、
+  //   同形词需两个渠道印证才采纳）。
+  //   第460次·补充（用户裁定）：MyMemory 默认不选（词级质量最差且 5000 字符/天限流，
+  //   仅末位手工兜底），默认不选渠道增至三：LLM/Backend/MyMemory。
+  //   第461次（用户裁定「撤销需要 key 的翻译接口」）：删需 Key 组（DeepL/Microsoft）
+  //   分组与两渠道标签文案；新增 transChHealth 渠道状态行标签（ch-health.js 渲染详情）。
   transDesc: {
-    en: 'Online channels for word meanings (checked = enabled, tried in order). The LLM channel uses the chat LLM above; the Backend channel calls the backend translate API using the backend source selected in the chat row above. Both are off by default; the others are on by default.',
-    zh: '生词释义的在线翻译渠道（勾选启用，按序回退）：LLM 渠道走上方对话大模型；Backend 渠道走后端翻译接口（来源/地址/Key 取对话行所选后端组来源）；两者默认不选，其余渠道默认全启用。'
+    en: 'Online channels for word meanings (checked = enabled, tried in order). Groups by closeness: no-config (Backend / browser built-in / BaiduSug / YoudaoDict) → free online (Reverso / Bing / Google / Youdao / Baidu / MyMemory). LLM, Backend and MyMemory are unchecked by default; the other free channels are on. The LLM channel uses the chat LLM above; Backend uses the backend translate API from the chat row. When a channel echoes the original text, another channel must confirm it before it is accepted.',
+    zh: '生词释义的在线翻译渠道（勾选启用，按序回退），按亲疏分组：免配置（后端/浏览器自身/百度联想/有道词典）→ 免费在线（Reverso/Bing/Google/有道翻译/百度翻译/MyMemory）。LLM、Backend、MyMemory 默认不选（MyMemory 质量差且每天限 5000 字符，仅作末位兜底），其余免费渠道默认选中；LLM 渠道走上方对话大模型；Backend 走对话行所选后端组的翻译接口。渠道回显原文时，需另一渠道给出相同译文才采纳。'
   },
   transChLlm: { en: 'LLM', zh: 'LLM' },
   // 后端翻译渠道：走 backend POST /api/translate（翻译路由，非 /v1/chat/completions 大模型路由）
@@ -156,12 +163,17 @@ const MSG = {
   transChBuiltinNoFx: { en: 'This browser has no built-in translation (e.g. Firefox)', zh: '此浏览器无内置翻译（如 Firefox）' },
   transChBaidusug: { en: 'BaiduSug', zh: '百度联想' },
   transChYoudaodict: { en: 'YoudaoDict', zh: '有道词典' },
+  // 第460次：Reverso 新增（免 key 端点，见 sw/translate-channels.js reversoTranslate）
+  transChReverso: { en: 'Reverso', zh: 'Reverso' },
   transChMymemory: { en: 'MyMemory', zh: 'MyMemory' },
   transChGoogle: { en: 'Google', zh: 'Google' },
   transChYoudao: { en: 'Youdao', zh: '有道翻译' },
   transChBaidu: { en: 'Baidu', zh: '百度翻译' },
   transChBing: { en: 'Bing', zh: 'Bing' },
-  transChLingva: { en: 'Lingva', zh: 'Lingva' },
+  // （transChDeepl/transChMstrans 已删：需 Key 渠道 DeepL/Microsoft 整体撤销，第461次）
+  // （transChLingva 已删：Lingva 公共实例不稳定摘除，第460次）
+  // 第461次：渠道状态行标签（详情由 ch-health.js 取 SW 登记簿渲染进 #transChHealthDetail）
+  transChHealth: { en: 'Channel status', zh: '渠道状态' },
   // 第二百二十六次（用户："asr 两行单选，第一行是本地，whisper模型是下拉，第二行是api。ocr同理"）：
   //   引擎单选文字精简为 本地/API（细项标签与说明承载 Whisper/Tesseract 语境）；
   //   fieldAsrEngine/fieldOcrEngine/asrApiFmt 三个行标签键随行结构删除。

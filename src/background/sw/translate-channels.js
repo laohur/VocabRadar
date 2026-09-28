@@ -1,8 +1,13 @@
 // =============================================================================
 // SW 在线翻译渠道实现（2026-09-27 拆分自 service-worker.js）
-// 职责：9 个渠道的单次请求实现（渠道 0 Backend + 1-2 词典快渠道 + 3-8 兜底）。
+// 职责：9 个渠道的单次请求实现（Backend + 2 词典快渠道 + 6 在线兜底渠道）。
 // 顺序、勾选门控与"未翻译"判定都在 translate.js（编排层），本文件只管发请求取译文。
-// 译文返回 null 即本渠道不可用，由编排层换下一渠道。
+// 译文返回 null 即本渠道不可用，由编排层换下一渠道；
+// 抛错（HTTP 状态/不支持语言）由编排层记入错误汇总——不遮蔽根因。
+// 渠道清单（2026-09-28 第461次起）：backend / baidusug / youdaodict / reverso /
+//   bing / google / youdao / baidu / mymemory(默认不选，末位手工兜底)；
+//   第460次曾加 deepl/mstrans（需 Key）已随第461次裁定整体撤销（含 Key 存取与检测）；
+//   lingva 公共实例不稳定已摘除。
 // =============================================================================
 import { cleanDictEntry } from '../../lib/dict-clean.js';
 import { resolveLlmConfig } from '../../lib/llm.js';
@@ -269,91 +274,130 @@ export async function baiduTranslate(text, src, tgt) {
 /**
  * Bing 翻译（Edge 浏览器用户优先可用）
  *
- * 反思（2026-08-02）：用户在 Edge 浏览器，Bing 翻译可能更容易访问。
- *   Bing translator API 需要 IG token（从 bing.com/translator 页面获取）。
- *   ttranslatev3 端点：POST https://www.bing.com/ttranslatev3?isVertical=1&IG=xxx
- *   返回: [{ "translations": [{ "text": "译文", "to": "zh" }] }]
- *   若 token 获取失败或翻译失败，返回 null 让调用方继续其他渠道。
+ * 反思（2026-08-02）：Bing translator API 需要 IG token（从 bing.com/translator 页面获取）。
+ * 反思（2026-09-28 第四百六十次·调研实测修复）：用户反馈词 "americanos"（en→pt）全渠道
+ *   失败，Bing 根因是旧实现只取 IG、不带 AbusePrevention token → POST 返回
+ *   {"statusCode":205}（非 JSON 数组），json 解析后走 null，日志侧再按 JSON 解析报错；
+ *   且 www POST 会 302 跳 cn.bing.com（fetch 跟随后变 GET）→ 空响应。
+ *   实测可用配方（PowerShell 直发验证 200，running→correndo）：
+ *     1. GET https://www.bing.com/translator（带浏览器 UA），取**最终 pageRes.url 的
+ *        origin**作 POST base（cn 地区 302→cn.bing.com，必须用页面落点而非写死 www）；
+ *     2. 页面解析三件套：IG:"..."、data-iid="translator.50xx"（5023/5025/5010 均可）、
+ *        params_AbusePreventionHelper=[keyTs, token, expiry]；
+ *     3. POST {origin}/ttranslatev3?isVertical=1&IG={ig}&IID={iid}，表单带
+ *        fromLang=auto-detect / text / to / token / key={keyTs}（key 必须是第 1 元素
+ *        时间戳；缺 token → 205，缺 UA → 401 ShowCaptcha）；
+ *     4. fromLang 恒 auto-detect（auto→400、显式 from=zh→400）；to=zh 需 zh-Hans、
+ *        to=sh → 400（跳过）。
+ *   三件套缓存约 4 分钟；请求失败即清缓存重取页面重试一次（token 可能已过期）。
+ * @returns {Promise<string|null>} 译文；null=响应无译文
+ * @throws 页面取三件套失败、HTTP 非 2xx、响应结构异常——由编排层记入错误汇总
  */
-let _bingIG = null;
-let _bingIGTime = 0;
+let _bingSess = null;   // { origin, ig, iid, keyTs, token, ts }
 export async function bingTranslate(text, src, tgt) {
-  // IG token 有效期约 5 分钟，过期重新获取
-  if (!_bingIG || Date.now() - _bingIGTime > 4 * 60 * 1000) {
-    try {
-      // 反思（2026-08-12）：用 fetchWithTimeout，8 秒超时
-      const pageRes = await fetchWithTimeout('https://www.bing.com/translator', {
-        credentials: 'omit',
-        headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' }
-      }, 8000);
-      if (!pageRes.ok) return null;
-      const pageText = await pageRes.text();
-      const igMatch = pageText.match(/IG:"([^"]+)"/);
-      if (igMatch) {
-        _bingIG = igMatch[1];
-        _bingIGTime = Date.now();
-      } else {
-        return null;
-      }
-    } catch (e) {
-      return null;
+  if (!text) return null;
+  if (tgt === 'sh') throw new Error('不支持目标语言(sh)（Bing 端点 400）');
+  const to = tgt === 'zh' ? 'zh-Hans' : tgt; // 实测 to=zh → 400，需区域码
+  for (let attempt = 0; attempt < 2; attempt++) {
+    if (!_bingSess || Date.now() - _bingSess.ts > 4 * 60 * 1000) {
+      _bingSess = null;
+      if (!(await _bingFetchSession())) continue; // 会话取不到 → 下一轮直接退出
     }
-  }
-
-  const url = `https://www.bing.com/ttranslatev3?isVertical=1&IG=${_bingIG}&IID=translator.5010`;
-  const params = new URLSearchParams({
-    fromLang: 'auto-detect',
-    text: text,
-    to: tgt
-  });
-  // 反思（2026-08-12）：用 fetchWithTimeout，8 秒超时
-  const res = await fetchWithTimeout(url, {
-    method: 'POST',
-    credentials: 'omit',
-    headers: {
-      'Content-Type': 'application/x-www-form-urlencoded',
-      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-      'Referer': 'https://www.bing.com/translator'
-    },
-    body: params.toString()
-  }, 8000);
-  if (!res.ok) return null;
-  const data = await res.json();
-  if (!Array.isArray(data) || data.length === 0) return null;
-  const translations = data[0]?.translations;
-  if (!Array.isArray(translations) || translations.length === 0) return null;
-  return translations[0]?.text?.trim() || null;
-}
-
-/**
- * Lingva 翻译（Google 翻译的代理，避免 Google 直接被墙）
- *
- * 反思（2026-08-02）：Lingva 是 Google 翻译的开源代理，
- *   公共实例可能不稳定，但作为额外渠道尝试。
- *   API: https://lingva.ml/api/v1/{src}/{tgt}/{text}
- *   返回: { "translation": "译文" }
- */
-export async function lingvaTranslate(text, src, tgt) {
-  // 尝试多个 Lingva 实例
-  const instances = [
-    'https://lingva.ml',
-    'https://translate.plausibility.cloud',
-    'https://lingva.lunar.icu'
-  ];
-  for (const base of instances) {
     try {
-      const url = `${base}/api/v1/${src}/${tgt}/${encodeURIComponent(text)}`;
-      // 反思（2026-08-12）：用 fetchWithTimeout，8 秒超时
-      const res = await fetchWithTimeout(url, {
-        credentials: 'omit',
-        headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' }
-      }, 8000);
-      if (!res.ok) continue;
-      const data = await res.json();
-      if (data?.translation) return data.translation.trim();
+      const res = await fetchWithTimeout(
+        _bingSess.origin + '/ttranslatev3?isVertical=1&IG=' + encodeURIComponent(_bingSess.ig) + '&IID=' + encodeURIComponent(_bingSess.iid),
+        {
+          method: 'POST',
+          credentials: 'omit',
+          headers: {
+            'Content-Type': 'application/x-www-form-urlencoded',
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
+            'Referer': _bingSess.origin + '/translator'
+          },
+          body: new URLSearchParams({
+            fromLang: 'auto-detect',
+            text: text,
+            to: to,
+            token: _bingSess.token,
+            key: String(_bingSess.keyTs)
+          }).toString()
+        }, 8000);
+      if (res.ok) {
+        const data = await res.json(); // 非 JSON（205 网关页等）抛错 → 走下面清缓存重试
+        const translations = Array.isArray(data) && data[0] && data[0].translations;
+        const out = Array.isArray(translations) && translations[0] && translations[0].text;
+        if (out) return String(out).trim();
+        throw new Error('响应无译文: ' + JSON.stringify(data).slice(0, 120));
+      }
+      throw new Error('HTTP ' + res.status);
     } catch (e) {
-      // 继续尝试下一个实例
+      _bingSess = null; // token 过期/站点换签：清缓存，下一轮（attempt=1）重取页面
+      if (attempt === 1) throw new Error('Bing 翻译失败: ' + String(e.message || e));
     }
   }
   return null;
 }
+
+/** 取 Bing 翻译页并解析三件套（IG/IID/AbusePrevention token）→ _bingSess；成功 true */
+async function _bingFetchSession() {
+  const pageRes = await fetchWithTimeout('https://www.bing.com/translator', {
+    credentials: 'omit',
+    headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36' }
+  }, 8000);
+  if (!pageRes.ok) throw new Error('translator 页 HTTP ' + pageRes.status);
+  const origin = new URL(pageRes.url).origin; // 302 落点（cn 地区为 cn.bing.com）
+  const html = await pageRes.text();
+  const ig = (html.match(/IG:"([^"]+)"/) || [])[1];
+  const iid = (html.match(/data-iid="([^"]+)"/) || [])[1];
+  const ab = html.match(/params_AbusePreventionHelper\s*=\s*\[\s*(\d+)\s*,\s*"?([^",\s]+)"?/);
+  if (!ig || !iid || !ab) throw new Error('页面三件套解析失败(IG=' + !!ig + ',IID=' + !!iid + ',token=' + !!ab + ')');
+  _bingSess = { origin, ig, iid, keyTs: ab[1], token: ab[2], ts: Date.now() };
+  return true;
+}
+
+/**
+ * Reverso Context 翻译（2026-09-28 第四百六十次·新增，用户裁定）
+ *
+ * 调研实测：POST https://api.reverso.net/translate/v1/translation，
+ *   JSON 必填 from/to/input/format/text + options 全套（缺 options 即拒）；
+ *   from 必须显式（无 auto）、from==to → direction_invalid；响应取 translation[0]。
+ *   预检需浏览器 UA（否则 403）。SW 走 host_permissions:<all_urls> 绕 CORS。
+ * 支持集（对本项目 42 语言码实测，不支持的快速跳过不发请求）：
+ *   源不支持：bn,ur,id,fil,ta,fa,pl,sh,bg,fi,nb,lt,sl,mk,lv,is
+ *   目标不支持：bn,ur,id,fil,ta,fa,ms,sh,he,bg,fi,nb,lt,sl,mk,lv,is
+ *   （ms/he 可作源不可作目标）
+ * @returns {Promise<string|null>} 译文；null=响应无译文
+ * @throws 语言不支持/HTTP 非 2xx——由编排层记入错误汇总
+ */
+const REV_SRC_BAD = ['bn', 'ur', 'id', 'fil', 'ta', 'fa', 'pl', 'sh', 'bg', 'fi', 'nb', 'lt', 'sl', 'mk', 'lv', 'is'];
+const REV_TGT_BAD = ['bn', 'ur', 'id', 'fil', 'ta', 'fa', 'ms', 'sh', 'he', 'bg', 'fi', 'nb', 'lt', 'sl', 'mk', 'lv', 'is'];
+export async function reversoTranslate(text, src, tgt) {
+  if (!text) return null;
+  if (!src || src === 'auto') throw new Error('需显式源语言（端点不支持 auto）');
+  if (REV_SRC_BAD.includes(src)) throw new Error('不支持源语言(' + src + ')');
+  if (REV_TGT_BAD.includes(tgt)) throw new Error('不支持目标语言(' + tgt + ')');
+  if (src === tgt) throw new Error('源语言与目标语言相同(' + src + ')');
+  const res = await fetchWithTimeout('https://api.reverso.net/translate/v1/translation', {
+    method: 'POST',
+    credentials: 'omit',
+    headers: {
+      'Content-Type': 'application/json',
+      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
+      'Accept': 'application/json'
+    },
+    body: JSON.stringify({
+      from: src,
+      to: tgt,
+      input: text,
+      format: 'text',
+      options: { sentenceSplitter: true, origin: 'translation-results', contextResults: false, languageDetection: false }
+    })
+  }, 8000);
+  if (!res.ok) throw new Error('HTTP ' + res.status);
+  const data = await res.json();
+  const out = data && Array.isArray(data.translation) && data.translation[0];
+  return out ? String(out).trim() : null;
+}
+// 第461次（用户裁定「撤销需要 key 的翻译接口」）：DeepL/Microsoft 两渠道及配套
+//   （_getKey 读 Key、_respSnippet 错误摘要）整体删除——引导页两行 Key 输入、
+//   检测按钮、trans-keys.js 与 shared.js 文案已同步移除（同次完成）。

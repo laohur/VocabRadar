@@ -110,6 +110,9 @@ import { initParser, disposeParser } from './parser.js';
 import { initDeactivate, disposeDeactivate } from './deactivate.js';
 // 330次：My Words（生词/熟词两栏，设定栏 group-global 后）独立模块（guide.js 超行限）
 import { initMyWords, syncMyWordsFromStorage } from './my-words.js';
+// 第461次：撤销需 Key 翻译渠道（DeepL/Microsoft），trans-keys.js 随删；新增渠道状态行
+//   模块 ch-health.js——guide.js 已 1200+ 行超 AGENTS.md 1000 行上限，状态拉取/渲染独立成模块
+import { initChHealth, refreshChHealth } from './ch-health.js';
 // 第一百七十次：对话大模型来源预置表（与后台共用同一份，避免地址/模型名两处不一致）
 // 第一百七十四次：新增 LLM_FORMAT_GROUPS —— 下拉按 API 格式 <optgroup> 分组
 //   （第445次起为：河狸后端 / OpenAI Chat Completion 格式 / Anthropic Messages 格式，free 组已裁撤）
@@ -127,13 +130,18 @@ const LLM_TRANSLATE_PROMPT = 'Please translate "{text}" in {lang}.';
 
 // 翻译渠道缺省表（与 lib/translator/index.js 的 DEFAULT_TRANS_CHANNELS 一致：LLM 与 Backend 默认不选）。
 // renderAll 回填与 loadSettings 默认共用；跨标签页 get(null) 拿不到默认键时也以它兜底。
-const DEFAULT_TRANS_CH = { llm: false, backend: false, builtin: true, baidusug: true, youdaodict: true, mymemory: true, google: true, youdao: true, baidu: true, bing: true, lingva: true };
+// 第460次：-lingva（摘除）+reverso（默认选）；mymemory 默认不选（质量差+5000 字符/天限流，仅末位手工兜底）
+// 第461次（用户裁定）：-deepl/-mstrans（需 Key 渠道整体撤销）
+const DEFAULT_TRANS_CH = { llm: false, backend: false, builtin: true, baidusug: true, youdaodict: true, reverso: true, mymemory: false, google: true, youdao: true, baidu: true, bing: true };
 
 // 翻译渠道复选框清单（元素 id ↔ translationChannels 键），回填与保存监听共用一份
-// （Backend 排首：回退顺序上它在最前，见 service-worker handleTranslateText 渠道0）
+// （Backend 排首：回退顺序上它在最前，见 sw/translate.js CHANNEL_TABLE；
+//  第460次按 guide.html 分组行序重排：免配置组 → 免费在线组（Reverso/Bing/…/MyMemory）；
+//  transChLingva 随摘除删除；transChDeepl/transChMstrans 随第461次撤销删除）
 const TRANS_CH_IDS = [['transChLlm', 'llm'], ['transChBackend', 'backend'], ['transChBuiltin', 'builtin'], ['transChBaidusug', 'baidusug'],
-  ['transChYoudaodict', 'youdaodict'], ['transChMymemory', 'mymemory'], ['transChGoogle', 'google'],
-  ['transChYoudao', 'youdao'], ['transChBaidu', 'baidu'], ['transChBing', 'bing'], ['transChLingva', 'lingva']];
+  ['transChYoudaodict', 'youdaodict'],
+  ['transChReverso', 'reverso'], ['transChBing', 'bing'], ['transChGoogle', 'google'],
+  ['transChYoudao', 'youdao'], ['transChBaidu', 'baidu'], ['transChMymemory', 'mymemory']];
 
 // 第三百九十四次（plan 阶段二③，用户裁定「扩展不再保留这两个模型」）：Tesseract 移除，
 //   语言→tess 代码映射（TESS_LANG_CODES）、BUNDLED_TESS_PACKS、renderOcrLangRow/
@@ -359,6 +367,8 @@ function _startDictSpin(el, baseText) {
 function _reattachSpin(el) {
   if (_spinEl && _spinTimer) el.appendChild(_spinEl);
 }
+// 第462次：就绪行分项重取句柄（renderDictStatus 装载时注册；LEMMAS_READY 监听调用）
+let _refreshDictStats = null;
 function renderDictStatus() {
   const el = $('gDictStatus');
   if (!el) return;
@@ -382,6 +392,9 @@ function renderDictStatus() {
       }
     }).catch(() => { /* 计数失败明示：保留已就绪基础文案，不掩饰也不阻断 */ });
   };
+  // 第462次（修"引导页 lemmas 0"）：applyStats 句柄留模块级——词形整表按需下载写入后
+  //   SW 广播 LEMMAS_READY（lemmas-engine.js），init 处 onMessage 监听据此重取分项。
+  _refreshDictStats = applyStats;
   // 346：后台重建观察器——rebuildPending 清空（重建结束/失败）即停轮播并重取分项终值
   // 347：构建中每 2s tick 顺带 applyStats(0)——字段到账即亮（如翻译先行回填完成后下一次
   //   tick 就显数），不再等重建结束一齐出；retries=0 不叠加翻译重试链（tick 本身就在重刷）
@@ -523,6 +536,7 @@ async function loadSettings() {
     ocrLlmModel: '',
     ocrLlmApiKey: '',
     translationChannels: DEFAULT_TRANS_CH,   // 第二百二十三次：改引常量（LLM 渠道默认不选，其余全选）
+    // 第461次：deeplApiKey/mstransApiKey 默认条目随需 Key 渠道撤销删除（storage 存量残留无害）
     llmTranslatePrompt: LLM_TRANSLATE_PROMPT,   // LLM 翻译渠道提示词（{text}=原文，{lang}=释义语言）
     // 第一百零二次：asrFirstChunkSec 默认值条目移除（唯一来源 src/data/config.json）
     // 308次（用户"新增默认样式"）：网页提示默认样式改绿色下划线，annotationStyle 等注释栏默认不动。
@@ -642,7 +656,7 @@ function renderAll(res) {
   $('ocrLlmBaseUrl').value = res.ocrLlmBaseUrl || '';
   $('ocrLlmModel').value = res.ocrLlmModel || '';
   $('ocrLlmApiKey').value = res.ocrLlmApiKey || '';
-  // 翻译渠道回填（缺省表兜底：LLM 不选、其余全选——跨标签页 get(null) 拿不到默认键时防止全亮）
+  // 翻译渠道回填（缺省表兜底：LLM/Backend/MyMemory 不选、其余全选——跨标签页 get(null) 拿不到默认键时防止全亮）
   // 无内置翻译 API 的浏览器（Firefox）：「浏览器自身」灰显禁用且不勾选
   const tch = Object.assign({}, DEFAULT_TRANS_CH, res.translationChannels || {});
   const builtinUnsupported = (typeof Translator === 'undefined');
@@ -660,6 +674,8 @@ function renderAll(res) {
     }
   });
   $('llmTranslatePrompt').value = res.llmTranslatePrompt || LLM_TRANSLATE_PROMPT;
+  // 第461次：渠道状态行刷新（CH_HEALTH 登记簿快照，ch-health.js；撤销的 Key 回填随 trans-keys.js 删除）
+  refreshChHealth();
   // 328次：单开关回填——任一重复键为开即勾选（收敛历史分歧值；勾选态=允许重复）
   $('hintLaterEnabled').checked = !!(res.hintLaterEnabled || res.annotateRepeat);
   $('hintSideAnnotation').checked = !!res.hintSideAnnotation;
@@ -1070,6 +1086,13 @@ async function init() {
   $('btnDetectLlm').addEventListener('click', () => detectService('llm'));
   $('btnDetectAsr').addEventListener('click', () => detectService('asr'));
   $('btnDetectOcr').addEventListener('click', () => detectService('ocr'));
+  // 第461次：渠道状态行——周期刷新 SW 翻译登记簿（ch-health.js；原第460次 Key 保存/检测接线随撤销删除）
+  initChHealth({ log, getLang: getLangState });
+  // 第462次：词形整表下载完成广播（lemmas-engine.js 写入后发）——就绪行分项重取，
+  //   消除"下载先于/晚于取数"造成的 lemmas 0 陈旧数字。不 return true（无需应答）。
+  chrome.runtime.onMessage.addListener((msg) => {
+    if (msg && msg.type === 'LEMMAS_READY' && _refreshDictStats) _refreshDictStats(0);
+  });
   // 地址/模型/Key/提示词：change（失焦或回车）时保存，与本页其他控件一致
   $('llmBaseUrl').addEventListener('change', (e) => {
     chrome.storage.local.set({ llmBaseUrl: e.target.value.trim() }, () => log('接口地址已保存'));
@@ -1208,7 +1231,7 @@ async function init() {
                || changes.chatWordPrompt || changes.chatSidebarPrompt
                || changes.asrLlmProvider || changes.asrLlmModel || changes.asrLlmBaseUrl
                || changes.asrLlmApiKey || changes.ocrLlmProvider || changes.ocrLlmBaseUrl || changes.ocrLlmModel
-                 || changes.ocrLlmApiKey || changes.translationChannels
+                  || changes.ocrLlmApiKey || changes.translationChannels   // 第461次：deeplApiKey/mstransApiKey 监听随撤销删除
                 || changes.llmTranslatePrompt || changes.learnLanguage || changes.meaningLanguage
                 || changes.queryEnabled || changes.contextLookupEnabled || changes.queryBarEnabled
                 || changes.textHintEnabled || changes.webSidebarEnabled || changes.sidebarEnabled

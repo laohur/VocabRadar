@@ -6,7 +6,7 @@
 // =============================================================================
 import { handleWordDbMessage } from '../../lib/word-db.js';
 import { _ts, log } from './log.js';
-import { handleTranslateText } from './translate.js';
+import { handleTranslateText, getChannelStatus } from './translate.js';
 import { handleParseMaterial } from './parse-material.js';
 import { handleOcrRecognize } from './ocr.js';
 import { handleAsrLlmFile, handleSegmentByLlm } from './asr.js';
@@ -84,9 +84,16 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       sendResponse({ ok: true, supported: true });
       return true;
     case 'TRANSLATE_TEXT':
-      handleTranslateText(msg.word, msg.source, msg.target, msg.channels)
+      // 第460次：msg.prior = 内容侧浏览器内置译文的同形先验票 {text,channel}，
+      //   供 handleTranslateText 计入跨渠道共识（≥2 票采纳）。
+      handleTranslateText(msg.word, msg.source, msg.target, msg.channels, msg.prior)
         .then((r) => sendResponse(r))
         .catch((e) => sendResponse({ ok: false, error: String(e.message || e) }));
+      return true;
+    case 'CHANNEL_STATUS':
+      // 第461次：翻译渠道状态快照（成功/失败/连败/冷却/最近错误与耗时），
+      //   引导页翻译分组状态行（guide/ch-health.js）读取。
+      sendResponse({ ok: true, channels: getChannelStatus() });
       return true;
     case 'FETCH_SUBTITLE':
       handleFetchSubtitle(msg.url)

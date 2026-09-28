@@ -166,27 +166,43 @@
             </div>
           </div>
           </div><!-- /.model-subsec-chat -->
+          <!-- 第460次（2026-09-28 用户裁定「亲疏远近有间距」）：翻译区按渠道亲疏分组重排——
+               行1 LLM（提示词紧随）；行2 免配置组 Backend/浏览器自身/百度联想/有道词典；
+               行3 免费在线组 Reverso/Bing/Google/有道翻译/百度翻译/MyMemory；
+               组距大于组内距，见 guide.css .model-subsec-trans .trans-grp。
+               Lingva 摘除（公共实例不稳定，见 sw/translate-channels.js 第460次注释）；MyMemory
+               挪在线组末位（慢且限流），且默认不勾（质量差，仅末位手工兜底）。
+               第461次（用户裁定「撤销需要 key 的翻译接口」）：DeepL/Microsoft 两行
+               （原组4/5：勾选+API Key 输入+检测按钮）整体删除，trans-keys.js 随删；
+               组3 下方新增渠道状态行（登记簿 sw/translate.js，ch-health.js 渲染）。 -->
           <div class="model-subsec model-subsec-trans">
             <div class="sub-head" data-key="subHeadTrans">翻译</div>
-          <p class="style-desc" data-key="transDesc">生词释义的在线翻译渠道（勾选启用，按序回退）：LLM 渠道走上方对话大模型；Backend 渠道走后端翻译接口（来源/地址/Key 取对话行所选后端组来源）；两者默认不选，其余渠道默认全启用。</p>
+          <p class="style-desc" data-key="transDesc">生词释义的在线翻译渠道（勾选启用，按序回退）：LLM、Backend、MyMemory 默认不选，其余免费渠道默认启用。</p>
           <div class="field-row tight">
             <label class="chk"><input type="checkbox" id="transChLlm"><span data-key="transChLlm">LLM</span></label>
             <div class="field" style="flex:1 1 320px; min-width:240px;">
               <input id="llmTranslatePrompt" type="text" placeholder="Please translate &quot;{text}&quot; in {lang}.">
             </div>
           </div>
-          <div class="field-row tight">
+          <!-- 组2：免配置（无需 Key/签名，按回退序 Backend → 浏览器自身 → 词典快渠道） -->
+          <div class="field-row tight trans-grp">
             <label class="chk"><input type="checkbox" id="transChBackend"><span data-key="transChBackend">Backend</span></label>
             <label class="chk"><input type="checkbox" id="transChBuiltin"><span data-key="transChBuiltin">浏览器自身</span></label>
             <label class="chk"><input type="checkbox" id="transChBaidusug"><span data-key="transChBaidusug">百度联想</span></label>
             <label class="chk"><input type="checkbox" id="transChYoudaodict"><span data-key="transChYoudaodict">有道词典</span></label>
-            <label class="chk"><input type="checkbox" id="transChMymemory"><span data-key="transChMymemory">MyMemory</span></label>
+          </div>
+          <!-- 组3：免费在线（Reverso 新增、Bing 修复、MyMemory 挪本组末位且默认不勾） -->
+          <div class="field-row tight trans-grp">
+            <label class="chk"><input type="checkbox" id="transChReverso"><span data-key="transChReverso">Reverso</span></label>
+            <label class="chk"><input type="checkbox" id="transChBing"><span data-key="transChBing">Bing</span></label>
             <label class="chk"><input type="checkbox" id="transChGoogle"><span data-key="transChGoogle">Google</span></label>
             <label class="chk"><input type="checkbox" id="transChYoudao"><span data-key="transChYoudao">有道翻译</span></label>
             <label class="chk"><input type="checkbox" id="transChBaidu"><span data-key="transChBaidu">百度翻译</span></label>
-            <label class="chk"><input type="checkbox" id="transChBing"><span data-key="transChBing">Bing</span></label>
-            <label class="chk"><input type="checkbox" id="transChLingva"><span data-key="transChLingva">Lingva</span></label>
+            <label class="chk"><input type="checkbox" id="transChMymemory"><span data-key="transChMymemory">MyMemory</span></label>
           </div>
+          <!-- 第461次：渠道状态行（成功/失败计数、连败冷却、最近错误与耗时；
+               数据源 sw/translate.js 登记簿，经 CHANNEL_STATUS 消息由 ch-health.js 渲染） -->
+          <p class="style-desc" style="margin:4px 0 0;"><span data-key="transChHealth">渠道状态</span><span id="transChHealthDetail" style="margin-left:6px;">…</span></p>
           </div><!-- /.model-subsec-trans -->
           <div class="model-subsec model-subsec-asr">
             <div class="sub-head" data-key="subHeadAsr">语音识别模型</div>

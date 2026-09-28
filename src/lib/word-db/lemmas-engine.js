@@ -118,6 +118,13 @@ async function lemmasLoadInner(lang) {
 
   // 4. 写入扩展数据域 IDB（读-合并-写，不影响 words 字段）
   await idbDictMerge(lang, { lemmas: wordDict, ambiguity: ambiguityMap });
+  // 第462次（修"引导页 lemmas 0 而引擎已就绪 139070"）：写入成功后广播——
+  //   就绪行分项统计（lemmasSizeCached 仅读缓存、不触发下载）在下载前取数必为 0，
+  //   且取数只有一次、无重取钩子；下载完成无人通知则数字永久停在 0。
+  //   引导页监听 LEMMAS_READY 即重取，"是啥就是啥"。无接收方时 lastError 吞掉。
+  try {
+    chrome.runtime.sendMessage({ type: 'LEMMAS_READY', lang, count }, () => { void chrome.runtime.lastError; });
+  } catch (_) { /* 无监听上下文不报错 */ }
   console.log(`[VocabRadar][词形数据] 语言 ${lang} 词形数据已下载并存入本地扩展存储（${count} 词）`);
   return { source: 'download', wordDict, ambiguityMap };
 }

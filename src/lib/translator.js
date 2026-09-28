@@ -7,7 +7,8 @@
 // 渠道优先级：
 //   1. 本地缓存（统一词典 word-db.js dbGetWord：key={lang}|{word_lower} 的 translation 字段）-> 命中直接返回
 //   2. 浏览器内置 Translator API（Chrome 138+，本地神经网络，最优）
-//   3. 经 service worker 转发的在线渠道（MyMemory -> Google -> Youdao -> Baidu -> Bing -> Lingva）
+//   3. 经 service worker 转发的在线渠道（Backend -> 词典快渠道 -> Reverso -> Bing ->
+//      Google -> Youdao -> Baidu -> MyMemory；见 sw/translate.js）
 //   4. 任一渠道成功 -> dbUpdateFields 写回词典 translation 字段
 //
 // 反思（2026-08-02）：
@@ -38,7 +39,7 @@
 //   - builtin-translator.js：浏览器内置 Translator API（单例状态 _translator/_initPromise/
 //     _availability、storage 语言对初始读取与变更监听、preloadTranslator 预热、
 //     getAvailability/getTranslator、targetScriptOk 文字系统校验）
-//   - online-channels.js：SW 在线渠道消息通道 sendMessage（TRANSLATE_TEXT 转发 + 55 秒超时）
+//   - online-channels.js：SW 在线渠道消息通道 sendMessage（TRANSLATE_TEXT 转发 + 80 秒超时）
 //   - index.js：翻译主流程（getWordCached/setWordCached 词典缓存、优先级队列、
 //     translate/_processQueue/_translateInternal/translateWithLemma），并作为目录统一出口
 //     re-export shared.js 与 builtin-translator.js 的原导出符号
@@ -47,4 +48,8 @@
 // 本门面仅 re-export 全部原导出符号（符号名不变），所有引用方零改动。
 // 2026-09-09 第二百四十二次：补 primeTranslator（手势入口 prime，th/panel.js 查词/OCR 面板用）
 // 2026-09-27：补 targetScriptOk（缓存读侧文字系统校验，annotator.js idbTrans 用）
-export { translate, getLastTranslateChannel, getMeaningLang, getAvailability, primeTranslator, targetScriptOk } from './translator/index.js';
+export {
+  translate, getLastTranslateChannel, getMeaningLang, getAvailability, primeTranslator, targetScriptOk,
+  // 第461次：翻译优先级档常量（调用方按来源传档：2=视频侧栏，1=网页正文；true/3=交互）
+  PRIO_INTERACT, PRIO_VIDEO, PRIO_WEB, PRIO_LOW
+} from './translator/index.js';

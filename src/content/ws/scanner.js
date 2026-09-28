@@ -18,7 +18,7 @@ import { LANGUAGES } from '../../lib/vendor/diverse-lemmas/languages.js';
 import { JS_SENTINELS, NON_CONTENT_SELECTOR, SKIP_TAGS } from '../../lib/main-text.js';
 import { getPhonetic } from '../../lib/phonetics.js';
 import { lemmaFamily } from '../../lib/lemmatizer.js';
-import { translate } from '../../lib/translator.js';
+import { translate, PRIO_WEB } from '../../lib/translator.js';
 import { getBlocks, getLastEmitAt, subscribe } from '../page-scan-bus.js';
 import { _activeTab, _allAnnotations, _annotateOov, _annotateRepeat, _annTemplate, _annotationsCache, _cachedLearnLang, _collectedSubs, _detailMode, _firstSentMap, _noAnnotation, _pageSentenceEls, _pageSentences, _rankThreshold, _root, _scanScheduled, _seenSentences, _seenWords, addSentenceKey, addWordKey, cssEscape, escapeHtml, escapeReg, formatTime, getBlockText, hasSentenceKey, hasWordKey, log, normSentKey, set_allAnnotations, set_annotationsCache, set_collectedSubs, set_firstSentMap, set_pageSentenceEls, set_pageSentences, set_scanScheduled, set_seenSentences, set_seenWords, splitSentences } from './core.js';
 // 280次：annBrackets 布尔退役改 annTemplate 模板——渲染走模板拆分（pre+释义+post）
@@ -718,12 +718,13 @@ async function scanPageTextFallback() {
       const sent = sentences[idx];
       if (hasSentenceKey(sent)) continue;
       try {
+        // 第461次：网页正文批量注释走档1（视频侧栏档2在其前，悬停/查词档3最前）
         const anns = await getAnnotations(sent, _rankThreshold, _seenWords, (ann) => {
           // 反思（2026-08-14 第五十八次）：fallback 路径原只调 updateWordTranslation 更新词汇面板，
           //   翻译晚到时句子槽位不重渲染 → 侧栏句子无注释（与"网页无提示"同源）。
           //   改用 onAsyncTranslate：重渲染包含该词的句子 slot（fillSlotAnnotations）并更新词汇面板。
           onAsyncTranslate(ann);
-        });
+        }, PRIO_WEB);
         if (!_root) return;
         // 第一百九十三次：与网页高亮同口径——annotateOov=false 时过滤表外词（rank=null），
         //   此时 th/queryWord 对表外词根本不高亮，侧栏也不该出注释。
@@ -982,7 +983,7 @@ function ensureAnnotations(sub) {
   const text = (typeof sub.text === 'string') ? sub.text : '';
   p = (_noAnnotation || !text)
     ? Promise.resolve([])
-    : getAnnotations(text, _rankThreshold, _seenWords, onAsyncTranslate);
+    : getAnnotations(text, _rankThreshold, _seenWords, onAsyncTranslate, PRIO_WEB);   // 第461次：网页正文批量=档1
   _annotationsCache.set(sub, p);
   return p;
 }
@@ -1031,12 +1032,13 @@ if (ann.rank === null && !_annotateOov) return;
 const wordSel = cssEscape(wordDedupKey(ann.word));
 const hasTrans = (ann.translations && ann.translations.length > 0);
 
-  // 翻译失败时重试一次（5秒后，高优先级）
+  // 翻译失败时重试一次（5秒后，网页正文档=1——第461次随四档队列由"高优先级"降档，
+  //   批量回填不与视频侧栏/悬停抢队头）
   // 反思（2026-08-10）：翻译器可能在页面加载时未就绪，5秒后重试给翻译器下载时间
   if (!hasTrans && !ann._retried) {
     ann._retried = true;
     setTimeout(() => {
-      translate(ann.word, true).then((translated) => {
+      translate(ann.word, PRIO_WEB).then((translated) => {
         if (translated) {
           ann.translations = [translated];
         }

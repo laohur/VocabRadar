@@ -40,6 +40,8 @@
 //      CSS 变量缺省底色 transparent、字号 28px，与 guide 页 Custom 默认值同源。
 
 import { getAnnotations, setRankMax, setMyWords } from '../lib/annotator.js';
+// 第461次：视频内字幕注释的翻译优先级档（2=视频侧栏，先于网页正文批量）
+import { PRIO_VIDEO } from '../lib/translator.js';
 // 302次：侧邻注释统一用短释（与各侧邻路径同源；本地旧版只认；已删）
 import { pickCleanShortTrans } from '../lib/dict-clean.js';
 // 第三百七十次（方案A）：词典就绪态（缓存守卫/时间线上报）+ 诊断记录器。
@@ -616,7 +618,7 @@ async function renderSubtitle(subtitle) {
     if (!annsRef || !_enabled || _lastKey !== (subtitle.start + ':' + subtitle.text)) return;
     applyAnns(subtitle, annsRef, annMode, subtitleEl, annEl);
     updateOverlayPosition();
-  });
+  }, PRIO_VIDEO);
   annsRef = anns;
   // 第三百七十次（方案A·堵洞③）：词典未就绪期算出的注释不可信（全表外/全 pending，
   //   247/366 同哲学"冷装载期查询结果不可信"），不写缓存——词典就绪后同句重算才有
