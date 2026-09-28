@@ -25,6 +25,15 @@ jar 现取重试一次（_extract_info 统一入口），失败如实上抛不�
 多线程 + upos host 替换）同源：upos 镜像 host 并发探测择优 + 多线程
 Range 分块，纯标准库零新依赖；任何失败返回 False 由调用方回退 yt-dlp
 原生下载（asr_job 调用侧回退，保证不比老路更差）。
+
+管理页下载主路（第448次）：download 任务先 extract_info(download=False)
+拿选中格式直链走 parallel_download（第438次模式推广：合流档 mp4/bestvideo
+视频+音频两路分块，ffmpeg -c copy 合并；半成品 cache/dl-<id>/ 原子进
+media/），失败回退 yt-dlp 原生下载——_base_opts 同次起带
+concurrent_fragment_downloads=4（yt-dlp -N，HLS/DASH 分片并发，官方建议 4+）。
+调研裁定不引入 aria2c 外部下载器：直链多连接价值 parallel_download 已覆盖，
+aria2c 进度回调仅完成一次（管理页进度条跳变）且部分流反而变慢（yt-dlp#7962），
+非 Windows 官方无预编译包（业界统一 brew/apt 自装）。
 """
 
 import glob
@@ -32,6 +41,7 @@ import logging
 import os
 import re
 import shutil
+import subprocess
 import threading
 import time
 import urllib.parse
@@ -225,6 +235,9 @@ def _base_opts(fmt, height=None, abr=None, fresh_cookie=False):
         "no_warnings": True,
         "noplaylist": True,  # 只取单视频，URL 带列表参数时忽略列表
         "retries": 3,
+        # 第448次：分片流（HLS/DASH）原生下载并发分片（yt-dlp -N 等价，官方建议 4+）；
+        # 直链走 parallel_download 主路不经此参
+        "concurrent_fragment_downloads": 4,
         "format": _pick_format(fmt, height, abr),
         # 客户端信息兜底：yt-dlp 提取器自带各站专属头优先，此处仅全局兜底
         "http_headers": dict(_HTTP_HEADERS),
@@ -527,22 +540,30 @@ def _run_download(task):
     try:
         # opts 构造含 cookiefile 等配置校验，放 try 内统一记 task.error
         def make_opts(_fresh=False):
-            opts = _base_opts(task["format"], task.get("height"), task.get("abr"))
+            opts = _base_opts(task["format"], task.get("height"), task.get("abr"),
+                              fresh_cookie=_fresh)
             opts["outtmpl"] = os.path.join(config.MEDIA_DIR, f"{task['id']}.%(ext)s")
             opts["progress_hooks"] = [_progress_hook(task)]
             return opts
-        info = _extract_info(make_opts, task["url"], download=True)
+        # 第448次：先提取（download=False）拿选中格式直链走并行分块下载主路
+        # （第438次 asr_job 同款），不适合直链或失败回退下方 yt-dlp 原生老路
+        info = _extract_info(make_opts, task["url"], download=False)
         if info.get("_type") == "playlist":  # 防御：noplaylist 之外的入口形态
             info = (info.get("entries") or [{}])[0]
         task["title"] = info.get("title")
-        # requested_downloads[0].filepath 是最终产物路径（含 postprocessor 改后缀）
-        rd = (info.get("requested_downloads") or [{}])[0]
-        filepath = rd.get("filepath")
-        if filepath:
-            task["filename"] = os.path.basename(filepath)
-        else:  # 兜底：按 id 前缀反查 media/
-            found = find_media(task["id"])
-            task["filename"] = os.path.basename(found) if found else None
+        if not _parallel_media(info, task):
+            info = _extract_info(make_opts, task["url"], download=True)
+            if info.get("_type") == "playlist":
+                info = (info.get("entries") or [{}])[0]
+            task["title"] = info.get("title") or task["title"]
+            # requested_downloads[0].filepath 是最终产物路径（含 postprocessor 改后缀）
+            rd = (info.get("requested_downloads") or [{}])[0]
+            filepath = rd.get("filepath")
+            if filepath:
+                task["filename"] = os.path.basename(filepath)
+            else:  # 兜底：按 id 前缀反查 media/
+                found = find_media(task["id"])
+                task["filename"] = os.path.basename(found) if found else None
         task["state"] = "done"
         task["progress"] = 100
     except Exception as e:  # yt-dlp 异常类型庞杂，统一兜底记入任务
@@ -559,6 +580,92 @@ def _progress_hook(task):
             if total:
                 task["progress"] = round(d.get("downloaded_bytes", 0) / total * 100)
     return hook
+
+
+# ---- 第448次：管理页下载直链并行主路（第438次模式推广，失败回退原生） ----
+
+def _direct_fmt(fmt, info):
+    """选中格式 → (url, headers, ext)；非 http(s) 直链返回 None（交回原生）。"""
+    url = (fmt or {}).get("url")
+    proto = (fmt or {}).get("protocol")
+    if not url or not url.startswith(("http://", "https://")) \
+            or (proto and proto not in ("http", "https")):
+        return None
+    ext = (fmt or {}).get("ext") or info.get("ext") or "bin"
+    headers = {**_HTTP_HEADERS, **((fmt or {}).get("http_headers") or {})}
+    return url, headers, ext
+
+
+def _parallel_media(info, task):
+    """直链并行分块下载主路（第448次）：单流档并行分块直落 media/；合流档
+    （requested_formats 视频+音频）两路依次分块（进度 0-50/50-95）后 ffmpeg
+    -c copy 合并。半成品在 cache/dl-<id>/（不落 media/ 防 find_media 命中），
+    成功后 os.replace 原子进 media/。不适合直链（HLS/DASH 分段等）或任何
+    失败返回 False（临时目录已清）由 _run_download 回退 yt-dlp 原生下载。"""
+    rf = info.get("requested_formats")
+    fmts = list(rf) if rf and len(rf) >= 2 else [rf[0] if rf else info]
+    checked = [_direct_fmt(f, info) for f in fmts]
+    if any(c is None for c in checked):
+        return False
+
+    def prog(base, span):
+        def cb(pct):
+            task["progress"] = min(99, base + pct * span // 100)
+        return cb
+
+    tmpdir = os.path.join(config.CACHE_DIR, f"dl-{task['id']}")
+    shutil.rmtree(tmpdir, ignore_errors=True)
+    os.makedirs(tmpdir, exist_ok=True)
+    try:
+        parts = []
+        for i, (url, headers, ext) in enumerate(checked):
+            if len(checked) == 1:
+                base, span = 0, 100
+            else:  # 合流两路：视频 0-50、音频 50-95（合并完成置 100）
+                base, span = (0, 50) if i == 0 else (50, 45)
+            log.info("下载 %s 直链并行：fmt=%s ext=%s url=%s", task["id"],
+                     (fmts[i] or {}).get("format_id"), ext, url[:200])
+            dest = os.path.join(tmpdir, f"{i}.{ext}")
+            if not parallel_download(url, dest, headers, prog(base, span)):
+                return False
+            parts.append(dest)
+        os.makedirs(config.MEDIA_DIR, exist_ok=True)
+        if len(parts) == 1:
+            final = os.path.join(config.MEDIA_DIR, f"{task['id']}.{checked[0][2]}")
+            os.replace(parts[0], final)
+        else:
+            container = _MERGE_CONTAINER.get(task.get("format") or "", "mkv")
+            final = os.path.join(config.MEDIA_DIR, f"{task['id']}.{container}")
+            if not _merge_av(parts[0], parts[1], final):
+                return False
+        task["filename"] = os.path.basename(final)
+        return True
+    except Exception as e:  # 网络/文件异常：如实记日志后回退原生
+        log.warning("下载 %s 直链并行失败（%s），回退 yt-dlp 原生下载",
+                    task["id"], str(e)[:200])
+        return False
+    finally:
+        shutil.rmtree(tmpdir, ignore_errors=True)
+
+
+def _merge_av(video, audio, dest):
+    """ffmpeg -c copy 合并视频/音频两路（remux 不重编码，同 yt-dlp 合流语义）。
+    ffmpeg 就绪走 _ensure_ffmpeg（系统 PATH/imageio-ffmpeg）；失败清残骸返回
+    False 由调用方回退原生下载（yt-dlp 自行合流）。"""
+    if not _ensure_ffmpeg():
+        log.warning("合流失败：ffmpeg 缺失（系统 PATH 与 imageio-ffmpeg 均无）")
+        return False
+    r = subprocess.run(["ffmpeg", "-y", "-nostdin", "-v", "error",
+                        "-i", video, "-i", audio, "-c", "copy", dest],
+                       capture_output=True, text=True)
+    if r.returncode != 0 or not os.path.isfile(dest) or not os.path.getsize(dest):
+        log.warning("ffmpeg 合流失败（%s）", (r.stderr or "").strip()[-300:])
+        try:
+            os.remove(dest)
+        except OSError:
+            pass
+        return False
+    return True
 
 
 def task_status(task_id=None):
