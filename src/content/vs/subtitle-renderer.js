@@ -29,7 +29,8 @@ import { getAnnotations, getRankMax, rankToStage, resetDiag } from '../../lib/an
 // 第461次：视频侧栏字幕注释的翻译优先级档（2=视频侧栏，先于网页正文批量）
 import { PRIO_VIDEO } from '../../lib/translator.js';
 import { lemmaFamily } from '../../lib/lemmatizer.js';
-import { getPhonetic } from '../../lib/phonetics.js';
+// 第508次（用户"评论带上[注音]"）：补 getPhoneticsBatch——评论组装前批量预取注音
+import { getPhonetic, getPhoneticsBatch } from '../../lib/phonetics.js';
 import { t } from '../../lib/i18n.js';
 import { isBalancedParens, pickCleanShortTrans } from '../../lib/dict-clean.js';
 // 第三百七十二次：渲染层漏斗上报——计算层有产出但页面无高亮时区分三段过滤（译文/阈值/开关）
@@ -1380,12 +1381,21 @@ function hasTranslation(a) {
 // 反思（2026-08-03）：用户反馈"视频提示生词表明明一堆，复制或者评论按钮说没有单词"。
 //   根因：复制/评论用 hasTranslation 过滤掉无译文的词，导致词表有词但按钮报"无单词"。
 //   修正：复制/评论不再过滤无译文词，无译文时释义列显示"-"（与标签列空值处理一致）。
-function formatAnnotationLine(a) {
+function formatAnnotationLine(a, forComment, phon) {
   const transArr = a.translations || [];
   const trans = transArr.length > 0 ? transArr.join('；') : '-';
   const tags = (a.tags && a.tags.length > 0) ? a.tags.join(',') : '-';
   const stage = (a.rank !== null && a.rank !== undefined) ? rankToStage(a.rank) : '表外';
-  return `${a.word} | ${trans} | ${tags} | ${stage}`;
+  // 第508次（用户"评论带上[注音]，{原形}若非原形"）：评论行单词后带 [注音]
+  //   （getPhoneticsBatch 批量预取，缺失回空不拼）；词面非原形（a.lemma 与 word
+  //   大小写不敏感不等，同 ws/scanner.js 口径）再带 {原形}。复制路径不传参维持原格式。
+  let head = a.word;
+  if (forComment) {
+    if (phon) head += ` [${phon}]`;
+    const lemma = (a.lemma || '').trim();
+    if (lemma && lemma.toLowerCase() !== String(a.word || '').toLowerCase()) head += ` {${lemma}}`;
+  }
+  return `${head} | ${trans} | ${tags} | ${stage}`;
 }
 
 // 第四百四十五次：侧邻注释文本格式——与页内简略模式 inline 注释同形：word(短释义)
@@ -1411,7 +1421,14 @@ export async function onCommentClick() {
   // 反思（2026-08-03）：用户反馈"视频提示生词表明明一堆，复制或者评论按钮说没有单词"。
   //   旧版用 hasTranslation 过滤无译文的词，导致词表有词但评论报"无单词"。
   //   修正：不再过滤，所有生词均纳入评论（无译文词释义列显示"-"）；仅当生词表为空时才提示。
-  const lines = _allAnnotations.map(formatAnnotationLine);
+  // 第508次（用户"评论带上[注音]，{原形}若非原形"）：组装前批量预取注音——
+  //   getPhoneticsBatch 并行走 getPhonetic 内存/持久化缓存（不传 lang 随
+  //   getPhonetic 内部回落学习语言；失败回空串不拼）。去重词表避免重复查。
+  //   formatAnnotationLine(a, true, phon) 启用 [注音]/{原形} 增强格式。
+  const words = [...new Set(_allAnnotations.map((a) => a.word).filter(Boolean))];
+  const phons = await getPhoneticsBatch(words).catch(() => []);
+  const phonMap = new Map(words.map((w, i) => [w, phons[i] || '']));
+  const lines = _allAnnotations.map((a) => formatAnnotationLine(a, true, phonMap.get(a.word) || ''));
   if (lines.length === 0) {
     toast(t('toast.noContent'));
     log('评论填入取消: 生词表为空, anns=', _allAnnotations.length);

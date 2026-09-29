@@ -8,6 +8,7 @@ import { clearAll as clearIdbAll } from '../../lib/word-db.js';
 import { ensureReady } from '../../lib/dictionary.js';
 import { _ts, log } from './log.js';
 import { DEFAULT_SETTINGS, applyConfigDefaults } from './settings.js';
+import { ANN_DEFAULT_STYLE } from '../../lib/styles.js';
 import { createContextMenus } from './menu.js';
 import { WF_UPDATE_ALARM, checkWfUpdates } from './wf.js';
 
@@ -106,6 +107,46 @@ chrome.runtime.onInstalled.addListener((details) => {
 // 旧默认首次背景色（灰蓝/河狸棕绿），onInstalled 时迁移为新 MD3 马卡龙深绿
 const LEGACY_DEFAULT_FIRST_BGS = ['#5a7a99', '#5a8a6a'];
 
+// 第504次（用户纠错定案"默认是绿色背景"）：第503次反向迁移——503 曾把三栏出厂
+// 默认误迁 green-wave（第503次对"绿波不动"理解有误，正确语义是 green-wave 条目
+// 本身不动、默认仍是 green-background）。本迁移把存量出厂残留回正：
+//   三栏 textStyle/annotationStyle/videoAnnotationStyle green-wave → ANN_DEFAULT_STYLE
+//     （green-background；503 已跑过的安装由此拨回，503 未跑而残留 green-background
+//     的安装本就正确，无操作）；
+//   subtitleStyle white-bottom → white-glow（第504次新出厂默认，白字+黑半透明底条
+//     +黑色半透明外发光）；
+//   subtitlePosition b20 → 'b15'（第504次出厂默认 15%）。
+// 只迁出厂残留值——用户手动指派的其他样式/位置不受影响（标记防重入，V1/V2 同款
+// 幂等）。503 标记 annPoolDefaultMigrated503 废止不再使用（503 迁移方向已被否）。
+(async () => {
+  try {
+    const done = await new Promise((resolve) => {
+      try { chrome.storage.local.get('annPoolDefaultMigrated504', (res) => resolve(res && res.annPoolDefaultMigrated504 === true)); } catch (_) { resolve(true); }
+    });
+    if (done) return;
+    const stored = await new Promise((resolve) => {
+      try {
+        chrome.storage.local.get(['textStyle', 'annotationStyle', 'videoAnnotationStyle', 'subtitleStyle', 'subtitlePosition'], (res) => resolve(res || {}));
+      } catch (_) { resolve({}); }
+    });
+    const patch = {};
+    for (const k of ['textStyle', 'annotationStyle', 'videoAnnotationStyle']) {
+      if (stored[k] === 'green-wave') patch[k] = ANN_DEFAULT_STYLE;
+    }
+    if (stored.subtitleStyle === 'white-bottom') patch.subtitleStyle = 'white-glow';
+    if (stored.subtitlePosition === 'b20') patch.subtitlePosition = 'b15';
+    if (Object.keys(patch).length > 0) {
+      await new Promise((resolve, reject) => {
+        try { chrome.storage.local.set(patch, () => { const e = chrome.runtime.lastError; e ? reject(e) : resolve(); }); } catch (e) { reject(e); }
+      });
+      console.log(`[VocabRadar][sw][${_ts()}] [init] 池默认出厂残留反向迁移（第504次）:`, JSON.stringify(patch));
+    }
+    chrome.storage.local.set({ annPoolDefaultMigrated504: true });
+  } catch (e) {
+    console.warn('[VocabRadar][sw] 池默认反向迁移失败（不置位，下次唤醒重试）:', e);
+  }
+})();
+
 // 安装时写入默认设置 + 创建右键菜单
 // 反思（2026-08-03）：改为 async，先读取 config.json 覆盖易坏参数
 chrome.runtime.onInstalled.addListener(async (details) => {
@@ -138,6 +179,7 @@ chrome.runtime.onInstalled.addListener(async (details) => {
     }
     // 反思（2026-08-18 第七十三次修正）：生词默认配色迁移——用户明确"单词绿底白字"。
     //   旧默认 #0d2014/#a8e6cf（近黑/青）也需迁移为 #2e6b43/#ffffff。
+    // 第502次：回退第501次对迁移目标的改动（目标回绿底白字，列表回含 '#ffffff'）。
     const LEGACY_FIRST_BGS = ['#0d2014', '#5a8a6a', '#3f51b5', '#1b2838'];
     const LEGACY_FIRST_FGS = ['#a8e6cf', '#ffffff'];
     if (merged.hintFirstBg && LEGACY_FIRST_BGS.includes(merged.hintFirstBg.toLowerCase())) {

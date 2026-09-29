@@ -254,8 +254,11 @@ async function init() {
     setChk('webSidebarEnabled', settings.webSidebarEnabled);
     // 样式设定菜单（2026-08-05 重构）：移除 hintFirstEnabled/hintLaterBg/hintLaterFg 的 UI
     //   生词配色统一用 hintFirstBg/Fg；后续出现复用相同配色（不再独立配置）
-    setVal('hintFirstBg', settings.hintFirstBg);
-    setVal('hintFirstFg', settings.hintFirstFg);
+    // 第501次（G1）：条目派生后该两键可能为 transparent/'inherit'（color input 非法值），
+    //   非 hex 时不回填，保持取色器初始 paint——仅显式 hex 色可上色。
+    const hexOr = (v, fb) => (/^#[0-9a-fA-F]{6}$/.test(String(v || '')) ? v : fb);
+    setVal('hintFirstBg', hexOr(settings.hintFirstBg, DEFAULTS.hintFirstBg));
+    setVal('hintFirstFg', hexOr(settings.hintFirstFg, DEFAULTS.hintFirstFg));
     setChk('hintLaterEnabled', settings.hintLaterEnabled);
     // 侧邻提示 + 注释配色
     setChk('hintSideAnnotation', settings.hintSideAnnotation);

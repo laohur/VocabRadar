@@ -693,12 +693,14 @@ function _hintGetSettings() {
     hintFirstEnabled: true,
     // 反思（2026-08-18 第七十三次修正）：用户明确"网页提示默认配色是单词绿底白字，
     //   注释是白底绿字"。旧版 #0d2014 墨绿近黑被用户视为黑色。
-    hintFirstBg: '#2e6b43',
-    hintFirstFg: '#ffffff',
-    // 反思（2026-08-05 修正）：用户要求"生词多次出现 复选框 默认空"
+    // 304次（用户"默认无底色"）：透明底；字色兜底绿字（仅生词条目无显式字段时生效，
+    //   pickColors 条目显式字段优先——第502次回退第501次误改的 'inherit'）。
+    hintFirstBg: 'transparent',
+    hintFirstFg: '#2e6b43',
+    // 反思（2026-08-05）：用户要求"生词多次出现 复选框 默认空"
     hintLaterEnabled: false,
-    hintLaterBg: '#2e6b43',
-    hintLaterFg: '#ffffff',
+    hintLaterBg: 'transparent',
+    hintLaterFg: '#2e6b43',
     // 侧邻注释（2026-08-05）：用户要求"侧邻提示 复选框 默认空"
     //   注释=白底绿字（用户明确）
     hintSideAnnotation: false,
@@ -711,10 +713,16 @@ function _hintGetSettings() {
     // 318次：默认语义=代指常量 ANN_DEFAULT_STYLE 的锚定（styles.js 唯一真源，版本变化才改
     //   常量值，无 storage 指针键）；本文件 classic script 不便 import styles.js，此字面量
     //   是常量的镜像兜底（仅 storage 全空时生效），真值锚点见 lib/styles.js
+    // 第501次曾移 green-wave；第502次镜像同步回 green-background；
+    // 第503次曾移 green-wave（误判）；
+    // 第504次（用户纠错"默认是绿色背景"）：ANN_DEFAULT_STYLE 回 green-background
+    //   （green-wave 条目保持 wordFg:'inherit' 即不动正文颜色），镜像同步回 green-background。
     textStyle: 'green-background',
     // 279次：注释样式候选池（三处共享）
     // 309次第五轮（用户四栏统一裁定）：默认 'green-background'，与 guide.js defaults 同步
     // 318次：同上——'green-background' 是 ANN_DEFAULT_STYLE 常量的镜像兜底，非写死绝对回落
+    // 第501次曾移 green-wave；第502次镜像同步回 green-background；第503次曾随误判移 green-wave；
+    // 第504次：常量回 green-background，镜像同步。
     annotationStyle: 'green-background',
     // 280次：侧邻注释模板（annBrackets 布尔退役；
     //   classic script 不便 import styles.js，默认值/迁移字面量与 lib/styles.js 保持一致）

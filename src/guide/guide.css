@@ -539,48 +539,44 @@ input::placeholder { color: var(--g-muted); opacity: 1; }
   line-height: 1.5;
   word-break: break-all;
 }
-/* 281次：预览单窗；282次：加横竖切换按钮行，窗体改固定尺寸（横 480×270 / 竖 270×480） */
+/* 281次：预览单窗；282次：加横竖切换按钮行；第503次（问题5）：切换退役——
+   双舞台常显（左横右竖同高），预览行改横排 flex，竖台拉伸与横台同高 */
 .sub-preview-row {
   display: flex;
-  flex-direction: column;
-  align-items: center;
+  align-items: stretch;
   gap: 8px;
-}
-/* 282次：横屏 16:9 / 竖屏 9:16 切换按钮（本地态，不写 storage） */
-.sub-orient-btns { display: flex; gap: 8px; }
-.sub-orient-btn {
-  padding: 3px 12px;
-  border: 1px solid var(--g-border);
-  border-radius: 14px;
-  background: transparent;
-  font-size: 12px;
-  color: var(--g-muted);
-  cursor: pointer;
-}
-.sub-orient-btn.active {
-  background: var(--g-primary);
-  border-color: var(--g-primary);
-  color: #ffffff;
 }
 /* 反思（2026-08-19 第七十九次修正）：预览窗口底色改"中心灰色光晕"（用户明确）
    radial-gradient 中心 #888 → 外缘 #4a4a4a。
-   282次：1080p 虚拟舞台——外层固定 480×270（竖 270×480），内层按 1080p 真实像素
-   1920×1080（竖 1080×1920）渲染字幕再 scale(0.25)：字号用样式 size 真实 px
-   （'none' 取 40px=真实 1080p clamp 上限），字体显示比例与真实 1080p 视频一致。
+   282次：1080p 虚拟舞台——内层按 1080p 真实像素 1920×1080（竖 1080×1920）渲染
+   字幕再 scale：字号用样式 size 真实 px（'none' 取 40px=真实 1080p clamp 上限），
+   字体显示比例与真实 1080p 视频一致。
    283次（用户"预览的横屏半宽，竖屏半高，按照正文页面的宽度算"）：窗体改百分比——
-   横屏=正文宽 50%（aspect-ratio 16:9 定高）；竖屏高=正文宽一半，按 9:16 反推
-   宽=正文宽 28.125%（=50%×9/16）。1080p 内层不再写死 scale(0.25)，由 guide.js
-   ResizeObserver 按 stage 实测宽/1920（竖 /1080）动态缩放，页面伸缩比例恒真。 */
+   横屏=正文宽 50%（aspect-ratio 16:9 定高）。1080p 内层不再写死 scale(0.25)，
+   由 guide.js ResizeObserver 按 stage 实测宽/1920（竖 /1080）动态缩放。
+   第503次（问题2）：底色改暗色视频感——white-shadow 黑色外发光/黑描边在旧 #888
+   灰底上对比过弱不可辨。（已被第505次推翻，见下）
+   第503次（问题5）：横台 align-self:flex-start 定高（16:9 由宽反推）；竖台
+   stretch 与横台同高、宽按 9:16 反推（width:auto + aspect-ratio）。
+   第505次（用户"视频预览中字幕并没有外发光效果。现在无法查看，因为你把预览的背景
+   改了"）：503 改暗判断有误——出场默认 white-glow 的黑色外发光
+   box-shadow rgba(0,0,0,0.65) 在暗底上不可见，灰底上反而清晰；底色恢复 79 次灰底。 */
 .sub-preview-stage {
   position: relative;
   width: 50%;
+  align-self: flex-start;
   aspect-ratio: 16 / 9;
-  background: radial-gradient(ellipse at center, #888 0%, #666 60%, #4a4a4a 100%);
+  background: radial-gradient(ellipse at center, #888 0%, #4a4a4a 100%);
   border-radius: 10px;
   overflow: hidden;
-  box-shadow: 0 0 12px rgba(136, 136, 136, 0.45), 0 4px 8px rgba(0, 0, 0, 0.08);
+  box-shadow: 0 0 12px rgba(0, 0, 0, 0.45), 0 4px 8px rgba(0, 0, 0, 0.18);
 }
-.sub-preview-stage.portrait { width: 28.125%; aspect-ratio: 9 / 16; }
+/* 第504次（用户"同高。你把同高放哪里了"）：同高不再走 CSS stretch——竖台内容
+   （1080p 内层布局尺寸）参与 flex 行高假设解析，stretch 实测不同高。改由
+   renderSubPreview 的 syncHeights JS 确定性同步（竖台高=横台实测高、宽按 9:16
+   反推，显式赋值）。CSS 保留 aspect-ratio 作首帧回退；align-self 收回 flex-start，
+   防与 JS 显式尺寸互搏。 */
+.sub-preview-stage.portrait { width: auto; align-self: flex-start; aspect-ratio: 9 / 16; }
 .sub-preview-1080 {
   position: relative;
   width: 1920px;
@@ -712,9 +708,122 @@ input::placeholder { color: var(--g-muted); opacity: 1; }
 }
 .style-card .card-label-input:hover { border-color: var(--g-border); }
 .style-card .card-label-input:focus { border-color: var(--g-primary); background: #ffffff; outline: none; }
-/* 281次：位置单选行（radio 一行铺开，替代旧位置网格） */
-.sub-pos-radios { display: flex; gap: 14px; align-items: center; flex-wrap: wrap; }
+/* 281次：位置单选行（radio 一行铺开，替代旧位置网格）——第501次：位置 radio 组退役，
+   .sub-pos-radios 保留给注释方式单选（subAnnModeRadios）。
+   第506次（用户"Annotation style拉远点"）：与上方预览窗拉开间距——预览节回归组体后，
+   注释方式行紧贴预览窗下缘显挤，18px 拉远（节标题→预览窗仍保持 sub-sec-label 的 8px 亲距） */
+.sub-pos-radios { display: flex; gap: 14px; align-items: center; flex-wrap: wrap; margin-top: 18px; }
 .sub-pos-radio { display: inline-flex; gap: 4px; align-items: center; font-size: 13px; color: var(--g-text); cursor: pointer; white-space: nowrap; }
+/* 第502次：注释方式单选行组前说明（"Side Detail 前面加说明，注释样式"） */
+.sub-ann-mode-hint { font-size: 13px; color: var(--g-muted); white-space: nowrap; }
+/* 第501次（滑轨）+第502次细化（用户逐条裁定）：预览框与滑轨列同排紧挨、等高。
+   第503次（问题5）：横竖切换按钮行退役（.sub-orient-host 删）；
+   第503次（问题6）：滑轨列改 grid 两列 [1fr auto]——值(r1c1)与滑轨(r2c1)同列居中，
+   值对齐滑轨垂线（而非滑轨+按钮合成垂线）；▲▼(r2c2) 垂直居中略间距不分两端；
+   标签横跨两列居中（r3）。 */
+.sub-preview-flex {
+  display: flex;
+  /* 第507次（用户"预览窗口跟滑轨整体居中，中间略有间距，滑轨高度同高"）：
+     三项（横台+竖台+滑轨列）总宽小于整行，原默认左对齐——改整体水平居中；
+     预览窗与滑轨间 8px gap 即"略有间距"；滑轨同高由 align-items:stretch 维持。
+     第509次（用户"预览窗口几个项目之间要有间距"）：8px 观感太贴——横台|竖台|滑轨
+     三项间 gap 加大到 16px；居中与同高维持不变。 */
+  justify-content: center;
+  align-items: stretch;   /* 同高：滑轨列拉伸至预览行（stage）高度 */
+  gap: 16px;
+}
+/* 第502次："挨着预览框"——预览框右贴滑轨列（列宽固定，贴右侧；预览框靠列对齐）；
+   第503次（问题5）：对齐改 stretch（原 flex-end 系竖台底部对齐旧设计），双台行内拉伸。
+   第505次（用户"中垂线左是水平预览，右侧是垂直预览，挨着垂直预览右侧是字幕位置
+   滑轨"）：预览行改 display:contents——横竖两台升为 .sub-preview-flex 直接 flex 项：
+   横台 width:50% 以整行宽为基准、右缘恰落整行中垂线，竖台紧随其右，滑轨列紧贴
+   竖台右侧（原 flex:1 撑满整行致滑轨列被推到最右、与竖台间留大段空白；row 自身
+   gap 失效，由 .sub-preview-flex 的 8px 接管）。 */
+.sub-preview-flex .sub-preview-row { display: contents; }
+/* 第505次：滑轨列定宽不被压缩（display:contents 后两台按内容+50% 占满，列保持 72px）
+   第503次（问题6）：grid 两列 [1fr auto]。
+   第510次（用户"预览窗口滑轨并没有同高"）：实测列 stretch 已与预览窗同高
+   （234.28=234.28），但轨道(input)被值(r1)+标签(r3)两行挤成 129px——视觉上
+   "滑轨没有同高"。改单行叠加布局：轨道 grid 占满整列（上下缘与预览窗对齐），
+   值悬浮轨道顶部、标签悬浮底部（均 pointer-events:none 不挡拖动），▲▼右侧居中。 */
+.sub-pos-slider-col {
+  flex: 0 0 auto;
+  width: 72px;
+  display: grid;
+  grid-template-columns: 1fr auto;   /* c1=值/滑轨/标签，c2=▲▼ */
+  grid-template-rows: 1fr;           /* 第510次：单行——轨道铺满列高 */
+  column-gap: 6px;
+  align-items: center;
+}
+.sub-slider-val {
+  grid-area: 1 / 1;   /* 第510次：与滑轨同格叠加，悬浮轨道顶端 */
+  align-self: start;
+  justify-self: center;
+  font-size: 12px;
+  color: var(--g-muted);
+  min-height: 16px;
+  text-align: center;
+  user-select: none;
+  pointer-events: none;   /* 第510次：文字不拦截滑轨拖动 */
+  z-index: 1;
+}
+.sub-slider-label {
+  grid-area: 1 / 1 / 2 / 3;   /* 第510次：横跨两列，悬浮轨道底端 */
+  align-self: end;
+  justify-self: center;
+  font-size: 12px;
+  color: var(--g-muted);
+  min-height: 16px;
+  text-align: center;
+  white-space: nowrap;
+  user-select: none;
+  pointer-events: none;   /* 第510次：不挡滑轨拖动 */
+  z-index: 1;
+}
+/* 垂直滑轨：0 在下、100 在上——vertical-lr+rtl 使值轴自下而上（现行标准写法）；
+   旧 WebKit 不识别 writing-mode 于 range 时回退 slider-vertical（轨道沿高度，min 在下）。
+   第503次（问题6）：grid 子项占中列、行高 1fr 撑满列中段；
+   第510次：单行叠加——占 r1c1 整格，轨道高=列高（与预览窗上下缘对齐）。
+   第510次补：列容器 align-items:center 使 input 不拉伸、高度停在浏览器默认
+   129px——align-self:stretch 拉满整格才真正与预览窗同高。 */
+.sub-pos-slider {
+  grid-area: 1 / 1;
+  justify-self: center;
+  align-self: stretch;   /* 第510次：铺满整格高度（input 默认高度仅 129px） */
+  writing-mode: vertical-lr;
+  direction: rtl;
+  width: 22px;
+  min-height: 60px;
+  accent-color: var(--g-primary);
+  cursor: pointer;
+}
+@supports not (writing-mode: vertical-lr) {
+  .sub-pos-slider { -webkit-appearance: slider-vertical; appearance: slider-vertical; }
+}
+/* 上下三角步进钮（第502次"右侧是向上向下三角，之间有间隔"）；
+   第503次（问题6）：垂直居中（滑轨右侧中部）+钮间小间距，不再分居两端；
+   第510次：单行叠加——占 r1c2，垂直居中维持。 */
+.sub-slider-btns {
+  grid-area: 1 / 2;
+  align-self: center;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 8px;
+}
+.sub-slider-step {
+  width: 22px;
+  height: 22px;
+  border: 1px solid var(--g-border);
+  border-radius: 4px;
+  background: transparent;
+  color: var(--g-muted);
+  font-size: 10px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0;
+}
+.sub-slider-step:hover { color: var(--g-text); border-color: var(--g-primary); }
 
 /* 展示注释结果汇总块 */
 .g-ann-summary[hidden] { display: none; }

@@ -21,6 +21,10 @@ export const DEFAULT_SETTINGS = {
   // 反思（2026-07-08 MD3 重构）：默认背景色改为 MD3 primary 马卡龙深绿 #2e6b43
   //   （原 #5a8a6a 河狸棕绿），符合"文本提示默认颜色跟侧栏色系一致，包括背景色"。
   hintFirstEnabled: true,
+  // 第502次（用户"默认样式改回绿背景"）：回退第501次误改的透明底/'inherit'——
+  //   出厂配色回绿底白字；第503次：池默认常量终裁 green-wave（本键是文本提示直配
+  //   兜底，池指派后 pickColors 压过它，故值不随常量动，仅注释更正锚点描述）；
+  //   存量 storage 有值不受影响（stored 优先）。
   hintFirstBg: '#2e6b43',
   hintFirstFg: '#ffffff',
   // 326次：默认改 false——与 popup.js:110「生词多次出现 复选框 默认空」（08-05 用户裁定）

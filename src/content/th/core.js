@@ -390,16 +390,19 @@ export function pickColors(s) {
   //   单词绿底白字，注释是白底绿字"。旧版 #0d2014（近黑）/#a8e6cf（青）被视为黑色。
   // 280次：统一池接入——textStyle 命中池条目时，生词底/字色取条目 wordBg/wordFg
   //   （渐变/透明底字符串同样经 --beaver-first-bg 变量生效，页面用 background shorthand）；
-  //   优先级：popup 显式 hintFirstBg/Fg > 池条目 > 默认（304次：透明底绿字）。
+  //   优先级（第501次 G1 改）：池条目显式字段 > popup 显式 hintFirstBg/Fg > 默认（304次）。
   // 301次：custom/用户条目经 resolveAnnEntry 解析（settings 直通 caches）。
   const txtSt = resolveAnnEntry(s.textStyle, s.annotationCustom, s.annotationUserStyles);
-  const wordBg = s.hintFirstBg || (txtSt && txtSt.wordBg) || 'transparent';
-  // 308次：条目显式 wordFg:'inherit'（Green Underline"生词不变色"）最优先——
-  //   继承正文色是条目自身的视觉承诺，须压过 popup/storage 端兜底色（text-hint.js
-  //   defaults 仍为白字等旧值），否则下划线样式会意外改字色。'inherit' 经
-  //   --beaver-first-fg 变量直达 color:var(--beaver-first-fg) 合法生效。
-  const wordFg = (txtSt && txtSt.wordFg === 'inherit') ? 'inherit'
-    : (s.hintFirstFg || (txtSt && txtSt.wordFg) || '#2e6b43');
+  // 第501次（G1 根治，用户批"根治"）：生词底/字色统一 377 次口径——条目显式字段
+  //   （含 transparent / 'inherit'）> popup 显式取色 > 内部兜底。旧版 hintFirstBg 恒排
+  //   条目前（hintFirstBg || 条目），storage 存有历史指派值（如绿底 #2e6b43）会把
+  //   green-wave 的透明底压掉——样式卡显示"透明底不变字"、页面实际绿底，即用户
+  //   反馈的"样式显示生词颜色并不变，实际效果却变了"根因之一。308 次的 inherit
+  //   特判被"条目显式优先"涵盖（条目 wordFg='inherit' 直接胜出）。
+  const wordBg = (txtSt && txtSt.wordBg !== undefined) ? txtSt.wordBg
+    : (s.hintFirstBg || 'transparent');
+  const wordFg = (txtSt && txtSt.wordFg !== undefined) ? txtSt.wordFg
+    : (s.hintFirstFg || '#2e6b43');   // 第502次回退第501次误改的 'inherit'（原透明底绿字兜底）
   // 反思（2026-08-15 第六十四次）：透明/半透明底色样式（下划线/荧光/描边等，wordBg=transparent
   //   或带 alpha 的 rgba）派生侧邻注释时，annFg=wordBg 会得到透明字色 → 注释文字不可见。
   // 反思（2026-08-15 第六十五次修正）：上一版把注释底设为 wordFg（如荧光笔 #332700 深色）

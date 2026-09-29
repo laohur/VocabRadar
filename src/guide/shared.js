@@ -9,7 +9,7 @@
 
 import { t } from '../lib/i18n.js';
 // 317次：sanitizeStyleId 缺省兜底改引字幕默认代指常量（styles.js 唯一写死处）
-import { SUBTITLE_TEXT_STYLES, SUBTITLE_POSITIONS, SUB_DEFAULT_STYLE } from '../lib/styles.js';
+import { SUBTITLE_TEXT_STYLES, subPosRatio, SUB_DEFAULT_STYLE } from '../lib/styles.js';
 
 export const $ = (id) => document.getElementById(id);
 
@@ -260,7 +260,8 @@ const MSG = {
   subStyleDesc: { en: 'Text styles apply to subtitle text only; the annotation line follows “Subtitle hints on video” in Word Annotation. Any change (style / custom / position) updates the preview immediately.', zh: '正文样式只管字幕正文；注释行外观由「生词标注 → 视频中字幕的注释」控制。样式/个性化/位置任一变化都会立即刷新预览。' },
   subPreview: { en: 'Preview', zh: '效果预览' },
   subTextStyle: { en: 'Subtitle Text Style', zh: '字幕正文样式' },
-  subPosition: { en: 'Position', zh: '位置' },
+  // 第502次：滑轨下方显示该标签，zh 按用户原话改"字幕位置"
+  subPosition: { en: 'Subtitle position', zh: '字幕位置' },
   subCustomStyle: { en: 'Custom Style', zh: '个性化样式' },
   subCustomBg: { en: 'Background', zh: '底色' },
   // 283次：底色透明勾选（勾选后取色器禁用、写入 'transparent'）；用户卡名称可编辑提示
@@ -278,9 +279,10 @@ const MSG = {
   subSampleText: { en: 'Sample text', zh: '样例文字' },
   subSamplePh: { en: 'Text shown on style cards and in the preview', zh: '显示在样式卡与预览中的样例文字' },
   subDelStyle: { en: 'Delete this style', zh: '删除该样式' },
-  subOrientLandscape: { en: 'Landscape 16:9', zh: '横屏 16:9' },
-  subOrientPortrait: { en: 'Portrait 9:16', zh: '竖屏 9:16' },
+  // 第503次（问题5）：横竖切换退役，subOrientLandscape/subOrientPortrait 两键删除
   // 291次：字幕注释方式单选（与视频侧栏 Detail 按钮写同一键）
+  // 第502次（用户"Side Detail 前面加说明，注释样式"）：组前说明文案
+  subAnnModeHint: { en: 'Annotation style', zh: '注释样式' },
   subAnnSide: { en: 'Side', zh: '侧邻' },
   subAnnDetail: { en: 'Detail', zh: '详细' },
   annResultsTitle: { en: 'Annotated Words', zh: '展示注释结果' },
@@ -345,11 +347,13 @@ export function sanitizeStyleId(items, id, fallback) {
   return fallback || SUB_DEFAULT_STYLE;
 }
 
-// 位置样式 id 清洗：不在 SUBTITLE_POSITIONS 内的回退默认 'b20'（下 1/5，与 storage/overlay
-// 出厂默认一致；314次：用户裁定默认位置改贴底 10%（b10），推翻 223 次的 'b20'——
-// 329次：用户又裁定改回下 1/5，出厂默认同 b20；'b10' 档仍存在可选）
+// 位置 id 清洗：合法 = 档表命中 或 滑轨自定义 'bNN'（0-100 整数，第501次）；
+//   否则回退默认（与 storage/overlay 出厂默认一致；314次：用户裁定默认位置改贴底 10%
+//   （b10）——329次：用户又裁定改回下 1/5（b20）——第504次（用户"位置也是15%"）：
+//   出厂默认随 White Glow 改 b15；'b10' 档仍存在可选）
 // 316次：'t10'（原顶部 1/10，316 次改名 b90 延续 b 系列命名）存量一次性迁移。
 export function sanitizePositionId(id) {
   if (id === 't10') return 'b90';
-  return (id && SUBTITLE_POSITIONS.some((p) => p.id === id)) ? id : 'b20';
+  if (id && subPosRatio(id) !== null) return id;
+  return 'b15';   // 第504次：兜底 b20→b15（出厂默认 White Glow pos=b15）
 }

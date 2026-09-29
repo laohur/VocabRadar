@@ -471,13 +471,26 @@
             </div>
             <button id="subCustomAdd" class="sub-add-btn" type="button" title="Save current custom as a new style">+</button>
           </div>
-          <div class="sub-sec-label" data-key="subPosition">Position</div>
-          <div class="sub-pos-radios" id="subPosRadios"></div>
+          <!-- 第506次（用户"撤回去。我都说是节了，你为啥说组，把组当成栏！"）：第505次
+               独立成组撤销——「节」=组内小节（sub-sec-label 层级），不是组卡片；预览节
+               回归「视频叠加字幕」组体原位。亲疏定案：节标题→预览窗（亲，sub-sec-label
+               下间距 8px）；预览窗→下方注释方式行拉远（guide.css .sub-pos-radios
+               margin-top，用户"Annotation style拉远点"）。
+               第502次（滑轨 UI 细化，用户逐条裁定）：滑轨列紧贴预览框右侧同高——列内
+               数值（上）→ 滑轨+右侧上下三角（中）→「字幕位置」标签（下）；「字幕位置」
+               文字只在滑轨下方（顶部 Position 段标签删除防重复）；预览区「效果预览」段
+               标签用回 sub-sec-label（501 次曾误删成孤儿 i18n 键，505 独立组期间由组名
+               承担，本次撤销复位）。注释方式单选行加组前说明（i18n 注释样式 / Annotation
+               style）。第503次（问题5/6）：横竖切换退役——预览行双舞台常显
+               （左横右竖同高，见 .sub-preview-row/.sub-preview-stage）；subOrientHost 容器删除 -->
+          <div class="sub-sec-label" data-key="subPreview">Preview</div>
+          <div class="sub-preview-flex" id="subPreviewFlex">
+            <div class="sub-preview-row" id="subPreviewRow"></div>
+            <div class="sub-pos-slider-col" id="subPosRadios"></div>
+          </div>
           <!-- 291次：注释方式单选（side 侧邻/detail 详细，写 storage.videoOverlayAnnMode，
                与视频侧栏 Detail 按钮同一键，控制字幕注释布局） -->
           <div class="sub-pos-radios" id="subAnnModeRadios"></div>
-          <div class="sub-sec-label" data-key="subPreview">Preview</div>
-          <div class="sub-preview-row" id="subPreviewRow"></div>
         </div>
       </div>
 

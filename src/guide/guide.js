@@ -92,7 +92,7 @@ import {
   initLang, setLang,
   LANG_NAMES, LANG_NAMES_EN, UI_LANGS, TRANSLATE_LANGS
 } from '../lib/i18n.js';
-import { DEFAULT_ANN_TEMPLATE, BUILD_STAMP, ANN_DEFAULT_STYLE, SUB_DEFAULT_STYLE } from '../lib/styles.js';
+import { DEFAULT_ANN_TEMPLATE, BUILD_STAMP, ANN_DEFAULT_STYLE, VANN_DEFAULT_STYLE, SUB_DEFAULT_STYLE } from '../lib/styles.js';
 // 302次：拆分模块（编排仅调它们的导出； direct lib 引用随代码搬迁，见各模块头）。
 import { $, m, log, getLangState, setLangState, ownWriteAt } from './shared.js';
 import {
@@ -475,6 +475,11 @@ function readFactoryCfg() {
 // 第二百一十三次（用户："更新 config.json…引导页的所有参数都在此"）：
 //   引导页全部默认参数以 src/data/config.json 为唯一来源（键名=storage 键），
 //   本文件内联对象仅作 config 缺键时的保底；storage 里用户已设的值恒优先。
+// 第510次（用户"White Shadow看起来像是侵蚀了原来字形"排查中发现）：第509次
+//   "默认字幕样式改为White Shadow"只改了 styles.js 常量与本文内联保底，
+//   漏改唯一权威来源 config.json——cfgDefaults 合并后出厂默认实际仍是
+//   white-glow（黑底条+外发光），"默认改 White Shadow"从未生效。已在
+//   config.json 补正 subtitleStyle → white-shadow（JSON 无法注释，沿革记此）。
 let _configDefaults = null;
 async function getConfigDefaults() {
   if (_configDefaults) return _configDefaults;
@@ -546,6 +551,11 @@ async function loadSettings() {
     //   （生词绿底#2e6b43白字+注释同主题绿字）——旧默认下引导页四栏指派 none/兜底色
     //   （hintFirstBg transparent+hintFirstFg #2e6b43 绿字）与池指派脱节，用户看不出"是啥样式"；
     //   池指派后 pickColors 压过兜底，四端观感与引导页样式卡一致。none 仍是合法选项可手选。
+    // 第501次（用户"Green Wave 既然已有就不动，默认改为它"）：常量曾改 'green-wave'；
+    // 第502次（用户"默认样式改回绿背景"）：常量回 'green-background'，回落回归本值。
+    // 第503次曾再移 'green-wave'（误判"绿波不变动生词颜色"）；第504次（用户纠错
+    //   "首先默认是绿色背景，其次绿波三令五申不要改动正文颜色"）定稿：常量终回
+    //   'green-background'（styles.js ANN_DEFAULT_STYLE 已定案），green-wave 条目字段不动。
     // 317次（用户"default 不是绝对而是代指"）：出厂默认改引代指常量。
     // 318次：default=代指定稿——绝对值唯一真源在常量，版本变化才改常量值；
     //   317 次新增的指针键出厂值（annDefaultStyle/subDefaultStyle）撤销。
@@ -567,14 +577,17 @@ async function loadSettings() {
     videoOverlayAnnTemplate: DEFAULT_ANN_TEMPLATE,
     // 318次：字幕样式出厂默认改引代指常量 SUB_DEFAULT_STYLE（default=代指，版本变化才改常量值）
     subtitleStyle: SUB_DEFAULT_STYLE,
-    subtitlePosition: 'b20',   // 314次：默认位置改贴底 1/10（用户裁定"default位置应当是底部10%"）；329次：用户裁定改回下 1/5（b20）
+    subtitlePosition: 'b15',   // 314次：贴底 1/10；329次：下 1/5（b20）；第504次（用户"位置也是15%"）：默认改 b15（随出厂默认 White Glow）
     // 281次：个性化字幕四参默认（subtitleStyle='custom' 时生效）+ 第四栏注释行样式键
     // 283次：默认改"能直接用"——透明底/不小字号/投影特效（用户裁定），与 overlay 端缺省对齐
     // 293次：字号改百分比；294次：默认 7%（用户裁定）
     subtitleCustom: { bg: 'transparent', fg: '#ffffff', fontSizePct: 5, fontFamily: 'sans', fx: 'shadow' },
     // 309次第五轮：视频叠加字幕注释行默认同改 'green-background'（用户四栏统一裁定）
     // 317次：改引默认代指常量（回落不写死绝对 id）
-    videoOverlayAnnStyle: ANN_DEFAULT_STYLE,
+    // 第501次曾移 green-wave；第502次随常量回 'green-background'，代指口径不变
+    // 第503次（用户"视频叠加字幕的注释默认样式为新建样式，Yellow Yellow"）：
+    //   本栏与前三栏分道——单独默认 VANN_DEFAULT_STYLE（yellow-yellow）
+    videoOverlayAnnStyle: VANN_DEFAULT_STYLE,
     webSidebarEnabled: true,
     sidebarEnabled: true,
     // 反思（2026-08-21 第九十次）：用户曾要求"视频叠加字幕应当默认不选"——
@@ -586,6 +599,7 @@ async function loadSettings() {
     videoSidebarAnnMode: 'side',
     videoOverlayAnnMode: 'side',
     // 304次（用户"默认无底色"）：透明底绿字。
+    // 第502次：回退第501次误改的 'inherit'（回原 304次透明底绿字口径）。
     hintFirstBg: 'transparent',
     hintFirstFg: '#2e6b43'
   }, cfgDefaults);

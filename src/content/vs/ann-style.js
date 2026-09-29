@@ -14,7 +14,7 @@
 //       applyColorSettings/refreshAnnPoolCss/applyAnnStyle。
 // =============================================================================
 
-import { buildAnnPoolCss } from '../../lib/styles.js';
+import { buildAnnPoolCss, resolveAnnEntry } from '../../lib/styles.js';
 import { getRoot } from '../video-sidebar.js';
 
 /**
@@ -31,12 +31,22 @@ export function applyColorSettings(settings) {
   const rootStyle = document.documentElement.style;
   // 反思（2026-08-18 第七十三次修正）：默认曾是绿底白字。
   // 304次（用户"默认无底色"）：生词默认透明底绿字（注释见上）。
-  const firstBg = settings.hintFirstBg || 'transparent';
-  const firstFg = settings.hintFirstFg || '#2e6b43';
+  // 第501次（G1 根治，用户批"根治"）：与 th pickColors 同口径——本栏条目
+  //   （videoAnnotationStyle）显式字段 > storage 显式取色 > 兜底。
+  //   旧版 hintFirst* 恒排前，条目色兑现不到 .beaver-w-word 等非池规则元素
+  //   （生词表词条等），与样式卡显示不一致。
+  // 第502次回退第501次误改的 fg 兜底 'inherit'（原 304次透明底绿字口径）。
+  const entry = resolveAnnEntry(settings.videoAnnotationStyle, settings.annotationCustom, settings.annotationUserStyles);
+  const firstBg = (entry && entry.wordBg !== undefined) ? entry.wordBg
+    : (settings.hintFirstBg || 'transparent');
+  const firstFg = (entry && entry.wordFg !== undefined) ? entry.wordFg
+    : (settings.hintFirstFg || '#2e6b43');
   rootStyle.setProperty('--beaver-first-bg', firstBg);
   rootStyle.setProperty('--beaver-first-fg', firstFg);
-  rootStyle.setProperty('--beaver-later-bg', settings.hintLaterBg || firstBg);
-  rootStyle.setProperty('--beaver-later-fg', settings.hintLaterFg || firstFg);
+  const laterBg = (settings.hintLaterBg || firstBg);
+  const laterFg = (settings.hintLaterFg || firstFg);
+  rootStyle.setProperty('--beaver-later-bg', laterBg);
+  rootStyle.setProperty('--beaver-later-fg', laterFg);
   // 378次（用户"注释没有跟随样式，而是变成了无色"）：删除本函数对
   //   --beaver-ann-bg/fg 的硬写（旧值 transparent/firstBg）。
   //   此处与 th/core.js applyColorVars 写同一 documentElement 节点，storage 监听

@@ -55,7 +55,7 @@ import { reportSubtitle } from '../lib/ann-diag.js';
 // 282次：SUB_FONTS/subFontFamily/subFxDecl/buildUserStyleDecl 收敛到共享层 styles.js——
 //   字体栈、特效声明、用户样式声明与 guide 页预览同源（预览=真实渲染），删除本文件
 //   本地 SUB_FONTS 常量（旧三栈与共享层重复，字体扩列后必然脱节）。
-import { SUBTITLE_TEXT_STYLES, SUBTITLE_POSITIONS, POOL_STYLES, SUB_FONTS, findStyle, annDecl, splitAnnTemplate, DEFAULT_ANN_TEMPLATE, BUILD_STAMP, subFontFamily, subFxDecl, buildUserStyleDecl, pxToSizePct, subFontSizePct, ANN_DEFAULT_STYLE, SUB_DEFAULT_STYLE } from '../lib/styles.js';
+import { SUBTITLE_TEXT_STYLES, POOL_STYLES, SUB_FONTS, findStyle, wordDecl, annDecl, splitAnnTemplate, DEFAULT_ANN_TEMPLATE, BUILD_STAMP, subFontFamily, subFxDecl, buildUserStyleDecl, pxToSizePct, subFontSizePct, ANN_DEFAULT_STYLE, SUB_DEFAULT_STYLE, VANN_DEFAULT_STYLE, resolveAnnEntry, subPosRatio } from '../lib/styles.js';
 // 第368次：流水日志接 debugLog 阀门（引导页「调试日志」开关）——字号/构建版本/创建/
 //   样式应用四条 console.log 直出属流水信息（用户点名"字号"日志多余），默认静默；
 //   warn/error 异常信号不受阀门影响。
@@ -77,7 +77,7 @@ let _lastKey = '';               // 避免重复渲染
 let _scrollHandler = null;       // scroll/resize 监听器
 let _mode = 'side';              // 'side'（侧邻注释）或 'detail'（详细注释）
 let _styleId = SUB_DEFAULT_STYLE; // 当前字幕文字样式 id（'custom'=个性化；注释布局由 _mode 决定；318次：初值=默认代指常量 SUB_DEFAULT_STYLE）
-let _posId = 'b20';              // 当前字幕位置样式 id（距视频底部比例；314次：默认改贴底 1/10；329次：用户裁定改回下 1/5（b20），推翻 314 次裁定）
+let _posId = 'b15';              // 当前字幕位置样式 id（距视频底部比例；314次：贴底 1/10；329次：下 1/5（b20）；第504次：出厂默认随 White Glow 改 b15）
 let _storageListener = null;     // storage 变化监听器（同步详略模式）
 let _fullscreenHandler = null;   // fullscreenchange 监听器（全屏时移动 overlay）
 let _userStyleSheet = null;      // 282次：用户样式动态 <style> 元素（style-user-* 规则重建用）
@@ -122,9 +122,11 @@ function injectOverlayStyles() {
   style.id = 'beaver-overlay-styles';
   // 反思（2026-08-16 第七十一次）：④ 撤销"黑底兜底"——基础规则不再写 background，
   //   默认透明（黑底只由选中的 .style-none 等样式类提供）；并显式钉住生词词块配色
-  //   （--beaver-first-bg/fg 固定为浅绿深字，防止 text-hint 的 applyColorVars 把页面暗色
-  //   变量泄漏进字幕 overlay 导致词块变暗色块）。透明样式被选中时，视频底色如实透出，
-  //   不再"把透明当作黑色"。
+  //   （防止 text-hint 的 applyColorVars 把页面暗色变量泄漏进字幕 overlay 导致词块
+  //   变暗色块）。透明样式被选中时，视频底色如实透出，不再"把透明当作黑色"。
+  //   第501次（G1 根治）钉住曾改透明/'inherit'；第502次（用户"默认样式改回绿背景"）
+  //     回退原绿底白字钉住值——钉住（本地定义，防泄漏）结构不变；条目派生由
+  //     applyWordColorVars 内联覆盖（条目显式字段 > 本缺省）。
   style.textContent = `
 #beaver-subtitle-overlay {
   position: fixed;
@@ -165,7 +167,10 @@ function injectOverlayStyles() {
 #beaver-subtitle-overlay .beaver-overlay-subtitle {
   word-break: break-word;
 }
-/* 字幕正文生词高亮（首次/后续配色复用 CSS 变量） */
+/* 字幕正文生词高亮（首次/后续配色复用 CSS 变量；第502次 fallback 回绿底白字）。
+ * 第502次（回应"不能实现不早说"）：词块补 deco 装饰线支持——deco 由
+ * applyWordColorVars 按生词条目（textStyle）派生为三个变量（同 wordDecl 口径：
+ * line/style/color 合成 shorthand + thickness + offset），无 deco 条目走缺省 none。 */
 #beaver-subtitle-overlay .beaver-overlay-subtitle .beaver-word {
   display: inline-block;
   background: var(--beaver-first-bg, #2e6b43);
@@ -173,6 +178,9 @@ function injectOverlayStyles() {
   padding: 0 3px;
   border-radius: 2px;
   font-weight: 500;
+  text-decoration: var(--beaver-word-deco, none);
+  text-decoration-thickness: var(--beaver-word-deco-thickness, auto);
+  text-underline-offset: var(--beaver-word-deco-offset, auto);
 }
 #beaver-subtitle-overlay .beaver-overlay-subtitle .beaver-word.later {
   background: var(--beaver-later-bg, #2e6b43);
@@ -276,9 +284,17 @@ function buildSubtitleStyleCss() {
     if (s.weight) parts.push('font-weight:' + s.weight);
     else if (s.bold) parts.push('font-weight:600');
     if (s.italic) parts.push('font-style:italic');
-    if (s.edge) parts.push('-webkit-text-stroke:1px ' + s.edge);
+    // 第510次（用户"White Shadow 看起来像是侵蚀了原来字形"）：追加 paint-order:stroke
+    //   fill——text-stroke 默认画在填充之上，黑边吃进白字笔画（"侵蚀"）；压到填充
+    //   之下后描边只露外缘、字形主干完整（同 guide 预览端 sub-style.js 双端一致；
+    //   与 subFxDecl 'stroke' 既有写法同口径）。
+    if (s.edge) parts.push('-webkit-text-stroke:1px ' + s.edge + ';paint-order:stroke fill');
     // 反思（2026-08-15 第六十四次）：shadow 字段支持字符串（自定义 text-shadow），true 用默认黑投影
     if (s.shadow) parts.push('text-shadow:' + (typeof s.shadow === 'string' ? s.shadow : '0 0 6px rgba(0,0,0,.9)'));
+    // 第504次（用户"视频预览中字幕并没有外发光效果"）：glow 字段输出字幕盒外发光
+    //   （box-shadow）——默认样式 white-glow 的"黑色半透明外发光"由此生效
+    //   （与 guide 预览 sub-style.js buildSubBoxCss 的 glow 输出同口径）。
+    if (s.glow) parts.push('box-shadow:' + s.glow);
     return '#beaver-subtitle-overlay.style-' + s.id + '{' + parts.join(';') + ';}';
   }).join('\n');
 
@@ -301,16 +317,30 @@ function buildSubtitleStyleCss() {
 
   // 281次：注释行样式规则（第四栏池 annstyle-{id}）——annDecl 输出过滤 font-size
   //  （池条目 12-15px 是侧栏语境，字幕注释行统一 0.9em 基准），词头加粗 600 与基础层一致
+  // 第504次（用户"你生词用错样式"）：annstyle 条目的 wordBg/wordFg 等生词字段此前
+  //  从未消费——追加 word 规则（wordDecl 滤 font-size，同 annDecl 口径）。选择器显式
+  //  含 .beaver-word.later：基础层 .beaver-word.later 特异性与 annstyle word 规则
+  //  平局时按源序兜底不可靠，.later 变体 (1,4,0) 稳胜（如 yellow-yellow 生词浅黄）。
   const annRules = POOL_STYLES
     .filter((s) => s.id)
     .map((s) => {
       const decl = annDecl(s).filter((d) => !d.startsWith('font-size')).join(';');
-      if (!decl) return '';
+      // 第505次（用户"绿波三令五申不要改动正文颜色，你偏要改！"）：green-wave
+      //  wordFg:'inherit' 语义是"不动正文颜色"，但直出 color:inherit 会经
+      //  504 次引入的 word 规则覆盖 .beaver-word.later 基础层颜色——此处过滤之。
+      const wordDeclCss = wordDecl(s).filter((d) => !d.startsWith('font-size') && d !== 'color:inherit').join(';');
+      if (!decl && !wordDeclCss) return '';
       const sel = '#beaver-subtitle-overlay.annstyle-' + s.id;
-      return sel + ' .beaver-overlay-subtitle .beaver-side-ann,' +
-        sel + ' .beaver-overlay-ann-word,' +
-        sel + ' .beaver-overlay-ann-trans{' + decl + ';}' +
-        sel + ' .beaver-overlay-ann-word{font-weight:600;}';
+      return (decl
+        ? sel + ' .beaver-overlay-subtitle .beaver-side-ann,' +
+          sel + ' .beaver-overlay-ann-word,' +
+          sel + ' .beaver-overlay-ann-trans{' + decl + ';}' +
+          sel + ' .beaver-overlay-ann-word{font-weight:600;}'
+        : '') +
+        (wordDeclCss
+          ? sel + ' .beaver-overlay-subtitle .beaver-word,' +
+            sel + ' .beaver-overlay-subtitle .beaver-word.later{' + wordDeclCss + ';}'
+          : '');
     })
     .filter(Boolean)
     .join('\n');
@@ -373,9 +403,10 @@ function updateOverlayPosition() {
   //   top = 视频底边 - 视频高度×ratio - 字幕框高/2（2026-08-19 第八十次：修正为 -h/2——
   //   旧版 -h 把盒子底边压在 ratio 线上，与"中心线"语义不符，预览/真实 overlay 都对不齐
   //   用户说的"中心水平线"）。横屏/竖屏视频同一公式，天然跟随视频矩形。
-  const posMeta = findStyle(SUBTITLE_POSITIONS, _posId);
-  // 329次：兜底 ratio 随默认位置改 0.2（下 1/5；314 次曾为 0.1）
-  const ratio = (posMeta && typeof posMeta.ratio === 'number') ? posMeta.ratio : 0.2;
+  // 第501次（滑轨）：ratio 统一经 subPosRatio——档表 b10/b20/… 或滑轨自定义 bNN（0-100）；
+  //   null（脏值）兜底下 1/5（329次默认 0.2；314 次曾为 0.1）。
+  const _r = subPosRatio(_posId);
+  const ratio = (typeof _r === 'number' && isFinite(_r)) ? _r : 0.2;
   // 329次（用户"全屏后字幕变窄，挤成一团"根治）：水平方向由
   //   left:视频中心 + transform:translateX(-50%) 改为 left/right 限定视频横切片，
   //   配合基础样式 width:fit-content + margin:0 auto 居中。根因见基础样式注释。
@@ -741,15 +772,17 @@ export function startOverlay(video, subtitles, options = {}) {
       }
       // 281次：注释样式（第四栏池指派）与个性化字幕热更新——引导页改动即时生效
       // 318次：newValue 若为 'none'（旧端残留写入）清洗回落默认代指常量
-      //   ANN_DEFAULT_STYLE（注释样式默认由该常量锚定）
+      // 第503次：本栏默认与前三栏分道——回落 VANN_DEFAULT_STYLE（yellow-yellow）
       if (changes.videoOverlayAnnStyle) {
         const nv = changes.videoOverlayAnnStyle.newValue;
-        setVideoOverlayAnnStyle(nv === 'none' ? ANN_DEFAULT_STYLE : nv);
+        setVideoOverlayAnnStyle(nv === 'none' ? VANN_DEFAULT_STYLE : nv);
       }
       // 301次：个性化/用户注释规则热更新（类名不变即时生效）
-      if (changes.annotationCustom || changes.annotationUserStyles) {
-        chrome.storage.local.get({ annotationCustom: null, annotationUserStyles: [] }, (res) => {
+      // 第501次（G1）：生词条目（textStyle/个性化/用户表）变化同步重派生词块配色
+      if (changes.annotationCustom || changes.annotationUserStyles || changes.textStyle) {
+        chrome.storage.local.get({ textStyle: ANN_DEFAULT_STYLE, annotationCustom: null, annotationUserStyles: [] }, (res) => {
           syncAnnCustomRules(res.annotationCustom, res.annotationUserStyles);
+          applyWordColorVars(res);
         });
       }
       if (changes.subtitleCustom) {
@@ -793,15 +826,18 @@ export function startOverlay(video, subtitles, options = {}) {
     //   再应用激活样式（激活值可能是 user-*，规则就绪后类一挂即生效）
     // 309次第五轮（用户四栏统一裁定）：videoOverlayAnnStyle 兜底默认
     // 318次：兜底/回落改默认代指常量（317 次的 annDefaultStyle/subDefaultStyle 指针键撤销）
-    chrome.storage.local.get({ subtitleStyle: SUB_DEFAULT_STYLE, subtitlePosition: 'b20', subtitleCustom: null, videoOverlayAnnStyle: ANN_DEFAULT_STYLE, subtitleUserStyles: [] }, (res) => {
+    // 第503次：本栏兜底单独走 VANN_DEFAULT_STYLE（yellow-yellow），与前三栏分道
+    // 第504次（用户"位置也是15%"）：subtitlePosition 兜底 b20→b15（出厂默认 White Glow pos=b15）
+    chrome.storage.local.get({ subtitleStyle: SUB_DEFAULT_STYLE, subtitlePosition: 'b15', subtitleCustom: null, videoOverlayAnnStyle: VANN_DEFAULT_STYLE, subtitleUserStyles: [], textStyle: ANN_DEFAULT_STYLE, annotationCustom: null, annotationUserStyles: [] }, (res) => {
       syncUserStyleRules(res.subtitleUserStyles);
+      applyWordColorVars(res);   // 第501次（G1）：字幕词块配色随生词条目派生
       setSubtitleStyle(res.subtitleStyle || SUB_DEFAULT_STYLE);
       // 316次：videoOverlayAnnStyle 读数清洗——池中 none 卡已删，残留 'none' 统一落
-      //   默认代指常量 ANN_DEFAULT_STYLE（与引导页口径一致）；subtitlePosition 的
-      //   旧 't10' 残留由 setSubtitlePosition 内迁移为 b90（见该函数）。
-      setSubtitlePosition(res.subtitlePosition || 'b20');   // 314次：默认贴底 1/10；329次：默认改回下 1/5（b20）
+      //   默认代指常量（第503次起本栏落 VANN_DEFAULT_STYLE，与引导页口径一致）；
+      //   subtitlePosition 的旧 't10' 残留由 setSubtitlePosition 内迁移为 b90（见该函数）。
+      setSubtitlePosition(res.subtitlePosition || 'b15');   // 314次：默认贴底 1/10；第504次：默认改 b15（用户"位置也是15%"）
       if (res.subtitleCustom) setSubtitleCustom(res.subtitleCustom);
-      setVideoOverlayAnnStyle(res.videoOverlayAnnStyle === 'none' ? ANN_DEFAULT_STYLE : (res.videoOverlayAnnStyle || ANN_DEFAULT_STYLE));
+      setVideoOverlayAnnStyle(res.videoOverlayAnnStyle === 'none' ? VANN_DEFAULT_STYLE : (res.videoOverlayAnnStyle || VANN_DEFAULT_STYLE));
     });
     // 301次：个性化/用户注释规则初始同步（与正文用户样式表同构，独立键）
     chrome.storage.local.get({ annotationCustom: null, annotationUserStyles: [] }, (res) => {
@@ -974,23 +1010,54 @@ export function setSubtitleStyle(style) {
 }
 
 /**
+ * 第501次（G1 根治）：字幕正文生词词块配色按生词条目（textStyle）派生——
+ *   条目显式字段 > 缺省（第502次回退：绿底白字，与样式表钉住值一致），内联
+ *   setProperty 覆盖本模块样式表的本地钉住值（钉住结构保留防页面变量泄漏）。
+ *   与 th pickColors / ws / vs 同口径（条目显式字段优先根治"显示不变实际变"）。
+ * 第502次（回应"不能实现不早说"）：词块补 deco 装饰线派生——条目 deco 字段
+ *   （line/style/color/width/offset）合成三个变量，与 wordDecl 生成器同口径；
+ *   无 deco 条目移除变量走样式表缺省（text-decoration: none）。
+ * @param {{textStyle?:string, annotationCustom?:object, annotationUserStyles?:Array}} s storage 子集
+ */
+function applyWordColorVars(s) {
+  if (!_overlay || !s) return;
+  const entry = resolveAnnEntry(s.textStyle, s.annotationCustom, s.annotationUserStyles);
+  const firstBg = (entry && entry.wordBg !== undefined) ? entry.wordBg : '#2e6b43';
+  const firstFg = (entry && entry.wordFg !== undefined) ? entry.wordFg : '#ffffff';
+  _overlay.style.setProperty('--beaver-first-bg', firstBg);
+  _overlay.style.setProperty('--beaver-first-fg', firstFg);
+  _overlay.style.setProperty('--beaver-later-bg', firstBg);
+  _overlay.style.setProperty('--beaver-later-fg', firstFg);
+  if (entry && entry.deco && entry.deco.line) {
+    _overlay.style.setProperty('--beaver-word-deco',
+      [entry.deco.line, entry.deco.style, entry.deco.color].filter(Boolean).join(' '));
+    _overlay.style.setProperty('--beaver-word-deco-thickness', entry.deco.width || 'auto');
+    _overlay.style.setProperty('--beaver-word-deco-offset', entry.deco.offset || 'auto');
+  } else {
+    _overlay.style.removeProperty('--beaver-word-deco');
+    _overlay.style.removeProperty('--beaver-word-deco-thickness');
+    _overlay.style.removeProperty('--beaver-word-deco-offset');
+  }
+}
+
+/**
  * 应用字幕位置样式（距视频底部比例）
  * 反思（2026-08-16 第六十九次）：位置与文字样式解耦。位置由 SUBTITLE_POSITIONS 元数据
  *   （ratio 字段）驱动，updateOverlayPosition 据此计算 top；本函数只更新 _posId 并刷新位置。
- *   storage key: subtitlePosition（'b20' 默认下 1/5，329次起；其他见 SUBTITLE_POSITIONS）。
+ *   storage key: subtitlePosition（默认 'b15'，第504次起随出厂默认 White Glow；其他见 SUBTITLE_POSITIONS）。
  * @param {string} posId 位置样式 id
  */
 export function setSubtitlePosition(posId) {
-  let id = posId || 'b20';
+  let id = posId || 'b15';   // 第504次：兜底 b20→b15（出厂默认 White Glow pos=b15）
   // 316次：'t10'（原顶部 1/10，316 次改名 b90 延续 b 系列命名）存量迁移——
-//   落 b90 保持视觉位置不变；不迁的话 b90 已入池、t10 查不到会被当未知 id 回落默认（329次起 b20），
-//   用户选好的"顶部 1/10"会无端跳回下 1/5。
+//   落 b90 保持视觉位置不变；不迁的话 b90 已入池、t10 查不到会被当未知 id 回落默认，
+//   用户选好的"顶部 1/10"会无端跳回默认位。
   if (id === 't10') id = 'b90';
-  if (!findStyle(SUBTITLE_POSITIONS, id)) {
-    console.warn(`[VocabRadar][overlay] 字幕位置 "${id}" 已不存在，回退默认位置并清理 storage`);
-    id = 'b20';
+  if (subPosRatio(id) === null) {   // 第501次：档表 或 滑轨 bNN 之外才视为脏值
+    console.warn(`[VocabRadar][overlay] 字幕位置 "${id}" 不合法（非档位/滑轨 bNN），回退默认位置并清理 storage`);
+    id = 'b15';   // 第504次：脏值回落 b20→b15
     try {
-      chrome.storage.local.set({ subtitlePosition: 'b20' });
+      chrome.storage.local.set({ subtitlePosition: 'b15' });
     } catch (e) { /* 清理失败忽略 */ }
   }
   _posId = id;
@@ -1047,13 +1114,25 @@ let _annCustomSheet = null;
 export function syncAnnCustomRules(customObj, userList) {
   const rules = [];
   const pushEntry = (entry, id) => {
+    // 第504次（与 buildSubtitleStyleCss annRules 同口径）：custom/用户条目同样追加
+    //  word 规则（生词字段此前从未消费），选择器显式含 .beaver-word.later 保特异性
+    //  (1,4,0) 稳胜基础层 .beaver-word.later；wordDecl 滤 font-size。
     const decl = annDecl(entry).filter((d) => !d.startsWith('font-size')).join(';');
-    if (!decl) return;
+    // 第505次（同上 annRules 口径）：wordFg:'inherit' 直出 color:inherit 会覆盖
+    //  基础层正文颜色——inherit 语义是"不动"，过滤之。
+    const wordDeclCss = wordDecl(entry).filter((d) => !d.startsWith('font-size') && d !== 'color:inherit').join(';');
+    if (!decl && !wordDeclCss) return;
     const sel = '#beaver-subtitle-overlay.annstyle-' + id;
-    rules.push(sel + ' .beaver-overlay-subtitle .beaver-side-ann,' +
-      sel + ' .beaver-overlay-ann-word,' +
-      sel + ' .beaver-overlay-ann-trans{' + decl + ';}');
-    rules.push(sel + ' .beaver-overlay-ann-word{font-weight:600;}');
+    if (decl) {
+      rules.push(sel + ' .beaver-overlay-subtitle .beaver-side-ann,' +
+        sel + ' .beaver-overlay-ann-word,' +
+        sel + ' .beaver-overlay-ann-trans{' + decl + ';}');
+      rules.push(sel + ' .beaver-overlay-ann-word{font-weight:600;}');
+    }
+    if (wordDeclCss) {
+      rules.push(sel + ' .beaver-overlay-subtitle .beaver-word,' +
+        sel + ' .beaver-overlay-subtitle .beaver-word.later{' + wordDeclCss + ';}');
+    }
   };
   if (customObj && typeof customObj === 'object') {
     pushEntry(Object.assign({ id: 'ann-custom' }, customObj), 'ann-custom');
@@ -1089,8 +1168,9 @@ export function setVideoOverlayAnnStyle(id) {
   const known = (id === 'ann-custom') || (id && id.indexOf('ann-user-') === 0);
   const s = (id && id !== 'none') ? (known ? { id } : findStyle(POOL_STYLES, id)) : null;
   if (id && id !== 'none' && !s) {
-    console.warn(`[VocabRadar][overlay] 字幕注释样式 "${id}" 已不存在，回落默认样式 "${ANN_DEFAULT_STYLE}"`);
-    setVideoOverlayAnnStyle(ANN_DEFAULT_STYLE);   // 318次：回落默认代指常量（版本变化才改常量值，递归深度 1）
+    // 第503次：本栏（视频叠加注释）回落默认与前三栏分道——落 VANN_DEFAULT_STYLE
+    console.warn(`[VocabRadar][overlay] 字幕注释样式 "${id}" 已不存在，回落默认样式 "${VANN_DEFAULT_STYLE}"`);
+    setVideoOverlayAnnStyle(VANN_DEFAULT_STYLE);   // 318次：回落默认代指常量（第503次起本栏用 VANN，递归深度 1）
     return;
   }
   if (s) _overlay.classList.add('annstyle-' + id);

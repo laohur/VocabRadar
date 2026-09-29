@@ -231,6 +231,7 @@ function _wsGetSettings() {
       annTemplate: '{target}{annotation}',
       // 反思（2026-08-18 第七十三次修正）：默认配色曾是单词绿底白字。
       // 304次（用户"默认无底色"）：改透明底绿字。
+      // 第502次回退第501次误改的 'inherit'（条目显式字段仍优先——G1 结构保留）。
       hintFirstBg: 'transparent',
       hintFirstFg: '#2e6b43',
       hintLaterBg: 'transparent',
@@ -241,6 +242,9 @@ function _wsGetSettings() {
       // 318次：'green-background' 是代指常量 ANN_DEFAULT_STYLE 的镜像兜底（classic
       //   script 不便 import styles.js；代指=常量锚定无指针键，版本变化才改常量值，
       //   锚点见 lib/styles.js）
+      // 第501次曾移 green-wave；第502次（用户"默认样式改回绿背景"）镜像同步回。
+      // 第503次曾随误判移 green-wave；
+      // 第504次（用户纠错"默认是绿色背景"）：常量回 green-background，镜像同步。
       annotationStyle: 'green-background',
       // 301次：个性化/用户条目缓存（applyAnnStyle 类切换之外，规则表刷新用）
       annotationCustom: null,

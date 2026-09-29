@@ -17,6 +17,9 @@
 
 // 第367次：日志阀门（storage.debugLog 镜像 + onChanged 即时生效）
 import { isDebugLog } from '../../lib/log-flag.js';
+// 第501次（G1 根治）：applyColors 按本栏条目（annotationStyle）显式字段派生变量，
+//   与 th pickColors 同口径（条目显式 > storage 取色 > 透明底/不变字兜底）。
+import { resolveAnnEntry } from '../../lib/styles.js';
 
 // 句子分隔正则：句号/感叹/问号/中文标点/换行
 const SENTENCE_SPLIT_RE = /[.!?。！？\n]+/;
@@ -435,11 +438,20 @@ export function splitSentences(text) {
 
 // === 配色应用 ===
 export function applyColors(settings) {
-  if (!_root) return;
-  if (settings.hintFirstBg) _root.style.setProperty('--beaver-first-bg', settings.hintFirstBg);
-  if (settings.hintFirstFg) _root.style.setProperty('--beaver-first-fg', settings.hintFirstFg);
-  if (settings.hintLaterBg) _root.style.setProperty('--beaver-later-bg', settings.hintLaterBg);
-  if (settings.hintLaterFg) _root.style.setProperty('--beaver-later-fg', settings.hintLaterFg);
+  if (!_root || !settings) return;
+  // 第501次（G1 根治）：与 th pickColors 同口径——本栏条目（annotationStyle）显式
+  //   字段 > storage 显式取色 > 兜底。旧版仅在 hintFirst* 非空时写变量，storage 无值
+  //   即落 css 旧兜底，条目色兑现不到句子生词/生词表词条，与样式卡显示不一致。
+  // 第502次回退第501次误改的 fg 兜底 'inherit'（原 304次透明底绿字口径）。
+  const entry = resolveAnnEntry(settings.annotationStyle, settings.annotationCustom, settings.annotationUserStyles);
+  const firstBg = (entry && entry.wordBg !== undefined) ? entry.wordBg
+    : (settings.hintFirstBg || 'transparent');
+  const firstFg = (entry && entry.wordFg !== undefined) ? entry.wordFg
+    : (settings.hintFirstFg || '#2e6b43');
+  _root.style.setProperty('--beaver-first-bg', firstBg);
+  _root.style.setProperty('--beaver-first-fg', firstFg);
+  _root.style.setProperty('--beaver-later-bg', settings.hintLaterBg || firstBg);
+  _root.style.setProperty('--beaver-later-fg', settings.hintLaterFg || firstFg);
 }
 
 // === 侧栏注释样式预设（引导页选择，无+11种） ===

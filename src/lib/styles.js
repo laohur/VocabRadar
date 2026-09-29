@@ -37,15 +37,35 @@ export const BUILD_STAMP = '__BUILD_STAMP__';
 // classic script（text-hint/web-sidebar/video-sidebar）与 config.json 无法 import，
 //   保留字面量仅为镜像（注释注明），语义由本常量锚定。
 // ================================================================
+// 第501次（用户"Green Wave 既然已有就不动，默认改为它"）：默认曾改 green-wave——
+// 第502次（用户"默认样式改回绿背景"）：曾撤销第501次，回 green-background。
+// 第503次（用户重申"给你说了绿波不变动生词颜色，你为啥偏要改"）：恢复第501次裁定，
+//   前三栏默认定稿 green-wave；green-wave 条目字段一字不动（"生词不变色"是其自身
+//   特性，不构成不当默认的理由）。第四栏 videoOverlayAnnStyle 单独默认
+//   VANN_DEFAULT_STYLE（yellow-yellow，本次新建）。
+// 第504次（用户纠错定案"默认是绿色背景"）：503 次对裁定理解有误——用户原意是
+//   green-wave 条目本身不动（不波动生词颜色），默认仍应为 green-background。
+//   常量回 'green-background'（lifecycle 第504次反向迁移把 503 误迁的存量改回）。
 export const ANN_DEFAULT_STYLE = 'green-background';
-export const SUB_DEFAULT_STYLE = 'white-bottom';
+// 第504次（问题4）：字幕正文出厂默认改新建 white-glow（白字+黑半透明底条+黑色半透明
+//   外发光，pos b15）——Yellow Yellow 的"字幕背景外发光黑色半透明"由所选字幕样式承载，
+//   出厂组合即 yellow-yellow × white-glow。
+// 第509次（用户"默认字幕样式改为White Shadow"）：出厂默认 white-glow → white-shadow
+//   （白字黑色 text-shadow 阴影；条目 pos:'b15' 与 _subPosId 默认一致，位置无迁移）。
+//   仅改默认代指——存量 storage 已存样式值（含出厂期写入的 white-glow）一律不动，
+//   用户需要时在设置页点选，避免重蹈第508次"擅自更改"。
+export const SUB_DEFAULT_STYLE = 'white-shadow';
+// 第503次（用户"视频叠加字幕的注释默认样式为新建样式，Yellow Yellow"）：视频叠加
+//   字幕栏（videoOverlayAnnStyle）独立默认代指——出厂指向新建 yellow-yellow 池条目；
+//   回落/清洗/再点取消的语义与 ANN_DEFAULT_STYLE 完全同口径，仅代指内容不同。
+export const VANN_DEFAULT_STYLE = 'yellow-yellow';
 
 // ================================================================
 // 统一样式候选池（网页提示 textStyle / 文本侧栏 annotationStyle / 视频侧栏
 // videoAnnotationStyle 三键共用同一 id 集；一条样式同时定义生词区与注释区外观）
 // ================================================================
 // 字段模型（280次定稿）：
-//   - id：storage 保存标识（316次起默认配色=green-background，本池已无 'none' 条目）
+//   - id：storage 保存标识（316次起默认配色=green-background，第502次回归本条；本池已无 'none' 条目）
 //   - label：中英文短名（引导页卡小字）
 //   生词区：
 //   - wordBg/wordFg：背景/前景（支持 gradient 字符串，页面经 --beaver-first-bg 变量生效）
@@ -72,7 +92,8 @@ export const SUB_DEFAULT_STYLE = 'white-bottom';
 //   - 无显式 annBg/annFg 的条目由消费方派生（th/core.pickColors 前后景互换逻辑）
 export const POOL_STYLES = [
   // 316次（用户"删除none default样式。都已经指定了默认样式，回落至此，你咋还能回落到其他样式"）：
-  //   none（Default）条目删除——指派/取消/脏值回落统一落 green-background（老默认绿底），
+  //   none（Default）条目删除——指派/取消/脏值回落统一落 ANN_DEFAULT_STYLE
+  //   （第501次起现值 green-wave；316-500次为 green-background 老默认绿底），
   //   不再有"回落到 none 这个其他样式"的歧义。字幕文本样式 SUBTITLE_TEXT_STYLES 的
   //   none（White Bottom）是实名样式（白字贴底），不在本池，不受影响。
 
@@ -102,22 +123,45 @@ export const POOL_STYLES = [
   //   故新增 green-background 样式卡承载老默认绿底。
   // 316次（用户裁定删 none 卡）：green-background 同时接管原 none 的回落语义——
   //   四栏缺省、再点取消、脏值清洗、删用户卡回落全部落本条目（见 ann-pool.js/shared.js）。
-  { id: 'green-background', label: { en: 'Green Background', zh: '绿色背景' }, wordBg: '#2e6b43', wordFg: '#ffffff', annBg: 'transparent', annFg: '#2e6b43', radius: '0' },
+  // 第501次曾把回落移交 green-wave；第502次（用户"默认样式改回绿背景"）回落回归本条目。
+  // 第502次（用户"背景太方正，可否低成本圆滑些"）：radius '0' → '4px'（生词区与
+  //   注释区共用的圆角字段，wordDecl/annDecl 各端自动生效，零结构改动）。
+  { id: 'green-background', label: { en: 'Green Background', zh: '绿色背景' }, wordBg: '#2e6b43', wordFg: '#ffffff', annBg: 'transparent', annFg: '#2e6b43', radius: '4px' },
   // 309次第三轮（用户"增加样式Green Wave样式"）：绿色波浪线——对齐 Green Underline 家族
   //   （生词文字不变色 wordFg inherit + 注释同主题色），波浪参照 wx-wavy 线型。
   { id: 'green-wave', label: { en: 'Green Wave', zh: '绿色波浪' }, wordBg: 'transparent', wordFg: 'inherit', annBg: 'transparent', annFg: 'var(--beaver-primary, #2e6b43)', radius: '0', deco: { line: 'underline', style: 'wavy', color: 'var(--beaver-primary, #2e6b43)', width: '1.5px', offset: '5px' } },
+  // 第503次（用户"视频叠加字幕的注释默认样式为新建样式，Yellow Yellow，生词略浅黄，
+  //   释义略深黄，背景外发光黑色半透明"）：新增卡——生词字略浅黄 #ffe082、注释字略深
+  //   黄 #fbc02d；作 videoOverlayAnnStyle 栏出厂默认（VANN_DEFAULT_STYLE）。
+  // 第504次（用户纠错"你生词用错样式，不是释义单独背景，而是选定的字幕样式
+  //   字幕背景外发光黑色半透明"）重定义：
+  //   ①注释不设自身背景（annBg transparent）、删除 annGlow——box-shadow 在透明底上
+  //     照样渲染，会呈"漂浮光晕矩形"= 变相背景，违背"不是释义单独背景"；
+  //   ②"字幕背景外发光黑色半透明"由**所选字幕文本样式**承载（出厂 white-glow：
+  //     白字+黑半透明底条+黑色半透明 box-shadow 外发光）；
+  //   ③生词"略浅黄"由本条 wordFg 表达——503 次缺口：overlay 第四栏 annstyle-{id}
+  //     规则只样式化注释元素，wordBg/wordFg 从未被消费（"生词用错样式"根因）；
+  //     本次 overlay 新增 annstyle word 规则消费本栏 wordBg/wordFg（含 .later 显式
+  //     选择器防特异性平局），guide 预览 previewWordCss 同步改派生第四栏条目。
+  // 第507次（用户"黄黄样式改为明黄、暗黄"）：色值定稿——生词明黄 #ffeb3b（饱和亮黄，
+  //   视频任意底色上醒目）、注释暗黄 #b8860b（DarkGoldenrod 系暗金，与明黄拉开层级）；
+  //   本段沿革注缩进顺带校正归位（2 空格，与全文件注释风格一致）。
+  // 第508次（用户"黄黄样式改为黄、深黄"）：再定稿——#ffeb3b 色相偏绿黄（hue 61°），
+  //   改纯黄 #ffeb00（hue 60° 正黄无绿感）；#b8860b 偏棕（DarkGoldenrod），改同色相
+  //   深黄 #c2a100（hsl(51,100%,38%)，纯深黄不带棕）。仅色值变化，字段结构不动。
+  { id: 'yellow-yellow', label: { en: 'Yellow Yellow', zh: '黄黄' }, wordBg: 'transparent', wordFg: '#ffeb00', annBg: 'transparent', annFg: '#c2a100', radius: '4px' },
   { id: 'plain', label: { en: 'Plain', zh: '素字' }, wordBg: 'transparent', wordFg: '#1565c0', annBg: 'transparent', annFg: '#1565c0', radius: '0' },
-  { id: 'capsule', label: { en: 'Blue Capsule', zh: '胶囊蓝' }, wordBg: '#64b5f6', wordFg: '#0d1b33', annBg: '#0d1b33', annFg: '#64b5f6', radius: '999px', bold: true },
+  // 第502次（用户"移除几个阴间样式，Blue Capsule、Cyan Glass、Glacier"）：三卡删除——
+  //   capsule/cyan-glass/glacier 条目移除；存量 storage 命中脏值由 resolveAnnEntry
+  //   回落 ANN_DEFAULT_STYLE、sanitizeStyleId 回落，无需迁移。
   { id: 'shadow-pop', label: { en: 'Shadow Pop', zh: '立体' }, wordBg: '#6d4c41', wordFg: '#fff8f0', annBg: '#fff8f0', annFg: '#6d4c41', radius: '3px', bold: true, shadow: '0 2px 3px rgba(0,0,0,.45), 0 5px 8px rgba(0,0,0,.25)' },
   { id: 'ink', label: { en: 'Ink', zh: '墨蓝' }, wordBg: '#263238', wordFg: '#eceff1', annBg: '#eceff1', annFg: '#263238', radius: '2px', bold: true, fontSize: '12px' },
   { id: 'night', label: { en: 'Night', zh: '暗夜' }, wordBg: '#37474f', wordFg: '#ffcc80', annBg: '#ffcc80', annFg: '#37474f', radius: '2px', bold: true },
   { id: 'outline', label: { en: 'Outline', zh: '描边字' }, wordBg: 'transparent', wordFg: '#1a237e', annBg: 'transparent', annFg: '#1a237e', radius: '0', bold: true, shadow: '0 1px 0 #fff, 0 -1px 0 #fff, 1px 0 0 #fff, -1px 0 0 #fff, 0 2px 3px rgba(0,0,0,.5)' },
   { id: 'sunset', label: { en: 'Sunset', zh: '落日橙' }, wordBg: '#ff6d00', wordFg: '#ffffff', annBg: '#ffffff', annFg: '#ff6d00', radius: '4px', bold: true, shadow: '0 1px 2px rgba(255,109,0,.4)' },
   { id: 'snow', label: { en: 'Snow', zh: '雪原' }, wordBg: '#ffffff', wordFg: '#1a1f1a', annBg: '#1a1f1a', annFg: '#ffffff', radius: '2px', bold: true, shadow: '0 1px 2px rgba(0,0,0,.35)', fontSize: '16px' },
-  { id: 'glacier', label: { en: 'Glacier', zh: '冰川' }, wordBg: '#4dd0e1', wordFg: '#002f36', annBg: '#002f36', annFg: '#4dd0e1', radius: '2px', fontSize: '18px' },
   { id: 'violet', label: { en: 'Violet', zh: '紫罗兰' }, wordBg: '#b388ff', wordFg: '#12002e', annBg: '#12002e', annFg: '#b388ff', radius: '6px', italic: true },
   { id: 'raspberry', label: { en: 'Raspberry', zh: '覆盆子' }, wordBg: '#f06292', wordFg: '#33000f', annBg: '#33000f', annFg: '#f06292', radius: '4px', italic: true, bold: true },
-  { id: 'cyan-glass', label: { en: 'Cyan Glass', zh: '青玻璃' }, wordBg: '#00e5ff', wordFg: '#001318', annBg: 'rgba(0,0,0,.88)', annFg: '#00e5ff', radius: '2px', bold: true, shadow: '0 0 4px rgba(0,229,255,.5)' },
 
   // ---- 原 TEXT_STYLES 独有 5 条（outline-light 与 outline 近似并入） ----
   { id: 'comic', label: { en: 'Comic', zh: '手写' }, wordBg: '#fff176', wordFg: '#5d4037', annBg: '#5d4037', annFg: '#fff176', radius: '0', italic: true, bold: true, shadow: '0 1px 2px rgba(93,64,55,.4)' },
@@ -219,16 +263,18 @@ export const VANN_TO_ANN_MIGRATION = {
   sunset: 'sunset',
   plain: 'plain',
   underline: 'red-underline',
-  capsule: 'capsule',
+  // 第502次：capsule/glacier/cyan-glass（Blue Capsule/Glacier/Cyan Glass）已删，
+  //   迁移目标改绿背景（池内默认），seafoam 历史近似目标同删一并改。
+  capsule: 'green-background',
   big: 'green-background',
   snow: 'snow',
-  glacier: 'glacier',
+  glacier: 'green-background',
   violet: 'violet',
   ember: 'green-background',
   mustard: 'green-background',
-  seafoam: 'glacier',
+  seafoam: 'green-background',
   raspberry: 'raspberry',
-  'cyan-glass': 'cyan-glass',
+  'cyan-glass': 'green-background',
   brick: 'green-background'
 };
 
@@ -330,7 +376,7 @@ export function wordDecl(s, opts = {}) {
   return d;
 }
 
-/** 注释区 CSS 声明数组（bg/fg/radius/fontSize/italic） */
+/** 注释区 CSS 声明数组（bg/fg/radius/fontSize/italic/glow） */
 export function annDecl(s, opts = {}) {
   const p = opts.important === true ? ' !important' : '';
   const d = [];
@@ -339,6 +385,9 @@ export function annDecl(s, opts = {}) {
   if (s.radius) d.push(`border-radius:${s.radius}${p}`);
   if (s.fontSize) d.push(`font-size:${s.fontSize}${p}`);
   if (s.italic) d.push(`font-style:italic${p}`);
+  // 第503次：annGlow 背景外发光（box-shadow）——Yellow Yellow 卡黑色半透明光晕，
+  //   buildAnnPoolCss / overlay annRules / 引导页预览共用本生成器，一处改全链生效。
+  if (s.annGlow) d.push(`box-shadow:${s.annGlow}${p}`);
   return d;
 }
 
@@ -384,16 +433,93 @@ export function poolPaint(s) {
 // 306次（用户"两种样式混在一起，为何不分两个框"）：拆出 annCustomCssSections——
 //   target/annotation 两段独立文本，引导页双代码框各占一段（解析回填互不混写）；
 //   本函数保留（单框格式拼接两段），旧调用点不破坏。
-export function annCustomCssSections(o) {
-  const w = wordDecl({
-    wordBg: o.wordBg, wordFg: o.wordFg, radius: o.radius, bold: o.bold, deco: o.deco
-  }).join(';\n');
-  const a = annDecl({ annBg: o.annBg, annFg: o.annFg, radius: o.radius }).join(';\n');
-  return { target: w ? w + ';' : '', annotation: a ? a + ';' : '' };
+// 第502次（用户"Target word CSS、Annotation CSS 并不显示真实样式代码"）：
+//   旧版只拼 5 个颜色字段、无 !important——与真实生效规则（buildAnnPoolCss：
+//   wordDecl/annDecl 全字段 + !important + 池选择器 .beaver-ann-style-{id}）不符。
+//   改为与 buildAnnPoolCss 完全同源的 important 全字段输出 + 选择器注释头；
+//   解析回填端同步剥离 !important（ann-pool.js parseAnnCustomCssText）。
+// 第503次（用户"Custom Style 并不显示真实样式代码"）：注释头+裸声明仍不是"真实
+//   样式代码"——改为直接输出带选择器与花括号的完整真实规则，与 buildAnnPoolCss
+//   产物逐字同构（侧栏端 root 真身 + annInline/annWord 组合选择器）；视频叠加端
+//   root 差异（#beaver-subtitle-overlay.annstyle-ann-custom，annstyle- 前缀）在
+//   注释头注明。解析端 parseAnnCustomCssText 本次同步增强（剥注释、{} 折算分隔符）。
+// 第504次（问题2，用户"Custom Style 并不显示真实样式代码"复核）：503 次把四栏
+//   全部写成了视频侧栏选择器（#beaver-sidebar）——其余三栏照旧不真实。新增第二参
+//   feat 按目标栏输出该栏真实生效的规则（依据 buildAnnPoolCss 两个调用点与
+//   th/core injectStyles、overlay syncAnnCustomRules 真身）：
+//   textStyle：网页提示无池类——声明折算进 :root 变量，由 .beaver-word-first /
+//     .beaver-side-ann 消费，输出即真实变量赋值 + 消费规则；
+//   annotationStyle：#beaver-web-sidebar（web-sidebar-impl refreshAnnPoolCss 真身）；
+//   videoAnnotationStyle：#beaver-sidebar（vs/ann-style refreshAnnPoolCss 真身）；
+//   videoOverlayAnnStyle：#beaver-subtitle-overlay.annstyle-ann-custom（overlay
+//     syncAnnCustomRules 真身；注释端 side-ann/ann-word/ann-trans，生词端
+//     .beaver-word 含 .later——第504次起 overlay annstyle 规则消费本栏 word 字段）。
+//   feat 缺省回 'videoAnnotationStyle'（与 503 次行为兼容；调用方应显式传栏）。
+export function annCustomCssSections(o, feat) {
+  const wd = wordDecl(o, { important: true });
+  const ad = annDecl(o, { important: true });
+  if (feat === 'textStyle') {
+    // 网页提示端真身：pickColors 折算 → applyColorVars 写 :root 变量 → 静态类消费
+    const word = [
+      '/* 网页提示端：无池类——声明折算进 :root 变量，由下列真实类消费 */',
+      ':root {',
+      '  --beaver-first-bg: ' + (o.wordBg !== undefined ? o.wordBg : 'transparent') + ';',
+      '  --beaver-first-fg: ' + (o.wordFg !== undefined ? o.wordFg : '#2e6b43') + ';',
+      '}',
+      '.beaver-word-first {',
+      '  background: var(--beaver-first-bg, transparent) !important;',
+      '  color: var(--beaver-first-fg, #2e6b43) !important;',
+      '}'
+    ].join('\n');
+    const ann = [
+      '.beaver-side-ann {',
+      '  background: var(--beaver-ann-bg, transparent) !important;',
+      '  color: var(--beaver-ann-fg, #2e6b43) !important;',
+      '  border-radius: var(--beaver-ann-radius, 3px) !important;',
+      '  font-size: var(--beaver-ann-font-size, 0.9em) !important;',
+      '  font-style: var(--beaver-ann-font-style, normal) !important;',
+      '}'
+    ].join('\n');
+    return { target: word, annotation: ann };
+  }
+  const presets = {
+    annotationStyle: {
+      root: '#beaver-web-sidebar',
+      word: '.beaver-web-sub-text .beaver-web-word',
+      annInline: '.beaver-web-ann-inline',
+      annWord: '.beaver-web-ann-line .beaver-web-ann-word'
+    },
+    videoAnnotationStyle: {
+      root: '#beaver-sidebar',
+      word: '.beaver-sub-text .beaver-word',
+      annInline: '.beaver-ann-inline',
+      annWord: '.beaver-ann-line .beaver-ann-word'
+    },
+    // 第505次（用户"Custom Style并不显示真实样式代码"）：preset 改存相对选择器，
+    //   由下方 scoped() 统一逐段补 root——原内嵌 root 与 rule() 拼接会重复
+    //   （root root ...）；逗号选择器列表每段需各自带 root 前缀。
+    videoOverlayAnnStyle: {
+      root: '#beaver-subtitle-overlay.annstyle-ann-custom',
+      word: '.beaver-overlay-subtitle .beaver-word,\n.beaver-overlay-subtitle .beaver-word.later',
+      annInline: '.beaver-overlay-subtitle .beaver-side-ann',
+      annWord: '.beaver-overlay-ann-word,\n.beaver-overlay-ann-trans'
+    }
+  };
+  const p = presets[feat] || presets.videoAnnotationStyle;
+  const note = '真实生效（' + p.root + '）；解析回填按声明逐条识别';
+  const rule = (sel, decls) => decls.length
+    ? '/* ' + note + ' */\n' + sel + ' {\n  ' + decls.join(';\n  ') + ';\n}'
+    : '';
+  // 第505次：相对选择器按逗号拆段、逐段补 root（多行选择器每段独立作用域）
+  const scoped = (rel) => rel.split(',').map((s) => p.root + ' ' + s.trim()).join(',\n');
+  return {
+    target: rule(scoped(p.word), wd),
+    annotation: rule(scoped(p.annInline + ',\n' + p.annWord), ad)
+  };
 }
 
-export function annCustomCssText(o) {
-  const s = annCustomCssSections(o);
+export function annCustomCssText(o, feat) {
+  const s = annCustomCssSections(o, feat);
   return '/* target */\n' + s.target + '\n/* annotation */\n' + s.annotation;
 }
 
@@ -476,6 +602,28 @@ export const SUBTITLE_TEXT_STYLES = [
   //   与 SUB_DEFAULT_STYLE 常量锚定；存量 storage.subtitleStyle='none' 由
   //   sanitizeStyleId（不在池内即回落 SUB_DEFAULT_STYLE）与各渲染端清洗点迁移。
   { id: 'white-bottom', label: { en: 'White Bottom', zh: '白字贴底' }, pos: 'b20', font: 'sans', fg: '#ffffff', bg: 'rgba(0,0,0,0.75)', fontSizePct: 5, edge: null, bold: false, italic: false, shadow: false, annMode: 'side', sample: 'He passed the quiz.' },
+  // 第501次（用户"White Shadow 用描边不用底条，默认位置15%"）：基于 White Bottom 的
+  //   白字，去掉黑半透明底条，改黑描边(-webkit-text-stroke) + 软投影双阴影——
+  //   亮暗场景均可读（对齐调研实证的平台主流：Bilibili 默认黑描边/Netflix 默认投影）。
+  //   pos:'b15'：指派该样式时位置同步 15%（b15 为滑轨任意值，不进 SUBTITLE_POSITIONS 档表）。
+  // 第510次（用户"White Shadow 看起来像是侵蚀了原来字形"）：shadow 第二层 0 0 8px
+  //   大模糊黑雾罩在字周（预览小字号下尤甚），与描边叠加出"字形被侵蚀"观感——
+  //   收紧为近影 0 1px 2px 紧贴 + 外圈 0 0 4px 半强度（可读性不减、不再糊）。
+  //   侵蚀主因（text-stroke 盖填充）双端 paint-order:stroke fill 修复，见两端输出点。
+  { id: 'white-shadow', label: { en: 'White Shadow', zh: '白字描边' }, pos: 'b15', font: 'sans', fg: '#ffffff', bg: null, fontSizePct: 5, edge: '#000000', bold: false, italic: false, shadow: '0 1px 2px rgba(0,0,0,.9),0 0 4px rgba(0,0,0,.55)', annMode: 'side', sample: 'He passed the quiz.' },
+  // 第504次（问题4，用户"增加默认样式White Glow"）：白字 + 黑半透明底条 + 黑色半透明
+  //   外发光——glow 字段（字幕盒 box-shadow）本次新增，buildSubBoxCss（guide 预览）与
+  //   buildSubtitleStyleCss（overlay 真实端）双端输出；文字端白字贴底条已可读不再叠加投影。
+  //   pos:'b15'（同 white-shadow 先例，指派同步位置 15%）；经 SUB_DEFAULT_STYLE 成出厂
+  //   默认——Yellow Yellow 的"字幕背景外发光黑色半透明"由所选字幕样式承载，出厂组合
+  //   即 yellow-yellow × white-glow。
+  // 第507次（用户"White Glow 外发光效果也没看见，一点背景阴影都没有"）：浏览器最小
+  //   复现实证——506 次 pvWrap calc 反向补偿技术生效（calc 晕 > 无补偿，直写 55px
+  //   与之一致），但 12px rgba(0,0,0,0.65) 单层黑影在预览灰底渐变（#888→#4a4a4a）
+  //   暗区太淡不可辨。glow 改三层强参数（内圈锐定形 + 中圈 + 外圈柔扩散，实测灰底
+  //   清晰可见）：guide 预览（pvWrap 逐层包 calc）与 overlay 真实端原样输出，两端
+  //   随条目值自动同步。
+  { id: 'white-glow', label: { en: 'White Glow', zh: '白字外发光' }, pos: 'b15', font: 'sans', fg: '#ffffff', bg: 'rgba(0,0,0,0.5)', fontSizePct: 5, edge: null, bold: false, italic: false, shadow: false, glow: '0 0 4px rgba(0,0,0,0.95), 0 0 12px rgba(0,0,0,0.8), 0 0 28px rgba(0,0,0,0.6)', annMode: 'side', sample: 'He passed the quiz.' },
   // 1. YouTube 官方默认：白字 + 黑半透明底（全球覆盖面最大的字幕样式）
   { id: 'yt-box', label: { en: 'YouTube', zh: 'YouTube 底条' }, font: 'sans', fg: '#ffffff', bg: 'rgba(8,8,8,0.75)', fontSizePct: 4, edge: null, bold: false, italic: false, shadow: false, annMode: 'side', sample: 'He passed the quiz.' },
   // 2. Netflix 官方：白字 + 软阴影（无底条，阴影保证亮暗场景均可读）
@@ -597,6 +745,21 @@ export const SUBTITLE_POSITIONS = [
   { id: 'b75', label: { en: 'Top 1/4', zh: '上1/4' }, ratio: 0.75 },
   { id: 'b90', label: { en: 'Top 1/10', zh: '上1/10' }, ratio: 0.9 }
 ];
+
+// 第501次（用户"Position 改为垂直滑轨……高度范围 0-100 交给用户选择"）：位置 id 统一解析——
+//   ① 档表命中（b10/b20/b25/b33/b50/b75/b90）→ 档 ratio（b33=1/3 以档表为准）；
+//   ② 'bNN'（NN=0..100 整数，滑轨任意值，如 b15/b37）→ NN/100；
+//   ③ 其余（脏值/迁移前 t10）→ null，由各调用方决定回落（清洗→出厂默认，渲染→兜底档）。
+export function subPosRatio(id) {
+  const hit = findStyle(SUBTITLE_POSITIONS, id);
+  if (hit) return hit.ratio;
+  const m = /^b(\d{1,3})$/.exec(String(id || ''));
+  if (m) {
+    const n = Number(m[1]);
+    if (n >= 0 && n <= 100) return n / 100;
+  }
+  return null;
+}
 
 // 取当前界面语言下的样式短名
 export function styleLabel(st, lang) {
