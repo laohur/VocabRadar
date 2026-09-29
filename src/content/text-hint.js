@@ -196,7 +196,7 @@ async function _hintBoot() {
       clear: () => { markManual(); if (_impl) _impl.clearHighlights(); },
       setRank: (v) => {
         markManual();
-        const n = (typeof v === 'number' && isFinite(v)) ? v : 5000;
+        const n = (typeof v === 'number' && isFinite(v)) ? v : 4000;
         chrome.storage.local.set({ rankThreshold: n });
         if (_impl) _impl.setRankThreshold(n);
       },
@@ -679,11 +679,12 @@ function _hintGetSettings() {
     // 301次：注释个性化参数＋用户样式（pickColors 经 resolveAnnEntry 解析，直通 settings）
     annotationCustom: null,
     annotationUserStyles: [],
-    // 反思（2026-08-14 第五十四次修正）：恢复默认 5000，撤销第五十二次误改的 0
-    rankThreshold: 5000,
+    // 反思（2026-08-14 第五十四次修正）：恢复默认，撤销第五十二次误改的 0。
+    //   2026-09-29（用户："默认提示4000-5000词频"）：默认 4000 / 上界 5000（全仓同批同步）
+    rankThreshold: 4000,
     // 340次（My Words 过滤失效修复）：上界也一并补——本 DEFAULTS 手工合并只拷列出的键
     //   （get(null) 全量拿、按白名单合），此前缺 rankThresholdMax → 刷新后上界恒回 Infinity 不限
-    rankThresholdMax: 0,
+    rankThresholdMax: 5000,
     // 340次（用户实测"进 Known 依旧提示/进 New 依旧不提示"根因）：缺 myWords → startHint 传给
     //   scan.js 的 settings 永远没有 myWords → setMyWords(空) → 过滤全失效；onChanged 链路虽
     //   正常但刷新/新开页面即失效。storage.myWords={new:[],known:[]}（小写单词数组）

@@ -25,6 +25,47 @@ import { cleanDictEntry } from '../dict-clean.js';
 import { withTimeout, log, _ts, transState, _setLastChannel, getLastTranslateChannel } from './shared.js';
 import { getTranslator, targetScriptOk } from './builtin-translator.js';
 import { sendMessage } from './online-channels.js';
+// 2026-09-29（用户："目前的翻译提示词模板效果差"）：LLM 翻译渠道提示词改为三级优先组装
+//   （config.json 出厂值 ＞ storage ＞ 代码常量），{lang} 用语言名而非语言代码（旧版
+//   SW 硬编码把 'zh' 直接塞进 "Translate ... into zh"，模型对语言代码的响应劣于语言名）。
+import { LLM_TRANSLATE_PROMPT } from '../llm.js';
+import { LANG_NAMES } from '../i18n.js';
+
+// config.json 出厂值读取（照 chat.js readChatCfg 惯例：模块级缓存只 fetch 一次，失败缓存空对象）
+let _transCfgPromise = null;
+function readTransCfg() {
+  if (!_transCfgPromise) {
+    _transCfgPromise = fetch(chrome.runtime.getURL('src/data/config.json'))
+      .then((r) => r.json())
+      .catch(() => ({}));
+  }
+  return _transCfgPromise;
+}
+
+/**
+ * 组装 LLM 翻译提示词（三级优先：config.json llmTranslatePrompt ＞ storage ＞ 常量兜底），
+ * 填充 {text} = 待译文本、{lang} = 释义语言名（LANG_NAMES 映射，照 chat.js buildFirstPrompt 范式）。
+ * @param {string} text 待译文本（单词/选区）
+ * @returns {Promise<string>} 已填充的完整提示词
+ */
+async function buildTranslatePrompt(text) {
+  const def = LLM_TRANSLATE_PROMPT;
+  let tpl = def;
+  let langName = '中文'; // 与 LANG_NAMES['zh'] 一致（meaningLanguage 默认 'zh'），照 chat.js 兜底风格
+  try {
+    const res = await new Promise((resolve) => {
+      try { chrome.storage.local.get({ llmTranslatePrompt: def, meaningLanguage: 'zh' }, resolve); } catch (_) { resolve({}); }
+    });
+    const langCode = String((res && res.meaningLanguage) || 'zh');
+    langName = LANG_NAMES[langCode] || langCode;
+    tpl = String((res && res.llmTranslatePrompt) || '') || def;
+  } catch (_) { /* 保底常量 */ }
+  try {
+    const v = (await readTransCfg()).llmTranslatePrompt;
+    if (typeof v === 'string' && v.trim()) tpl = v;
+  } catch (_) { /* 读不到维持上一级取数结果 */ }
+  return tpl.split('{text}').join(text).split('{}').join(text).split('{lang}').join(langName);
+}
 
 // 第二百一十六次（用户："引导页增加翻译一行，后跟LLM、几个api、浏览器自身复选框，
 //   这里LLM只有文本，直接用聊天的LLM配置"）：翻译渠道勾选状态（模块级缓存 +
@@ -321,9 +362,12 @@ async function _translateInternal(word) {
     }
   }
   // 4. 渠道 3：LLM 文本翻译（第二百一十六次——文本形态，直接用聊天的 LLM 配置）
+  // 2026-09-29：content 侧组装提示词（三级优先 + {lang} 语言名）随消息下发，
+  //   SW 端哑管道直发；prompt 为空时 SW 保留旧硬编码兜底。
   if (!result && _chOn.llm) {
     try {
-      const resp = await sendMessage({ type: 'LLM_TRANSLATE', text: word, target: transState.meaningLang });
+      const prompt = await buildTranslatePrompt(word);
+      const resp = await sendMessage({ type: 'LLM_TRANSLATE', text: word, target: transState.meaningLang, prompt });
       if (resp && resp.ok && resp.text) {
         result = cleanDictEntry(resp.text.trim());
         _setLastChannel('LLM');

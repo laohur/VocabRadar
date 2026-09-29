@@ -178,11 +178,12 @@ async function getAnnotationsInner(text, rankThreshold = 0, seen = new Set(), on
   // 反思（2026-08-16 第七十二次）：词典只加载一次——startHint/web-sidebar 启动时已加载，
   //   此处不再逐句调 loadDictionary()（用户反馈"每次都加载 wordfreq/wordlists"）。
   //   若 Maps 未就绪（极端竞态），lookup 返回 null，走表外分支。
-  // rankThreshold 防御：非数字或 NaN 时回退默认值 5000。
+  // rankThreshold 防御：非数字或 NaN 时回退默认值。
   // 第一百八十五次（用户："也不知道你咋选词的…有高频词"）：旧版回退 0 等于"不过滤高频词"，
-  //   与全仓默认阈值 5000（popup/service-worker/th/core/ws/core/video-sidebar 等）不一致；
-  //   一旦调用方漏传或传入 NaN（配置未就绪的竞态），高频词就整批漏进词表。统一为 5000。
-  const threshold = (typeof rankThreshold === 'number' && !isNaN(rankThreshold)) ? rankThreshold : 5000;
+  //   与全仓默认阈值（popup/service-worker/th/core/ws/core/video-sidebar 等）不一致；
+  //   一旦调用方漏传或传入 NaN（配置未就绪的竞态），高频词就整批漏进词表。
+  // 2026-09-29（用户："默认提示4000-5000词频"）：统一兜底改 4000（config.json rankThreshold 同步）。
+  const threshold = (typeof rankThreshold === 'number' && !isNaN(rankThreshold)) ? rankThreshold : 4000;
   // 第三百七十五次：垃圾 token 便宜守卫——单字母碎片与超长拼接串（频道 handle/URL 片，
   //   如诊断所见 crashcoursekids/youtubecrashcourse/bsky 类）不进 IDB 批量与翻译队列；
   //   英文实词长度恒在 2~24 区间，真词零影响（a/I 本就因高频被滤，此处只是提前止损）。

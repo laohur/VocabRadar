@@ -135,7 +135,7 @@ let _root = null;             // 视频提示根元素
 initAsrProgress({ getRoot: () => _root });
 let _video = null;            // video 元素
 let _subtitles = [];          // [{start, end, text}]
-let _rankThreshold = 5000;    // 词频阈值（2026-08-14 第五十四次修正：恢复默认 5000）
+let _rankThreshold = 4000;    // 词频阈值（2026-09-29 用户："默认提示4000-5000词频"：默认改 4000，配 rankThresholdMax=5000）
 let _myWords = null;          // My Words 生词/熟词表（storage.myWords；null=未加载，startOverlay 传参用）
 // 是否注释表外词（2026-08-14 第五十四次：键名改 annotateOov，默认不选）
 let _annotateOov = false;
@@ -252,11 +252,11 @@ async function loadConfig() {
 async function loadSettings() {
   return new Promise((resolve) => {
     chrome.storage.local.get({
-      rankThreshold: 5000,
+      rankThreshold: 4000,
       // 340次（My Words 过滤失效修复）：此前缺两键 → 刷新后 settings.myWords=undefined →
       //   video-sidebar.js:1419 setMyWords(空) 过滤失效；controller 转发 startOverlay 的
       //   myWords/rankThresholdMax 也为 undefined（subtitle-overlay 真值守卫不清空但从不生效）
-      rankThresholdMax: 0,
+      rankThresholdMax: 5000,
       myWords: { new: [], known: [] },
       // 反思（2026-08-18 第七十三次修正）：默认配色曾是单词绿底白字。
       // 304次（用户"默认无底色"）：改透明底绿字。

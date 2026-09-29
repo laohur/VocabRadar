@@ -67,7 +67,7 @@ let _subtitles = [];             // [{start, end, text}]
 let _annotationsCache = new Map(); // text -> annotations
 let _seen = new Set();           // 跨字幕去重
 let _enabled = true;
-let _rankThreshold = 5000;   // 2026-08-14 第五十四次修正：恢复默认 5000
+let _rankThreshold = 4000;   // 2026-09-29（用户："默认提示4000-5000词频"）：默认改 4000（配 rankThresholdMax=5000）
 // 注释重复生词（2026-08-15 第六十二次：默认不选，后续出现不包裹不注释）
 let _annotateRepeat = false;
 // 280次：侧邻注释模板（annBrackets 布尔退役，默认 {word}({meaning})，{word}/{meaning} 均为变量）
@@ -720,7 +720,7 @@ export function startOverlay(video, subtitles, options = {}) {
 
   _video = video;
   _subtitles = subtitles;
-  _rankThreshold = options.rankThreshold ?? 5000;
+  _rankThreshold = options.rankThreshold ?? 4000;
   // 词频范围上界（storage.rankThresholdMax；0/缺省=不限制），annotator 模块级生效
   setRankMax(options.rankThresholdMax);
   // My Words（用户生词/熟词表，优先级高于词频范围；storage.myWords={new:[],known:[]}）

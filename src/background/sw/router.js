@@ -217,8 +217,9 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         .catch((e) => sendResponse({ ok: false, error: String(e.message || e) }));
       return true;
     // 第二百一十六次：翻译渠道的 LLM 文本翻译——**直接用聊天的 LLM 配置**（文本形态）
+    // 2026-09-29：content 侧组装好的提示词随消息下发（哑管道直发，空则 SW 旧硬编码兜底）
     case 'LLM_TRANSLATE':
-      handleLlmTranslate(msg.text, msg.target)
+      handleLlmTranslate(msg.text, msg.target, msg.prompt)
         .then((r) => sendResponse(r))
         .catch((e) => sendResponse({ ok: false, error: String(e.message || e) }));
       return true;

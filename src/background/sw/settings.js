@@ -10,8 +10,9 @@ export const DEFAULT_SETTINGS = {
   learnLanguage: 'en',
   meaningLanguage: 'zh',
   // 反思（2026-08-14 第五十四次修正）：用户裁定"调整词频就能凸显，不应更改默认值"。
-  //   恢复默认 5000（原 5000），此前第五十二次误改为 0 属于错误默认，回滚。
-  rankThreshold: 5000,
+  //   2026-09-29（用户："默认提示4000-5000词频"）：默认改 4000，配 config.json
+  //   rankThresholdMax=5000（上界出厂值），popup.js DEFAULTS 已同批同步。
+  rankThreshold: 4000,
   // 第二百二十五次：删除死键 subtitleOverlay（SW install 写入、全库零读取，《命名清查》裁定）。
   // 反思（2026-08-12）：用户反馈"所有浏览器网页中丢了文本提示"。
   //   旧版 textHintEnabled: false，onInstalled 写入 storage 后 text-hint.js 读取到 false 不启动。

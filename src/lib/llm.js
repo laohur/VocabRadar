@@ -166,6 +166,10 @@ export const LLM_DEFAULT_PROVIDER = 'local-backend';
 // 2026-09-02 修正占位为 {text}（用户裁定：Please explain "{text}" in {lang}. / Please translate "{text}" in {lang}.）
 export const CHAT_WORD_PROMPT = 'Please explain "{text}" in {lang}.';
 export const CHAT_SIDEBAR_PROMPT = 'Please summarise the text above in {lang}.';
+// 翻译提示词兜底模板（2026-09-29）：正常走 config.json 出厂值 > storage > 此常量 三级优先，
+//   由 translator/index.js 组装（{text} = 选中文本，{lang} = 释义语言名），SW 端只做哑管道直发。
+//   约束句式防 LLM 输出解释/引号等冗余内容（旧硬编码 "Please translate ... in ..." 无任何输出约束）。
+export const LLM_TRANSLATE_PROMPT = 'Translate "{text}" into {lang}. Output only the translation: no explanations, no quotes.';
 
 /**
  * 按 id 取预置来源；未知 id 回退到默认来源（避免 storage 残留旧 id 导致取不到，

@@ -90,8 +90,9 @@ const DEFAULTS = {
   learnLanguage: 'en',
   meaningLanguage: 'zh',
   // 反思（2026-08-14 第五十四次修正）：用户裁定"调整词频就能凸显，不应更改默认值"。
-  //   恢复默认 5000，撤销第五十二次误改的 0。
-  rankThreshold: 5000,
+  //   2026-09-29（用户："默认提示4000-5000词频"）：默认改 4000（配 rankThresholdMax=5000，
+  //   即默认只注释词频 rank 4000-5000 段生词），guide.js/config.json 等兜底同批同步。
+  rankThreshold: 4000,
   // 反思（2026-07-10 #88）：用户反馈「字幕提示可选的按钮丢了」，指整个侧栏的开关。
   //   加回 sidebarEnabled 控制侧栏显隐，默认 true（侧栏默认显示）。
   sidebarEnabled: true,

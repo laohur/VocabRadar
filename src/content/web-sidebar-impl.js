@@ -110,7 +110,7 @@ export async function startWebSidebar(settings) {
   // 反思（2026-08-07）：初始化 i18n，使 t() 返回界面语言对应文案（不再硬编码中文）
   initLang().catch(() => { /* ignore */ });
   _settings = settings || {};
-  set_rankThreshold((_settings.rankThreshold != null) ? _settings.rankThreshold : 5000);
+  set_rankThreshold((_settings.rankThreshold != null) ? _settings.rankThreshold : 4000);
   // 词频范围上界（storage.rankThresholdMax，0/缺省=不限制）
   setRankMax(_settings.rankThresholdMax);
   // My Words（用户生词/熟词表，优先级高于词频范围；storage.myWords={new:[],known:[]}）
@@ -300,7 +300,7 @@ export function stopWebSidebar() {
 
 // 设置变化热更新接口
 export function setRankThreshold(n) {
-  set_rankThreshold((typeof n === 'number' && !isNaN(n)) ? n : 5000);
+  set_rankThreshold((typeof n === 'number' && !isNaN(n)) ? n : 4000);
   // 反思（2026-08-13 第五十次）：rank input 已移除，无需同步 input.value。
   // 反思（2026-08-07）：不调用 onRankChange（会导致 storage 循环写入）。
   //   直接清缓存重扫，onRankChange 中已有 chrome.storage.local.set。

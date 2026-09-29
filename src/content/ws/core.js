@@ -37,9 +37,10 @@ export let _noAnnotation = false;        // 不显示注释（第二百三十九
 
 export let _detailMode = false;          // 详略模式：false=简略，true=详细
 
-// 反思（2026-08-14 第五十四次修正）：默认词频阈值恢复 5000，撤销第五十二次误改的 0。
+// 反思（2026-08-14 第五十四次修正）：默认词频阈值恢复，撤销第五十二次误改的 0。
 //   用户裁定"调整词频就能凸显，不应更改默认值"。
-export let _rankThreshold = 5000;            // 词频阈值
+//   2026-09-29（用户："默认提示4000-5000词频"）：默认改 4000（全仓同批同步）
+export let _rankThreshold = 4000;            // 词频阈值
 
 // 反思（2026-08-14 第五十四次）：设置键改名 localTranslateEnabled → annotateOov；
 //   默认 false（注释表外词默认不选）。

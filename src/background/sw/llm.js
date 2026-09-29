@@ -34,14 +34,20 @@ export async function resolveLlmEngineCfg(engine) {
 
 // 第二百一十六次：LLM 文本翻译（翻译渠道候选之一）——直接复用聊天的 LLM 配置与轮替；
 //   提示词只要求输出译文本身，词条级短文本，max_tokens 默认 1024 足够。
-export async function handleLlmTranslate(text, target) {
+// 2026-09-29（用户："目前的翻译提示词模板效果差"）：提示词改为哑管道——content 侧
+//   translator/index.js 三级优先组装（config.json llmTranslatePrompt ＞ storage ＞ 常量，
+//   {lang} 用语言名）后随消息下发，本端非空即直发；空则保留旧硬编码兜底（兼容旧消息方）。
+export async function handleLlmTranslate(text, target, prompt) {
   if (!text) return { ok: false, error: 'empty text' };
-  const tgt = String(target || 'zh');
-  const NL = String.fromCharCode(10);
-  const prompt = 'Translate the following text into ' + tgt
-    + '. Output ONLY the translation, with no commentary, no quotes.'
-    + NL + NL + String(text);
-  const out = await handleLlmChat([{ role: 'user', content: prompt }]);
+  let msg = (typeof prompt === 'string' && prompt.trim()) ? prompt : null;
+  if (!msg) {
+    const tgt = String(target || 'zh');
+    const NL = String.fromCharCode(10);
+    msg = 'Translate the following text into ' + tgt
+      + '. Output ONLY the translation, with no commentary, no quotes.'
+      + NL + NL + String(text);
+  }
+  const out = await handleLlmChat([{ role: 'user', content: msg }]);
   if (!out.ok) return { ok: false, error: out.error };
   return { ok: true, text: String(out.content || '').trim() };
 }

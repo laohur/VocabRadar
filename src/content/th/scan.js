@@ -85,12 +85,13 @@ export async function startHint(settings) {
   try {
     // 反思（2026-08-12 第四十一次）：初始化 i18n，使 t() 返回界面语言对应文案
     initLang().catch(() => { /* ignore */ });
-    // 反思（2026-08-06）：NaN 防御 — rankThreshold 非有限数字时回退 5000（默认）
+    // 反思（2026-08-06）：NaN 防御 — rankThreshold 非有限数字时回退默认值
     //   settings.rankThreshold 若为 NaN，旧版 `?? 0` 不触发（NaN 非 null/undefined），
     //   导致 _rankThreshold=NaN → lookupWord 中 `rank > NaN` 恒 false → 所有词按表外处理。
     //   虽不直接产生"NaN阶"显示，但影响高亮判定，且 console.log 会打印 NaN。
+    //   2026-09-29（用户："默认提示4000-5000词频"）：回退默认改 4000（全仓同批同步）
     thState.rankThreshold = (typeof settings.rankThreshold === 'number' && isFinite(settings.rankThreshold))
-      ? settings.rankThreshold : 5000;
+      ? settings.rankThreshold : 4000;
     // 词频范围上界（storage.rankThresholdMax，0/缺省=不限制）
     setRankMax(settings.rankThresholdMax);
     // My Words（用户生词/熟词表，优先级高于词频范围；storage.myWords={new:[],known:[]}）
@@ -287,7 +288,7 @@ export function clearHighlights() {
  */
 export function setRankThreshold(v) {
   const oldThreshold = thState.rankThreshold;
-  thState.rankThreshold = (typeof v === 'number' && isFinite(v)) ? v : 5000;
+  thState.rankThreshold = (typeof v === 'number' && isFinite(v)) ? v : 4000;
   thState.wordCache.clear();
   thState.seenWords.clear();
   if (thState.enabled) {
@@ -1481,7 +1482,7 @@ export async function getDiagState() {
     try {
       chrome.storage.local.get({
         textHintEnabled: true, sidebarEnabled: true, webSidebarEnabled: true,
-        learnLanguage: 'en', meaningLanguage: 'zh', rankThreshold: 5000,
+        learnLanguage: 'en', meaningLanguage: 'zh', rankThreshold: 4000,
         annotateOov: false, hintFirstEnabled: true, hintSideAnnotation: false,
         hintLaterEnabled: false,
         uiLanguage: 'en'

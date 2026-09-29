@@ -218,11 +218,12 @@ function _wsGetSettings() {
     chrome.storage.local.get({
       learnLanguage: 'en',
       meaningLanguage: 'zh',
-      // 反思（2026-08-14 第五十四次修正）：默认词频阈值恢复 5000，撤销第五十二次误改的 0
-      rankThreshold: 5000,
+      // 反思（2026-08-14 第五十四次修正）：默认词频阈值恢复，撤销第五十二次误改的 0。
+      //   2026-09-29（用户："默认提示4000-5000词频"）：默认 4000 / 上界 5000（全仓同批同步）
+      rankThreshold: 4000,
       // 340次（My Words 过滤失效修复）：此前缺两键 → 刷新后 _settings.myWords=undefined →
       //   web-sidebar-impl setMyWords(空) 过滤失效；上界恒 Infinity 不限
-      rankThresholdMax: 0,
+      rankThresholdMax: 5000,
       myWords: { new: [], known: [] },
       annotateOov: false,
       annotateRepeat: false,

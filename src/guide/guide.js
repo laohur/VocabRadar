@@ -117,16 +117,17 @@ import { initChHealth, refreshChHealth } from './ch-health.js';
 // 第一百七十四次：新增 LLM_FORMAT_GROUPS —— 下拉按 API 格式 <optgroup> 分组
 //   （第445次起为：河狸后端 / OpenAI Chat Completion 格式 / Anthropic Messages 格式，free 组已裁撤）
 import {
-  LLM_PROVIDERS, LLM_FORMAT_GROUPS, LLM_DEFAULT_PROVIDER, CHAT_WORD_PROMPT, CHAT_SIDEBAR_PROMPT, getProvider
+  LLM_PROVIDERS, LLM_FORMAT_GROUPS, LLM_DEFAULT_PROVIDER, CHAT_WORD_PROMPT, CHAT_SIDEBAR_PROMPT, LLM_TRANSLATE_PROMPT, getProvider
 } from '../lib/llm.js';
 // 第二百四十八次：词典装载状态行——ensureReady 幂等（IDB 已构建走投影快通道秒回，
 //   缺数据才就地从源装载 = 更新/安装后引导页静默初始化的点名入口），getDiagState 读装载态。
 import { ensureReady, getDiagState, getMaxRank, getDictFieldStats } from '../lib/dictionary.js';
 
 // 第二百二十三次：LLM 翻译渠道提示词默认模板（{text}=原文，{lang}=释义语言）。
-// 2026-09-02 修正占位为 {text}（用户裁定：Please translate "{text}" in {lang}.）
-// 注意：后台 handleLlmTranslate 目前用硬编码英文提示词、不消费此键——接线属后台改造（本次仅保存）。
-const LLM_TRANSLATE_PROMPT = 'Please translate "{text}" in {lang}.';
+// 2026-09-29（用户："目前的翻译提示词模板效果差"）：默认模板迁至 lib/llm.js 常量
+//   LLM_TRANSLATE_PROMPT（与后台/config.json 共用一份），本地旧文案
+//   'Please translate "{text}" in {lang}.'（无输出约束）随迁退役。
+// 后台 handleLlmTranslate 同步改为哑管道直发 content 侧组装的提示词（见 translator/index.js）。
 
 // 翻译渠道缺省表（与 lib/translator/index.js 的 DEFAULT_TRANS_CHANNELS 一致：LLM 与 Backend 默认不选）。
 // renderAll 回填与 loadSettings 默认共用；跨标签页 get(null) 拿不到默认键时也以它兜底。
@@ -495,14 +496,14 @@ async function loadSettings() {
   const defaults = Object.assign({    uiLanguage: 'zh',
     learnLanguage: 'en',
     meaningLanguage: 'zh',
-    rankThreshold: 5000,
+    rankThreshold: 4000,
     annotateOov: false,
     uiLanguage: 'zh',
     learnLanguage: 'en',
     meaningLanguage: 'zh',
-    rankThreshold: 5000,
+    rankThreshold: 4000,
     annotateOov: false,
-    rankThresholdMax: 0,   // 词频范围上界（0=不限制）
+    rankThresholdMax: 5000,   // 词频范围上界（0=不限制）
     annotateRepeat: false,
     // 327次：引导页新增复选框回填默认（与 popup.hintLaterEnabled 同键，默认空即仅首次高亮）
     hintLaterEnabled: false,
@@ -1015,7 +1016,7 @@ async function init() {
   });
   $('rankThreshold').addEventListener('change', (e) => {
     const v = parseInt(e.target.value, 10);
-    chrome.storage.local.set({ rankThreshold: isFinite(v) ? v : 5000 }, () => log('词频阈值=', v));
+    chrome.storage.local.set({ rankThreshold: isFinite(v) ? v : 4000 }, () => log('词频阈值=', v));
     updateRankMaxMin(); // 下界变了 → 上界 spinner 起步值随动
   });
   // 词频上界（0/空=未设上界=空集，全部词都值得注释；正数上界须大于下界）

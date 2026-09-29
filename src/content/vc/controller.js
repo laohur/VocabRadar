@@ -63,8 +63,8 @@ function _supKey(sup) {
 function getSettings() {
   return new Promise((resolve) => {
     chrome.storage.local.get({
-      rankThreshold: 5000,   // 2026-08-14 第五十四次修正：恢复默认 5000
-      rankThresholdMax: 0,   // 词频范围上界，0/缺省=不限制（默认全表频段）
+      rankThreshold: 4000,   // 2026-09-29（用户："默认提示4000-5000词频"）：默认改 4000
+      rankThresholdMax: 5000,   // 词频范围上界，0/缺省=不限制（默认全表频段）
       // 340次（My Words 过滤失效修复）：此前缺键 → getSettings 后转发 startOverlay 的
       //   myWords=undefined → subtitle-overlay 真值守卫不清空但也从不 setMyWords → 失效
       myWords: { new: [], known: [] },
