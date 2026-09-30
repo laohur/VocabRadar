@@ -51,6 +51,9 @@
  *   注（2026-09-04 Edge 适配，历史）：Edge 上传校验拒绝包内任何 .gz 扩展名文件——
  *       当时将 wordfreq/kuroshiro-dict 改名 .bin、tessdata 真解压；2026-09-07/08 起
  *       大体积数据均已 CDN 化，包内已无此类文件，该约束仍适用于未来新增数据。
+ *   注（2026-10-01 第511次，Edge 上传校验）：Edge 包校验拒绝 manifest 的 "key" 字段
+ *       （PackageValidationError）——chrome + obfuscate（-upload）构建时剥离；
+ *       pure/-min 本地包保留 key 以复用商店 ID。
  *
  * 迁移说明（build.py → build.mjs 的等价与差异，2026-09-05）：
  *   - terser：CLI spawn（npx terser <file> --comments false [--module] -o <file>）
@@ -186,6 +189,22 @@ function buildPhonemizeLangpacks() {
       `未安装（npm install --prefix scripts）或产物超 5MB。不打静默回退包。`
     );
   }
+}
+
+function patchManifestForStore(distDir) {
+  // 第511次：Chrome/Edge 商店提交包剥离 "key" 字段。
+  // Edge Add-ons 包校验硬拒含 key 的 manifest（PackageValidationError「The manifest
+  // shouldn't contain the key field」，v0.4.0 上传实测），上传后 10 秒即 Failed。
+  // key 只对本地「加载解压的扩展」有意义（复用商店 ID hcpmj…，401 次加入，见
+  // change.log/教训与沿革）；商店侧 ID 由商店自己保管，与该字段无关。
+  // 故仅 -upload（mode=obfuscate，提交商店的包）剥离；pure/-min 本地包保留 key，
+  // 本地加载 ID 不变。Firefox 包已由 patchManifestForFirefox 剥离，不走此函数。
+  const manifestPath = path.join(distDir, 'manifest.json');
+  const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+  if (!('key' in manifest)) return;
+  delete manifest.key;
+  fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2) + '\n', 'utf8');
+  console.log('[商店包] manifest.json 已剥离 key 字段（Edge 包校验拒绝该字段；本地包仍保留）');
 }
 
 function patchManifestForFirefox(distDir) {
@@ -661,6 +680,8 @@ async function buildBrowser(browser, mode) {
   cleanDist(distDir);
   copyRuntime(distDir);
   if (browser === 'firefox') patchManifestForFirefox(distDir);
+  // 第511次：Chrome/Edge 商店提交包（-upload）剥离 manifest.key——Edge 包校验硬拒
+  if (browser === 'chrome' && mode === 'obfuscate') patchManifestForStore(distDir);
   if (mode === 'pure') {
     // 纯净（现行为不变）：先剥离注释再 esbuild 预打包——esbuild 从 ROOT 源码读入、
     // 输出本就无注释，覆盖 dist 内 impl 副本；散文件注释剥离只对最终留在 dist 的文件生效。
