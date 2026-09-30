@@ -12,7 +12,8 @@ Häufigkeit— und zeigt sofort ihre Bedeutung. **42 Sprachen**. Keine Registrie
 kein Konto; alles wird lokal nachgeschlagen.
 
 Funktionen: neue Wörter in Videos (Bilibili / YouTube) und auf jeder Webseite,
-Untertitel mit Notizen, lokale Spracherkennung (Whisper), OCR und KI-Chat.
+Untertitel mit Notizen, Transkription (Whisper) und OCR über die optionale
+lokale Begleit-App, dazu KI-Chat.
 
 ## Installation
 

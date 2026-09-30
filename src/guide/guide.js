@@ -11,7 +11,7 @@
 
 import {
   initLang, setLang,
-  LANG_NAMES, LANG_NAMES_EN, UI_LANGS, TRANSLATE_LANGS
+  LANG_NAMES, UI_LANGS, TRANSLATE_LANGS
 } from '../lib/i18n.js';
 import { DEFAULT_ANN_TEMPLATE, BUILD_STAMP, ANN_DEFAULT_STYLE, VANN_DEFAULT_STYLE, SUB_DEFAULT_STYLE } from '../lib/styles.js';
 import { $, m, log, getLangState, setLangState, ownWriteAt } from './shared.js';
@@ -125,13 +125,16 @@ const HELP = [
 // === 渲染函数 ===
 
 function renderLangSelect(selectEl, langs, selected, names) {
-  // names 可选：释义语言下拉传 LANG_NAMES_EN 统一英文名，其余缺省用本地化名 LANG_NAMES
+  // 三组语言下拉（界面/学习/释义）统一口径：两位代码 + 空格 + 语言自称（LANG_NAMES）；
+  // 20260930 用户令「语言列表的语言自称之前加上两位代码和空格」+ 纠错「释义语言全是英文全称」——
+  // 原释义语言传 LANG_NAMES_EN（Chinese/Japanese 英文全称）已撤销，names 参数仅留作个例兜底。
   const nameOf = names || LANG_NAMES;
   selectEl.innerHTML = '';
   for (const code of langs) {
     const opt = document.createElement('option');
     opt.value = code;
-    opt.textContent = nameOf[code] || code;
+    const label = nameOf[code] || code;
+    opt.textContent = nameOf[code] ? `${code} ${label}` : label;
     opt.selected = (code === selected);
     selectEl.appendChild(opt);
   }
@@ -464,10 +467,10 @@ function updateRankMaxMin() {
 }
 
 function renderAll(res) {
-  // 语言控件（释义语言固定用英文名称 LANG_NAMES_EN）
+  // 语言控件（三组统一：代码 + 自称；释义语言原 LANG_NAMES_EN 英文全称口径 20260930 撤销）
   renderLangSelect($('uiLang'), UI_LANGS, res.uiLanguage);
   renderLangSelect($('learnLanguage'), TRANSLATE_LANGS, res.learnLanguage);
-  renderLangSelect($('meaningLanguage'), TRANSLATE_LANGS, res.meaningLanguage, LANG_NAMES_EN);
+  renderLangSelect($('meaningLanguage'), TRANSLATE_LANGS, res.meaningLanguage);
   $('rankThreshold').value = res.rankThreshold;
   // 词频上界：0/缺省=回退到词典词频表上界；词典未就绪时显示 ∞
   const _effMax = (typeof res.rankThresholdMax === 'number' && isFinite(res.rankThresholdMax) && res.rankThresholdMax > 0)

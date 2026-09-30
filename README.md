@@ -28,11 +28,18 @@ Supported languages (42):
 - **Learn words from the web** — new words in any page's text are highlighted,
   with hover definitions and right-click lookup; the side panel collects the
   page's new words with their example sentences.
-- **Learn without subtitles** — local speech recognition (Whisper) transcribes
-  subtitle-less videos, recordings and uploaded audio/video; OCR reads the text
-  in the current video frame (burned-in subtitles, slides).
+- **Learn without subtitles** — subtitle-less videos, recordings and uploaded
+  audio/video are transcribed **on your own machine** by the optional free
+  local companion app (Whisper); OCR reads the text in the current video frame
+  (burned-in subtitles, slides) through the companion app or your own
+  OpenAI / Anthropic-compatible key. Everything else works without it.
 - **AI chat** — a built-in chat panel works with free models, or with your own
   OpenAI / Anthropic-compatible key.
+- **Optional local companion app** — a small Python service on
+  `127.0.0.1:7777` that you run yourself: local LLM chat, transcription, OCR,
+  offline translation (NLLB, 42 languages) and media/subtitle downloading.
+  Install with `python backend/scripts/install.py`, start with
+  `python backend/app.py`.
 - **Companion practice site** — push your collected pages and scrolls to
   [vocabradar.com](https://vocabradar.com) for review and practice.
 
@@ -66,8 +73,9 @@ the VocabRadar mini program (Chinese UI):
   downloads only the language you need, on demand, and verifies integrity
   (SHA-256) before use.
 - **English word lists & translations** — bundled with the extension.
-- **Translations** — online channels, Chrome's built-in Translator API, or the
-  AI endpoint **you** configure; only the text you explicitly look up is sent.
+- **Translations** — online channels, Chrome's built-in Translator API, the
+  AI endpoint **you** configure, or the optional local companion app (NLLB,
+  offline); only the text you explicitly look up is sent.
 
 
 ## Privacy
@@ -77,7 +85,7 @@ See [PRIVACY.md](PRIVACY.md) (English + 中文).
 
 ## Repository / License
 
-- Repository: *TBD — placeholder, fill in the public repo URL (its `/releases`
-  page will host the Chrome install zips).*
+- Repository: <https://github.com/laohur/VocabRadar> — its `/releases` page
+  hosts the Chrome install zips.
 - License: *TBD — placeholder.*
 - Build & AMO source-submission notes: [doc/build-readme.md](doc/build-readme.md).

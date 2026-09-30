@@ -29,6 +29,7 @@ import { getAnnotations, getRankMax, rankToStage, resetDiag } from '../../lib/an
 import { PRIO_VIDEO } from '../../lib/translator.js';
 import { lemmaFamily } from '../../lib/lemmatizer.js';
 // 用户"评论带上[注音]"：补 getPhoneticsBatch——评论组装前批量预取注音
+// 20260930 用户纠错「视频侧栏评论中出现的，改为/音标/」：注音包裹由半角方括号 [x] 改为 /x/
 import { getPhonetic, getPhoneticsBatch } from '../../lib/phonetics.js';
 import { t } from '../../lib/i18n.js';
 import { isBalancedParens, pickCleanShortTrans } from '../../lib/dict-clean.js';
@@ -1406,12 +1407,13 @@ function formatAnnotationLine(a, forComment, phon) {
   const trans = transArr.length > 0 ? transArr.join('；') : '-';
   const tags = (a.tags && a.tags.length > 0) ? a.tags.join(',') : '-';
   const stage = (a.rank !== null && a.rank !== undefined) ? rankToStage(a.rank) : '表外';
-  // 用户"评论带上[注音]，{原形}若非原形"：评论行单词后带 [注音]
+  // 用户"评论带上[注音]，{原形}若非原形"：评论行单词后带 /注音/
   //   （getPhoneticsBatch 批量预取，缺失回空不拼）；词面非原形（a.lemma 与 word
   //   大小写不敏感不等，同 ws/scanner.js 口径）再带 {原形}。复制路径不传参维持原格式。
+  // 20260930 用户令「改为/音标/」：包裹符号 [ ] → / /（原半角方括号判为不合规范）。
   let head = a.word;
   if (forComment) {
-    if (phon) head += ` [${phon}]`;
+    if (phon) head += ` /${phon}/`;
     const lemma = (a.lemma || '').trim();
     if (lemma && lemma.toLowerCase() !== String(a.word || '').toLowerCase()) head += ` {${lemma}}`;
   }
@@ -1444,7 +1446,7 @@ export async function onCommentClick() {
   // 用户"评论带上[注音]，{原形}若非原形"：组装前批量预取注音——
   //   getPhoneticsBatch 并行走 getPhonetic 内存/持久化缓存（不传 lang 随
   //   getPhonetic 内部回落学习语言；失败回空串不拼）。去重词表避免重复查。
-  //   formatAnnotationLine(a, true, phon) 启用 [注音]/{原形} 增强格式。
+  //   formatAnnotationLine(a, true, phon) 启用 /注音/{原形} 增强格式（20260930 [x]→/x/）。
   const words = [...new Set(_allAnnotations.map((a) => a.word).filter(Boolean))];
   const phons = await getPhoneticsBatch(words).catch(() => []);
   const phonMap = new Map(words.map((w, i) => [w, phons[i] || '']));

@@ -18,8 +18,9 @@ VocabRadar 是 Chrome / Edge / Firefox 的浏览器扩展。它扫描你正在�
 
 - **看视频学词**——B 站 / YouTube 视频页右侧出现学习面板：字幕列表（生词高亮）+ 生词表。字幕也可叠加在视频画面上，带注释。注释可切详略，点击时间戳跳转到对应句子，一键填入评论框或弹幕。
 - **逛网页学词**——任意网页正文的生词高亮显示，悬停查看释义，右键可查词；侧栏汇总本页生词与例句。
-- **没字幕也能学**——内置本地语音识别（Whisper），无字幕视频、录音、上传的音视频均可转写成可学文本；OCR 识别视频帧文字（硬字幕、幻灯片）。
+- **没字幕也能学**——装上可选的免费**本地配套程序**后，无字幕视频、录音、上传的音视频都在本机转写成可学文本（Whisper）；OCR 识别视频帧文字（硬字幕、幻灯片），走配套程序或你自己的 OpenAI / Anthropic 兼容 Key。不装配套程序，其余功能照常可用。
 - **AI 对话**——内置对话窗，可用免费模型或你自己配置的 OpenAI / Anthropic 兼容 Key，结合上下文查词和讨论。
+- **可选本地配套程序**——自己在本机跑的 Python 服务（`127.0.0.1:7777`）：本地 LLM 对话、语音转写、OCR、离线翻译（NLLB，42 语）与音视频/字幕下载。安装 `python backend/scripts/install.py`，启动 `python backend/app.py`。
 - **配套练习与体验**——把整理的页面和卷轴推送到 [vocabradar.com](https://vocabradar.com)，进行复习与练习。
 
 ## 截图
@@ -47,7 +48,7 @@ VocabRadar 是 Chrome / Edge / Firefox 的浏览器扩展。它扫描你正在�
 - **词频数据**——来自 Hugging Face 数据集
   [`vocabradar/wordfreq`](https://huggingface.co/datasets/vocabradar/wordfreq)：上述 42 种语言的清洗词频表，源自 [wordfreq](https://github.com/rspeer/wordfreq) 3.0.2（MIT）。扩展按需下载你所学的语言，使用前校验完整性（SHA-256）。
 - **英文词表与释义**——随扩展本地打包。
-- **翻译**——在线渠道、Chrome 内置 Translator API 或你自己配置的 AI 接口；每次只发送你主动查询的文本。
+- **翻译**——在线渠道、Chrome 内置 Translator API、你自己配置的 AI 接口，或可选的本地配套程序（NLLB，离线）；每次只发送你主动查询的文本。
 
 
 ## 隐私
@@ -56,6 +57,6 @@ VocabRadar 是 Chrome / Edge / Firefox 的浏览器扩展。它扫描你正在�
 
 ## 仓库 / 许可证
 
-- 仓库地址：*待填——占位，填入公开仓库 URL（其 Releases 页面用于提供 Chrome 安装包）。*
+- 仓库地址：<https://github.com/laohur/VocabRadar>（其 Releases 页面用于提供 Chrome 安装包）。
 - 许可证：*待填——占位。*
 - 构建与 AMO 源码披露说明：[doc/build-readme.md](doc/build-readme.md)。

@@ -12,8 +12,8 @@ probablement pas —selon la fréquence d'usage— et montre leur sens immédiat
 **42 langues**. Sans inscription, sans compte ; tout est consulté en local.
 
 Fonctions : mots nouveaux dans les vidéos (Bilibili / YouTube) et sur toute page
-web, sous-titres annotés, reconnaissance vocale locale (Whisper), OCR et
-discussion avec l'IA.
+web, sous-titres annotés, transcription locale (Whisper) et OCR via
+l'application compagnon optionnelle, et discussion avec l'IA.
 
 ## Installation
 

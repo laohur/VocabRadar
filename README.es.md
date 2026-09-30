@@ -12,7 +12,8 @@ frecuencia de uso— y muestra su significado al momento. **42 idiomas**.
 Sin registro, sin cuenta; todo se consulta en local.
 
 Funciones: palabras nuevas en vídeos (Bilibili / YouTube) y en cualquier página
-web, subtítulos con notas, reconocimiento de voz local (Whisper), OCR y chat con IA.
+web, subtítulos con notas, transcripción local (Whisper) y OCR con la app
+complementaria local opcional, y chat con IA.
 
 ## Instalar
 
