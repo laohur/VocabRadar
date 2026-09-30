@@ -128,9 +128,11 @@ function renderLangSelect(selectEl, langs, selected, names) {
   // 三组语言下拉（界面/学习/释义）统一口径：两位代码 + 空格 + 语言自称（LANG_NAMES）；
   // 20260930 用户令「语言列表的语言自称之前加上两位代码和空格」+ 纠错「释义语言全是英文全称」——
   // 原释义语言传 LANG_NAMES_EN（Chinese/Japanese 英文全称）已撤销，names 参数仅留作个例兜底。
+  // 用户令「引导页语言顺序改为两位代码顺序，默认值不变」——仅本页展示按代码字典序排，
+  //   不改 i18n.js UI_LANGS/TRANSLATE_LANGS 的顺序（其余端展示序与 loadSettings 默认值原样）。
   const nameOf = names || LANG_NAMES;
   selectEl.innerHTML = '';
-  for (const code of langs) {
+  for (const code of [...langs].sort()) {
     const opt = document.createElement('option');
     opt.value = code;
     const label = nameOf[code] || code;

@@ -29,7 +29,7 @@ import { getAnnotations, getRankMax, rankToStage, resetDiag } from '../../lib/an
 import { PRIO_VIDEO } from '../../lib/translator.js';
 import { lemmaFamily } from '../../lib/lemmatizer.js';
 // 用户"评论带上[注音]"：补 getPhoneticsBatch——评论组装前批量预取注音
-// 20260930 用户纠错「视频侧栏评论中出现的，改为/音标/」：注音包裹由半角方括号 [x] 改为 /x/
+// 注音包裹为半角方括号 [x]（20260930 曾误改 /x/，同日用户裁定改回 [x]）
 import { getPhonetic, getPhoneticsBatch } from '../../lib/phonetics.js';
 import { t } from '../../lib/i18n.js';
 import { isBalancedParens, pickCleanShortTrans } from '../../lib/dict-clean.js';
@@ -1198,8 +1198,11 @@ async function collectAnnotationsForSlot(slot, subIdx) {
     log('首批字幕诊断 text=', JSON.stringify(text.slice(0, 60)),
         'threshold=', getRankThreshold(), '命中生词=', anns.length);
   }
-  // 只在槽位仍显示同一条字幕时回填（可能已滚走，此时不更新避免闪烁）
-  if (slot.dataset.idx === String(subIdx)) {
+  // 只在槽位仍显示同一条字幕时回填——按对象身份判定，不用 dataset.idx：
+  //   ASR 在 await 期间/之后的前段插行使槽位 idx 整体位移，idx 字符串比较会误丢回填。
+  //   槽位与 sub 一一对应（全量渲染重建槽位，旧槽位脱离 DOM 即跳过）。
+  const cur = _windowSlots.indexOf(slot);
+  if (cur >= 0 && _subEntries[cur] && _subEntries[cur].sub === sub) {
     fillSlotAnnotations(slot, sub, anns);
   }
 }
@@ -1407,13 +1410,13 @@ function formatAnnotationLine(a, forComment, phon) {
   const trans = transArr.length > 0 ? transArr.join('；') : '-';
   const tags = (a.tags && a.tags.length > 0) ? a.tags.join(',') : '-';
   const stage = (a.rank !== null && a.rank !== undefined) ? rankToStage(a.rank) : '表外';
-  // 用户"评论带上[注音]，{原形}若非原形"：评论行单词后带 /注音/
+  // 用户"评论带上[注音]，{原形}若非原形"：评论行单词后带 [注音]
   //   （getPhoneticsBatch 批量预取，缺失回空不拼）；词面非原形（a.lemma 与 word
   //   大小写不敏感不等，同 ws/scanner.js 口径）再带 {原形}。复制路径不传参维持原格式。
-  // 20260930 用户令「改为/音标/」：包裹符号 [ ] → / /（原半角方括号判为不合规范）。
+  // 包裹符号沿用半角方括号 [ ]（20260930 曾改 / /，同日用户裁定改回）。
   let head = a.word;
   if (forComment) {
-    if (phon) head += ` /${phon}/`;
+    if (phon) head += ` [${phon}]`;
     const lemma = (a.lemma || '').trim();
     if (lemma && lemma.toLowerCase() !== String(a.word || '').toLowerCase()) head += ` {${lemma}}`;
   }
@@ -1446,7 +1449,7 @@ export async function onCommentClick() {
   // 用户"评论带上[注音]，{原形}若非原形"：组装前批量预取注音——
   //   getPhoneticsBatch 并行走 getPhonetic 内存/持久化缓存（不传 lang 随
   //   getPhonetic 内部回落学习语言；失败回空串不拼）。去重词表避免重复查。
-  //   formatAnnotationLine(a, true, phon) 启用 /注音/{原形} 增强格式（20260930 [x]→/x/）。
+  //   formatAnnotationLine(a, true, phon) 启用 [注音]/{原形} 增强格式（包裹 [x]）。
   const words = [...new Set(_allAnnotations.map((a) => a.word).filter(Boolean))];
   const phons = await getPhoneticsBatch(words).catch(() => []);
   const phonMap = new Map(words.map((w, i) => [w, phons[i] || '']));
@@ -1555,12 +1558,11 @@ export async function appendASRSubtitle(seg) {
   // 同步单条 ASR 字幕到视频内字幕 overlay（全屏时显示）
   overlayAddSubtitle(sub);
 
-  // 走生词注释流程（统一入口 collectAnnotations，避免与渲染槽位竞态覆盖缓存）
-  const anns = await collectAnnotations(sub);
-  // 诊断日志：排查"ASR 字幕无生词注释，生词表空"
-  log('ASR 注释诊断 text=', JSON.stringify(sub.text.slice(0, 50)),
-      'noAnn=', _noAnnotation, 'rank=', getRankThreshold(),
-      'anns=', anns.length, '总生词=', _allAnnotations.length);
+  // ==== 同步段（此处到 highlightCurrent 之间禁止插入任何 await）====
+  // 乱序根因（用户报"识别字幕时间错乱"）：面板插入此前放在 await collectAnnotations
+  //   之后，而 insertIdx 是 await 之前算的。asr-client 同批循环同步 fire 多段 →
+  //   各段按注释完成顺序用陈旧索引插 DOM → 面板乱序/首批重复上屏。
+  //   同步插入使同批/跨批天然串行化，insertIdx 永不陈旧。
 
   // 全量渲染模式：直接创建字幕条目并追加到面板
   const panel = getRoot().querySelector('#beaver-subtitle-panel');
@@ -1605,7 +1607,9 @@ export async function appendASRSubtitle(seg) {
           if (!prevWasDiscontinuous) {
             const sep = document.createElement('div');
             sep.className = 'beaver-sub-gap';
-            panel.insertBefore(sep, panel.children[insertIdx] || null);
+            // 锚点必须用 _windowSlots（只含字幕行）：panel.children 还含 gap 行，
+            //   用 children 下标会把分隔符插错位置
+            panel.insertBefore(sep, _windowSlots[insertIdx] || null);
           }
         }
       }
@@ -1632,6 +1636,14 @@ export async function appendASRSubtitle(seg) {
   if (getActiveVideo() && _windowSlots.length > 0) {
     try { highlightCurrent(getActiveVideo().currentTime); } catch (e) { /* ignore */ }
   }
+
+  // ==== 异步段：生词注释收集+诊断（纯数据侧，DOM 顺序已定，不再影响上屏顺序）====
+  // 统一入口 collectAnnotations，避免与渲染槽位竞态覆盖缓存
+  const anns = await collectAnnotations(sub);
+  // 诊断日志：排查"ASR 字幕无生词注释，生词表空"
+  log('ASR 注释诊断 text=', JSON.stringify(sub.text.slice(0, 50)),
+      'noAnn=', _noAnnotation, 'rank=', getRankThreshold(),
+      'anns=', anns.length, '总生词=', _allAnnotations.length);
 }
 // ============================================================================
 // 渲染状态接驳导出（门面经此读写，等价于原同模块直接赋值）
