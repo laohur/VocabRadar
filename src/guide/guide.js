@@ -1,152 +1,61 @@
-// VocabRadar 引导页逻辑（第五十四次大改：四子标签 设定栏/ASR/OCR/说明栏，默认设定栏）
-// 第二百五十三次（用户："引导页 asr ocr 之后增加 parser … 先实现界面"）：五子标签
-//   设定栏/ASR/OCR/Parser/说明栏，新增 Parser 文档解析界面（parser.js，解析逻辑待接线）。
-// 反思（2026-08-14 第五十四次修正）：用户要求 asr 跟 ocr 跟 设定栏、说明栏并列，
-//   即四子标签：设定栏=按功能分组的参数与样式
-//   （全局参数组 + 网页生词提示/文本侧栏/视频侧栏/视频叠加字幕四个可折叠组，组头带启用开关），
-//   ASR/OCR=从文本侧栏迁移来的语音/文字识别完整功能（本文件仅负责入口与标签切换，识别逻辑见
-//   asr.js/ocr.js，公共基础设施见 asr-common.js——2026-08-20 第八十六次按用户要求拆分），
-//   说明栏=使用说明；默认落在设定栏。样例文字为有意义的 "He passed the quiz(测验)."。
-//   本页统一承载设置：
-//     - 272次：Word Annotation 单组（280 次重排）——左列三功能卡（网页提示/文本侧栏/视频侧栏开关），
-//       右列共享样式候选池 POOL_STYLES；每张池卡带 Web/Text/Video 三个指派钮（多对多）：
-//       Web → 写 storage.textStyle + hintFirstBg/hintFirstFg（注释色自动派生），
-//       Text → storage.annotationStyle，Video → storage.videoAnnotationStyle（280 次复活）
-//     - annTemplate 注释模板（280 次：annBrackets 退役；284次默认 {target} {annotation}，旧 {word}/{meaning} 兼容）
-//     - 字幕样式 → 写 storage.subtitleStyle（文字外观）+ subtitlePosition（距底部位置，overlay 实时应用）
-//       + 横屏 16:9 / 竖屏 9:16 双预览（第六十九次重构：样式=文字样式×位置样式 两维）
-//     - 各功能开关 / 源/目标语言 / 词频阈值 / 注释表外词开关 / ASR 模型 → 写 storage 对应键
-//   文案全部经 data-key 属性由本地化字典填充，跟随界面语言。
-// 第二百二十三次（用户："本次只改引导页界面"）：模型分组重排——新增「翻译」小节（从全局参数
-//   挪入；行1=LLM 渠道（默认不选）+提示词，行2=其余渠道默认全选；保存监听补齐；Firefox 无内置
-//   翻译灰显）；ASR/OCR 引擎改下拉两行式（本地/API 默认本地，细项随选中切换；旧存 'api' 归一化
-//   为消费端认的 'llm'）；OCR 本地语言复选改动态渲染（界面/目标/释义三语言，不写死，无语言包禁用）；
-//   字幕文字样式网格 3→4 列压缩留白；位置默认统一 b20（下 1/5）。
-// 第二百二十四次（用户反馈修正）：①ASR/OCR 引擎由下拉改回单选（radio）两行式，细项各自铺开——
-//   本地 Whisper 为 whisper-tiny 等具体模型名单选（value 仍存 tiny/base/…）；②OCR 语言复选标签
-//   改回角色名 界面/目标/释义（223 次误用语言名 English/中文 当标签，用户纠正"不要特指"），
-//   值仍动态映射 tess 代码、默认全选；③翻译行提示词与 LLM 复选框确认同行（收窄防换行）。
-// 第二百二十五次（命名清查执行）：①存储语言键按本义改名（学习语言/释义语言两键，全库统一）；
-//   ②引擎值 'llm' 定名 'api'（读侧兼容旧残留）；③死键/死代码清理（subtitleOverlay、
-//   sidebarCollapsed、_asrFallbackMode、SEND_* 等）。
-// 第二百二十六次（用户反馈）：①旧键迁移块删除（升级用户语言回落默认，需重选一次）；
-//   ②字幕文字样式卡底框改统一窄高尺寸；③字段行水平对齐（.chk 去底部内边距）；
-//   ④两个提示词与背景正文上限合并为一行；⑤ASR/OCR 改为"每行=引擎单选+细项"两行式
-//   （行1 本地+Whisper 下拉，行2 API+地址/模型/Key；行1 细项=语言复选，行2 细项=格式+地址/模型/Key）。
-// 第二百八十一次（用户反馈）：①共享池交互重做——左列四栏上下平铺可点选（Web Hints/文本侧栏/
-//   视频侧栏/新增第四栏 Subtitle hints on video），点栏选中（.selected 高亮+池顶说明切换），
-//   点池卡=指派给选中栏并把卡样例 cloneNode 复制进栏内（用户："选中之后，直接把卡片复制过去"）；
-//   池卡三指派钮（Web/Text/Video chip）删除；网格一次建卡不重建，指派/切栏只改类名。
-//   ②字幕组重做——正文样式网格改 none+10 内置+个性化卡共 12 卡 5 列；个性化=底色/字色/字号/
-//   字体四控件（storage.subtitleCustom，改任一切 'custom'）；位置改单选行（radio）；
-//   预览改单窗 16:9（容器水平居中，字幕按位置 ratio 渲染）；注释行样式由第四栏
-//   storage.videoOverlayAnnStyle 控制；正文/位置/注释任一变化立即刷新预览。
-// 第二百八十二次（用户反馈）：①字幕正文样式组增强——Custom 增加特效下拉（无/阴影/
-//   发光/描边/立体，共享层 SUB_FX_OPTIONS）、字体下拉扩到 12 项（SUB_FONT_OPTIONS），
-//   行尾大加号把当前参数存为新正文样式（storage.subtitleUserStyles，样卡右上角可删除，
-//   overlay 端动态生成 style-user-* 规则）；样式卡样例一律只渲染正文。
-//   ②预览重做——横屏 16:9 / 竖屏 9:16 切换（本地态不写 storage）；视频按 1080p 真实
-//   像素虚拟舞台渲染再整体 scale(0.25)（横 480×270 / 竖 270×480），字体显示比例与
-//   真实 1080p 视频一致；正文/位置/注释样式任一变化都触发立即预览。
-// 第二百八十八次（Video Overlay Subtitles 改造执行）：①点击样例卡回填个性化行
-//   （backfillSubCustomFrom，选中态不变；custom 卡跳过）；②预览改首尾两词注释
-//   （subPreviewHtml：He/他 + quiz/测验，side 行内/detail 独立两行）；内置 10 按流行度
-//   保持 283 排序不动（B站≈yt-box/Default）；位置单选与横竖屏预览保持；存储键零新增。
-// 第二百八十九次（CSS 代码行）：个性化行下加左代码框 + 右大加号（加号由原行搬入，
-//   同 id 绑定不变）；代码框与五控件双向同步（subCustomCssText 生成/parseSubCustomCssText
-//   解析/applySubCustomControls 统一应用），同源渲染，作用于预览；改名/删除/点击复制既有。
-// 第二百九十次（样例文字 + 右侧卡去闪 + 卡片保真）：Subtitle Text Style 网格后加样例
-//   输入框（storage.subtitleSample，默认 VocabRadar is short for vocabulary 词汇
-//   radar(雷达).），驱动样式卡与预览；预览注释改通用解析（parseSamplePairs：括号式 +
-//   空格式，side 行内/detail 独立多行）；个性化卡搬出网格至代码右侧独立卡，原地刷新，
-//   控件/CSS 改动不再全网格重建（去闪），点击选中 custom；样例卡真实尺寸 scale=1.0。
-// 第二百九十一次（六项反馈）：①卡片越界修复（flow 分支改块级 + flex 子项 min-width:0）；
-//   ②代码框 rows 4→6/min-height 120px/字号 13px；③样例改 input 事件实时重绘（持久化防抖）；
-//   ④默认样例改纯英文句，注释走动态链路（getAnnotations：释义语言/词频阈值实时）；
-//   ⑤Position 后加 side/detail 单选（videoOverlayAnnMode，与视频侧栏同键）；
-//   ⑥右侧卡改常驻单 span 原地改样式（demo 不重建，彻底去闪）。
-// 第二百九十二次（三项反馈）：①卡片换行全显（wrap=true 块级，height:auto，无溢出无省略号）；
-//   ②注释截短（pickCleanShortTrans＋24 字 cap，side 行内 0.85em，detail 独立行同口径）；
-//   ③storage 回声抑制（markOwnWrite＋分支 1200ms 跳过，去"中间态"闪）。
-// 第二百九十三次（字号百分比，297-298次修订为视频高基线＋默认 5%＋无 clamp）：
-//   overlay 全样式走 --beaver-sub-fs 实时变量；guide 卡片 540/预览 1080 同口径换算；
-//   旧值三处一次性迁移（custom/用户条目/config）；短释义分隔符拓宽（radar 例）。
-// 第二百九十四次：网格改 2 列（卡片换行全显不变，窄屏 1 列）；custom 默认改 7%。
-// 第二百九十五次：①一排横向滚动卡片（296次作废回滚）；②custom 默认 7%→6%（296次改回 7%）；
-//   ③参数名统一 fontSizePct（三级回退收过渡值）。
-// 第二百九十六次：①网格回 2 列换行全显（一排方案作废）；②缺省一直默认 7%
-//   （none 同改 7%，之前 6% 是误改，即改回；认错）。
-// 第二百九十七次：基线改视频短边＋默认 5%＋删 clamp（失真）。
-// 第二百九十八次（用户笔误纠正）：基线改回统一视频高（短边方案作废）；底色问题见汇报（代码未动）。
-// 第三百零一次（注释 Sample＋Custom，仿字幕结构；其他不动）：样例行（annotationSample，
-//   默认 vocab radar，只注释末词，动态链路同字幕）＋个性化行（七控件＋双区段 CSS 代码＋
-//   右侧卡＋大＋号，用户卡改名/删除/点击回填）＋统一解析器与四消费点接线；另修潜伏 bug：
-//   buildAnnPoolCss 52 条同选择器致末条通吃，补 beaver-ann-style-{id} 限定（只会让选择生效）。
-// 第二百九十三次（字号百分比，297-298次修订为视频高基线＋默认 5%＋无 clamp）：
-//   overlay 全样式走 --beaver-sub-fs 实时变量；guide 卡片 540/预览 1080 同口径换算；
-//   旧值三处一次性迁移（custom/用户条目）；短释义分隔符拓宽（radar 例）。
-// 第三百零二次（门面模式拆分）：本文件保留编排（renderAll/init/loadSettings/模型栏），
-//   共享底座 → shared.js，注释池 → ann-pool.js，字幕 → sub-style.js（依赖无环，见各文件头）。
+// VocabRadar 引导页逻辑（五子标签：设定栏 / ASR / OCR / Parser / 说明栏，默认设定栏）。
+// 本文件保留编排（renderAll/init/loadSettings/模型栏）：共享底座 → shared.js，
+//   注释池 → ann-pool.js，字幕 → sub-style.js，ASR/OCR/Parser 见各自模块（依赖无环）。
+// 设定栏承载：
+//   - Word Annotation 单组：左列三功能卡（网页提示/文本侧栏/视频侧栏开关），右列共享样式
+//     候选池 POOL_STYLES，每张池卡带 Web/Text/Video 指派钮（多对多，写 storage 对应键）；
+//   - 注释模板 annTemplate（{target} {annotation}，旧 {word}/{meaning} 兼容）；
+//   - 字幕样式（文字外观×位置 两维 + 横屏 16:9 / 竖屏 9:16 双预览，overlay 实时应用）；
+//   - 各功能开关 / 学习语言 / 释义语言 / 词频阈值 / 注释表外词开关 → 写 storage 对应键。
+// 文案全部经 data-key 属性由本地化字典填充，跟随界面语言。
 
 import {
   initLang, setLang,
   LANG_NAMES, LANG_NAMES_EN, UI_LANGS, TRANSLATE_LANGS
 } from '../lib/i18n.js';
 import { DEFAULT_ANN_TEMPLATE, BUILD_STAMP, ANN_DEFAULT_STYLE, VANN_DEFAULT_STYLE, SUB_DEFAULT_STYLE } from '../lib/styles.js';
-// 302次：拆分模块（编排仅调它们的导出； direct lib 引用随代码搬迁，见各模块头）。
 import { $, m, log, getLangState, setLangState, ownWriteAt } from './shared.js';
 import {
   syncPoolSettings, getPoolTarget, renderPoolGrid, bindPoolGrid, bindPoolLeft,
   renderPoolNote, renderPoolSideDemos
 } from './ann-pool.js';
 import { syncSubtitleSettings, getSubCustom } from './sub-style.js';
-// 第二百五十三次：asr-common.js 名实不符改名 guide-common.js（import 同步）
 import { initAsrCommon, disposeAsrCommon } from './guide-common.js';
 import { initAsr, disposeAsr } from './asr.js';
 import { initOcr, disposeOcr } from './ocr.js';
-// 第二百五十三次：Parser 文档解析界面（本阶段界面，解析逻辑待接线）
 import { initParser, disposeParser } from './parser.js';
-// 第二百七十次：Deactivate 停用栏（逐条规则行渲染/编辑/深链，见该文件头注释）
+// Deactivate 停用栏（逐条规则行渲染/编辑/深链，见该文件头注释）
 import { initDeactivate, disposeDeactivate } from './deactivate.js';
-// 330次：My Words（生词/熟词两栏，设定栏 group-global 后）独立模块（guide.js 超行限）
+// My Words（生词/熟词两栏，设定栏 group-global 后）独立模块
 import { initMyWords, syncMyWordsFromStorage } from './my-words.js';
-// 第461次：撤销需 Key 翻译渠道（DeepL/Microsoft），trans-keys.js 随删；新增渠道状态行
-//   模块 ch-health.js——guide.js 已 1200+ 行超 AGENTS.md 1000 行上限，状态拉取/渲染独立成模块
+// 渠道状态行模块 ch-health.js（状态拉取/渲染独立成模块，控制本文件行数）
 import { initChHealth, refreshChHealth } from './ch-health.js';
-// 第一百七十次：对话大模型来源预置表（与后台共用同一份，避免地址/模型名两处不一致）
-// 第一百七十四次：新增 LLM_FORMAT_GROUPS —— 下拉按 API 格式 <optgroup> 分组
-//   （第445次起为：河狸后端 / OpenAI Chat Completion 格式 / Anthropic Messages 格式，free 组已裁撤）
+// 对话大模型来源预置表（与后台共用同一份，避免地址/模型名两处不一致）
+// LLM_FORMAT_GROUPS：下拉按 API 格式 <optgroup> 分组（免费直连 / 河狸后端 / OpenAI Chat
+//   Completion 格式 / Anthropic Messages 格式），让"要不要账号"一眼可辨
 import {
   LLM_PROVIDERS, LLM_FORMAT_GROUPS, LLM_DEFAULT_PROVIDER, CHAT_WORD_PROMPT, CHAT_SIDEBAR_PROMPT, LLM_TRANSLATE_PROMPT, getProvider
 } from '../lib/llm.js';
-// 第二百四十八次：词典装载状态行——ensureReady 幂等（IDB 已构建走投影快通道秒回，
+// 词典装载状态行——ensureReady 幂等（IDB 已构建走投影快通道秒回，
 //   缺数据才就地从源装载 = 更新/安装后引导页静默初始化的点名入口），getDiagState 读装载态。
 import { ensureReady, getDiagState, getMaxRank, getDictFieldStats } from '../lib/dictionary.js';
 
-// 第二百二十三次：LLM 翻译渠道提示词默认模板（{text}=原文，{lang}=释义语言）。
-// 2026-09-29（用户："目前的翻译提示词模板效果差"）：默认模板迁至 lib/llm.js 常量
-//   LLM_TRANSLATE_PROMPT（与后台/config.json 共用一份），本地旧文案
-//   'Please translate "{text}" in {lang}.'（无输出约束）随迁退役。
-// 后台 handleLlmTranslate 同步改为哑管道直发 content 侧组装的提示词（见 translator/index.js）。
+// LLM 翻译渠道提示词默认模板（{text}=原文，{lang}=释义语言）——常量 LLM_TRANSLATE_PROMPT
+//   在 lib/llm.js（与后台/config.json 共用一份）；后台 handleLlmTranslate 为哑管道直发
+//   content 侧组装的提示词（见 translator/index.js）。
 
-// 翻译渠道缺省表（与 lib/translator/index.js 的 DEFAULT_TRANS_CHANNELS 一致：LLM 与 Backend 默认不选）。
+// 翻译渠道缺省表（与 lib/translator/index.js 的 DEFAULT_TRANS_CHANNELS 一致：LLM 与 Backend 默认不选；
+//   MyMemory 质量差且有 5000 字符/天限流，仅末位手工兜底故默认不选）。
 // renderAll 回填与 loadSettings 默认共用；跨标签页 get(null) 拿不到默认键时也以它兜底。
-// 第460次：-lingva（摘除）+reverso（默认选）；mymemory 默认不选（质量差+5000 字符/天限流，仅末位手工兜底）
-// 第461次（用户裁定）：-deepl/-mstrans（需 Key 渠道整体撤销）
 const DEFAULT_TRANS_CH = { llm: false, backend: false, builtin: true, baidusug: true, youdaodict: true, reverso: true, mymemory: false, google: true, youdao: true, baidu: true, bing: true };
 
 // 翻译渠道复选框清单（元素 id ↔ translationChannels 键），回填与保存监听共用一份
-// （Backend 排首：回退顺序上它在最前，见 sw/translate.js CHANNEL_TABLE；
-//  第460次按 guide.html 分组行序重排：免配置组 → 免费在线组（Reverso/Bing/…/MyMemory）；
-//  transChLingva 随摘除删除；transChDeepl/transChMstrans 随第461次撤销删除）
+// （Backend 排首：回退顺序上它在最前，见 sw/translate.js CHANNEL_TABLE；其余按 guide.html 分组行序：
+//  免配置组 → 免费在线组）
 const TRANS_CH_IDS = [['transChLlm', 'llm'], ['transChBackend', 'backend'], ['transChBuiltin', 'builtin'], ['transChBaidusug', 'baidusug'],
   ['transChYoudaodict', 'youdaodict'],
   ['transChReverso', 'reverso'], ['transChBing', 'bing'], ['transChGoogle', 'google'],
   ['transChYoudao', 'youdao'], ['transChBaidu', 'baidu'], ['transChMymemory', 'mymemory']];
-
-// 第三百九十四次（plan 阶段二③，用户裁定「扩展不再保留这两个模型」）：Tesseract 移除，
-//   语言→tess 代码映射（TESS_LANG_CODES）、BUNDLED_TESS_PACKS、renderOcrLangRow/
-//   collectOcrLangs 及 ocrLanguages 存储随本地 OCR 一并退役。
 
 // 使用说明（说明栏），分节渲染
 const HELP = [
@@ -215,11 +124,8 @@ const HELP = [
 
 // === 渲染函数 ===
 
-// 280 次：_setRadio 辅助函数删除——注释布局 radio 全部移出引导页，页面已无任何 radio 组需回填
-
 function renderLangSelect(selectEl, langs, selected, names) {
-  // 第二百二十八次：names 可选——释义语言下拉传 LANG_NAMES_EN 统一英文名（用户裁定），
-  // 其余下拉缺省用本地化名 LANG_NAMES。
+  // names 可选：释义语言下拉传 LANG_NAMES_EN 统一英文名，其余缺省用本地化名 LANG_NAMES
   const nameOf = names || LANG_NAMES;
   selectEl.innerHTML = '';
   for (const code of langs) {
@@ -252,11 +158,10 @@ function renderHelp() {
     }
     box.appendChild(ul);
   }
-  // 第367次（用户指令"help 底部增加 debug 日志开关、诊断开关，选中后打印丰富日志"）
   appendLogFlags(box);
 }
 
-// 第367次：日志双开关（debugLog=侧栏逐条流水日志阀门；diagLog=诊断类日志阀门）。
+// 日志双开关（debugLog=侧栏逐条流水日志阀门；diagLog=诊断类日志阀门）。
 //   勾选写 storage.local，content script 经 lib/log-flag.js 的 onChanged 镜像
 //   即时生效（无需刷新页面）；config.json debug 仍是打包期默认（现 false，静默）。
 const LOG_FLAG_DEFS = [
@@ -291,12 +196,10 @@ function appendLogFlags(box) {
   });
 }
 
-// 通用 data-key 文案填充
-// 反思（2026-08-16 第七十一次）：⑥ 两处增强——
-//   1) 保留前导图标（📁/🎙 等 emoji）：旧版 textContent 直接覆盖会把按钮 emoji 吞掉，
-//      现在仅当元素文本以 emoji 开头时保留"emoji + 空格 + i18n 文案"；
-//   2) 支持 data-title-key：悬浮提示（如 ASR 来源 radio 的 *_Title 键）也走 i18n，
-//      不再硬编码英文 title。
+// 通用 data-key 文案填充：
+//   保留前导图标（📁/🎙 等 emoji）——仅当元素文本以 emoji 开头时保留"emoji + 空格 + i18n 文案"；
+//   支持 data-title-key（悬浮提示也走 i18n）与 data-ph-key（textarea/input 占位符本地化，
+//   placeholder 是属性而非文本内容，data-key 的 textContent 路径不适用）。
 function fillByDataKey() {
   document.querySelectorAll('[data-key]').forEach((el) => {
     const key = el.dataset.key;
@@ -311,8 +214,7 @@ function fillByDataKey() {
     const txt = m(key);
     if (txt !== '') el.title = txt;
   });
-  // 第二百五十三次：data-ph-key——textarea/input 占位符本地化（Parser 输入框用；
-  //   placeholder 是属性而非文本内容，data-key 的 textContent 路径不适用）
+  // data-ph-key：占位符本地化（Parser 输入框用）
   document.querySelectorAll('[data-ph-key]').forEach((el) => {
     const key = el.dataset.phKey;
     const txt = m(key);
@@ -320,24 +222,16 @@ function fillByDataKey() {
   });
 }
 
-// 第二百四十八次：词典初始化状态行（设定栏顶部 #gDictStatus）——用户："更新安装后，自动
-//   打开引导页就静默初始化么"。引导页打开即触发 ensureReady：IDB 已构建（__built__ 标记，
-//   如 SW onInstalled 已建）则走投影快通道秒回；IDB 缺数据才就地从源装载（词频网络拉取只在
-//   缺数据时发生），完成翻转「已就绪」。失败示红（网页按无词典降级，不掩饰错误——AGENTS.md）。
-//   文案按界面语言取，与 renderHelp 一样用 getLangState()（不走 data-key/i18n 字典）。
-// 第三百三十八次（用户："有错为啥不改"）：ready 文案 "built-in meanings · N words" 名不
-//   副实——N=dictMap.size=词频∪词表并集（rank+tags 两字段覆盖的词条数），并非释义数；
-//   内置翻译包 40261 词在 d_trans 分表懒读、不进内存投影（projection.js 321-324 行设计
-//   如此），页侧无现成计数。文案改为如实标注数字口径，不再声称 "built-in meanings"。
-// 第三百三十九次（用户："各个字段分别统计"）：338 次仍只显示一个并集数，仍不符要求。
-//   就绪行改为四字段各显各的规模：词频 / 词表标签 / 翻译 / 词形还原，计数经
-//   getDictFieldStats()（query.js 339 次）分项取得——词频/词表遍历内存 dictMap，
-//   翻译查 d_trans 分表 IDB 计数（含运行时在线翻译缓存），词形查扩展数据域缓存
-//   （仅读不下载）。就绪先翻转（不阻塞），分项数字异步到账后刷新文案。
+// 词典初始化状态行（设定栏顶部 #gDictStatus）：引导页打开即触发 ensureReady——IDB 已构建
+//   （__built__ 标记，如 SW onInstalled 已建）走投影快通道秒回；IDB 缺数据才就地从源装载
+//   （词频网络拉取只在缺数据时发生），完成翻转「已就绪」。失败示红（网页按无词典降级，不
+//   遮蔽错误——AGENTS.md）。文案按界面语言取，不走 data-key/i18n 字典。
+// 就绪行四字段各显各的规模（词频/词表标签/翻译/词形还原），计数经 getDictFieldStats()
+//   分项取得：词频/词表遍历内存 dictMap，翻译查 d_trans 分表 IDB 计数（含运行时在线翻译
+//   缓存），词形查扩展数据域缓存（仅读不下载）。就绪先翻转（不阻塞），分项数字异步到账后刷新。
 const _fmt = (n) => Number(n || 0).toLocaleString('en-US');
-// 第三百四十六次（用户裁定方案 A + "◑◒◐◓轮播"）：渐进式就绪视觉——
-//   ◑◒◐◓ 四帧 120ms 字符轮播用于两处：装载中（ensureReady 未落定）、后台构建中
-//   （projection.js 346 起库残缺不再 await 重建，放行就绪后源构建后台跑）。
+// 渐进式就绪视觉：◑◒◐◓ 四帧 120ms 字符轮播用于两处——装载中（ensureReady 未落定）、
+//   后台构建中（projection.js 库残缺不再 await 重建，放行就绪后源构建后台跑）。
 //   句柄模块级持有：renderDictStatus 重入（语言切换）先停旧轮播防 interval 泄漏。
 //   rebuildPending 观察器 2s 轮询 getDiagState，清空（重建结束/失败）即停轮播并
 //   applyStats(3) 重取分项终值；重建失败时 rebuildPending 同样清空，分项数字如实
@@ -360,15 +254,13 @@ function _startDictSpin(el, baseText) {
   let _i = 0;
   _spinTimer = setInterval(() => { span.textContent = _SPIN_FRAMES[(++_i) % _SPIN_FRAMES.length]; }, 120);
 }
-// 第三百四十七次（用户："好像还是一齐最后显示，而不是有啥字段显示啥"）：textContent 赋值
-//   会整体替换子节点（轮播 span 被摘下、interval 仍在往脱管节点写字符）——346 版 applyStats
-//   因此被延后到重建结束，快字段全被绑死一齐出。改为：span 句柄模块级持有，数字刷新后
-//   轮播仍活跃即把 span 重新挂回行尾（appendChild 自动从脱管状态移回），构建中的渐进
-//   数字刷新与轮播可共存。
+// textContent 赋值会整体替换子节点（轮播 span 被摘下、interval 仍在往脱管节点写字符），
+//   故数字刷新后轮播仍活跃即把 span 重新挂回行尾（appendChild 自动从脱管状态移回），
+//   构建中的渐进数字刷新与轮播可共存。
 function _reattachSpin(el) {
   if (_spinEl && _spinTimer) el.appendChild(_spinEl);
 }
-// 第462次：就绪行分项重取句柄（renderDictStatus 装载时注册；LEMMAS_READY 监听调用）
+// 就绪行分项重取句柄（renderDictStatus 装载时注册；LEMMAS_READY 监听调用）
 let _refreshDictStats = null;
 function renderDictStatus() {
   const el = $('gDictStatus');
@@ -378,11 +270,10 @@ function renderDictStatus() {
     ? `词典已就绪 · 词频 ${_fmt(s.rankCount)} 词 · 词表标签 ${_fmt(s.tagCount)} 词 · 翻译 ${_fmt(s.transCount)} 词 · 词形还原 ${_fmt(s.lemmaCount)} 词`
     : `Dictionary ready · frequency ${_fmt(s.rankCount)} · word-list tags ${_fmt(s.tagCount)} · translations ${_fmt(s.transCount)} · lemmas ${_fmt(s.lemmaCount)}`);
   // 分项统计异步取数后刷新就绪文案；统计失败不回退就绪态（数字维持未刷新前的兜底文案）
-  // 第三百四十次：翻译包后台补装期重取——补装在 projection.js 异步进行（不阻塞词典就绪），
-  //   首次统计大概率取到补装前旧计数（如 687）；transCount<1000 且 lang=en 时 2s 后重取
-  //   （最多 3 次），小语种无内置包不空转。其余字段（词频/词表/词形）就绪时已是终值。
-  // 第三百四十七次：构建中数字照刷（有啥字段显示啥）——行尾追加"后台构建中"标记，轮播
-  //   span 重挂行尾；346 版把 applyStats 延后到重建结束，快字段（翻译/词形）被绑死一齐出。
+  // 翻译包后台补装期重取：补装在 projection.js 异步进行（不阻塞词典就绪），首次统计大概率
+  //   取到补装前旧计数；transCount<1000 且 lang=en 时 2s 后重取（最多 3 次），小语种无内置包
+  //   不空转。其余字段（词频/词表/词形）就绪时已是终值。构建中数字照刷（有啥字段显示啥）——
+  //   行尾追加"后台构建中"标记，轮播 span 重挂行尾。
   const applyStats = (retries) => {
     Promise.resolve(getDictFieldStats()).then((s) => {
       const building = !!getDiagState().rebuildPending;
@@ -393,12 +284,12 @@ function renderDictStatus() {
       }
     }).catch(() => { /* 计数失败明示：保留已就绪基础文案，不掩饰也不阻断 */ });
   };
-  // 第462次（修"引导页 lemmas 0"）：applyStats 句柄留模块级——词形整表按需下载写入后
-  //   SW 广播 LEMMAS_READY（lemmas-engine.js），init 处 onMessage 监听据此重取分项。
+  // applyStats 句柄留模块级：词形整表按需下载写入后 SW 广播 LEMMAS_READY（lemmas-engine.js），
+  //   init 处 onMessage 监听据此重取分项（消除"下载先于/晚于取数"造成的 lemmas 0 陈旧数字）
   _refreshDictStats = applyStats;
-  // 346：后台重建观察器——rebuildPending 清空（重建结束/失败）即停轮播并重取分项终值
-  // 347：构建中每 2s tick 顺带 applyStats(0)——字段到账即亮（如翻译先行回填完成后下一次
-  //   tick 就显数），不再等重建结束一齐出；retries=0 不叠加翻译重试链（tick 本身就在重刷）
+  // 后台重建观察器：rebuildPending 清空（重建结束/失败）即停轮播并重取分项终值；
+  //   构建中每 2s tick 顺带 applyStats(0)——字段到账即亮（如翻译先行回填完成后下一次 tick
+  //   就显数），不等重建结束一齐出；retries=0 不叠加翻译重试链（tick 本身就在重刷）
   let _rebuildWatchTimer = null;
   const watchRebuild = () => {
     if (_rebuildWatchTimer) return;
@@ -415,9 +306,8 @@ function renderDictStatus() {
       }
     }, 2000);
   };
-  // 346：就绪渲染按"是否后台构建中"分流——构建中走轮播文案（applyStats 延后到
-  //   重建结束，防其 textContent 刷新清掉轮播 span；当前数字如实不撒谎）
-  // 347：构建中立即 applyStats(0) 取数——快字段先行亮出，数字渐进刷新与轮播共存
+  // 就绪渲染按"是否后台构建中"分流：构建中走轮播文案并立即 applyStats(0) 取数（快字段
+  //   先行亮出，数字渐进刷新与轮播共存）；未构建直接就绪文案
   const renderReady = () => {
     const d = getDiagState();
     if (d.rebuildPending) {
@@ -437,7 +327,7 @@ function renderDictStatus() {
     renderReady();
     return;
   }
-  // 346：装载中 ◑◒◐◓ 轮播（替代静态"装载中…"，一眼可见在动、没死）
+  // 装载中 ◑◒◐◓ 轮播（替代静态"装载中…"，一眼可见在动、没死）
   _startDictSpin(el, zh ? '词典装载中' : 'Dictionary loading');
   // 承诺永不悬空（query.js：_loadDict 内部 catch，resolve null/undefined 表示失败）
   Promise.resolve(ensureReady()).then((m) => {
@@ -455,10 +345,9 @@ function renderDictStatus() {
   });
 }
 
-// 第357次（用户："让 config.json 生效…我手动调的为准"）：读取 config.json 出厂值（模块级缓存）。
-//   对话三项参数（chatWordPrompt/chatSidebarPrompt/chatContextMaxBytes）实际生效以出厂值为
-//   第一优先（chat.js openChatPanel/buildFirstPrompt 同款三级优先），本页回填后异步覆盖显示，
-//   保证引导页"所见 = 实际生效"。
+// 读取 config.json 出厂值（模块级缓存）。对话三项参数（chatWordPrompt/chatSidebarPrompt/
+//   chatContextMaxBytes）实际生效以出厂值为第一优先（chat.js openChatPanel/buildFirstPrompt
+//   同款三级优先），本页回填后异步覆盖显示，保证引导页"所见 = 实际生效"。
 let _factoryCfgPromise = null;
 function readFactoryCfg() {
   if (!_factoryCfgPromise) {
@@ -471,16 +360,9 @@ function readFactoryCfg() {
 
 // === 事件绑定 ===
 
-// 样式网格点击：写 storage + 切 active + 预览（每个网格只绑一次）
 // 加载既有设置并回填控件
-// 第二百一十三次（用户："更新 config.json…引导页的所有参数都在此"）：
-//   引导页全部默认参数以 src/data/config.json 为唯一来源（键名=storage 键），
+// 引导页全部默认参数以 src/data/config.json 为唯一来源（键名=storage 键），
 //   本文件内联对象仅作 config 缺键时的保底；storage 里用户已设的值恒优先。
-// 第510次（用户"White Shadow看起来像是侵蚀了原来字形"排查中发现）：第509次
-//   "默认字幕样式改为White Shadow"只改了 styles.js 常量与本文内联保底，
-//   漏改唯一权威来源 config.json——cfgDefaults 合并后出厂默认实际仍是
-//   white-glow（黑底条+外发光），"默认改 White Shadow"从未生效。已在
-//   config.json 补正 subtitleStyle → white-shadow（JSON 无法注释，沿革记此）。
 let _configDefaults = null;
 async function getConfigDefaults() {
   if (_configDefaults) return _configDefaults;
@@ -493,11 +375,7 @@ async function getConfigDefaults() {
 
 async function loadSettings() {
   const cfgDefaults = await getConfigDefaults();
-  const defaults = Object.assign({    uiLanguage: 'zh',
-    learnLanguage: 'en',
-    meaningLanguage: 'zh',
-    rankThreshold: 5000,   // 2026-09-29（用户："改回原来的5000-∞"）：撤销 4000-5000 词频带
-    annotateOov: false,
+  const defaults = Object.assign({
     uiLanguage: 'zh',
     learnLanguage: 'en',
     meaningLanguage: 'zh',
@@ -505,108 +383,58 @@ async function loadSettings() {
     annotateOov: false,
     rankThresholdMax: 0,   // 词频范围上界（0=不限制），出厂未设上界
     annotateRepeat: false,
-    // 327次：引导页新增复选框回填默认（与 popup.hintLaterEnabled 同键，默认空即仅首次高亮）
-    hintLaterEnabled: false,
+    hintLaterEnabled: false,   // 与 popup.hintLaterEnabled 同键，默认空即仅首次高亮
     hintSideAnnotation: false,
     textHintEnabled: true,
-    // 272 次：Query 独立开关（右键查询+查询栏），默认开；不再由网页提示负责
-    // 286次：拆分为右键查询（contextLookupEnabled）/查询栏（queryBarEnabled）两键，默认开；
-    //   两键故意不进 defaults——回填时 undefined 即回退旧 queryEnabled，老用户旧值自动沿用
-    //   （进了 defaults 会被 get 填 true，旧关值会被掩盖）；旧 queryEnabled 保留只读作回退
+    // 右键查询/查询栏两键故意不进 defaults——回填时 undefined 即回退旧 queryEnabled，
+    //   老用户旧值自动沿用（进了 defaults 会被 get 填 true，旧关值会被掩盖）
     queryEnabled: true,
-    // 第一百七十次：对话大模型配置（llmBaseUrl/llmModel 留空 = 用所选来源的预置值）
+    // 对话大模型配置（llmBaseUrl/llmModel 留空 = 用所选来源的预置值）
     llmProvider: LLM_DEFAULT_PROVIDER,
     llmBaseUrl: '',
     llmModel: '',
     llmApiKey: '',
-    // 第445次：backendBaseUrl 默认键删除——「本地后端地址」独立填空裁撤，
-    //   backend 组形制与其他 LLM API 一致（预置 baseUrl 即默认地址，Endpoint 填空可改）
     chatWordPrompt: CHAT_WORD_PROMPT,
     chatSidebarPrompt: CHAT_SIDEBAR_PROMPT,
-    // 第397次：对话上下文字节上限默认改十万（plan-backend §4.3.2；出厂 config.json 同值。
-    //   第212次曾定 1 万并由用户三度确认，第357次出厂值先行改为 100000，此处补齐对齐）
-    chatContextMaxBytes: 100000,
-    // 第二百二十三次：引擎改下拉两行式；补齐 asrLlm*/ocrLlm* 六键与 translationChannels/llmTranslatePrompt 默认
-    // 第三百九十三次：asrLlmProvider 显式化（此前缺省由 service-worker get 兜底 'openai'）；
-    //   两 provider 键值域由格式名（openai|anthropic）扩展为 provider id（含 backend 组）——
-    //   旧值 openai/anthropic 本身即 provider id，天然兼容无需迁移
-    // 第三百九十四次：ocrEngine/asrEngine 引擎键退役（whisper/tesseract 移除，只剩在线
-    //   一路，无引擎可分）；asrLlmProvider 默认改 'local-backend'（用户裁定「local-backend，
-    //   没有免key后缀」）
+    chatContextMaxBytes: 100000,   // 对话上下文字节上限（与出厂 config.json 同值）
     asrLlmProvider: 'local-backend',   // ASR 转写 API 来源（provider id；本地后端免 Key）
     asrLlmModel: 'whisper-1',   // LLM 转写模型（用户自管，有错就报；本地后端忽略此值）
-    asrLlmBaseUrl: '',   // 转写 API 接口地址（后台 resolveLlmEngineCfg('asr') 消费，此前无 UI）
-    asrLlmApiKey: '',    // 转写 API Key（此前无 UI）
+    asrLlmBaseUrl: '',   // 转写 API 接口地址（后台 resolveLlmEngineCfg('asr') 消费）
+    asrLlmApiKey: '',    // 转写 API Key
     ocrLlmProvider: 'openai',   // OCR 视觉识别 API 来源（provider id；本地后端免 Key）
     ocrLlmBaseUrl: '',
     ocrLlmModel: '',
     ocrLlmApiKey: '',
-    translationChannels: DEFAULT_TRANS_CH,   // 第二百二十三次：改引常量（LLM 渠道默认不选，其余全选）
-    // 第461次：deeplApiKey/mstransApiKey 默认条目随需 Key 渠道撤销删除（storage 存量残留无害）
+    translationChannels: DEFAULT_TRANS_CH,   // 翻译渠道缺省表（LLM 渠道默认不选，其余全选）
     llmTranslatePrompt: LLM_TRANSLATE_PROMPT,   // LLM 翻译渠道提示词（{text}=原文，{lang}=释义语言）
-    // 第一百零二次：asrFirstChunkSec 默认值条目移除（唯一来源 src/data/config.json）
-    // 308次（用户"新增默认样式"）：网页提示默认样式改绿色下划线，annotationStyle 等注释栏默认不动。
-    // 309次第二轮：名字定稿 'green-underline'。
-    // 309次第五轮（用户"单词注释的网页提示、文本侧栏、视频侧栏、视频叠加字幕默认样式
-    //   应当是Green Background"）：四注释类指派出厂默认统一改 'green-background'
-    //   （生词绿底#2e6b43白字+注释同主题绿字）——旧默认下引导页四栏指派 none/兜底色
-    //   （hintFirstBg transparent+hintFirstFg #2e6b43 绿字）与池指派脱节，用户看不出"是啥样式"；
-    //   池指派后 pickColors 压过兜底，四端观感与引导页样式卡一致。none 仍是合法选项可手选。
-    // 第501次（用户"Green Wave 既然已有就不动，默认改为它"）：常量曾改 'green-wave'；
-    // 第502次（用户"默认样式改回绿背景"）：常量回 'green-background'，回落回归本值。
-    // 第503次曾再移 'green-wave'（误判"绿波不变动生词颜色"）；第504次（用户纠错
-    //   "首先默认是绿色背景，其次绿波三令五申不要改动正文颜色"）定稿：常量终回
-    //   'green-background'（styles.js ANN_DEFAULT_STYLE 已定案），green-wave 条目字段不动。
-    // 317次（用户"default 不是绝对而是代指"）：出厂默认改引代指常量。
-    // 318次：default=代指定稿——绝对值唯一真源在常量，版本变化才改常量值；
-    //   317 次新增的指针键出厂值（annDefaultStyle/subDefaultStyle）撤销。
+    // 注释样式出厂默认改引代指常量：绝对值唯一真源在常量（styles.js），版本变化才改常量值
     textStyle: ANN_DEFAULT_STYLE,
     annotationStyle: ANN_DEFAULT_STYLE,
-    // 280 次：videoAnnotationStyle 复活（池内三指派之一）；annBrackets 布尔退役 → annTemplate 模板
     videoAnnotationStyle: ANN_DEFAULT_STYLE,
-    // 301次：注释个性化参数＋样例句缺省（用户样式列表不进 defaults，读 res || []）
-    // 304次：生词底色默认透明（用户"默认无底色"）。
-    annotationCustom: {
+    annotationCustom: {   // 注释个性化缺省：生词底色默认透明（无底色）
       wordBg: 'transparent', wordFg: '#004d40', annBg: 'transparent', annFg: '#004d40',
       radius: '4px', bold: true
     },
     annotationSample: 'vocab radar',
-    annTemplate: DEFAULT_ANN_TEMPLATE,
-    // 283次：注释模板分键——其余三栏各自的模板缺省（与 annTemplate 同默认值）
+    annTemplate: DEFAULT_ANN_TEMPLATE,   // 注释模板；其余三栏各有分键、默认同值
     webAnnTemplate: DEFAULT_ANN_TEMPLATE,
     videoAnnTemplate: DEFAULT_ANN_TEMPLATE,
     videoOverlayAnnTemplate: DEFAULT_ANN_TEMPLATE,
-    // 318次：字幕样式出厂默认改引代指常量 SUB_DEFAULT_STYLE（default=代指，版本变化才改常量值）
-    subtitleStyle: SUB_DEFAULT_STYLE,
-    subtitlePosition: 'b15',   // 314次：贴底 1/10；329次：下 1/5（b20）；第504次（用户"位置也是15%"）：默认改 b15（随出厂默认 White Glow）
-    // 281次：个性化字幕四参默认（subtitleStyle='custom' 时生效）+ 第四栏注释行样式键
-    // 283次：默认改"能直接用"——透明底/不小字号/投影特效（用户裁定），与 overlay 端缺省对齐
-    // 293次：字号改百分比；294次：默认 7%（用户裁定）
-    subtitleCustom: { bg: 'transparent', fg: '#ffffff', fontSizePct: 5, fontFamily: 'sans', fx: 'shadow' },
-    // 309次第五轮：视频叠加字幕注释行默认同改 'green-background'（用户四栏统一裁定）
-    // 317次：改引默认代指常量（回落不写死绝对 id）
-    // 第501次曾移 green-wave；第502次随常量回 'green-background'，代指口径不变
-    // 第503次（用户"视频叠加字幕的注释默认样式为新建样式，Yellow Yellow"）：
-    //   本栏与前三栏分道——单独默认 VANN_DEFAULT_STYLE（yellow-yellow）
-    videoOverlayAnnStyle: VANN_DEFAULT_STYLE,
+    subtitleStyle: SUB_DEFAULT_STYLE,   // 字幕样式出厂默认改引代指常量
+    subtitlePosition: 'b15',   // 贴底 15%
+    subtitleCustom: { bg: 'transparent', fg: '#ffffff', fontSizePct: 5, fontFamily: 'sans', fx: 'shadow' },   // subtitleStyle='custom' 时生效；透明底/投影特效，与 overlay 端缺省对齐
+    videoOverlayAnnStyle: VANN_DEFAULT_STYLE,   // 视频叠加字幕注释行默认样式（yellow-yellow，与前三栏分道）
     webSidebarEnabled: true,
     sidebarEnabled: true,
-    // 反思（2026-08-21 第九十次）：用户曾要求"视频叠加字幕应当默认不选"——
-    // 277次（用户"引导页 视频叠加字幕默认选中"）改默认开（storage 未设置即勾选）
-    // 308次（用户"视频叠加字幕默认关"）改回默认关：与 video-sidebar.js 三处 === true
-    //   口径一致——未设置视为关，全链路统一
-    overlayEnabled: false,
+    overlayEnabled: false,   // 与 video-sidebar.js 三处 === true 口径一致：未设置视为关
     webSidebarAnnMode: 'side',
     videoSidebarAnnMode: 'side',
     videoOverlayAnnMode: 'side',
-    // 304次（用户"默认无底色"）：透明底绿字。
-    // 第502次：回退第501次误改的 'inherit'（回原 304次透明底绿字口径）。
-    hintFirstBg: 'transparent',
+    hintFirstBg: 'transparent',   // 默认无底色，透明底绿字
     hintFirstFg: '#2e6b43'
   }, cfgDefaults);
-  // 272 次：等待 storage 读取完成再返回——init 里改 await loadSettings()，
-  //   保证 _lang 在后续动态行渲染（deactivate 停用栏 chip 等）前已按界面语言就绪
-  //   （旧版不等待，deactivate 行首渲染竞态到 zh 默认值 = 英文界面下闪中文混杂）。
+  // 等待 storage 读取完成再返回：init 里 await loadSettings()，保证 _lang 在后续动态行渲染
+  //   （deactivate 停用栏 chip 等）前已按界面语言就绪，避免行首渲染竞态到 zh 默认值
   return new Promise((resolve) => {
     chrome.storage.local.get(defaults, (res) => {
       setLangState(res.uiLanguage);
@@ -623,7 +451,7 @@ async function loadSettings() {
   });
 }
 
-// 词频上界占位提示：词典就绪后显示词频表上界实际值（用户「是几就是几」），未就绪显示 ∞
+// 词频上界占位提示：词典就绪后显示词频表上界实际值，未就绪显示 ∞
 function refreshRankMaxPlaceholder() {
   const maxHint = getMaxRank();
   $('rankThresholdMax').placeholder = (maxHint > 0) ? String(maxHint) : '∞';
@@ -636,12 +464,12 @@ function updateRankMaxMin() {
 }
 
 function renderAll(res) {
-  // 语言控件（2026-09-02 释义语言统一英文名称：meaningLanguage 固定用 LANG_NAMES_EN）
+  // 语言控件（释义语言固定用英文名称 LANG_NAMES_EN）
   renderLangSelect($('uiLang'), UI_LANGS, res.uiLanguage);
   renderLangSelect($('learnLanguage'), TRANSLATE_LANGS, res.learnLanguage);
   renderLangSelect($('meaningLanguage'), TRANSLATE_LANGS, res.meaningLanguage, LANG_NAMES_EN);
   $('rankThreshold').value = res.rankThreshold;
-  // 词频上界：0/缺省=回退到词典词频表上界（用户「是几就是几」；词典未就绪时显示 ∞）
+  // 词频上界：0/缺省=回退到词典词频表上界；词典未就绪时显示 ∞
   const _effMax = (typeof res.rankThresholdMax === 'number' && isFinite(res.rankThresholdMax) && res.rankThresholdMax > 0)
     ? res.rankThresholdMax : 0;
   $('rankThresholdMax').value = _effMax > 0 ? _effMax : '';
@@ -649,25 +477,25 @@ function renderAll(res) {
   updateRankMaxMin(); // 上界 spinner 起步值随动下界
   refreshRankMaxPlaceholder();
   $('annotateOov').checked = !!res.annotateOov;
-  // 第三百九十四次：asrEngine/ocrEngine 引擎 radio 回填退役（引擎键已删，只剩在线一路）
-  // 第445次（用户裁定「asr ocr llm都裁掉free组」）：三处下拉不再有 free 组；
-  //   ASR 只留 backend/openai 两组。旧 storage free 组 id（已从 LLM_PROVIDERS 删除）
-  //   经 getProvider 归一化回退 local-backend 并写回，完成一次性迁移。
-  // ASR API 细项回填（第三百九十三次：来源下拉接入 renderEngineProviderSelect；
-  //   模型名保留 whisper-1 兜底）
-  const _asrId = getProvider(res.asrLlmProvider).id;
-  renderEngineProviderSelect($('asrLlmProvider'), _asrId || 'local-backend', ['backend', 'openai']);
+  // ASR/OCR 不启用免费直连组：旧 storage 残留 free 组 id 经组校验显式回退默认并写回
+  //   （free 组恢复后 getProvider 不再将其归一化，须自行校验；对话 LLM 无此限制）
+  // ASR API 细项回填（模型名保留 whisper-1 兜底）
+  const asrAllowed = ['backend', 'openai'];
+  const _asrP = getProvider(res.asrLlmProvider);
+  const _asrId = asrAllowed.includes(_asrP.group || _asrP.format) ? _asrP.id : 'local-backend';
+  renderEngineProviderSelect($('asrLlmProvider'), _asrId, asrAllowed);
   applyEngineProviderHints('asr', $('asrLlmProvider').value, 'whisper-1');
-  if (_asrId !== (res.asrLlmProvider || '')) chrome.storage.local.set({ asrLlmProvider: _asrId || 'local-backend' });
+  if (_asrId !== (res.asrLlmProvider || '')) chrome.storage.local.set({ asrLlmProvider: _asrId });
   $('asrLlmBaseUrl').value = res.asrLlmBaseUrl || '';
   $('asrLlmApiKey').value = res.asrLlmApiKey || '';
   $('asrLlmModel').value = res.asrLlmModel || 'whisper-1';
-  // OCR API 细项回填（第三百九十三次：静态两选项改动态 provider id 下拉；第445次 free
-  // 组裁撤，仅剩 backend/openai/anthropic；地址/模型 placeholder 随来源给预置值）
-  const _ocrId = getProvider(res.ocrLlmProvider).id;
-  renderEngineProviderSelect($('ocrLlmProvider'), _ocrId || 'openai');
+  // OCR API 细项回填（provider id 下拉裁 free 组；地址/模型 placeholder 随来源给预置值）
+  const ocrAllowed = ['backend', 'openai', 'anthropic'];
+  const _ocrP = getProvider(res.ocrLlmProvider);
+  const _ocrId = ocrAllowed.includes(_ocrP.group || _ocrP.format) ? _ocrP.id : 'openai';
+  renderEngineProviderSelect($('ocrLlmProvider'), _ocrId, ocrAllowed);
   applyEngineProviderHints('ocr', $('ocrLlmProvider').value);
-  if (_ocrId !== (res.ocrLlmProvider || '')) chrome.storage.local.set({ ocrLlmProvider: _ocrId || 'openai' });
+  if (_ocrId !== (res.ocrLlmProvider || '')) chrome.storage.local.set({ ocrLlmProvider: _ocrId });
   $('ocrLlmBaseUrl').value = res.ocrLlmBaseUrl || '';
   $('ocrLlmModel').value = res.ocrLlmModel || '';
   $('ocrLlmApiKey').value = res.ocrLlmApiKey || '';
@@ -689,26 +517,22 @@ function renderAll(res) {
     }
   });
   $('llmTranslatePrompt').value = res.llmTranslatePrompt || LLM_TRANSLATE_PROMPT;
-  // 第461次：渠道状态行刷新（CH_HEALTH 登记簿快照，ch-health.js；撤销的 Key 回填随 trans-keys.js 删除）
+  // 渠道状态行刷新（CH_HEALTH 登记簿快照，ch-health.js）
   refreshChHealth();
-  // 328次：单开关回填——任一重复键为开即勾选（收敛历史分歧值；勾选态=允许重复）
+  // 单开关回填：任一重复键为开即勾选（勾选态=允许重复）
   $('hintLaterEnabled').checked = !!(res.hintLaterEnabled || res.annotateRepeat);
   $('hintSideAnnotation').checked = !!res.hintSideAnnotation;
-  // 286次：word hits 六开关回填（缺省=开；右键查询/查询栏 undefined 时回退旧 queryEnabled）
+  // word hits 六开关回填（缺省=开；右键查询/查询栏 undefined 时回退旧 queryEnabled）
   const _effQuery = (v) => (typeof v === 'undefined' ? res.queryEnabled : v) !== false;
   $('hitContextLookup').checked = _effQuery(res.contextLookupEnabled);
   $('hitQueryBar').checked = _effQuery(res.queryBarEnabled);
   $('hitTextHint').checked = res.textHintEnabled !== false;
   $('hitTextSidebar').checked = res.webSidebarEnabled !== false;
   $('hitVideoSidebar').checked = res.sidebarEnabled !== false;
-  // 277次（用户"引导页 视频叠加字幕默认选中"）：默认开——未设置视为勾选（!== false）
-  // 308次：改回默认关——未设置视为未勾选（=== true），与 video-sidebar.js / defaults 同口径
+  // 视频叠加字幕默认关：未设置视为未勾选（=== true），与 video-sidebar.js / defaults 同口径
   $('hitOverlay').checked = res.overlayEnabled === true;
-  // 第三百九十四次：Whisper 模型下拉回填退役（asrModelSize 键与 offscreen SUPPORTED_MODELS 已删）
-  // 第一百零二次：asrFirstChunkSec 引导页控件已移除（唯一来源 src/data/config.json）
 
-  // 模型行（第一百七十次）：来源下拉 + API 配置回填。第445次：旧 free 组 id 经
-  //   getProvider 归一化回退 local-backend 并写回；backendBaseUrl 回填行删除（键已裁撤）
+  // 模型行：来源下拉 + API 配置回填（getProvider 未知 id 回退默认来源并写回）
   const _chatId = getProvider(res.llmProvider).id;
   renderLlmProviderSelect(_chatId || LLM_DEFAULT_PROVIDER);
   if (_chatId !== (res.llmProvider || '')) chrome.storage.local.set({ llmProvider: _chatId || LLM_DEFAULT_PROVIDER });
@@ -717,9 +541,9 @@ function renderAll(res) {
   $('llmApiKey').value = res.llmApiKey || '';
   $('chatWordPrompt').value = res.chatWordPrompt || CHAT_WORD_PROMPT;
   $('chatSidebarPrompt').value = res.chatSidebarPrompt || CHAT_SIDEBAR_PROMPT;
-  // 第397次：对话上下文上限回填（空值显示默认 100000，与 loadSettings 默认/出厂 config.json 对齐）
-  // 第357次（用户："让 config.json 生效…我手动调的为准"）：三项对话参数实际生效以
-  //   config.json 出厂值为第一优先，回填后异步用出厂值覆盖显示，保证"所见 = 实际生效"。
+  // 对话上下文上限回填（空值显示默认 100000，与 loadSettings 默认/出厂 config.json 对齐）；
+  //   三项对话参数实际生效以 config.json 出厂值为第一优先，回填后异步用出厂值覆盖显示，
+  //   保证"所见 = 实际生效"。
   $('chatContextMaxBytes').value = res.chatContextMaxBytes || 100000;
   readFactoryCfg().then((cfg) => {
     if (!cfg) return;
@@ -733,7 +557,7 @@ function renderAll(res) {
   applyLlmProviderHints(res.llmProvider);
 
   syncPoolSettings(res);
-  // 281次：候选池（右列网格一次建卡 + 池顶说明随选中栏切换 + 左栏选中态与内联复制卡）。
+  // 候选池（右列网格一次建卡 + 池顶说明随选中栏切换 + 左栏选中态与内联复制卡）；
   //   初始选中栏固定第一项 Web Hints（_poolTarget 默认），补 .selected 高亮。
   renderPoolGrid();
   bindPoolGrid();
@@ -746,7 +570,7 @@ function renderAll(res) {
 
   syncSubtitleSettings(res);
 
-  // 330次：My Words 两栏初始化（幂等；读 storage 回填 + 控件绑定 + chips 渲染）
+  // My Words 两栏初始化（幂等；读 storage 回填 + 控件绑定 + chips 渲染）
   initMyWords();
 
   // 界面文案
@@ -754,16 +578,14 @@ function renderAll(res) {
 }
 
 /**
- * 渲染对话模型来源下拉（第一百七十次）
- * 第一百七十四次：按 API 格式分三类，用 <optgroup> 分组（第445次起：河狸后端 / OpenAI Chat
- *   Completion 格式 / Anthropic Messages 格式），让"要不要账号"一眼可辨。选项文案跟随界面语言；
+ * 渲染对话模型来源下拉：按 API 格式 <optgroup> 分组（免费直连 / 河狸后端 / OpenAI Chat
+ *   Completion 格式 / Anthropic Messages 格式），选项文案跟随界面语言；
  *   未知/残留 id 由 getProvider 回退默认来源。
  * @param {string} id 当前选中的来源 id
  */
-// 第二百一十六次：引擎 LLM 配置的 Provider 选择渲染（通用版，供 ASR/OCR 复用）
-// 第三百九十二次：过滤支持 group 字段 —— provider 可归入与 format 不同的显示组（河狸后端组）
-// 第三百九十三次：第 3 参 allowedGroups 裁剪显示组；第445次（用户裁定「asr ocr llm
-//   都裁掉free组」）free 组已整体裁撤，allowedGroups 仅用于 ASR 裁 anthropic
+// 引擎 LLM 配置的 Provider 选择渲染（通用版，供 ASR/OCR 复用）：
+//   过滤支持 group 字段（provider 可归入与 format 不同的显示组，如河狸后端组）；
+//   第 3 参 allowedGroups 裁剪显示组（ASR 裁 anthropic、ASR/OCR 都裁 free）
 function renderEngineProviderSelect(sel, selected, allowedGroups) {
   if (!sel) return;
   sel.innerHTML = '';
@@ -806,11 +628,8 @@ function renderLlmProviderSelect(id) {
 
 /**
  * 同步来源相关的提示信息：输入框 placeholder 显示该来源的预置地址/模型。
- * 第一百七十四次：'free' 类来源无需账号无需 Key，故整列隐藏 API Key 输入，
- *   避免用户以为还得先注册。（第445次：free 组已裁撤，仅剩 noKey 判断）
- * 第四百四十六次（用户裁定「local不要专门去掉key框，说了形制一样，无论啥来源。
- *   你要记忆就key的占位符写no need」）：noKey 来源（本地后端）不再隐藏 Key 框
- *   ——所有来源形制统一，占位符显示 no need 提示无需填写。
+ * 免 Key 来源（free 免费直连 / noKey 本地后端）不隐藏 Key 框（形制统一），
+ *   占位符显示 no need 提示无需填写。
  * @param {string} id 来源 id
  */
 function applyLlmProviderHints(id) {
@@ -820,27 +639,22 @@ function applyLlmProviderHints(id) {
   const key = $('llmApiKey');
   if (base) base.placeholder = p.baseUrl || 'https://your-endpoint/v1';
   if (model) model.placeholder = p.model || 'model-name';
-  // 第446次：noKey 来源不隐藏 Key 框（形制统一），占位符 no need
-  if (key) key.placeholder = p.noKey ? 'no need' : 'sk-...';
+  if (key) key.placeholder = (p.noKey || p.format === 'free') ? 'no need' : 'sk-...';
 }
 
-// 第443次：每个模型服务（对话/ASR/OCR）配一个「检测」按钮——检测单位是
-//   服务（当前选中的 provider），不是模型。backend 组探 {base}/api/health（baseUrl 去
-//   /v1），openai 格式探 {base}/models，anthropic 格式探 {base}/v1/models（与运行时
-//   请求路径同口径）。第445次（用户裁定「我选了api，连key都没有，咋还能检测出成功！」）：
-//   ①探测定性改为 2xx = √（401/403/404 等一律 ×，不再「任何响应都算连通」）；
-//   ②需 Key 的格式无 Key 直接判失败（title 提示 missing-key，不发请求）；
-//   ③有 Key 时带鉴权头探测（openai: Authorization Bearer / anthropic: x-api-key +
-//   anthropic-version），Key 错误即 401 ×，如实反映；
-//   ④backend 组「两级填空全空时扫 7778–7827」端口扫描删除（用户裁定「扩展端不再
-//   范围尝试」）；backendBaseUrl storage 键裁撤，backend 组地址=填空或预置地址。
+// 服务连通探测：检测单位是服务（当前选中的 provider），不是模型。backend 组探
+//   {base}/api/health（baseUrl 去 /v1）；openai 格式探 {base}/models，anthropic 格式探
+//   {base}/v1/models（与运行时请求路径同口径）。2xx = √，其余状态码一律 ×；
+//   需 Key 的格式无 Key 直接判失败（title 提示 missing-key，不发请求）；有 Key 带鉴权头
+//   探测（openai: Authorization Bearer / anthropic: x-api-key + anthropic-version），
+//   Key 错误即 401 ×，如实反映。
 const SERVICE_DETECT_IDS = {
   llm: { provider: 'llmProvider', base: 'llmBaseUrl', key: 'llmApiKey', btn: 'btnDetectLlm', span: 'spanDetectLlm' },
   asr: { provider: 'asrLlmProvider', base: 'asrLlmBaseUrl', key: 'asrLlmApiKey', btn: 'btnDetectAsr', span: 'spanDetectAsr' },
   ocr: { provider: 'ocrLlmProvider', base: 'ocrLlmBaseUrl', key: 'ocrLlmApiKey', btn: 'btnDetectOcr', span: 'spanDetectOcr' }
 };
 
-/** 服务连通探测：5s 超时；第445次起 2xx = √，其余状态码 = ×。返回 {ok, status?, error?, ms}。 */
+/** 服务连通探测：5s 超时；2xx = √，其余状态码 = ×。返回 {ok, status?, error?, ms}。 */
 async function probeServiceUrl(url, headers) {
   const ctl = new AbortController();
   const timer = setTimeout(() => ctl.abort(), 5000);
@@ -868,7 +682,7 @@ function renderDetectResult(span, res) {
     span.style.color = '#1f9d4d';
     span.title = 'HTTP ' + res.status + ' · ' + res.ms + 'ms';
   } else {
-    // 第445次：missing-key 直接中文点破（未发请求），其余原样
+    // missing-key 直接中文点破（未发请求），其余原样
     const errText = (res && res.error === 'missing-key')
       ? (getLangState() === 'zh' ? '需先填 API Key' : 'API Key required')
       : ((res && res.error) || 'HTTP ' + (res && res.status));
@@ -878,7 +692,7 @@ function renderDetectResult(span, res) {
   }
 }
 
-/** 检测某服务（kind: llm|asr|ocr）当前选中 provider 的连通性（第445次：2xx + 鉴权头 + 无 Key 即 ×）。 */
+/** 检测某服务（kind: llm|asr|ocr）当前选中 provider 的连通性：2xx + 鉴权头 + 无 Key 即 ×。 */
 async function detectService(kind) {
   const ids = SERVICE_DETECT_IDS[kind];
   const btn = $(ids.btn);
@@ -893,16 +707,16 @@ async function detectService(kind) {
   const isAnthropic = (p.format === 'anthropic');
   let res;
   if ((p.group || '') === 'backend' || p.format === 'backend') {
-    // backend 组探健康端点（baseUrl 去 /v1）；第445次起不再读 backendBaseUrl、不再扫端口
+    // backend 组探健康端点（baseUrl 去 /v1）
     res = await probeServiceUrl(base.replace(/\/v1$/i, '') + '/api/health');
-  } else if (!p.noKey && !apiKey) {
-    // 需 Key 的格式无 Key：直接 ×，不发请求（用户裁定「连key都没有，咋还能检测出成功」）
+  } else if (!p.noKey && p.format !== 'free' && !apiKey) {
+    // 需 Key 的格式无 Key：直接 ×，不发请求（free 免费直连 / noKey 本地后端不要求 Key）
     res = { ok: false, error: 'missing-key', ms: 0 };
   } else {
-    // 有 Key 带鉴权头探测（探 models 端点）；Key 错误即 401 ×，如实反映
+    // 有 Key 带鉴权头探测（探 models 端点）；Key 错误即 401 ×，如实反映；free 不带鉴权头
     const headers = isAnthropic
       ? { 'x-api-key': apiKey, 'anthropic-version': '2023-06-01' }
-      : { 'Authorization': 'Bearer ' + apiKey };
+      : (p.format === 'free' ? {} : { 'Authorization': 'Bearer ' + apiKey });
     res = await probeServiceUrl(base + (isAnthropic ? '/v1/models' : '/models'), headers);
   }
   renderDetectResult(span, res);
@@ -910,15 +724,10 @@ async function detectService(kind) {
   log('检测服务[' + kind + ']:', p.id, res.ok ? '√ HTTP ' + res.status + ' ' + res.ms + 'ms' : '× ' + ((res && res.error) || ('HTTP ' + res.status)));
 }
 
-// 第三百九十四次：renderOcrLangRow/collectOcrLangs 退役（Tesseract 语言三复选已随本地
-//   OCR 移除，ocrLanguages 存储不再读写）。
-
-// 第三百九十三次：ASR/OCR 引擎 API 来源提示通用化（原 applyOcrProviderHints 硬映射退役，
-//   镜像 applyLlmProviderHints 的交互）——placeholder 带来源预置地址/模型。prefix='asr'|'ocr'
-//   拼控件 id；modelPlaceholder 覆写模型提示（来源表预置的是对话模型名，ASR 转写恒提示 whisper-1）。
-// 第445次：free 判断删除（free 组裁撤）。
-// 第446次（用户裁定「形制一样，无论啥来源；要记忆就 key 的占位符写 no need」）：
-//   noKey 来源不再隐藏 Key 输入，Key 框占位符显示 no need（镜像 chat 行）。
+// ASR/OCR 引擎 API 来源提示通用化（镜像 applyLlmProviderHints 的交互）：
+//   placeholder 带来源预置地址/模型；prefix='asr'|'ocr' 拼控件 id；modelPlaceholder 覆写
+//   模型提示（来源表预置的是对话模型名，ASR 转写恒提示 whisper-1）。
+//   noKey 来源不隐藏 Key 输入，Key 框占位符显示 no need（镜像 chat 行）。
 function applyEngineProviderHints(prefix, id, modelPlaceholder) {
   const p = getProvider(id);
   const base = $(prefix + 'LlmBaseUrl');
@@ -935,24 +744,22 @@ function applyTexts() {
   document.title = 'VocabRadar · Guide';
   document.documentElement.lang = getLangState();
   fillByDataKey();
-  // 283次：fillByDataKey 会把 poolNoteRerender 覆盖回静态兜底文案（段2），须在其后
-  //   重跑动态拼接（拼当前栏名）；此时池状态已就绪，幂等无副作用
+  // fillByDataKey 会把 poolNoteRerender 覆盖回静态兜底文案（段2），须在其后重跑动态拼接
+  //   （拼当前栏名）；此时池状态已就绪，幂等无副作用
   renderPoolNote();
   renderHelp();
-  // 反思（2026-08-16 第七十次）：头部显示构建版本——与视频页 overlay 启动日志的
-  //   BUILD_STAMP 对照，可判定"改了默认样式/没选中"是不是旧构建残留。
+  // 头部显示构建版本：与视频页 overlay 启动日志的 BUILD_STAMP 对照可判定构建新旧
   const verEl = $('guideVer');
-  // 272次：BUILD_STAMP 已含 'v' 前缀（构建注入 v{yyyyMMdd.HHmm}），不再外加 'v'
-  if (verEl) verEl.textContent = BUILD_STAMP;
+  if (verEl) verEl.textContent = BUILD_STAMP;   // BUILD_STAMP 已含 'v' 前缀（构建注入）
 }
 
 // === 初始化 ===
 
 async function init() {
   await initLang().catch(() => {});
-  // 272 次：改 await——_lang 就绪后 initDeactivate 才渲染动态行（修语言混杂竞态）
+  // await：_lang 就绪后 initDeactivate 才渲染动态行（避免语言混杂竞态）
   await loadSettings();
-  // 第二百四十八次：词典状态行（引导页 = 更新/安装后静默初始化的点名入口）
+  // 词典状态行（引导页 = 更新/安装后静默初始化的点名入口）
   renderDictStatus();
 
   // 三子标签切换
@@ -966,11 +773,8 @@ async function init() {
   });
 
   // 可折叠分组（组头点击折叠/展开，点击开关不触发折叠）
-  // 反思（2026-08-16 第六十六次）：样式栏"第一下点不开"的根因——
-  //   guide.html 折叠组 .group-body 用内联 style="display:none;" 初始收起，
-  //   但 group 上没有 'collapsed' 类，点击头时 setCollapsed(!classList.contains('collapsed'))
-  //   认为初始未收起 → 第一下反而设为收起（视觉无变化），第二下才展开。
-  //   修正：初始化时把 collapsed 类与箭头同步为内联 display 的实际状态。
+  // 初始把 collapsed 类与箭头同步为内联 display 的实际状态：guide.html 折叠组初始收起
+  //   用内联 style="display:none;" 但无 collapsed 类，不同步则第一下点击误判状态。
   document.querySelectorAll('.group[data-collapsible]').forEach((group) => {
     const head = group.querySelector('.group-head');
     const body = group.querySelector('.group-body');
@@ -1020,13 +824,9 @@ async function init() {
     updateRankMaxMin(); // 下界变了 → 上界 spinner 起步值随动
   });
   // 词频上界（0/空=未设上界=空集，全部词都值得注释；正数上界须大于下界）
-  // 反思：修复"上界框不可点击调节"——根因是 Chrome 空值点 ▲ 从 min 起步，旧 min=0
-  //   得 0，校验 `v<=0` 命中即清空输入框 → 数字闪一下就没了，永远调不上去。
-  //   现区分输入：留空/0=未设上界(空集)；合法值=直接存；非法=恢复上次有效值
-  //   （dataset.prev），无上次有效值回落 未设。
-  // 第397次（plan-backend §4.3.3）：显式键入 0 亦视为 未设上界（空集=∞，annotator.js
-  //   setRankMax 对 0/非正数即转 Infinity）——原 v===0 走"spinner 起步补下界"分支与
-  //   新语义冲突，删除（spinner min 由 updateRankMaxMin 恒设 下界+1000，起步值本就合法）。
+  // Chrome 空值点 ▲ 从 min 起步，须区分输入：留空/0=未设上界（空集=∞，annotator.js
+  //   setRankMax 对 0/非正数即转 Infinity）；合法值=直接存；非法=恢复上次有效值
+  //   （dataset.prev）。spinner min 由 updateRankMaxMin 恒设 下界+1000，起步值本就合法。
   $('rankThresholdMax').addEventListener('change', (e) => {
     const raw = e.target.value;
     const v = parseInt(raw, 10);
@@ -1051,7 +851,7 @@ async function init() {
   $('annotateOov').addEventListener('change', (e) => {
     chrome.storage.local.set({ annotateOov: e.target.checked }, () => log('注释表外词=', e.target.checked));
   });
-  // 328次：旧 annotateRepeat 复选框已删（只留一个开关）；单开关双写——
+  // 旧 annotateRepeat 复选框已删（只留一个开关）；单开关双写——
   //   hintLaterEnabled（后续高亮显隐）+ annotateRepeat（侧邻/侧栏/字幕注释去重）
   //   同值，确保"重复"一个概念两处机制一致；content 侧 onChanged+5s 对账已覆盖两键。
   $('hintLaterEnabled').addEventListener('change', (e) => {
@@ -1061,7 +861,7 @@ async function init() {
   $('hintSideAnnotation').addEventListener('change', (e) => {
     chrome.storage.local.set({ hintSideAnnotation: e.target.checked }, () => log('侧邻提示=', e.target.checked));
   });
-  // 286次：word hits 六开关保存（原五处开关抽取至此；旧 queryEnabled 不再写入，只读回退）
+  // word hits 六开关保存（旧 queryEnabled 不再写入，只读回退）
   $('hitContextLookup').addEventListener('change', (e) => {
     chrome.storage.local.set({ contextLookupEnabled: e.target.checked }, () => log('右键查询=', e.target.checked));
   });
@@ -1080,12 +880,10 @@ async function init() {
   $('hitOverlay').addEventListener('change', (e) => {
     chrome.storage.local.set({ overlayEnabled: e.target.checked }, () => log('视频叠加字幕=', e.target.checked));
   });
-  // 280 次：注释布局三组 radio 监听删除——radio 移出引导页，布局控制在各自侧栏与叠加字幕内；
-  //   storage 键（webSidebarAnnMode/videoSidebarAnnMode/videoOverlayAnnMode）与 defaults 保留
-  //   （侧栏/overlay 功能自身 UI 仍消费）。
-  // （第二百二十四次：Whisper 模型由下拉改单选，监听移至下方「引擎单选」区块统一处理）
+  // 注释布局三组 radio 的 storage 键（webSidebarAnnMode/videoSidebarAnnMode/
+  //   videoOverlayAnnMode）与 defaults 保留：侧栏/overlay 功能自身 UI 仍消费
 
-  // 模型行（第一百七十次）：来源切换时清空自定义地址/模型，改用新来源的预置值
+  // 模型行：来源切换时清空自定义地址/模型，改用新来源的预置值
   //   （否则切到 Groq 却仍带着 OpenRouter 的模型名，请求必然 404，且用户看不出原因）
   $('llmProvider').addEventListener('change', (e) => {
     const id = e.target.value;
@@ -1093,17 +891,17 @@ async function init() {
       $('llmBaseUrl').value = '';
       $('llmModel').value = '';
       applyLlmProviderHints(id);
-      clearServiceResult('llm');   // 第443次：服务已切换，旧检测结果失效
+      clearServiceResult('llm');   // 服务已切换，旧检测结果失效
       log('对话模型来源=', id);
     });
   });
-  // 第443次：每个模型服务一个「检测」按钮，测当前选中服务的连通性
+  // 每个模型服务一个「检测」按钮，测当前选中服务的连通性
   $('btnDetectLlm').addEventListener('click', () => detectService('llm'));
   $('btnDetectAsr').addEventListener('click', () => detectService('asr'));
   $('btnDetectOcr').addEventListener('click', () => detectService('ocr'));
-  // 第461次：渠道状态行——周期刷新 SW 翻译登记簿（ch-health.js；原第460次 Key 保存/检测接线随撤销删除）
+  // 渠道状态行：周期刷新 SW 翻译登记簿（ch-health.js）
   initChHealth({ log, getLang: getLangState });
-  // 第462次：词形整表下载完成广播（lemmas-engine.js 写入后发）——就绪行分项重取，
+  // 词形整表下载完成广播（lemmas-engine.js 写入后发）：就绪行分项重取，
   //   消除"下载先于/晚于取数"造成的 lemmas 0 陈旧数字。不 return true（无需应答）。
   chrome.runtime.onMessage.addListener((msg) => {
     if (msg && msg.type === 'LEMMAS_READY' && _refreshDictStats) _refreshDictStats(0);
@@ -1111,17 +909,15 @@ async function init() {
   // 地址/模型/Key/提示词：change（失焦或回车）时保存，与本页其他控件一致
   $('llmBaseUrl').addEventListener('change', (e) => {
     chrome.storage.local.set({ llmBaseUrl: e.target.value.trim() }, () => log('接口地址已保存'));
-    clearServiceResult('llm');   // 第443次：地址已改，旧检测结果失效
+    clearServiceResult('llm');   // 地址已改，旧检测结果失效
   });
-  // 第445次：backendBaseUrl change 监听删除（「本地后端地址」填空已裁撤；
-   //   第401次旧注释随之移除）
   $('llmModel').addEventListener('change', (e) => {
     chrome.storage.local.set({ llmModel: e.target.value.trim() }, () => log('模型名=', e.target.value.trim()));
   });
   $('llmApiKey').addEventListener('change', (e) => {
     chrome.storage.local.set({ llmApiKey: e.target.value.trim() }, () => log('API Key 已保存（长度', e.target.value.trim().length, '）'));
   });
-  // 第一百八十四次：默认提示词拆两套，各自独立保存；清空即回落到各自默认常量
+  // 对话提示词拆两套（单词类/侧栏），各自独立保存；清空即回落到各自默认常量
   $('chatWordPrompt').addEventListener('change', (e) => {
     const v = e.target.value.trim() || CHAT_WORD_PROMPT;
     e.target.value = v;
@@ -1132,33 +928,31 @@ async function init() {
     e.target.value = v;
     chrome.storage.local.set({ chatSidebarPrompt: v }, () => log('侧栏提示词=', v));
   });
-  // 第397次：对话上下文上限（字节，下限 1000；非法输入回落默认 100000——第207次注释与代码
-  //   不一致回落 10000，本次一并修正；plan-backend §4.3.2）
+  // 对话上下文上限（字节，下限 1000；非法输入回落默认 100000）
   $('chatContextMaxBytes').addEventListener('change', (e) => {
     let v = parseInt(e.target.value, 10);
     if (!Number.isFinite(v) || v < 1000) v = 100000;
     e.target.value = v;
     chrome.storage.local.set({ chatContextMaxBytes: v }, () => log('对话上下文上限(字节)=', v));
   });
-  // ASR/OCR API 来源下拉（第三百九十三次：provider id 直存——'openai'/'anthropic' 旧值即
-  // provider id 天然兼容；change 时同步 placeholder 与 Key 框显隐。
-  // 第三百九十四次：引擎 radio 保存监听与 asrModelSize 下拉监听随引擎键退役）
+  // ASR/OCR API 来源下拉：provider id 直存（'openai'/'anthropic' 旧值即 provider id
+  //   天然兼容）；change 时同步 placeholder 与 Key 框提示
   $('asrLlmProvider').addEventListener('change', (e) => {
     const v = e.target.value;
     chrome.storage.local.set({ asrLlmProvider: v }, () => log('ASR API 来源=', v));
     applyEngineProviderHints('asr', v, 'whisper-1');
-    clearServiceResult('asr');   // 第443次：服务已切换，旧检测结果失效
+    clearServiceResult('asr');   // 服务已切换，旧检测结果失效
   });
   $('ocrLlmProvider').addEventListener('change', (e) => {
     const v = e.target.value;
     chrome.storage.local.set({ ocrLlmProvider: v }, () => log('OCR API 来源=', v));
     applyEngineProviderHints('ocr', v);
-    clearServiceResult('ocr');   // 第443次：服务已切换，旧检测结果失效
+    clearServiceResult('ocr');   // 服务已切换，旧检测结果失效
   });
-  // ASR API 细项（OpenAI 兼容转写）：地址/模型/Key 保存（此前 asrLlmModel 无保存监听——缺口补齐）
+  // ASR API 细项（OpenAI 兼容转写）：地址/模型/Key 保存
   $('asrLlmBaseUrl').addEventListener('change', (e) => {
     chrome.storage.local.set({ asrLlmBaseUrl: e.target.value.trim() }, () => log('转写接口地址已保存'));
-    clearServiceResult('asr');   // 第443次：地址已改，旧检测结果失效
+    clearServiceResult('asr');   // 地址已改，旧检测结果失效
   });
   $('asrLlmModel').addEventListener('change', (e) => {
     chrome.storage.local.set({ asrLlmModel: e.target.value.trim() }, () => log('转写模型=', e.target.value.trim()));
@@ -1166,10 +960,10 @@ async function init() {
   $('asrLlmApiKey').addEventListener('change', (e) => {
     chrome.storage.local.set({ asrLlmApiKey: e.target.value.trim() }, () => log('转写 API Key 已保存（长度', e.target.value.trim().length, '）'));
   });
-  // OCR API 细项：地址/模型/Key 保存（格式单选监听在上方「引擎单选」区块）
+  // OCR API 细项：地址/模型/Key 保存
   $('ocrLlmBaseUrl').addEventListener('change', (e) => {
     chrome.storage.local.set({ ocrLlmBaseUrl: e.target.value.trim() }, () => log('OCR 接口地址已保存'));
-    clearServiceResult('ocr');   // 第443次：地址已改，旧检测结果失效
+    clearServiceResult('ocr');   // 地址已改，旧检测结果失效
   });
   $('ocrLlmModel').addEventListener('change', (e) => {
     chrome.storage.local.set({ ocrLlmModel: e.target.value.trim() }, () => log('OCR 模型名=', e.target.value.trim()));
@@ -1177,8 +971,8 @@ async function init() {
   $('ocrLlmApiKey').addEventListener('change', (e) => {
     chrome.storage.local.set({ ocrLlmApiKey: e.target.value.trim() }, () => log('OCR API Key 已保存（长度', e.target.value.trim().length, '）'));
   });
-  // 翻译渠道复选：补保存监听（第二百二十三次——此前勾选从不写 storage，设置形同虚设）。
-  // 保存按 DOM 现状整表写入；「浏览器自身」在 Firefox 被禁用且未勾，写回 false 与实际一致。
+  // 翻译渠道复选保存：按 DOM 现状整表写入；「浏览器自身」在 Firefox 被禁用且未勾，
+  //   写回 false 与实际一致。
   TRANS_CH_IDS.forEach(([id]) => {
     $(id).addEventListener('change', () => {
       const obj = {};
@@ -1186,23 +980,19 @@ async function init() {
       chrome.storage.local.set({ translationChannels: obj }, () => log('翻译渠道=', JSON.stringify(obj)));
     });
   });
-  // LLM 翻译渠道提示词：清空回落默认模板（仅保存；后台 handleLlmTranslate 消费接线属后续改造）
+  // LLM 翻译渠道提示词：清空回落默认模板
   $('llmTranslatePrompt').addEventListener('change', (e) => {
     const v = e.target.value.trim() || LLM_TRANSLATE_PROMPT;
     e.target.value = v;
     chrome.storage.local.set({ llmTranslatePrompt: v }, () => log('LLM 翻译提示词=', v));
   });
-  // 第一百零二次：asrFirstChunkSec 监听器已随引导页控件移除（唯一来源 config.json）
 
-  // 反思（2026-08-14 第五十六次修正）：底部按钮栏已整栏删除（用户要求"这一栏全删掉"）。
-  // 反思（2026-08-21 第八十八次）：diagnose.js 已彻底删除（用户要求），诊断问题已解决。
-
-  // 功能栏 ASR/OCR/Parser（拆分自 asr-ocr.js：公共初始化 → ASR → OCR；253 次 + Parser）
+  // 功能栏 ASR/OCR/Parser（拆分自 asr-ocr.js：公共初始化 → ASR → OCR + Parser）
   initAsrCommon();
   initAsr();
   initOcr();
   initParser();
-  // 第二百七十次：Deactivate 停用栏（须在折叠组通用绑定与标签切换绑定之后初始化，
+  // Deactivate 停用栏（须在折叠组通用绑定与标签切换绑定之后初始化，
   //   深链 ?deactivate= 需复用两者的既有监听）
   initDeactivate({ m, lang: () => getLangState() });
   window.addEventListener('pagehide', () => {
@@ -1216,46 +1006,40 @@ async function init() {
       setLangState(changes.uiLanguage.newValue);
       chrome.storage.local.get(null, (res) => renderAll(res));
     } else if (changes.subtitleStyle || changes.subtitlePosition) {
-      // 反思（2026-08-16 第六十八次）：整栏重渲染（而非仅切 active 类）——
-      //   其他标签页写入的若为已删样式 id，旧逻辑无卡可选中；重渲染走 stale-id 清洗回退。
-      // 反思（2026-08-16 第六十九次）：位置样式（subtitlePosition）变化同样整栏重渲染。
+      // 整栏重渲染（而非仅切 active 类）：其他标签页写入的若为已删样式 id，
+      //   旧逻辑无卡可选中；重渲染走 stale-id 清洗回退。位置样式变化同样整栏重渲染。
       chrome.storage.local.get(null, (res) => renderAll(res));
     } else if (changes.textStyle || changes.annotationStyle || changes.videoAnnotationStyle || changes.annTemplate
        || changes.webAnnTemplate || changes.videoAnnTemplate || changes.videoOverlayAnnTemplate
        || changes.videoOverlayAnnStyle || changes.subtitleCustom || changes.subtitleUserStyles
        || changes.subtitleSample || changes.videoOverlayAnnMode
-       // 291次：阈值/表外开关影响预览动态注释，布局键跨页同步预览
+       // 阈值/表外开关影响预览动态注释，布局键跨页同步预览
        || changes.rankThreshold || changes.rankThresholdMax || changes.annotateOov
-       // 301次：注释个性化三键（与字幕流同分支，共享回声抑制）
+       // 注释个性化三键（与字幕流同分支，共享回声抑制）
        || changes.annotationCustom || changes.annotationUserStyles || changes.annotationSample) {
-      // 292次回声抑制：本页刚写入（即时渲染已是最终态），1200ms 内回声跳过
+      // 回声抑制：本页刚写入（即时渲染已是最终态），1200ms 内回声跳过
       //   全量 renderAll——否则"先经过一个样式再到最终"地闪一次；他页写入正常同步。
-      // 301次：池指派写 storage 同样打戳，281"不重渲染"至此才真正落地（此前回声必全量重建）。
+      //   池指派写 storage 同样打戳。
       if (Date.now() - ownWriteAt() < 1200) return;
-      // 280 次：候选池四键跨标签页同步（池三指派键 + 注释模板；annBrackets 退役）。
-      //   282次：补第四栏注释样式键与字幕个性化/用户样式键——缺了会"别的标签页改了
-      //   样式本页预览不动"（用户"都会触发立即预览，现在没动"的根因之一）。
-      //   283次：补三栏独立模板键（分键后每个键变化都需重渲染池卡样例与输入框回填）。
+      // 候选池四键跨标签页同步（池三指派键 + 注释模板 + 第四栏注释样式键 +
+      //   字幕个性化/用户样式键 + 三栏独立模板键）：缺了会"别的标签页改了样式本页预览不动"。
       chrome.storage.local.get(null, (res) => renderAll(res));
     } else if (changes.myWords || changes.myWordsPresetSel) {
-      // 330次：My Words 外部变化（查询窗 🏁/✓ 标记按钮、他页编辑）→ 两栏回填。
+      // My Words 外部变化（查询窗 🏁/✓ 标记按钮、他页编辑）→ 两栏回填。
       //   自写回声由 my-words.js 内部 _lastWriteAt 窗口抑制（防打断输入），不整页 renderAll。
       syncMyWordsFromStorage();
     } else if (changes.llmProvider || changes.llmBaseUrl || changes.llmModel
-               || changes.llmApiKey   // 第445次：changes.backendBaseUrl 移除（键已裁撤）
+               || changes.llmApiKey
                || changes.chatWordPrompt || changes.chatSidebarPrompt
                || changes.asrLlmProvider || changes.asrLlmModel || changes.asrLlmBaseUrl
                || changes.asrLlmApiKey || changes.ocrLlmProvider || changes.ocrLlmBaseUrl || changes.ocrLlmModel
-                  || changes.ocrLlmApiKey || changes.translationChannels   // 第461次：deeplApiKey/mstransApiKey 监听随撤销删除
+                  || changes.ocrLlmApiKey || changes.translationChannels
                 || changes.llmTranslatePrompt || changes.learnLanguage || changes.meaningLanguage
                 || changes.queryEnabled || changes.contextLookupEnabled || changes.queryBarEnabled
                 || changes.textHintEnabled || changes.webSidebarEnabled || changes.sidebarEnabled
                 || changes.overlayEnabled) {
-      // 第一百七十三次：补齐「模型」栏的跨标签页同步。第一百七十次新增 llm*/chatPrompt/
-      //   asrModelSize 六个键时漏了本监听器 —— 在另一标签页改了模型配置，本页输入框
-      //   仍显示旧值，用户以为没保存又改一遍，两页互相覆盖。
-      // 第二百二十三次：引擎/翻译渠道/LLM 翻译提示词/ASR·OCR API 细项/OCR 语言/目标·释义语言
-      //   新键并入（语言两键变化会联动 OCR 语言候选重渲）。
+      // 「模型」栏等设置键的跨标签页同步：另一标签页改了模型配置，本页输入框
+      //   须回填最新值（语言两键变化会联动 OCR 语言候选重渲）。
       chrome.storage.local.get(null, (res) => renderAll(res));
     }
   });

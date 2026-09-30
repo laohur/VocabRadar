@@ -11,6 +11,8 @@ dist-firefox-upload/
 # ===== 日志（change.log 等运行/变更日志）=====
 logs/
 change.log
+# 本地临时测试产物（如译文失控检测的抓包样例）
+/*.jsonl
 
 # ===== 文档（不入库；源码注释与 docs/ 均为文档；README 与 PRIVACY 随公开项目入库）=====
 docs/
@@ -21,7 +23,7 @@ note.text
 # ===== HF 上传包（数据住 HF 仓库，不入库）=====
 data/hf-upload/
 
-# ===== 工作区规则文件（用户裁定不入库）=====
+# ===== 工作区规则文件（不入库）=====
 AGENTS.md
 
 # ===== 截图素材（不入库）=====
@@ -33,6 +35,7 @@ data/qrcode-unlimit.png
 data/wx_qrcode-unlimit.jpg
 
 # ===== backend 运行时产物（git 只记源代码，模型/媒体/缓存/二进制/venv 不入库）=====
+# config.json = 用户设定（首次在管理界面设定时才生成），出厂不带
 backend/models/
 backend/media/
 backend/cache/
@@ -40,6 +43,7 @@ backend/bin/
 backend/.venv/
 backend/.installed.json
 backend/*.pid
+backend/config.json
 
 # ===== 工具/编辑器状态与缓存 =====
 node_modules/

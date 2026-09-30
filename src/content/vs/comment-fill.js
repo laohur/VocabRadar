@@ -1,7 +1,7 @@
 // =============================================================================
 // vs/comment-fill.js —— 评论框填入子模块
 // -----------------------------------------------------------------------------
-// 职责：评论超长时随机选行（pickRandomLinesForComment）、查找视频正下方主评论框
+// 职责：评论超长时按字节长度加权概率选行（pickRandomLinesForComment）、查找视频正下方主评论框
 //       容器（findMainCommentContainer）、自动展开评论区、跨 shadow DOM 递归查找
 //       并填入评论输入框（deepQuery/deepQueryAll/isInCommentItem/fillCommentInput）、
 //       最小滚动定位（scrollMinIntoView）。
@@ -14,30 +14,35 @@ import { log } from './logger.js';
 import { escapeHtml } from './dom-utils.js';
 
 /**
- * 评论超长时随机选取若干行，使 prefix + 选取行.join('\n') 总长度 ≤ maxLen
+ * 评论超长时按字节长度加权概率选取若干行，使 prefix + 选取行.join('\n') 总长度 ≤ maxLen
  *
- * 算法：
- *   1. Fisher-Yates 打乱行索引
- *   2. 贪心加入：只要再加一行不超限就加入（单行超限的跳过）
+ * 算法（Efraimidis–Spirakis 加权随机抽样）：
+ *   1. 每行算 key = ln(1-U)/w（U∈(0,1)，w=字节长；与 U^(1/w) 同序，越长越优先）
+ *   2. 按 key 降序贪心加入：只要再加一行不超限就加入（单行超限的跳过）
  *   3. 排序恢复原始字幕顺序，保证阅读连贯
  * @param {string[]} lines 已格式化的注释行
  * @param {number} maxLen 评论最大字符数（含前缀）
  * @param {number} prefixLen 前缀字符数
+ * @param {number[]=} weights 各行概率权重（单词 UTF-8 字节长）；缺省用行内容字节长
  * @returns {string[]} 选取的行（按原顺序）
  */
-export function pickRandomLinesForComment(lines, maxLen, prefixLen) {
-  const indices = lines.map((_, i) => i);
-  // Fisher-Yates 完整打乱
-  for (let i = indices.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1));
-    [indices[i], indices[j]] = [indices[j], indices[i]];
-  }
+export function pickRandomLinesForComment(lines, maxLen, prefixLen, weights) {
+  const enc = new TextEncoder();
+  const byteLen = (s) => enc.encode(s).length;
+  const ws = (weights && weights.length === lines.length)
+    ? weights
+    : lines.map((l) => byteLen(l));
+  const keyed = lines.map((_, i) => ({
+    i,
+    key: Math.log(1 - Math.random()) / Math.max(1, ws[i]),
+  }));
+  keyed.sort((a, b) => b.key - a.key); // key 大者先出
   const picked = [];
   let total = prefixLen;
-  for (const idx of indices) {
-    const lineLen = lines[idx].length + 1; // +1 为换行符
+  for (const { i } of keyed) {
+    const lineLen = lines[i].length + 1; // +1 为换行符
     if (total + lineLen > maxLen) continue; // 跳过该行（含单行就超限的极端情况）
-    picked.push(idx);
+    picked.push(i);
     total += lineLen;
   }
   picked.sort((a, b) => a - b); // 恢复原字幕顺序
@@ -204,7 +209,6 @@ function isInCommentItem(el) {
 function deepQuery(root, selector) {
   const all = deepQueryAll(root, selector);
   if (all.length === 0) return null;
-  // 诊断：输出所有匹配项
   log('deepQuery 候选', all.length, '个:', all.slice(0, 5).map((el) =>
     `${el.tagName}.${String(el.className).slice(0,30)} inItem=${isInCommentItem(el)}`).join(' | '));
   // 优先级1：publisher/main 容器内的 editor（主评论框）

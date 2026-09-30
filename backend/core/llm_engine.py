@@ -1,12 +1,10 @@
-"""LLM 引擎：llama.cpp llama-server 子进程管理（阶段一第 3 条实现）。
+"""LLM 引擎：llama.cpp llama-server 子进程管理。
 
-规划要点（plan-backend §3.2/§3.3）：
-- 启动：llama-server -hf <repo>:<quant>（第431次：卡片 command 即权威，模型
-  交 llama.cpp 自动下载/管理，hub 缓存 %USERPROFILE%/.cache/huggingface/hub）
-- 三源健壮性（第446次裁定「先探测三源，再选定启动」）：启动前串行探测
-  hf 官方 → hf-mirror → fallback_url，选定首个可达源仅启动一次，失败
-  如实上抛不换源（第431次「启动→失败→换源试错链」废除——每次失败启动
-  都在 hub 缓存制造 *.downloadInProgress 残骸）
+- 启动：卡片 command 即权威，llama-server -hf <repo>:<quant> 自动下载/管理
+  模型（hub 缓存 %USERPROFILE%/.cache/huggingface/hub）
+- 三源健壮性：启动前串行探测 hf 官方 → hf-mirror → fallback_url，选定首个
+  可达源仅启动一次，失败如实上抛不换源（试错启动会在 hub 缓存制造
+  *.downloadInProgress 残骸）
 - 生命周期：resident（Flask 启动即后台拉起）/ on-demand（首请求拉起 + 空闲 idle_timeout 退出）
 - backend 对外反代其 /v1/*；7788 仅内部使用
 - b10964+ 包结构：llama-server.exe 为薄启动器，实现在 llama-server-impl.dll
@@ -25,30 +23,29 @@ import config
 
 log = logging.getLogger(__name__)
 
-# 第419次：pid 文件治理——后端退出走 atexit 自动停机；后端被 taskkill /F 强杀、
-# 断电等未及清理时，下次 start() 读 pid 文件先行终止残留 llama-server，防 7788 双占。
+# pid 文件治理：后端退出走 atexit 自动停机；被强杀/断电等未及清理时，
+# 下次 start() 读 pid 文件先行终止残留 llama-server，防 7788 双占。
 _PID_FILE = os.path.join(config.BASE_DIR, ".llama-server.pid")
 
-# 第425次：卡片 command 中「带值旗标」白名单——用于 --flag=value 预拆与带值
-# 消费；--host/--port/-c 强制覆盖为配置值（后端反代依赖），其余（含 -m/
-# --mmproj/-hf 等模型旗标）第431次起一律保留命令声明值原样透传（模型交
-# llama.cpp 自管，引擎不再注入任何模型路径）。
+# 卡片 command 中「带值旗标」白名单——用于 --flag=value 预拆与带值消费；
+# --host/--port/-c 强制覆盖为配置值（后端反代依赖），其余（含 -m/--mmproj/
+# -hf 等模型旗标）一律保留命令声明值原样透传（模型交 llama.cpp 自管，
+# 引擎不注入任何模型路径）。
 _CMD_VALUE_FLAGS = {"-m", "--model", "--mmproj", "--host", "--port",
                     "-c", "--ctx-size", "--temp", "--top-p", "--top-k",
                     "--min-p", "--repeat-penalty"}
 
-# 第431次：三源重试链层②的镜像端点（llama.cpp 读 MODEL_ENDPOINT 重定向
-# repo 解析请求；hf-cache.cpp 实证 b10964 支持）。
+# 三源重试链的镜像端点（llama.cpp 读 MODEL_ENDPOINT 重定向 repo 解析请求）
 _HF_MIRROR = "https://hf-mirror.com/"
 
-# 第446次：三源探测端点（先探测后启动；repo 存在性走 API 端点，比整仓下载轻量）
+# 三源探测端点（先探测后启动；repo 存在性走 API 端点，比整仓下载轻量）
 _HF_API = "https://huggingface.co/api/models/"
 _HF_MIRROR_API = "https://hf-mirror.com/api/models/"
 
 
 def _probe_http_ok(url, timeout=6):
-    """第446次：单 URL 可达性探测——GET + Range: bytes=0-0（API 端点忽略
-    Range 返 200；直链只取首分片，防整文件下载），200/206 即可达。"""
+    """单 URL 可达性探测——GET + Range: bytes=0-0（API 端点忽略 Range 返
+    200；直链只取首分片，防整文件下载），200/206 即可达。"""
     req = urllib.request.Request(url, headers={
         "User-Agent": "VocabRadar-backend/1.0",
         "Range": "bytes=0-0",
@@ -64,7 +61,7 @@ _HF_REPO_FLAGS = {"-hf", "-hfr", "--hf-repo"}
 
 
 def _hub_cache_dir():
-    """hf-cache.cpp 同序解析 hub 缓存根（第431次调研实证）：LLAMA_CACHE →
+    """hf-cache.cpp 同序解析 hub 缓存根：LLAMA_CACHE →
     HF_HUB_CACHE → HUGGINGFACE_HUB_CACHE → HF_HOME(+hub) →
     XDG_CACHE_HOME(+huggingface/hub) → USERPROFILE(+.cache/huggingface/hub)。"""
     env = os.environ
@@ -103,8 +100,8 @@ def _hub_cache_bytes():
     """hub 缓存根下全部 blobs 字节总量（无根目录返回 None）。
 
     start() 等待期每轮取一次：大小变化=下载活动进行中，据此延长健康等待
-    超时（首次自动下载 3.3G 远超原 180s；\r 进度条不产生换行，输出行检测
-    不可用，改量测缓存体积）。仅 scandir+stat 元数据，毫秒级开销。"""
+    超时（首次自动下载体积大；\r 进度条不产生换行，输出行检测不可用，
+    改量测缓存体积）。仅 scandir+stat 元数据，毫秒级开销。"""
     root = _hub_cache_dir()
     total = 0
     try:
@@ -157,10 +154,9 @@ def _kill_stale_pid():
 
 
 def _kill_orphan_llama():
-    """第424次：pid 文件丢失兜底——pid 文件可能与活进程脱钩（正常停机清除后进程未死、
-    强杀后未及写入），孤儿 llama-server 占 7788 后新实例 bind 不上端口，请求仍打到无
-    sampling 旗标的旧服务（复读依旧的根因：旧进程 14616 占口，带旗标新进程 11976 未监听）。
-    backend 是本机 llama-server 唯一属主，拉起前按映像名全量清场，不再依赖 pid 文件。"""
+    """pid 文件丢失兜底：pid 文件可能与活进程脱钩（正常停机清除后进程未死、
+    强杀后未及写入），孤儿 llama-server 占 7788 后新实例 bind 不上端口。
+    backend 是本机 llama-server 唯一属主，拉起前按映像名全量清场，不依赖 pid 文件。"""
     try:
         if os.name == "nt":
             out = subprocess.run(
@@ -194,10 +190,9 @@ def _kill_orphan_llama():
 
 
 def _clean_download_stale():
-    """第446次：清理 hub 缓存中的 *.downloadInProgress 下载残骸——历次失败
-    启动在 blobs 留下的半成品，Windows 上与同名正式 blob rename 冲突（报
-    unable to rename file）。调用时机在 _kill_orphan_llama 清场之后，无并发
-    写者，删除安全；下次下载从头重建该分片。"""
+    """清理 hub 缓存中的 *.downloadInProgress 下载残骸——失败启动在 blobs
+    留下的半成品，Windows 上与同名正式 blob rename 冲突。调用时机在
+    _kill_orphan_llama 清场之后，无并发写者，删除安全；下次下载从头重建该分片。"""
     root = _hub_cache_dir()
     try:
         entries = list(os.scandir(root))
@@ -227,13 +222,13 @@ class LlmEngine:
         self.proc = None
         self.lock = threading.Lock()
         self._starting = False  # start() 健康等待期间为 True，idle_watch 须避让
-        # 第409次：手动停机标志——stop() 置位、start() 解除；置位期间惰性拉起点
+        # 手动停机标志——stop() 置位、start() 解除；置位期间惰性拉起点
         # （api/llm.py 反代、core/ocr.py LLM 识别）不得自动拉起。
-        # 第410次：从 config.json <llm>.stopped 恢复——进程重启后仍尊重上次的主动关停
+        # 从 config <llm>.stopped 恢复：默认 True（默认全关），重启后仍尊重用户设定
         self._manual_stop = bool(self.cfg.get("stopped"))
         self.inflight = 0       # 活跃请求数（on-demand 防推理中被空闲误杀）
         self.last_used = time.time()
-        # 第431次：最近输出环形缓冲（启动即退出报错附证据，不遮蔽失败原因）
+        # 最近输出环形缓冲（启动即退出报错附证据，不遮蔽失败原因）
         self._last_lines = collections.deque(maxlen=8)
         if self.cfg.get("mode", "resident") == "on-demand":
             threading.Thread(target=self._idle_watch, daemon=True).start()
@@ -241,25 +236,24 @@ class LlmEngine:
     # ---- 状态与路径 ----
 
     def status(self):
-        # 第446次（用户裁定「要真的能服务才算成功，启动中的状态不是成功是启动中」）：
-        # running 以 /health 200 为准（原进程存活即 running 为虚假成功根源——
-        # 下载/加载模型期进程活着但未监听/503）；活着未就绪=starting 三态。
+        # running 以 /health 200 为准（进程存活不等于能服务：下载/加载模型期
+        # 活着但未监听/503）；活着未就绪=starting 三态。
         alive = self.proc is not None and self.proc.poll() is None
         running = alive and self._health_ok()
         return {
             "running": running,
-            "starting": alive and not running,  # 第446次：启动中（进程活但 /health 未 200）
+            "starting": alive and not running,  # 启动中（进程活但 /health 未 200）
             "engine": self.cfg.get("engine", "llamacpp"),
             "mode": self.cfg.get("mode", "resident"),
             "port": self.cfg.get("port", 7788),
-            "model": self.cfg.get("model", ""),   # 当前卡片名（llm.model，第431次由文件名改卡片名）
-            "cards": self.list_cards(),            # 卡片只读清单（管理页展示，第431次替代 models 下拉）
-            "manual_stop": self._manual_stop,      # 第409次：手动停机中（惰性拉起被抑制）
+            "model": self.cfg.get("model", ""),   # 当前卡片名（llm.model）
+            "cards": self.list_cards(),            # 卡片只读清单（管理页展示）
+            "manual_stop": self._manual_stop,      # 手动停机中（惰性拉起被抑制）
         }
 
     def _health_ok(self):
-        """第446次：探活 /health——200 才算真的能服务（加载模型期 503、下载期
-        未监听均不算）；status() 三态与 start() 幂等判定共用。"""
+        """探活 /health——200 才算真的能服务（加载模型期 503、下载期未监听
+        均不算）；status() 三态与 start() 幂等判定共用。"""
         try:
             with urllib.request.urlopen(self.base_url() + "/health", timeout=0.8) as r:
                 return r.status == 200
@@ -284,7 +278,7 @@ class LlmEngine:
                      if os.path.splitext(h)[1] not in (".dll", ".so", ".dylib")), None)
 
     def _current_card(self):
-        """第431次：当前生效卡片——llm.model 为卡片名（匹配 cards[].name），
+        """当前生效卡片——llm.model 为卡片名（匹配 cards[].name），
         未命中或为空回落首卡；无卡片返回 None（start() 报错）。"""
         cards = [c for c in (self.cfg.get("cards") or []) if isinstance(c, dict)]
         chosen = (self.cfg.get("model") or "").strip().lower()
@@ -297,8 +291,8 @@ class LlmEngine:
         return cards[0] if cards else None
 
     def card_installed(self, card):
-        """第431次：installed 判定=hub 缓存存在 models--<org>--<name> 目录
-        （模型交 llama.cpp 自管后，引擎不再持有 models/ 落盘视图）。"""
+        """installed 判定=hub 缓存存在 models--<org>--<name> 目录
+        （模型交 llama.cpp 自管，引擎不持有 models/ 落盘视图）。"""
         repo = str((card or {}).get("hf_repo") or "").strip()
         return bool(repo) and _repo_cache_path(repo) is not None
 
@@ -314,9 +308,8 @@ class LlmEngine:
         return out
 
     def _command_argv(self, card, exe):
-        """第431次：解析卡片 command 为启动 argv——卡片命令即权威，模型交
-        llama.cpp 自管（-hf 自动下载/缓存命中离线可用），引擎不再注入任何
-        模型路径（原 -m/--mmproj 强制绝对路径与兜底追加一并撤除）。
+        """解析卡片 command 为启动 argv——卡片命令即权威，模型交 llama.cpp
+        自管（-hf 自动下载/缓存命中离线可用），引擎不注入模型路径。
 
         规则：argv[0] 忽略（统一用引擎自定位 exe，保证 GPU 版二进制）；
         --host/--port/--ctx-size 强制配置值（后端反代依赖）；--jinja 缺失追加
@@ -368,7 +361,7 @@ class LlmEngine:
                 i += 1
         if "--jinja" not in seen:
             argv += ["--jinja"]
-        # 命令未声明的采样旗标按 card.sampling 注入（第420/422次映射沿用）
+        # 命令未声明的采样旗标按 card.sampling 注入
         smp = (card or {}).get("sampling")
         if isinstance(smp, dict):
             for flag, key in (("--temp", "temperature"), ("--top-p", "top_p"),
@@ -381,10 +374,9 @@ class LlmEngine:
     # ---- 生命周期 ----
 
     def _pick_source(self, card, args):
-        """第446次（用户裁定「先探测三源，再选定启动」）：启动前串行探测三个
-        下载源，选定首个可达源后仅启动一次，失败如实上抛不换源——替代
-        第431/445次的「逐源启动试错链」（每次失败启动都在 hub 缓存制造
-        *.downloadInProgress 残骸）。返回 (tag, env, argv)：
+        """启动前串行探测三个下载源，选定首个可达源后仅启动一次，失败如实
+        上抛不换源（逐源试错启动会在 hub 缓存制造 *.downloadInProgress 残骸）。
+        返回 (tag, env, argv)：
         - hub 缓存命中：离线直启不探测（断网时探测反而误判，缓存本身够用）
         - hf 官方 API 可达：原命令（-hf 官方源）
         - hf-mirror API 可达：MODEL_ENDPOINT 指向镜像（llama.cpp 读它重定向）
@@ -420,13 +412,11 @@ class LlmEngine:
     def start(self, timeout=180):
         """拉起 llama-server 并等 /health 就绪（幂等，可并发调用）。
 
-        第446次（用户裁定）：①「先探测三源，再选定启动」——_pick_source 探测
-        可达源后仅启动一次，失败如实上抛不换源（第431/445次逐源启动试错链
-        废除，不再制造下载残骸）；②「要真的能服务才算成功」——幂等判定以
-        /health 200 为准，进程活着但未就绪（加载中）不算成功，清场走完整拉起；
-        ③启动中并发 start() 让位等待首个拉起结束再判成败（防双 Popen 双占
-        端口、防假成功提前返回）。下载/加载期健康等待按 hub 缓存体积增长
-        自动续期（首次自动下载远超 timeout）。"""
+        ①先探测三源选定启动（_pick_source），失败如实上抛不换源；
+        ②幂等判定以 /health 200 为准，进程活着但未就绪（加载中）不算成功，
+        清场走完整拉起；③启动中并发 start() 让位等待首个拉起结束再判成败
+        （防双 Popen 双占端口、防假成功提前返回）。下载/加载期健康等待按
+        hub 缓存体积增长自动续期。"""
         # 让位等待（锁外轮询）：启动中并发调用等首个拉起结束再判成败
         while self._starting:
             if self._manual_stop:  # 等待期间用户手动停机，不再继续
@@ -434,9 +424,9 @@ class LlmEngine:
             time.sleep(0.5)
         with self.lock:
             self._manual_stop = False  # 显式 start（管理页按钮）解除手动停机抑制
-            config.set_engine_stopped("llm", False)  # 第410次：同步清持久化标志
+            config.set_engine_stopped("llm", False)  # 持久化用户启动设定（stopped:false）
             if self.proc is not None and self.proc.poll() is None:
-                if self._health_ok():  # 第446次：探活 200 才算已在服务
+                if self._health_ok():  # 探活 200 才算已在服务
                     return True
                 self._stop_locked()  # 活而不健康（加载中/僵死）：清场走完整拉起
             exe = self.server_path()
@@ -449,9 +439,9 @@ class LlmEngine:
             if args is None:
                 raise RuntimeError(
                     f"卡片 {card.get('name')!r} 的 command 未配置或解析失败，无法拉起 llama-server")
-            _kill_stale_pid()  # 第419次：拉起前终止残留旧进程（再次启动先关停旧进程）
-            _kill_orphan_llama()  # 第424次：按映像名兜底清场——pid 文件丢失的孤儿占口不再漏网
-            _clean_download_stale()  # 第446次：清 .downloadInProgress 残骸（Windows rename 冲突祸源）
+            _kill_stale_pid()  # 拉起前终止残留旧进程
+            _kill_orphan_llama()  # 按映像名兜底清场：pid 文件丢失的孤儿占口
+            _clean_download_stale()  # 清 .downloadInProgress 残骸（Windows rename 冲突）
             self._starting = True  # 置位，idle_watch 在健康等待期避让
         try:
             tag, env, final_args = self._pick_source(card, args)
@@ -465,25 +455,25 @@ class LlmEngine:
             self._starting = False
 
     def _spawn_and_wait(self, args, env, tag, exe, timeout):
-        """Popen + 写 pid + 输出采集 + 等待 /health 就绪（第446次起：选定源单次启动共用）。"""
+        """Popen + 写 pid + 输出采集 + 等待 /health 就绪（选定源单次启动共用）。"""
         flags = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
         p = subprocess.Popen(args, cwd=os.path.dirname(exe), env=env,
                              stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                              creationflags=flags)
         with self.lock:  # 短持锁赋值，防与并发 stop() 竞态
             self.proc = p
-        try:  # 第419次：记录 pid，供后端异常退出后下次启动清场
+        try:  # 记录 pid，供后端异常退出后下次启动清场
             with open(_PID_FILE, "w", encoding="utf-8") as f:
                 f.write(str(p.pid))
         except OSError as e:
             log.warning(f"写 pid 文件失败：{e}")
-        # 第432次：下载/启动前打印完整执行命令（可复制复现；三源重试每层各打一条）
+        # 下载/启动前打印完整执行命令（可复制复现；三源每层各打一条）
         log.info("拉起 llama-server（%s 源，端口 %s）：%s",
                  tag, self.cfg.get("port", 7788), subprocess.list2cmdline(args))
         if env is not None and env.get("MODEL_ENDPOINT"):
             log.info("镜像端点：MODEL_ENDPOINT=%s", env["MODEL_ENDPOINT"])
         self._last_lines.clear()  # 先清再启采集线程，防首行被清竞态
-        # 输出采集（plan §5.4）：后台读线程逐行入日志，排障不再黑洞
+        # 输出采集：后台读线程逐行入日志，排障可查
         threading.Thread(target=self._drain_output, args=(p.stdout,), daemon=True).start()
         deadline = time.time() + timeout
         last_bytes = _hub_cache_bytes()
@@ -535,14 +525,14 @@ class LlmEngine:
         return out
 
     def stop(self, manual=True):
-        """停机。manual=True（管理页按钮）置位手动停机标志并持久化（第410次：
-        进程重启后不再自动拉起）；manual=False（on-demand 空闲自动退出）不置位，
+        """停机。manual=True（管理页按钮）置位手动停机标志并持久化（进程重启后
+        保持停机，回落默认全关）；manual=False（on-demand 空闲自动退出）不置位，
         下次请求照常自动拉起。"""
         if manual:
             with self.lock:
                 self._manual_stop = True
                 self._stop_locked()
-            config.set_engine_stopped("llm", True)  # 第410次：持久化主动关停
+            config.set_engine_stopped("llm", True)  # 持久化主动关停（移除键回落默认停机）
         else:
             with self.lock:
                 self._stop_locked()
@@ -560,7 +550,7 @@ class LlmEngine:
                 self.proc.kill()
                 self.proc.wait(timeout=5)
         self.proc = None
-        try:  # 第419次：pid 文件随停机清除（进程已自行退出也清，保持无残留）
+        try:  # pid 文件随停机清除（进程已自行退出也清，保持无残留）
             os.remove(_PID_FILE)
         except OSError:
             pass

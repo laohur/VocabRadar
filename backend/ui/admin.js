@@ -29,8 +29,8 @@ async function api(url, opts) {
   return data;
 }
 
-// 第425次：恢复 extraQuery（如 'no_reload=1' 旁路热重载）；返回响应体供调用方判断
-// llm_reloading/restart_required（第431次：撤 llm_downloading——模型改 -hf 自动下载）
+// 恢复 extraQuery（如 'no_reload=1' 旁路热重载）；返回响应体供调用方判断
+// llm_reloading/restart_required
 async function saveCfg(section, patch, hintEl, doneText, extraQuery) {
   try {
     const r = await api(`/api/config${extraQuery ? `?${extraQuery}` : ''}`, {
@@ -85,7 +85,7 @@ function settingsCard(title, fields, onSave, saveText = 'Save Settings') {
 
 // ---- 总览页 ----
 
-// 引擎加载/关停（第408次：模型服务可选化，/api/engine/<name>/start|stop）
+// 引擎加载/关停（/api/engine/<name>/start|stop）
 async function engineToggle(name, action, btn, errEl) {
   btn.disabled = true;
   const orig = btn.textContent;
@@ -143,16 +143,15 @@ async function renderOverview(main) {
   const eng = data.engines || {};
 
   if (data.needs_setup) {
-    // 第431次：needs_setup 语义改为「未配置模型卡片」（models/ 撤销，「未安装」概念消失）
     main.append(el('div', { class: 'notice' },
-      t('No model cards configured. Open the LLM page and pick a default model — it auto-downloads on first use.')));
+      t('No default model selected. Open the LLM page and pick a model — it auto-downloads on first use.')));
   }
 
   const rows = [
     ['LLM', eng.llm, eng.llm && eng.llm.engine, eng.llm && (eng.llm.running ?? eng.llm.loaded),
       eng.llm && (t('mode={m} · internal port {p}', { m: eng.llm.mode, p: eng.llm.port })
         + (eng.llm.model ? ' ' + t('· model {m}', { m: eng.llm.model }) : '')
-        // 第446次：启动中（进程活但 /health 未 200）detail 提示；badge 仍按 running
+        // 启动中（进程活但 /health 未 200）detail 提示；badge 仍按 running
         + (eng.llm.starting ? ' · ' + t('llama-server starting') : '')), 'llm'],
     ['ASR', eng.asr, eng.asr && eng.asr.engine, eng.asr && (eng.asr.loaded || eng.asr.loading),
       eng.asr && (t('mode={m}', { m: eng.asr.mode })
@@ -161,9 +160,9 @@ async function renderOverview(main) {
     ['OCR', eng.ocr, eng.ocr && eng.ocr.engine, eng.ocr && (eng.ocr.loaded || eng.ocr.loading),
       eng.ocr && t('mode={m}', { m: eng.ocr.mode }) + (eng.ocr.loaded ? ' · loaded' : ''), 'ocr'],
     ['Translate', eng.translate, eng.translate && eng.translate.engine,
-      eng.translate && eng.translate.llm && (eng.translate.llm.running ?? eng.translate.llm.loaded),
-      eng.translate && (eng.translate.llm && eng.translate.llm.running
-        ? t('llama-server running') : t('Uses the LLM engine; start/stop on the LLM row'))],
+      eng.translate && (eng.translate.loaded || eng.translate.loading),
+      eng.translate && (t('mode={m}', { m: eng.translate.mode })
+        + (eng.translate.loaded ? ' · loaded' : '')), 'translate'],
     ['Downloader', eng.ytdl, 'yt-dlp' + (eng.ytdl && eng.ytdl.version ? ` v${eng.ytdl.version}` : ''), true,
       eng.ytdl && (t('default format {f}', { f: eng.ytdl.format })
         + (eng.ytdl.cookiefile ? ' ' + t('· cookie configured') : ''))],
@@ -172,9 +171,6 @@ async function renderOverview(main) {
     el('tr', {}, el('th', {}, t('Feature')), el('th', {}, t('Engine')), el('th', {}, t('Status')),
       el('th', {}, t('Details')), el('th', {}, t('Action'))),
     ...rows.map((r) => statusRow(...r))));
-
-  // 第431次：升级中心撤除——模型交 llama-server -hf 自动下载（HF hub 缓存），
-  // llama.cpp/yt-dlp 升级暂无 UI 入口（后端 scripts/upgrade.py 保留，去留待定）
 
   // ---- 基础设定 ----
   let cfg0 = {};
@@ -203,8 +199,7 @@ async function renderOverview(main) {
 
   main.append(basics);
 
-  // ---- 后端日志（第409次：引擎输出/对话/反代日志可见化，GET /api/logs；
-  //       第410次：3s 自动轮询，路由切换时经 logTimer 清理） ----
+  // ---- 后端日志（GET /api/logs，3s 自动轮询，路由切换时经 logTimer 清理） ----
   const uplog = el('pre', { class: 'uplog' });
   const loadLogs = async () => {
     try {
@@ -227,7 +222,7 @@ async function renderOverview(main) {
 // ---- 路由 ----
 
 const TITLES = { llm: 'LLM', translate: 'Translate', asr: 'ASR', ocr: 'OCR', ytdl: 'Downloader' };
-let logTimer = null;  // 第410次：总览日志卡自动刷新句柄——路由切换时清理，防 interval 泄漏
+let logTimer = null;  // 总览日志卡自动刷新句柄——路由切换时清理，防 interval 泄漏
 
 function route() {
   const page = (location.hash || '#overview').slice(1);
@@ -252,7 +247,7 @@ document.querySelector('.sidebar').addEventListener('click', (e) => {
 });
 
 window.addEventListener('hashchange', route);
-// 第414次：初始路由推迟到 DOMContentLoaded——本文件先于 pages.js 加载，
+// 初始路由推迟到 DOMContentLoaded——本文件先于 pages.js 加载，
 // 同步 route() 时 window.Pages 尚未挂载，非总览 hash 直达（含语言切换按钮
 // 的 location.reload）会落到「Not implemented」占位页。
 if (document.readyState === 'loading') {

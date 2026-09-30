@@ -388,9 +388,11 @@ def subtitles(url, lang=None):
     """提取字幕：优先手动轨，回退自动轨，vtt 抓取解析为结构化条目（不落盘）。
 
     lang 精确匹配 → 主语言段匹配（zh 命中 zh-Hans）→ 轨道表首个；不传
-    lang 直接取首个。条目为 {start,end,text}（秒，float，与扩展字幕
-    解析器同构）。两轨全空返回 None（api 层映射 404）。零新依赖
-    （urllib 标准库），扩展侧五路字幕全失败后的 backend 兜底（第399次）。
+    lang 默认取视频原始语言（yt-dlp info 的 language 字段，即原声音轨
+    语言），缺该字段才落到轨道表首个。条目为 {start,end,text}（秒，
+    float，与扩展字幕解析器同构）。两轨全空返回 None（api 层映射 404）。
+    零新依赖（urllib 标准库），扩展侧五路字幕全失败后的 backend 兜底
+    （第399次）。
     """
     yt_dlp = _import_yt_dlp()
     try:
@@ -402,6 +404,8 @@ def subtitles(url, lang=None):
     auto = info.get("automatic_captions") or {}
     if not manual and not auto:
         return None
+    if not (lang or "").strip():
+        lang = info.get("language") or ""  # 默认原声语言，无则 _pick_track 落首个
     kind = "manual"
     key, track = _pick_track(manual, lang)
     vtt_url = _vtt_url(track)
@@ -431,7 +435,9 @@ def subtitles(url, lang=None):
 def _pick_track(tracks, lang):
     """lang 选轨：精确 → 主语言段匹配（zh 命中 zh-Hans）→ 表内首个。
 
-    tracks 为 {lang: [track]}；空表返回 (None, None)。
+    tracks 为 {lang: [track]}；空表返回 (None, None)。主语言段命中多键
+    （YouTube 自动轨 xx-orig 原始轨 + xx-yy 翻译链同头）时优先 -orig
+    原始轨——翻译链是原轨机翻副本，默认场景用户要的是原文。
     """
     if not tracks:
         return None, None
@@ -440,9 +446,10 @@ def _pick_track(tracks, lang):
         if want in tracks:
             return want, tracks[want]
         want_head = want.split("-")[0]
-        for k in tracks:
-            if k.lower().split("-")[0] == want_head:
-                return k, tracks[k]
+        hits = [k for k in tracks if k.lower().split("-")[0] == want_head]
+        if hits:
+            k = next((k for k in hits if k.lower().endswith("-orig")), hits[0])
+            return k, tracks[k]
     k = next(iter(tracks))
     return k, tracks[k]
 

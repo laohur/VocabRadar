@@ -2,10 +2,7 @@
 
 对外监听 127.0.0.1:7777（扩展与管理界面，地址可在扩展设置中任意配置）；
 可用 --port N 运行级指定端口（不写回 config.json）。
-第445次（用户裁定「启动之前先检测端口，占用就失败。用户自行处理，解除占用
-或者指定端口」）：原「端口被占自动递延换端口（试绑扫描 + 写回 config.json +
-扩展端 7777–7827 范围发现）」整套删除——backend 固定监听配置端口，占用即失败
-退出；扩展端只认固定地址，不再范围尝试。
+backend 固定监听配置端口，占用即失败退出；扩展端只认固定地址，不再范围尝试。
 LLM 由 llama-server 子进程承担（内部端口 7788，core/llm_engine.py），
 本进程只做反代与功能 API。
 """
@@ -43,6 +40,9 @@ log = logging.getLogger("app")
 def create_app(cfg=None):
     cfg = cfg or config.load()
     app = Flask(__name__, static_folder=None)
+    # 所有 jsonify 输出（含报错 message 的中文）直出 UTF-8，不做 \uXXXX ascii
+    # 转义——转义串人不可读且徒增体积（Flask 默认 ensure_ascii=True）
+    app.json.ensure_ascii = False
     app.config["CFG"] = cfg
     app.config["VERSION"] = VERSION
     # 引擎实例唯一属主挂在这里，蓝图经 current_app.extensions 取用
@@ -51,7 +51,7 @@ def create_app(cfg=None):
         "llm": llm,
         "asr": AsrEngine(cfg.get("asr", {})),
         "ocr": OcrEngine(cfg.get("ocr", {}), llm),  # llm 引擎路径复用上方 LlmEngine
-        "translate": TranslateEngine(cfg.get("translate", {}), llm),
+        "translate": TranslateEngine(cfg.get("translate", {})),
     }
 
     for bp in (admin_bp, llm_bp, asr_bp, asr_job_bp, ocr_bp, translate_bp,
@@ -64,8 +64,7 @@ def create_app(cfg=None):
 
     @app.route("/")
     def index():
-        # max_age=0：发 must-revalidate，防浏览器启发式缓存旧 UI（第412次：
-        # 下拉列表无新模型即旧 JS 缓存所致）
+        # max_age=0：发 must-revalidate，防浏览器启发式缓存旧 UI
         return send_from_directory(config.UI_DIR, "index.html", max_age=0)
 
     @app.route("/ui/<path:name>")
@@ -114,10 +113,9 @@ def _preload(engine, label):
 
 
 def _port_in_use(host, port):
-    """第445次：启动前端口预检（用户裁定「占用就失败」，不再自动递延）。
-    连接探测 + 试绑双重判断——Windows 上先到进程若带 SO_REUSEADDR 可被二次
-    绑定（本机曾出现两个 python 同听 7777 的双绑），仅 bind 成功不足以证明
-    空闲，故先 connect 探测。"""
+    """启动前端口预检。连接探测 + 试绑双重判断——Windows 上先到进程若带
+    SO_REUSEADDR 可被二次绑定（本机曾出现两个 python 同听 7777 的双绑），
+    仅 bind 成功不足以证明空闲，故先 connect 探测。"""
     import socket
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
         s.settimeout(0.3)
@@ -132,7 +130,7 @@ def _port_in_use(host, port):
 
 
 def _parse_cli_port(argv):
-    """第406次：--port N / --port=N 运行级指定端口（不写回 config.json）；无参返回 None。
+    """--port N / --port=N 运行级指定端口（不写回 config.json）；无参返回 None。
     坏参直接退出而非回落默认——端口号写错还悄悄生效旧端口，用户难以察觉（不遮蔽）。"""
     for i, a in enumerate(argv):
         if a == "--port":
@@ -156,19 +154,18 @@ def _parse_cli_port(argv):
 def main():
     setup_logs()  # 双通道日志（stderr + backend/logs/backend.log），见 core/logs.py
     cfg = config.load()
-    cli_port = _parse_cli_port(sys.argv[1:])  # 第406次：--port 运行级覆盖，不写回 config.json
+    cli_port = _parse_cli_port(sys.argv[1:])  # --port 运行级覆盖，不写回 config.json
     if cli_port is not None:
         cfg["port"] = cli_port
     app = create_app(cfg)
     engines = app.extensions["engines"]
-    # 第419次：后端退出（正常退出/Ctrl+C）时自动终止 llama-server——manual=False
+    # 后端退出（正常退出/Ctrl+C）时自动终止 llama-server——manual=False
     # 不置手动停机标志，下次启动照常惰性拉起；taskkill /F 强杀无法拦截，
     # 该场景由 pid 文件兜底（core/llm_engine.py 下次 start() 先清残留）。
     atexit.register(engines["llm"].stop, False)
-    # 第417次：LLM 不再随启动预拉——llama-server 加载重（显存紧张时启动即崩，
-    # 如 09-25 01:09 Qwen3.5-0.8B Vulkan ErrorOutOfDeviceMemory），对话/翻译/
-    # OCR(llm) 首请求时自动惰性拉起（api/llm.py、core/translate.py、core/ocr.py），
-    # 管理页可手动启停；其余引擎预加载照旧。
+    # LLM 不随启动预拉——llama-server 加载重（显存紧张时启动即崩），
+    # 对话/OCR(llm) 首请求时自动惰性拉起（api/llm.py、core/ocr.py），
+    # 管理页可手动启停；进程内模型引擎（ASR/OCR/翻译）预加载照旧。
     if not engines["llm"].auto_start_allowed():
         log.info("LLM 引擎处于主动关停状态（llm.stopped=true），首次对话请求也不会拉起")
     if engines["asr"].mode == "resident":  # resident 后台预加载 ASR 模型
@@ -184,13 +181,19 @@ def main():
         else:
             threading.Thread(target=_preload, args=(ocr, "OCR"),
                              daemon=True).start()
+    translate = engines["translate"]  # NLLB resident 后台预加载（快路径低时延）
+    if translate.mode == "resident":
+        if translate.status()["manual_stop"]:
+            log.info("翻译引擎处于主动关停状态（translate.stopped=true），跳过自动预加载")
+        else:
+            threading.Thread(target=_preload, args=(translate, "翻译"),
+                             daemon=True).start()
     # 升级静默检查（plan §5.5）：daemon 线程，有更新仅日志提示不打扰
     threading.Thread(target=upgrade.silent_check, daemon=True).start()
     url = f"http://{cfg['host']}:{cfg['port']}"
     log.info(f"VocabRadar backend v{VERSION} -> {url}")
 
-    # 第445次（用户裁定「启动之前先检测端口，占用就失败。用户自行处理，
-    #   解除占用或者指定端口」）：预检失败即退出，不再自动递延换端口。
+    # 预检失败即退出，不自动递延换端口（用户自行解除占用或 --port 指定）
     if _port_in_use(cfg["host"], cfg["port"]):
         log.error(f"端口 {cfg['port']} 已被占用（常见原因：另一个 backend 实例仍在运行）。"
                   f"请先解除占用（结束占用进程），或用 --port 指定其他端口后重试。")

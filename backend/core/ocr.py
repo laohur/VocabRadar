@@ -1,12 +1,12 @@
 """OCR 引擎：LLM 多模态（默认，复用 llama-server 视觉能力）/ RapidOCR（可选）分发。
 
-设计（plan-backend §2.5/§3.3）：
+设计：
 - llm 引擎：复用 LlmEngine 拉起的 llama-server（models/ 已带 mmproj，启动即多模态），
   内部 POST /v1/chat/completions 发 OpenAI 兼容 image_url（dataURL）消息。
   生命周期归 LlmEngine：resident 预拉 / on-demand 首请求 + inflight 防空闲误杀。
 - rapidocr 引擎：进程内模型（PP-OCR 系随 pip 包分发，纯 CPU，无需下载），
   生命周期同 ASR：resident 预加载 / on-demand 空闲卸载，_starting 防重入。
-- 结果缓存：不做（plan §2.11：LLM/OCR/翻译输入千变万化，命中率低）。
+- 结果缓存：不做（LLM/OCR/翻译输入千变万化，命中率低）。
 """
 
 import base64
@@ -39,8 +39,8 @@ class OcrEngine:
         self._engine_loaded = None     # 已加载的进程内引擎名（llm 不落在此）
         self._lock = threading.Lock()
         self._starting = False         # 加载互斥标志（同 llm_engine/asr）
-        # 第409次：手动停机标志（仅 rapidocr 生效）；第410次：从 config.json
-        # <ocr>.stopped 恢复——进程重启后仍尊重上次的主动关停
+        # 手动停机标志（仅 rapidocr 生效）；从 config <ocr>.stopped 恢复：
+        # 默认 True（默认全关），重启后仍尊重用户设定
         self._manual_stop = bool(self.cfg.get("stopped"))
         self._last_used = 0.0
         if self.mode == "on-demand":
@@ -56,7 +56,7 @@ class OcrEngine:
             "loaded": self._engine is not None,     # rapidocr 进程内模型
             "loading": self._starting,
             "loaded_engine": self._engine_loaded,
-            "manual_stop": self._manual_stop,  # 第409次：手动停机中（懒加载被抑制）
+            "manual_stop": self._manual_stop,  # 手动停机中（懒加载被抑制）
             "llm": self.llm.status(),
         }
 
@@ -78,7 +78,7 @@ class OcrEngine:
 
     def _recognize_llm(self, image_bytes, mime):
         if not self.llm.status()["running"]:
-            if not self.llm.auto_start_allowed():  # 第409次：LLM 手动停机期间不自动拉起
+            if not self.llm.auto_start_allowed():  # LLM 手动停机期间不自动拉起
                 raise RuntimeError("LLM 引擎已手动停机，请到管理页重新启动后再用 LLM OCR")
             self.llm.start()  # RuntimeError（未安装/超时）上抛，api 映射 503
         data_url = f"data:{mime};base64," + base64.b64encode(image_bytes).decode("ascii")
@@ -123,8 +123,8 @@ class OcrEngine:
     def ensure_loaded(self, engine=None, force=False):
         """确保进程内引擎就绪（懒加载），返回 (model, engine_name)。线程安全。
 
-        第409次：force=True（管理页启动按钮）解除手动停机；普通调用在
-        手动停机期间拒绝加载（同 ASR）。"""
+        force=True（管理页启动按钮）解除手动停机；普通调用在手动停机
+        期间拒绝加载（同 ASR）。"""
         engine = engine or self.cfg.get("engine", "llm")
         if engine == "llm":
             raise ValueError("llm 引擎无进程内模型（生命周期归 LlmEngine）")
@@ -133,7 +133,7 @@ class OcrEngine:
         with self._lock:
             if force:
                 self._manual_stop = False
-                config.set_engine_stopped("ocr", False)  # 第410次：同步清持久化标志
+                config.set_engine_stopped("ocr", False)  # 持久化用户启动设定（stopped:false）
             elif self._manual_stop:
                 raise RuntimeError("OCR 引擎已手动停机，请到管理页重新启动")
             if self._engine is not None and self._engine_loaded == engine:
@@ -184,6 +184,6 @@ class OcrEngine:
         with self._lock:
             if self._starting:
                 raise RuntimeError("OCR 引擎正在加载中，请稍候再关停")
-            self._manual_stop = True  # 第409次：业务请求不再自动重新加载
+            self._manual_stop = True  # 业务请求不再自动重新加载
             self._release()
-        config.set_engine_stopped("ocr", True)  # 第410次：持久化主动关停
+        config.set_engine_stopped("ocr", True)  # 持久化主动关停（移除键回落默认停机）

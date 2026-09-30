@@ -17,7 +17,7 @@ PAGES.llm = async function (main) {
 
   const cfg = (await api('/api/config')).config || {};
   const st = await api('/api/llm/status').catch(() => ({}));
-  // 第413次：模型卡片驱动——/api/llm/models 返回 cards（含 installed/is_default）与安装状态
+  // /api/llm/models 返回 cards（含 installed/is_default）与安装状态
   let cards = [];
   const data0 = await api('/api/llm/models').catch(() => null);
   if (data0) cards = data0.cards || [];
@@ -32,7 +32,6 @@ PAGES.llm = async function (main) {
   const modelSel = el('select', { onchange: () => { selTouched = true; } });
   function fillModelSel() {
     // 轮询重绘不重置用户选择：动过下拉后以当前值为准
-    // 第431次：llm.model 存卡片名（不再是主 GGUF 文件名）
     const cur = selTouched ? modelSel.value : (cfg.llm?.model || '').toLowerCase();
     modelSel.innerHTML = '';
     for (const c of cards) {
@@ -54,17 +53,17 @@ PAGES.llm = async function (main) {
     ctx: Number(inputs[2].value) || 16384,
     mode: inputs[3].value,
     idle_timeout: Number(inputs[4].value) || 600,
-  }, hint)); // 第431次：通用设定卡保存仍热重载 llama-server
+  }, hint));
   setCard.prepend(el('div', { class: 'hint' },
     t('Status: {s} · internal port {p} · saving General Settings auto-reloads llama-server · MiniCPM is text-only (no vision OCR; use Qwen for vision)', {
-      // 第446次：三态——running=探活 200；starting=进程活但未就绪（下载/加载模型中）
+      // 三态——running=探活 200；starting=进程活但未就绪（下载/加载模型中）
       s: st.running ? t('llama-server running')
         : st.starting ? t('llama-server starting') : t('not running'),
       p: st.port ?? cfg.llm?.port ?? 7788,
     })));
   left.append(setCard);
 
-  // ---- 模型卡片列表（第431次：只读） ----
+  // ---- 模型卡片列表（只读） ----
   const cardsBody = el('div', {});
   left.append(el('div', { class: 'card' },
     el('h2', {}, t('Model Cards')),
@@ -73,8 +72,7 @@ PAGES.llm = async function (main) {
     cardsBody));
 
   function renderCards() {
-    // 第431次：卡片只读——选卡走上方「Default model」下拉；行内不再提供
-    // 下载/编辑/删除/设默认（模型下载交 llama-server -hf 三源自动补拉）
+    // 卡片只读——选卡走上方「Default model」下拉；模型下载交 llama-server -hf 三源自动补拉
     cardsBody.innerHTML = '';
     for (const c of cards) {
       const descLine = [c.desc, c.desc_en].filter(Boolean).join(' / ');
@@ -93,11 +91,10 @@ PAGES.llm = async function (main) {
   fillModelSel();
   renderCards();
 
-  // ---- 试用（对话 + 图片上传，OpenAI 兼容 /v1/chat/completions，第407次改流式） ----
+  // ---- 试用（对话 + 图片上传，OpenAI 兼容 /v1/chat/completions 流式） ----
   const msgs = [];
   const list = el('div', { class: 'chat' });
   let imageData = null;  // dataURL，附加到下一条 user 消息
-  // 第416次：还原原生 file input（「浏览/未选择文件」文案不动）
   const fileInput = el('input', { type: 'file', accept: 'image/*' });
   fileInput.addEventListener('change', () => {
     const f = fileInput.files[0];
@@ -111,11 +108,10 @@ PAGES.llm = async function (main) {
     class: 'btn ghost hidden',
     onclick: () => { imageData = null; preview.src = ''; preview.classList.add('hidden'); clearImg.classList.add('hidden'); },
   }, t('Remove image'));
-  // 第418次：对话框加大（输入 4→6 行）；第419次：再加大 6→8 行（列表高度 .chat 见 admin.css）
   const input = el('textarea', { rows: 8, placeholder: t('Type a message (optionally attach an image)…') });
-  // 第423次：思考开关（默认不思考）——llama.cpp /v1/chat/completions 支持请求级
+  // 思考开关（默认不思考）——llama.cpp /v1/chat/completions 支持请求级
   // chat_template_kwargs 硬开关；Qwen3/Qwen3.5 系模板默认 enable_thinking=true 须显式关，
-  // 其他模板忽略未知 kwargs 无害；思考过程显示沿用第421次 reasoning_content 灰字链路
+  // 其他模板忽略未知 kwargs 无害
   const thinkChk = el('input', { type: 'checkbox' });
   const send = el('button', {
     class: 'btn primary',
@@ -137,11 +133,10 @@ PAGES.llm = async function (main) {
         const resp = await fetch('/v1/chat/completions', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          // 第418次：max_tokens 兜底——不传时 llama-server 默认无限生成
-          // （n_predict=-1），部分模型 EOS 收敛不干脆会输出超长；
-          // 第421次：1024→4096——thinking 模型思考吃满 1024 致正文为空
-          // 第423次：请求级思考硬开关——默认不思考（thinkChk 未勾传 false），
-          // 勾选「思考」后 Qwen3/Qwen3.5 系模板输出 reasoning_content（第421次灰字显示）
+          // max_tokens 兜底——不传时 llama-server 默认无限生成
+          // （n_predict=-1），部分模型 EOS 收敛不干脆会输出超长；4096 给
+          // thinking 模型留思考空间。请求级思考硬开关——默认不思考
+          // （thinkChk 未勾传 false），勾选后 Qwen3/Qwen3.5 系模板输出 reasoning_content
           body: JSON.stringify({ model: 'local', messages: msgs, stream: true, max_tokens: 4096,
             chat_template_kwargs: { enable_thinking: thinkChk.checked } }),
         });
@@ -150,8 +145,8 @@ PAGES.llm = async function (main) {
           throw new Error(data.error?.message || data.message || data.error || `HTTP ${resp.status}`);
         }
         bubble.classList.remove('hint');
-        // 第421次：--jinja 把 <think> 内容放 delta.reasoning_content（此前只累加 content，
-        // thinking 模型的推理过程完全不可见）——灰字实时滚动，完成后折叠进「思考过程」区
+        // --jinja 把 <think> 内容放 delta.reasoning_content——灰字实时滚动，
+        // 完成后折叠进「思考过程」区
         const thinkBox = el('div', { class: 'msg-think hidden' });
         const mainBox = el('div', {});
         bubble.append(thinkBox, mainBox);
@@ -205,7 +200,7 @@ PAGES.llm = async function (main) {
         : m.content.filter((p) => p.type === 'text').map((p) => p.text).join('\n')
           + (m.content.some((p) => p.type === 'image_url') ? t(' [image]') : '');
       if (m.role === 'assistant' && m.reasoning) {
-        // 第421次：带思考过程的消息——思考折叠区（默认收起，点击展开）+ 正文
+        // 带思考过程的消息——思考折叠区（默认收起，点击展开）+ 正文
         list.append(el('div', { class: 'msg assistant' },
           el('details', { class: 'msg-think' },
             el('summary', {}, t('Thought process')),
@@ -233,7 +228,7 @@ PAGES.llm = async function (main) {
 
 // ===== 翻译 =====
 
-// 42 种语言，顺序与扩展端 src/lib/i18n.js TRANSLATE_LANGS 一致（第407次补齐）
+// 42 种语言，顺序与扩展端 src/lib/i18n.js TRANSLATE_LANGS 一致
 const LANGS = [
   ['en', 'English'], ['zh', 'Chinese'], ['hi', 'Hindi'], ['es', 'Spanish'], ['fr', 'French'],
   ['ar', 'Arabic'], ['bn', 'Bengali'], ['pt', 'Portuguese'], ['ru', 'Russian'], ['ur', 'Urdu'],
@@ -251,8 +246,6 @@ PAGES.translate = async function (main) {
   main.append(el('h1', {}, t('Translate')));
   const wrap = el('div', { class: 'cols' });
 
-  // 第三百九十五次：argos 备选档移除，翻译只走 llm（llama.cpp，随 LLM 页启停）。
-
   // ---- 试用 ----
   const from = select([['auto', t('Auto detect')], ...LANGS], 'auto');
   const to = select(LANGS, 'zh');
@@ -260,7 +253,7 @@ PAGES.translate = async function (main) {
   const out = el('div', { class: 'result' });
   wrap.append(el('div', { class: 'card' },
     el('h2', {}, t('Playground')),
-    el('div', { class: 'hint' }, t('Engine: llm (llama.cpp; start/stop on the LLM page)')),
+    el('div', { class: 'hint' }, t('Engine: NLLB-200-distilled-600M (local CT2 int8; no API key; start/stop on the Overview page)')),
     el('div', { class: 'chatbar' }, field(t('Source language'), from), field(t('Target language'), to)),
     text,
     el('button', {
@@ -288,14 +281,14 @@ PAGES.asr = async function (main) {
   const wrap = el('div', { class: 'cols' });
 
   const cfg = (await api('/api/config')).config || {};
-  const engine = select([['faster-whisper', 'faster-whisper']],  // 第404次：qwen3-asr 备选移除，唯一引擎
+  const engine = select([['faster-whisper', 'faster-whisper']],
     cfg.asr?.engine ?? 'faster-whisper');
   const mode = select([['resident', t('resident (always on)')], ['on-demand', t('on-demand')]],
     cfg.asr?.mode ?? 'resident');
   const cacheOn = el('input', { type: 'checkbox', checked: cfg.asr?.cache !== false ? '' : null });
   const wmodel = select([['large-v3-turbo', 'large-v3-turbo'], ['tiny', 'tiny'],
     ['base', 'base'], ['small', 'small'], ['medium', 'medium'],
-    ['large-v3', 'large-v3']],  // 第408次：档位写全名，旧值 turbo 后端自动归一
+    ['large-v3', 'large-v3']],
     cfg.asr?.whisper_model ?? 'large-v3-turbo');
   wrap.append(settingsCard(t('Settings'), [
     [t('Engine'), engine],
@@ -332,7 +325,7 @@ PAGES.asr = async function (main) {
   renderCache();
   wrap.append(cacheCard);
 
-  // ---- 试用（第409次：上传即建 job，1s 增量轮询——转写过程流式出部分结果，
+  // ---- 试用（上传即建 job，1s 增量轮询——转写过程流式出部分结果，
   //      长音频不用等全部完成；协议与 URL 任务同构 /api/asr/jobs?after=N） ----
   const lang = el('input', { placeholder: t('Optional, e.g. en / ja / zh') });
   const out = el('div', { class: 'result' });
@@ -416,7 +409,7 @@ PAGES.ocr = async function (main) {
 
   const cfg = (await api('/api/config')).config || {};
   const engine = select([['llm', t('llm (vision model)')], ['rapidocr', t('rapidocr (local lightweight)')]],
-    cfg.ocr?.engine ?? 'rapidocr');  // 第407次：默认档改 rapidocr（与 config.py 对齐）
+    cfg.ocr?.engine ?? 'rapidocr');
   const mode = select([['resident', t('resident (always on)')], ['on-demand', t('on-demand')]],
     cfg.ocr?.mode ?? 'resident');
   wrap.append(settingsCard(t('Settings'), [
@@ -453,7 +446,7 @@ PAGES.ocr = async function (main) {
 
 // ===== 下载器 =====
 
-// yt-dlp --cookies-from-browser 支持的浏览器（第407次：cookie 自动取已登录浏览器）
+// yt-dlp --cookies-from-browser 支持的浏览器
 const YTDL_BROWSERS = [
   ['', 'off'], ['firefox', 'firefox'], ['chrome', 'chrome'], ['edge', 'edge'],
   ['brave', 'brave'], ['chromium', 'chromium'], ['vivaldi', 'vivaldi'],
@@ -481,21 +474,22 @@ PAGES.ytdl = async function (main) {
     cookies_from_browser: cfb.value,
   }, hint)));
 
-  // ---- 试用（第409次：解析结果数据驱动 参数下拉——分辨率/音质/字幕轨道） ----
+  // ---- 试用（解析结果数据驱动 参数下拉——分辨率/音质/字幕轨道） ----
   const url = el('input', { placeholder: t('Video page URL (Bilibili/YouTube etc.)') });
   const heightSel = select([['', t('Best (no limit)')]], '');
   const abrSel = select([['', t('Best (no limit)')]], '');
-  const subSel = select([['', t('Default (first track)')]], '');
+  const subSel = select([['', t('Default (original language)')]], '');
   // 解析成功后重填数值下拉（首个空档=不限）
   const fillSel = (sel, opts) => {
     sel.innerHTML = '';
     for (const [v, label] of opts) sel.append(el('option', { value: v }, label));
   };
   // 字幕轨道下拉：optgroup 手动/机器，值带 manual:/auto: 前缀（提交前剥掉）。
-  // 第410次：默认预选界面语言轨道（zh/en 按主语言码匹配，如 zh-Hans→zh），无匹配保持「默认」
+  // 默认项「原始语言」由 backend 取视频原声语言轨（无该字段落首个）。
+  // 解析成功后预选界面语言轨道（zh/en 按主语言码匹配，如 zh-Hans→zh），无匹配保持「默认」
   const fillSubs = (subs) => {
     subSel.innerHTML = '';
-    subSel.append(el('option', { value: '' }, t('Default (first track)')));
+    subSel.append(el('option', { value: '' }, t('Default (original language)')));
     const manual = subs?.manual || [];
     const auto = subs?.auto || [];
     if (manual.length) {
@@ -512,7 +506,7 @@ PAGES.ytdl = async function (main) {
       subSel.append(el('option', { value: '', disabled: '' }, t('No subtitles')));
     }
     const ui = currentLang();
-    // 第419次：先剥 ai- 机器轨前缀再取主码——B站轨道 ai-zh 原判成 'ai'，匹配不上界面语言 zh
+    // 先剥 ai- 机器轨前缀再取主码——B站轨道 ai-zh 原判成 'ai'，匹配不上界面语言 zh
     const primary = (v) => v.split(':')[1].toLowerCase().replace(/^ai-/, '').split('-')[0];
     const all = [...manual.map((l) => `manual:${l}`), ...auto.map((l) => `auto:${l}`)];
     const hit = all.find((v) => primary(v) === ui);
@@ -538,7 +532,6 @@ PAGES.ytdl = async function (main) {
         fillSel(abrSel, [['', t('Best (no limit)')], ...(r.abrs || []).map((a) => [String(a), `${a} kbps`])]);
         fillSubs(r.subs);
         const nSubs = ((r.subs?.manual || []).length) + ((r.subs?.auto || []).length);
-        // 第410次：解析结果改键值对逐行（.kv），比原先单行 hint 更易读
         info.innerHTML = '';
         const kv = el('div', { class: 'kv' });
         const row = (k, v) => { if (v) kv.append(el('span', {}, k), el('span', {}, v)); };

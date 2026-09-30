@@ -137,9 +137,8 @@ async function renderSubtitlePanel(keepAnnotations = false) {
   }
   clearLoading();
 
-  // 用户裁定"超过小时的，用时分秒时间"：面板级小时格式开关。
-  //   视频 duration ≥1h 或已有字幕段最大 start ≥1h → 整面板统一 h:mm:ss，
-  //   避免逐条判定造成的 m:ss/h:mm:ss 混排（grid 时间列宽窄不齐）。
+  // 面板级小时格式开关：视频 duration ≥1h 或已有字幕段最大 start ≥1h →
+  //   整面板统一 h:mm:ss，避免逐条判定造成的 m:ss/h:mm:ss 混排（grid 时间列宽窄不齐）。
   //   ref 最大 start 兜底 duration 未知场景（ASR 段已推进到小时级）。
   {
     const dv = getActiveVideo();
@@ -678,9 +677,8 @@ function makeSeq(sub, wordIdx) {
 }
 
 /**
- * 用户裁定："不可兜底首位。右列首位你是妄想。"：
- *   缺失词序键者一律排表尾，绝不占首位（此前回退 0 恰好抢占表首，
- *   与用户裁定相反，也是"词序与字幕不一致"的最显眼表现）。
+ * 缺失词序键者一律排表尾，绝不占首位（此前回退 0 恰好抢占表首，
+ *   是"词序与字幕不一致"的最显眼表现）。
  */
 const SEQ_TAIL = Number.MAX_SAFE_INTEGER;
 
@@ -1435,9 +1433,10 @@ function formatAnnotationSide(a) {
 //   2. 空内容保护：_allAnnotations 为空或译文全 pending 时禁止只填前缀。
 //   3. fillCommentInput 限定在"视频正下方主评论区"内查找，不进入评论项列表。
 // 用户反馈"有些评论有字数限制，随机选取"。各平台/场景评论上限不同（B站前端实测约 1000
-//   字符，回复框更短，其他平台差异更大）。组装全文后若超 commentMaxLen，需随机选取若干
-//   行重新组装，保证可发送。算法：Fisher-Yates 打乱行索引→贪心加入直到再加超限→
-//   恢复原始字幕顺序（保证阅读连贯）。单行就超限的极端情况下，该行被跳过。
+//   字符，回复框更短，其他平台差异更大）。组装全文后若超 commentMaxLen，需按概率选取若干
+//   行重新组装，保证可发送。算法：权重 = 单词 UTF-8 字节长（越长越优先），Efraimidis–
+//   Spirakis 加权抽样→贪心加入直到再加超限→恢复原始字幕顺序（保证阅读连贯）。
+//   单行就超限的极端情况下，该行被跳过。
 export async function onCommentClick() {
   // 用户反馈"视频提示生词表明明一堆，复制或者评论按钮说没有单词"。
   //   此前用 hasTranslation 过滤无译文的词，导致词表有词但评论报"无单词"。
@@ -1450,6 +1449,8 @@ export async function onCommentClick() {
   const phons = await getPhoneticsBatch(words).catch(() => []);
   const phonMap = new Map(words.map((w, i) => [w, phons[i] || '']));
   const lines = _allAnnotations.map((a) => formatAnnotationLine(a, true, phonMap.get(a.word) || ''));
+  // 加权概率权重 = 单词 UTF-8 字节长（越长越优先），与 lines 一一对应
+  const weights = _allAnnotations.map((a) => new TextEncoder().encode(a.word || '').length);
   if (lines.length === 0) {
     toast(t('toast.noContent'));
     log('评论填入取消: 生词表为空, anns=', _allAnnotations.length);
@@ -1459,13 +1460,13 @@ export async function onCommentClick() {
   const maxLen = getCfg().commentMaxLen || 0;
   let usedLines = lines;
   let trimmed = false;
-  // 字数限制保护：超限时随机选取
+  // 字数限制保护：超限时按字节长度加权概率选取
   if (maxLen > 0) {
     const fullLen = prefix.length + lines.reduce((s, l) => s + l.length + 1, 0);
     if (fullLen > maxLen) {
-      usedLines = pickRandomLinesForComment(lines, maxLen, prefix.length);
+      usedLines = pickRandomLinesForComment(lines, maxLen, prefix.length, weights);
       trimmed = true;
-      log(`评论超长: 全文 ${fullLen} > ${maxLen}，随机选取 ${usedLines.length}/${lines.length} 词`);
+      log(`评论超长: 全文 ${fullLen} > ${maxLen}，加权选取 ${usedLines.length}/${lines.length} 词`);
       if (usedLines.length === 0) {
         // 极端：所有单行都超限，无法填入
         toast(t('toast.commentFail'));

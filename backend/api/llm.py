@@ -1,5 +1,5 @@
 """LLM API：/v1/chat/completions（反代 llama-server，OpenAI 兼容）、/api/llm/status、
-模型卡片（第431次起为只读元数据：自动下载交 llama.cpp -hf 三源重试链，
+模型卡片（只读元数据：自动下载交 llama.cpp -hf 三源重试链，
 卡片仅声明 command/hf_repo/fallback_url 等启动要素）+ 启动命令解析。"""
 
 import json
@@ -18,7 +18,7 @@ log = logging.getLogger(__name__)
 
 # llama-server 启动命令中「带值」的旗标 → 卡片字段（/api/llm/models/parse 用）；
 # 旗标匹配用精确相等或 flag= 前缀，防 -cudart 之类误配 -c。
-# 第431次：卡片以 command 为权威，parse 只解析下载相关旗标（-hf/-mu/-mmu）
+# 卡片以 command 为权威，parse 只解析下载相关旗标（-hf/-mu/-mmu）
 # 与端口/上下文（port/ctx 仅供参考，实际以 config 为准）
 _VALUE_FLAGS = {
     "-hf": "hf_repo", "-hfr": "hf_repo", "--hf-repo": "hf_repo",
@@ -39,9 +39,8 @@ def llm_status():
 def chat_completions():
     """原样反代 llama-server（OpenAI 兼容格式，含 image_url base64 多模态）。
 
-    on-demand 模式在首个请求时拉起；流式（SSE）与非流式均透传。
-    第409次：手动停机期间不惰性拉起（llm 引擎「停不掉」修复的一半）；
-    每次对话请求入日志（用户反馈「对话也没日志」）。
+    on-demand 模式在首个请求时按需拉起（手动停机期间不惰性拉起，返回 503）；
+    流式（SSE）与非流式均透传；每次对话请求入日志（不落正文）。
     """
     engine = current_app.extensions["engines"]["llm"]
     st = engine.status()
@@ -55,8 +54,7 @@ def chat_completions():
             return jsonify({"ok": False, "error": "llm_start_failed",
                             "message": str(e)}), 503
     engine.begin_request()  # inflight+1：on-demand 下推理期间不被空闲误杀
-    # 第415次：先解析再转发——原先 data=get_data(cache=False) 已消费请求流，
-    # 之后 get_json 恒为空，model/messages/stream 永远打 "-"、0、False。
+    # 先取原始请求体再转发：get_data(cache=False) 消费流后 get_json 恒为空
     raw = request.get_data(cache=False)
     try:
         body = json.loads(raw.decode("utf-8", "replace")) if raw else {}
@@ -94,12 +92,12 @@ def chat_completions():
 
 
 # ---------------------------------------------------------------------------
-# 模型卡片（第413次引入；第431次转为只读元数据）：llm.cards 数组，每张卡
-# 描述一个可经 llama.cpp -hf 自动下载/切换的模型。
-# name=唯一 ID（llm.model 存卡片名）；command=llama-server 启动命令（权威，
-# 自动下载由其中 -hf <repo>[:quant] 驱动）；hf_repo=归属仓库（installed 扫
-# %USERPROFILE%/.cache/huggingface/hub 判定）；fallback_url/fallback_mmproj_url
-# = hf 与 hf-mirror 均失败后的直链兜底（engine 启动时改写 -mu/-mmu）。
+# 模型卡片：llm.cards 数组，每张卡描述一个可经 llama.cpp -hf 自动下载/切换
+# 的模型。name=唯一 ID（llm.model 存卡片名）；command=llama-server 启动命令
+# （权威，自动下载由其中 -hf <repo>[:quant] 驱动）；hf_repo=归属仓库
+# （installed 扫 %USERPROFILE%/.cache/huggingface/hub 判定）；
+# fallback_url/fallback_mmproj_url = hf 与 hf-mirror 均失败后的直链兜底
+# （engine 启动时改写 -mu/-mmu）。
 # ---------------------------------------------------------------------------
 
 def _get_cards():
@@ -108,16 +106,16 @@ def _get_cards():
 
 
 def _save_cards(cards, model=None):
-    """写回 llm.cards（put_config 同款：deep_merge→save→CFG→4 引擎同步）。
+    """写回 llm.cards（put_config 同款最小持久化：update_user→load→CFG→4 引擎同步）。
 
     deep_merge 对 list 整体替换，cards 传 [] 即清空；model 非 None 时一并
-    写 llm.model（设默认/默认卡改名跟随/删默认回 auto）。
+    写 llm.model（设默认/默认卡改名跟随/删默认回未选卡）。
     """
     patch = {"llm": {"cards": cards}}
     if model is not None:
         patch["llm"]["model"] = model
-    merged = config.deep_merge(current_app.config["CFG"], patch)
-    config.save(merged)
+    config.update_user(patch)  # 用户层最小持久化，不固化 DEFAULTS
+    merged = config.load()     # 运行时全量视图 = DEFAULTS + 用户层覆盖
     current_app.config["CFG"] = merged
     engines = current_app.extensions["engines"]
     for name in ("llm", "asr", "ocr", "translate"):
@@ -138,12 +136,10 @@ def _normalize_card(body):
         v = str(body.get(key) or "").strip()
         if v:
             card[key] = v
-    # 第420次：采样参数白名单（数值过滤；llm_engine.start 注入 llama-server 启动参数）
+    # 采样参数白名单（数值过滤；llm_engine.start 注入 llama-server 启动参数）
     smp = body.get("sampling")
     if isinstance(smp, dict):
         norm_smp = {}
-        # 第422次：白名单补 repeat_penalty——小模型对话复读（用户："llm生成 网友采纳
-        #   健康体检健康体检健康体检健康…"）需启动级复读惩罚遏制
         for k in ("temperature", "top_p", "top_k", "min_p", "repeat_penalty"):
             v = smp.get(k)
             if isinstance(v, (int, float)) and not isinstance(v, bool):
@@ -161,7 +157,7 @@ def list_model_cards():
     out = []
     for c in _get_cards():
         d = dict(c)
-        # 第431次：installed 扫 llama.cpp/huggingface_hub 共用 hub 缓存判定
+        # installed：扫 llama.cpp/huggingface_hub 共用 hub 缓存判定
         d["installed"] = engine.card_installed(c)
         d["is_default"] = bool(model) and str(c.get("name", "")).lower() == model
         out.append(d)
@@ -195,7 +191,7 @@ def update_model_card(name):
         return jsonify({"ok": False, "error": "duplicate_name"}), 400
     old_name = str(cards[idx].get("name", ""))
     cards[idx] = card
-    # 默认模型跟随：旧卡名正被设为默认且卡改名 → 指向新名（第431次按名匹配）
+    # 默认模型跟随：旧卡名正被设为默认且卡改名 → 指向新名
     cfg_model = (current_app.config["CFG"]["llm"].get("model") or "").lower()
     model = (card["name"] if old_name.lower() == cfg_model
              and old_name != card["name"] else None)
@@ -210,7 +206,7 @@ def delete_model_card(name):
     if idx is None:
         return jsonify({"ok": False, "error": "not_found"}), 404
     removed = cards.pop(idx)
-    # 删的是默认卡 → model 清空回 auto；只删卡不清 hub 缓存
+    # 删的是默认卡 → model 清空（needs_setup 重新置位）；只删卡不清 hub 缓存
     cfg_model = (current_app.config["CFG"]["llm"].get("model") or "").lower()
     model = "" if str(removed.get("name", "")).lower() == cfg_model else None
     _save_cards(cards, model)
@@ -219,8 +215,8 @@ def delete_model_card(name):
 
 @bp.post("/api/llm/models/parse")
 def parse_launch_cmd():
-    """解析 llama-server 启动命令 → 卡片字段（第413次；第431次改解析
-    -hf/-mu/-mmu 下载旗标，name 由 hf 仓库名生成）。
+    """解析 llama-server 启动命令 → 卡片字段（-hf/-mu/-mmu 下载旗标，
+    name 取 -hf 参数原值）。
 
     shlex(posix=False) 保留 Windows 反斜杠路径，token 再手工剥引号；
     i 从 1 起（parts[0] 是可执行文件）。
@@ -251,8 +247,7 @@ def parse_launch_cmd():
         else:
             i += 1
     if out["hf_repo"]:
-        # 第432次：卡片命名统一——llamacpp 中叫啥就是啥，name 即 -hf 参数原值
-        # （含 :quant 后缀，如 unsloth/Qwen3-0.6B-GGUF:Q4_K_M），不再 slug 化
+        # name 即 -hf 参数原值（含 :quant 后缀，如 unsloth/Qwen3-0.6B-GGUF:Q4_K_M）
         out["name"] = out["hf_repo"]
     return jsonify({"ok": True, "parsed": out})
 

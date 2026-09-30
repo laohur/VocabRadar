@@ -1,99 +1,206 @@
-"""翻译引擎：LLM（复用 llama-server 提示词路径，单一路径）。
+"""翻译引擎：NLLB-200-distilled-600M（CTranslate2 int8 CPU，唯一引擎，纯本地免 Key）。
 
-设计（plan-backend §2.6/§3.3）：
-- llm 引擎：复用 LlmEngine 端点，提示词模板做翻译（只输出译文）；
-  src 支持 "auto"（LLM 自动识别源语言）。生命周期归 LlmEngine。
-- 结果缓存：不做（plan §2.11：翻译输入千变万化，命中率低）。
-第三百九十五次：Argos Translate 备选档整体移除（qwen3.5-0.8b 常驻后
-LLM 翻译全面占优，离线档无保留价值，用户裁定），不保留代码。
+设计：
+- 模型：JustFrederik/nllb-200-distilled-600M-ct2-int8（预转换 CT2 int8 仓库，
+  免 torch/transformers 转换依赖）。模型文件交 huggingface_hub 自动维护：
+  先 hub 本地缓存直取（local_files_only，就绪绝不联网），无缓存才联网
+  snapshot_download（断点续传，尊重 HF_ENDPOINT 镜像）。
+- 推理：ctranslate2.Translator（CPU int8）+ sentencepiece 分词。源序列 =
+  [源语言码] + sp 编码 + </s>，target_prefix=[目标语言码]，译文 = sp.decode
+  （去掉输出首部的目标语言 token）。
+- 语言码：调用方传 2 字码（zh/en/…，全集见 ui/pages.js LANGS），内部映射
+  FLORES-200；src="auto" 按 Unicode 脚本区间探测（NLLB 无自动识别）。
+- 生命周期同 ASR（进程内模型）：resident 随启动预加载 / on-demand 首请求
+  加载 + 空闲卸载 + _starting 互斥；手动停机持久化 config.json
+  <translate>.stopped，管理页可启停。
+- 缓存不做：翻译输入千变万化命中率低。
 """
 
-import requests
+import gc
+import os
+import threading
+import time
 
-_TRANSLATE_PROMPT = (
-    "你是翻译引擎。将用户文本{src_desc}翻译成{dst}。"
-    "只输出译文本身：不要解释、不要加引号、不要重复原文、不要输出任何多余内容。"
-    "若文本为空或无法翻译，输出空字符串。"
-)
+import config
 
-_LANG_NAMES = {
-    "zh": "中文", "en": "英语", "ja": "日语", "ko": "韩语", "de": "德语",
-    "fr": "法语", "es": "西班牙语", "pt": "葡萄牙语", "ru": "俄语",
-    "it": "意大利语", "ar": "阿拉伯语", "th": "泰语", "vi": "越南语",
-    "id": "印尼语", "hi": "印地语", "nl": "荷兰语", "tr": "土耳其语",
+# 预转换 CT2 int8 模型仓库（含 model.bin / sentencepiece.bpe.model /
+# shared_vocabulary.txt；许可证 cc-by-nc-4.0，本地自用）
+_MODEL_REPO = "JustFrederik/nllb-200-distilled-600M-ct2-int8"
+
+# 2 字语言码 → FLORES-200（覆盖 ui/pages.js LANGS / 扩展端 i18n TRANSLATE_LANGS 42 语）
+_FLORES = {
+    "en": "eng_Latn", "zh": "zho_Hans", "hi": "hin_Deva", "es": "spa_Latn",
+    "fr": "fra_Latn", "ar": "arb_Arab", "bn": "ben_Beng", "pt": "por_Latn",
+    "ru": "rus_Cyrl", "ur": "urd_Arab", "id": "ind_Latn", "de": "deu_Latn",
+    "ja": "jpn_Jpan", "tr": "tur_Latn", "fil": "fil_Latn", "vi": "vie_Latn",
+    "ta": "tam_Taml", "ko": "kor_Hang", "fa": "pes_Arab", "it": "ita_Latn",
+    "ms": "zsm_Latn", "pl": "pol_Latn", "uk": "ukr_Cyrl", "nl": "nld_Latn",
+    "ro": "ron_Latn", "sh": "hrv_Latn", "el": "ell_Grek", "hu": "hun_Latn",
+    "cs": "ces_Latn", "sv": "swe_Latn", "he": "heb_Hebr", "bg": "bul_Cyrl",
+    "da": "dan_Latn", "fi": "fin_Latn", "nb": "nob_Latn", "sk": "slk_Latn",
+    "ca": "cat_Latn", "lt": "lit_Latn", "sl": "slv_Latn", "mk": "mkd_Cyrl",
+    "lv": "lvs_Latn", "is": "isl_Latn",
 }
 
+# Unicode 脚本区间 → 源语言（auto 探测用；假名/谚文先于汉字判定——日文
+# 混用汉字，谚文独立成段）。共享文字（fa/ur 用阿拉伯字母）归默认语言。
+_SCRIPT_RANGES = (
+    (0x3040, 0x30FF, "jpn_Jpan"),   # 平假名 + 片假名
+    (0xAC00, 0xD7AF, "kor_Hang"),   # 谚文音节
+    (0x4E00, 0x9FFF, "zho_Hans"),   # CJK 统一汉字
+    (0x0900, 0x097F, "hin_Deva"),   # 天城文
+    (0x0980, 0x09FF, "ben_Beng"),   # 孟加拉文
+    (0x0B80, 0x0BFF, "tam_Taml"),   # 泰米尔文
+    (0x0590, 0x05FF, "heb_Hebr"),   # 希伯来
+    (0x0600, 0x06FF, "arb_Arab"),   # 阿拉伯字母（fa/ur 共享，归 MSA）
+    (0x0370, 0x03FF, "ell_Grek"),   # 希腊
+)
+_UKRAINIAN_LETTERS = (0x0456, 0x0457, 0x0454, 0x0491)  # і ї є ґ
 
-def _lang_desc(code):
-    """提示词里的语言描述：已知代码用中文名，否则原样透传。"""
+
+def _flores(code):
+    """2 字码 → FLORES-200；调用方直接给 FLORES 码则原样放行；未知返回 None。"""
+    code = (code or "").strip()
     if not code or code == "auto":
-        return "（自动识别源语言）"
-    return f"从{_LANG_NAMES.get(code, code)}"
+        return None
+    if "_" in code:
+        return code
+    return _FLORES.get(code.lower())
+
+
+def detect_src(text):
+    """auto 源语言探测：逐字符查脚本区间，命中即返回；乌克兰语特征字母
+    （і ї є ґ）优先于泛西里尔；拉丁文及未识别脚本默认英语。"""
+    has_cyrillic = False
+    for ch in text:
+        cp = ord(ch)
+        if cp in _UKRAINIAN_LETTERS:
+            return "ukr_Cyrl"
+        for lo, hi, lang in _SCRIPT_RANGES:
+            if lo <= cp <= hi:
+                return lang
+        if 0x0400 <= cp <= 0x04FF:
+            has_cyrillic = True
+    return "rus_Cyrl" if has_cyrillic else "eng_Latn"
+
+
+def ensure_local_model():
+    """确保模型就绪，返回模型目录（huggingface_hub 自动维护：hub 默认缓存，
+    断点续传/并发锁/完整性自管）。先本地缓存直取——就绪绝不联网；无缓存
+    才联网下载（尊重 HF_ENDPOINT 镜像环境变量）。"""
+    from huggingface_hub import snapshot_download
+    try:
+        return snapshot_download(repo_id=_MODEL_REPO, local_files_only=True)
+    except Exception:
+        return snapshot_download(repo_id=_MODEL_REPO)
 
 
 class TranslateEngine:
-    """翻译引擎属主（挂 app.extensions["engines"]["translate"]）。
+    """进程内翻译引擎属主（挂 app.extensions["engines"]["translate"]）。
 
-    推理与生命周期委托给 LlmEngine 实例（llama-server 进程/端口属主）。
+    唯一引擎 NLLB-200-distilled-600M（CT2 int8 CPU）；模型加载互斥，
+    on-demand 模式空闲超时自动卸载，手动停机持久化 config.json。
     """
 
-    def __init__(self, cfg, llm):
+    def __init__(self, cfg):
         self.cfg = cfg or {}
-        self.llm = llm  # LlmEngine 实例：进程/端口属主
+        self.mode = self.cfg.get("mode", "resident")
+        self._model = None  # (Translator, SentencePieceProcessor)
+        self._lock = threading.Lock()
+        self._starting = False          # 加载互斥标志（同 llm_engine/asr）
+        self._manual_stop = bool(self.cfg.get("stopped"))
+        self._last_used = 0.0
+        if self.mode == "on-demand":
+            t = threading.Thread(target=self._idle_watch, daemon=True)
+            t.start()
 
-    # ---- 状态 ----
+    # ---- 生命周期 ----
+
+    def ensure_loaded(self, force=False):
+        """确保模型就绪（懒加载），返回 (translator, sp)。线程安全。
+
+        force=True（管理页启动按钮）解除手动停机；普通调用在手动停机期间
+        拒绝加载（停了就是停了，不被业务请求悄悄拉回）。
+        """
+        with self._lock:
+            if force:
+                self._manual_stop = False
+                config.set_engine_stopped("translate", False)
+            elif self._manual_stop:
+                raise RuntimeError("翻译引擎已手动停机，请到管理页重新启动")
+            if self._model is not None:
+                self._last_used = time.time()
+                return self._model
+            if self._starting:
+                raise RuntimeError("翻译引擎正在加载中，请稍候重试")
+            self._starting = True
+            try:
+                self._model = self._load_nllb()
+                self._last_used = time.time()
+                return self._model
+            finally:
+                self._starting = False
+
+    def _load_nllb(self):
+        import ctranslate2
+        import sentencepiece as spm
+        model_dir = ensure_local_model()
+        translator = ctranslate2.Translator(model_dir, device="cpu",
+                                            compute_type="int8")
+        sp = spm.SentencePieceProcessor()
+        sp.load(os.path.join(model_dir, "sentencepiece.bpe.model"))
+        return translator, sp
+
+    def _release(self):
+        self._model = None
+        gc.collect()
+
+    def stop(self):
+        """手动卸载模型（管理界面关停按钮）。线程安全；置位手动停机并持久化，
+        业务请求不再自动重新加载。"""
+        with self._lock:
+            if self._starting:
+                raise RuntimeError("翻译引擎正在加载中，请稍候再关停")
+            self._manual_stop = True
+            self._release()
+        config.set_engine_stopped("translate", True)
+
+    def _idle_watch(self):
+        timeout = self.cfg.get("idle_timeout", 600)
+        while True:
+            time.sleep(30)
+            with self._lock:
+                if (self._model is not None and not self._starting
+                        and time.time() - self._last_used > timeout):
+                    self._release()
 
     def status(self):
-        """/api/translate/status 与 /api/status 用。状态透传 LlmEngine。"""
+        """/api/translate/status 与 /api/status 用。"""
         return {
-            "engine": self.cfg.get("engine", "llm"),
-            "llm": self.llm.status(),
+            "engine": "nllb",
+            "mode": self.mode,
+            "loaded": self._model is not None,
+            "loading": self._starting,
+            "manual_stop": self._manual_stop,
+            "model": _MODEL_REPO,
         }
 
     # ---- 推理 ----
 
     def translate(self, text, src="auto", dst="zh"):
-        """翻译 → {text}。src/dst 为语言代码，src 支持 "auto"。
+        """翻译 → {text, engine}。src/dst 为 2 字语言码，src 支持 "auto"。
 
-        RuntimeError：引擎不可用（llama-server 拉起失败/服务不可达）
-        → api 层映射 503；ValueError：参数不支持 → 400。
+        RuntimeError：引擎不可用 → api 层映射 503；
+        ValueError：参数不支持 → 400。
         """
-        return {"text": self._translate_llm(text, src, dst)}
-
-    def _translate_llm(self, text, src, dst):
-        if not dst or dst == "auto":
-            raise ValueError("目标语言不能为空或 auto")
-        payload = {
-            "messages": [
-                {"role": "system", "content": _TRANSLATE_PROMPT.format(
-                    src_desc=_lang_desc(src), dst=_LANG_NAMES.get(dst, dst))},
-                {"role": "user", "content": text},
-            ],
-            "temperature": 0,      # 翻译要确定性输出
-            "max_tokens": 4096,
-            "stream": False,
-            # Qwen3.5 为思考模型：不关思考会先输出 reasoning（耗 token 且
-            # max_tokens 耗尽在思考阶段时 content 为空）
-            "chat_template_kwargs": {"enable_thinking": False},
-        }
-        return self._chat_once(payload)
-
-    def _chat_once(self, payload):
-        """发一次 chat/completions 并取回纯文本（与 ocr 同款错误包装）。"""
-        if not self.llm.status()["running"]:
-            if not self.llm.auto_start_allowed():  # 第409次：LLM 手动停机期间不自动拉起
-                raise RuntimeError("LLM 引擎已手动停机，请到管理页重新启动后再翻译")
-            self.llm.start()  # RuntimeError（未安装/超时）上抛，api 映射 503
-        self.llm.begin_request()  # on-demand 下推理期间不被空闲误杀
-        try:
-            r = requests.post(f"{self.llm.base_url()}/v1/chat/completions",
-                              json=payload, timeout=(10, 600))
-            r.raise_for_status()
-            text = r.json()["choices"][0]["message"]["content"]
-            return (text or "").strip()
-        except requests.RequestException as e:
-            raise RuntimeError(f"LLM 服务不可达：{e}") from e
-        except (KeyError, IndexError, ValueError) as e:
-            raise RuntimeError(f"LLM 返回格式异常：{e}") from e
-        finally:
-            self.llm.end_request()
+        dst_flores = _flores(dst)
+        if not dst_flores:
+            raise ValueError(f"不支持的目标语言：{dst}")
+        src_flores = _flores(src) or detect_src(text)
+        translator, sp = self.ensure_loaded()
+        tokens = [src_flores] + sp.encode(text, out_type=str) + ["</s>"]
+        results = translator.translate_batch(
+            [tokens], target_prefix=[[dst_flores]], beam_size=4)
+        out = results[0].hypotheses[0]
+        # 首个 token 为目标语言码，decode 前去掉
+        return {"text": sp.decode(out[1:]).strip(), "engine": "nllb"}

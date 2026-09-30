@@ -4,10 +4,14 @@
 //   ASR/OCR 两组独立引擎配置解析（resolveLlmEngineCfg）、流式 Port 通道注册。
 // 来源表与请求参数预设见 lib/llm.js（resolveLlmConfig，引导页与 SW 共用）。
 // =============================================================================
-import { resolveLlmConfig } from '../../lib/llm.js';
+import { resolveLlmConfig, getFreeProviders } from '../../lib/llm.js';
+import { isRunawayText } from '../../lib/runaway.js';
 import { _ts, log } from './log.js';
 
-// ASR-LLM 与 OCR-LLM 各自独立的 LLM 配置（asrLlm* / ocrLlm* 键，用户裁定与聊天
+// 免费直连轮替游标：每次轮替请求起点在几家免费来源间轮转，分摊限流压力
+let _llmFreeCursor = 0;
+
+// ASR-LLM 与 OCR-LLM 各自独立的 LLM 配置（asrLlm* / ocrLlm* 键，与聊天
 //   llm* 配置分开、可单独下拉配置），provider 缺省 local-backend（河狸后端，免 key）。
 export async function resolveLlmEngineCfg(engine) {
   const keys = (engine === 'asr')
@@ -15,7 +19,7 @@ export async function resolveLlmEngineCfg(engine) {
     : { p: 'ocrLlmProvider', b: 'ocrLlmBaseUrl', m: 'ocrLlmModel', k: 'ocrLlmApiKey' };
   const res = await new Promise((resolve) => {
     chrome.storage.local.get(
-      // storage 无值（从未打开引导页）时默认走河狸后端（用户裁定 local-backend 免 key）
+      // storage 无值（从未打开引导页）时默认走河狸后端（local-backend 免 key）
       { [keys.p]: 'local-backend', [keys.b]: '', [keys.m]: '', [keys.k]: '' },
       (r) => resolve(r || {})
     );
@@ -43,7 +47,13 @@ export async function handleLlmTranslate(text, target, prompt) {
       + '. Output ONLY the translation, with no commentary, no quotes.'
       + NL + NL + String(text);
   }
-  const out = await handleLlmChat([{ role: 'user', content: msg }]);
+  // 译文失控校验随 attempts 循环逐家执行：某家 200 但输出退化重复（如
+  //   "ooo呜呜呜呜呜…"）判失败并换下一家免费来源，而不是把乱串当成功直通。
+  const out = await handleLlmChat([{ role: 'user', content: msg }], null, {
+    validate: (c) => (isRunawayText(c, text)
+      ? '译文输出失控（退化重复）：' + String(c || '').trim().slice(0, 60)
+      : '')
+  });
   if (!out.ok) return { ok: false, error: out.error };
   return { ok: true, text: String(out.content || '').trim() };
 }
@@ -62,19 +72,25 @@ const LLM_CHAT_SYSTEM = 'You are a concise assistant in a vocabulary-learning br
  * 代理 LLM 对话请求
  * content script 受宿主页面 CSP 限制无法 fetch 第三方 API，
  *   统一由 SW 代理（扩展 CSP 的 connect-src 已加入各来源域名）。
- * 来源按 format 分两类（见 lib/llm.js），请求差异集中在本函数：
+ * 来源按 format 分三类（见 lib/llm.js），请求差异集中在本函数：
  *   - 'openai'   ：POST {baseUrl}/chat/completions，取 choices[0].message.content，
  *                  Authorization: Bearer 头（noKey 的 backend 组不带头）。
  *   - 'anthropic'：POST {baseUrl}/v1/messages，x-api-key + anthropic-version 头，
  *                  system 消息须单列、max_tokens 必填，取 content[0].text。
- * 只请求用户所选来源本身，失败如实上抛。
+ *   - 'free'     ：请求形状同 openai 但不带鉴权头，且未手填地址/模型时按
+ *                  LLM_FREE_ROTATION 轮替重试（402/429/5xx/网络错换下一家，
+ *                  起点由游标轮转；用户手填地址或模型则只试所选来源本身）。
  * @param {Array<{role: string, content: string}>} messages 对话上下文
  * @param {(text: string) => void} [onDelta] 传入即走流式（SSE 逐 chunk 回调），
  *   不传保持非流式行为（LLM_TRANSLATE 词条翻译仍走非流式）。
+ * @param {{validate?: (content: string) => string}} [opts] 逐家结果校验钩子
+ *   （仅非流式路径执行；流式 delta 已逐段外推无法回收）：返回非空字符串即判
+ *   该家失败（retryable）——免费轮替换下一家，全失败时以最后一次的错误如实返回。
+ *   翻译用途传输出失控检测（handleLlmTranslate）；对话不传，行为不变。
  * @returns {Promise<{ok: boolean, content?: string, error?: string, needConfig?: boolean}>}
  *   needConfig=true 表示尚未配置，前端应显示"打开设置"按钮而非只报错
  */
-export async function handleLlmChat(messages, onDelta) {
+export async function handleLlmChat(messages, onDelta, opts) {
   if (!Array.isArray(messages) || messages.length === 0) {
     return { ok: false, error: 'empty messages' };
   }
@@ -88,8 +104,21 @@ export async function handleLlmChat(messages, onDelta) {
     );
   });
   const cfg = resolveLlmConfig(res);
-  // 只尝试用户所选来源本身，失败如实上抛不换家。
-  const attempts = [cfg];
+  // 尝试序列：免费来源（未手填地址/模型）按轮替清单换家重试；其余只试所选来源本身，
+  //   失败如实上抛不换家
+  let attempts = [cfg];
+  if (cfg.format === 'free' && !cfg.userBaseUrl && !cfg.userModel) {
+    const frees = getFreeProviders();
+    if (frees.length > 1) {
+      const start = _llmFreeCursor % frees.length;
+      _llmFreeCursor = (_llmFreeCursor + 1) % frees.length;
+      attempts = [];
+      for (let i = 0; i < frees.length; i++) {
+        const p = frees[(start + i) % frees.length];
+        attempts.push(Object.assign({}, cfg, { provider: p.id, baseUrl: p.baseUrl, model: p.model }));
+      }
+    }
+  }
 
   let last = { ok: false, error: 'no attempt' };
   for (let i = 0; i < attempts.length; i++) {
@@ -97,6 +126,16 @@ export async function handleLlmChat(messages, onDelta) {
     last = onDelta
       ? await llmChatStreamOnce(attempts[i], turns, onDelta)
       : await llmChatOnce(attempts[i], turns);
+    // 逐家内容校验（非流式）：HTTP 200 但内容失控（退化重复）与限流同待遇——
+    //   标记 retryable 换下一家；单一家配置时即以校验错误如实返回，不展示乱串
+    if (last.ok && !onDelta && opts && typeof opts.validate === 'function') {
+      const vErr = opts.validate(String(last.content || ''));
+      if (vErr) {
+        log('[VocabRadar][sw][' + _ts() + '] llmChat 来源 ' + attempts[i].provider
+          + ' 内容校验未过(' + vErr + ')');
+        last = { ok: false, error: vErr, retryable: true };
+      }
+    }
     if (last.ok || !last.retryable) return last;
     log('[VocabRadar][sw][' + _ts() + '] llmChat 来源 ' + attempts[i].provider + ' 失败(' + last.error + ')');
   }
@@ -112,8 +151,8 @@ export async function handleLlmChat(messages, onDelta) {
  *   retryable=true 表示"本家限流/不通"（402/429/5xx/网络错），仅保留语义字段
  */
 async function llmChatOnce(cfg, messages) {
-  // 是否需要 Key 只看 noKey（backend 组）
-  const noKey = !!cfg.noKey;
+  // 是否需要 Key：noKey（backend 组）与 free 格式（免费直连，无鉴权）都不需要
+  const noKey = !!cfg.noKey || cfg.format === 'free';
   const isAnthropic = cfg.format === 'anthropic';
   // 不遮蔽错误：缺 baseUrl / 缺 model 都明确告知；Key 只对需账号的两类强制要求
   if (!noKey && !cfg.apiKey) return { ok: false, error: 'API Key 未配置', needConfig: true };
@@ -193,8 +232,8 @@ async function llmChatOnce(cfg, messages) {
  * @param {(text: string) => void} onDelta 每收到一段增量文本回调一次
  */
 async function llmChatStreamOnce(cfg, messages, onDelta) {
-  // 是否需要 Key 只看 noKey（backend 组）
-  const noKey = !!cfg.noKey;
+  // 是否需要 Key：noKey（backend 组）与 free 格式（免费直连，无鉴权）都不需要
+  const noKey = !!cfg.noKey || cfg.format === 'free';
   const isAnthropic = cfg.format === 'anthropic';
   if (!noKey && !cfg.apiKey) return { ok: false, error: 'API Key 未配置', needConfig: true };
   if (!cfg.baseUrl) return { ok: false, error: 'Base URL 未配置', needConfig: true };

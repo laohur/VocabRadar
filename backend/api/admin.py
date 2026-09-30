@@ -1,5 +1,5 @@
 """管理 API：/api/config（读/写配置）、/api/status（各引擎总览）、
-/api/engine/<name>/start|stop（模型服务加载/关停，第408次可选化）。"""
+/api/engine/<name>/start|stop（模型服务加载/关停）。"""
 
 import logging
 import threading
@@ -12,12 +12,12 @@ bp = Blueprint("admin", __name__)
 
 log = logging.getLogger(__name__)
 
-_ENGINE_NAMES = ("llm", "asr", "ocr")  # 可加载/关停的模型服务（translate 随 llm）
+_ENGINE_NAMES = ("llm", "asr", "ocr", "translate")  # 可加载/关停的模型服务
 
 
 @bp.post("/api/engine/<name>/start")
 def engine_start(name):
-    """显式加载模型服务：llm=拉起 llama-server 并等就绪；asr/ocr=进程内模型加载。
+    """显式加载模型服务：llm=拉起 llama-server 并等就绪；asr/ocr/translate=进程内模型加载。
 
     404 未知引擎；400 引擎形态不支持（如 OCR 由 llm 承载）；503 启动失败/依赖缺失。
     """
@@ -29,7 +29,7 @@ def engine_start(name):
         if name == "llm":
             engine.start()  # start() 内部解除手动停机抑制
         else:
-            engine.ensure_loaded(force=True)  # 第409次：显式启动解除手动停机
+            engine.ensure_loaded(force=True)  # 显式启动解除手动停机
     except ValueError as e:
         log.warning(f"引擎 {name} 启动不适用：{e}")
         return jsonify({"ok": False, "error": "not_applicable", "message": str(e)}), 400
@@ -42,7 +42,7 @@ def engine_start(name):
 
 @bp.post("/api/engine/<name>/stop")
 def engine_stop(name):
-    """显式关停模型服务：llm=退出 llama-server；asr/ocr=卸载进程内模型释放内存。"""
+    """显式关停模型服务：llm=退出 llama-server；asr/ocr/translate=卸载进程内模型释放内存。"""
     if name not in _ENGINE_NAMES:
         return jsonify({"ok": False, "error": "unknown_engine"}), 404
     engine = current_app.extensions["engines"][name]
@@ -61,8 +61,8 @@ def engine_stop(name):
 
 @bp.get("/api/logs")
 def get_logs():
-    """backend.log 末尾日志（第409次：管理页日志卡片，llama-server 输出/
-    对话请求等排障信息不再黑洞）。?tail=N 控制行数，默认 200 上限 2000。"""
+    """backend.log 末尾日志（管理页日志卡片）。?tail=N 控制行数，
+    默认 200 上限 2000。"""
     try:
         n = int(request.args.get("tail", 200))
     except ValueError:
@@ -82,17 +82,17 @@ def put_config():
     if not isinstance(body, dict):
         return jsonify({"ok": False, "error": "bad_body"}), 400
     old = current_app.config["CFG"]
-    merged = config.deep_merge(old, body)
-    config.save(merged)
+    config.update_user(body)  # 用户层最小持久化：config.json 只存用户设定，不固化默认值
+    merged = config.load()    # 运行时全量视图 = DEFAULTS + 用户层覆盖
     current_app.config["CFG"] = merged
-    # 第410次修复：deep_merge 生成新 dict，引擎仍持旧 cfg 引用——配置改动
-    # （模型、engine、mode 等）永不达引擎。此处同步各引擎 cfg 指向新配置。
+    # config.load() 生成新 dict，引擎仍持旧 cfg 引用——同步各引擎 cfg
+    # 指向新配置，改动（模型、engine、mode 等）才能生效。
     engines = current_app.extensions["engines"]
     for name in ("llm", "asr", "ocr", "translate"):
         engines[name].cfg = merged.get(name, {})
     # LLM 主模型/上下文变更且 llama-server 运行中：自动重启加载新模型，
-    # 无需用户再手动点关停+启动（此前「切换模型不生效」的另一半根因）。
-    # 第418次：?no_reload=1 旁路（不进 body 不污染配置）——「设为默认」
+    # 无需用户再手动点关停+启动。
+    # ?no_reload=1 旁路（不进 body 不污染配置）——「设为默认」
     # 只落配置不热重启，下次启动生效。
     llm_reloading = False
     llm = engines["llm"]
@@ -104,7 +104,7 @@ def put_config():
             log.info(f"LLM 配置变更（model={chosen!r}），按 no_reload 请求"
                      f"不切换运行中的 llama-server（下次启动生效）")
         elif llm.status()["running"]:
-            # 第431次：选中未装卡片无需在此按需下载——llm.start() 内三源
+            # 选中未装卡片无需在此按需下载——llm.start() 内三源
             # 重试链（-hf → hf-mirror → fallback_url）自动补拉
             log.info(f"LLM 配置变更（model={chosen!r}），"
                      f"重启 llama-server 加载新模型...")
@@ -141,7 +141,7 @@ def _ytdl_status(cfg):
 
     importlib.metadata 只查元数据不 import 包本体（yt_dlp import 近秒级，
     /api/status 是总览页与扩展健康检查共用的高频接口）。cookies_from_browser
-    原值透出；auto 时附 auto_browser＝第435次探测解析到的浏览器名（core.ytdl
+    原值透出；auto 时附 auto_browser＝探测解析到的浏览器名（core.ytdl
     结果缓存，零重复探测；空＝未发现已装浏览器，不带 cookie 直连）。
     """
     from importlib.metadata import version

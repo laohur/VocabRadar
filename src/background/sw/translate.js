@@ -7,6 +7,7 @@
 // =============================================================================
 import { cleanDictEntry } from '../../lib/dict-clean.js';
 import { getWord, updateFields } from '../../lib/word-db.js';
+import { isRunawayText } from '../../lib/runaway.js';
 import { _ts, log } from './log.js';
 import {
   backendTranslateOnce, baiduSugTranslate, youdaoDictTranslate, mymemoryTranslate,
@@ -30,9 +31,12 @@ import {
  *   'same-form 译文与原文完全相同但文字系统合格（如 pt→pt 的 americanos 原样回显、
  *              或 es→pt 外来语同形）→ 不立即采纳，记入跨渠道共识票，≥2 个独立
  *              渠道投出同一文本才采纳（单渠道同形大概率是端点偷懒回显，不可信）；
- *   'bad'      空结果/文字系统不符（如 en→zh 返回英文、渠道中文泄漏）→ 丢弃换渠道。
+ *   'bad'      空结果/文字系统不符（如 en→zh 返回英文、渠道中文泄漏）/输出失控
+ *              （退化重复，isRunawayText 判定）→ 丢弃换渠道。
  * 分类规则：src===tgt 一律 ok（同语言不校验）；先比 trim+lowercase 精确相等，
- *   再跑 targetScriptOk 文字系统校验（不等但文字系统不符也是 bad——同语言不同词）。
+ *   再过输出失控检测（LLM 免费渠道偶发单字符无限复读，如 "ooo呜呜呜呜呜…"，
+ *   非空且文字系统合格，旧三道闸拦不住），最后跑 targetScriptOk 文字系统校验
+ *   （不等但文字系统不符也是 bad——同语言不同词）。
  * @param {string} text 译文（可为 null/空）
  * @param {string} word 原文
  * @param {string} src 源语言码
@@ -45,6 +49,10 @@ export function classifyTranslation(text, word, src, tgt) {
   const trimmed = String(text).trim();
   const same = trimmed.toLowerCase() === String(word || '').trim().toLowerCase();
   if (same) return targetScriptOk(trimmed, tgt) ? 'same-form' : 'bad';
+  if (isRunawayText(trimmed, word)) {
+    console.warn(`[VocabRadar][sw][${_ts()}] 校验失败: 译文"${trimmed.slice(0, 60)}" 输出失控（退化重复），视为无效`);
+    return 'bad';
+  }
   if (!targetScriptOk(trimmed, tgt)) {
     console.warn(`[VocabRadar][sw][${_ts()}] 校验失败: 译文"${trimmed}" 不含目标语言(${tgt})文字系统，视为未翻译`);
     return 'bad';

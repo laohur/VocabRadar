@@ -1,7 +1,7 @@
-/* 管理界面双语（第408次，用户指令"后台页面可以切换中英文"）：
+/* 管理界面双语：
    key = 英文原文（en 直接回落显示 key，零维护成本），中文查 ZH 表；
    t(key, params) 做 {x} 占位替换；语言存 localStorage('admin_lang')，
-   切换入口为右上角地球图标（第409次，用户指定），点击后整页 reload
+   切换入口为右上角地球图标，点击后整页 reload
    生效（页面均为函数式重渲染，无常驻状态，reload 即全量翻译）。 */
 'use strict';
 
@@ -38,16 +38,14 @@ const ZH = {
   'Start': '启动',
   'Stop': '关停',
   'Failed to load status: {msg}': '状态加载失败：{msg}',
-  // 第431次：needs_setup 语义改「未配置模型卡片」（models/ 撤销，交 -hf 自动下载）
-  'No model cards configured. Open the LLM page and pick a default model — it auto-downloads on first use.':
-    '尚未配置模型卡片。请打开 LLM 页选择默认模型——首次使用时自动下载。',
+  'No default model selected. Open the LLM page and pick a model — it auto-downloads on first use.':
+    '尚未选择默认模型。请打开 LLM 页选择模型——首次使用时自动下载。',
   'mode={m} · internal port {p}': 'mode={m} · 内部端口 {p}',
   '· model {m}': '· 模型 {m}',
   '· loaded {e}': '· 已加载 {e}',
   'llama-server running': 'llama-server 运行中',
-  'llama-server starting': 'llama-server 启动中',  // 第446次：三态（进程活但 /health 未 200）
+  'llama-server starting': 'llama-server 启动中',
   'not running': '未运行',
-  'Uses the LLM engine; start/stop on the LLM row': '使用 LLM 引擎；在 LLM 行启动/关停',
   'default format {f}': '默认格式 {f}',
   '· cookie configured': '· 已配 cookie',
 
@@ -70,7 +68,6 @@ const ZH = {
   'resident (always on)': 'resident（常驻）',
   'on-demand': 'on-demand（按需）',
   'Idle exit (seconds, on-demand only)': '空闲退出（秒，仅 on-demand）',
-  // 第413次：模型卡片 UI；第431次：撤卡片增删改/命令导入/手动下载，卡片只读
   'General Settings': '通用设定',
   'Default model': '默认模型',
   'Internal port': '内部端口',
@@ -80,7 +77,6 @@ const ZH = {
   'Default': '默认',
   'Downloaded': '已下载',
   'Not downloaded': '未下载',
-  // 第425次：热重载边界收窄；第431次：「设为默认」按钮撤除，文案同步精简
   'Status: {s} · internal port {p} · saving General Settings auto-reloads llama-server · MiniCPM is text-only (no vision OCR; use Qwen for vision)':
     '状态：{s} · 内部端口 {p} · 保存通用设定会重载 llama-server · MiniCPM 为纯文本模型（无视觉 OCR；视觉用途请用 Qwen 系）',
   'Saved. Reloading llama-server with the new model…': '已保存，正在用新模型重载 llama-server…',
@@ -97,7 +93,8 @@ const ZH = {
 
   // ---- 翻译页 ----
   'Playground': '试用',
-  'Engine: llm (llama.cpp; start/stop on the LLM page)': '引擎：llm（llama.cpp；在 LLM 页启动/关停）',
+  'Engine: NLLB-200-distilled-600M (local CT2 int8; no API key; start/stop on the Overview page)':
+    '引擎：NLLB-200-distilled-600M（本地 CT2 int8；免 Key；在总览页启动/关停）',
   'Source language': '源语言',
   'Target language': '目标语言',
   'Auto detect': '自动检测',
@@ -159,13 +156,12 @@ const ZH = {
   'Best (no limit)': '最高（不限）',
   'Audio quality (abr cap)': '音质（abr 上限）',
   'Subtitle language': '字幕语言',
-  'Default (first track)': '默认（首条轨道）',
+  'Default (original language)': '默认（原始语言）',
   'manual': '手动',
   'auto (machine)': '自动（机器生成）',
   'No subtitles': '无字幕轨道',
   'Enter a URL first.': '请先输入链接。',
   'Resolving…': '解析中…',
-  // 第410次：解析结果键值对逐行（.kv）各键
   'Title': '标题',
   'Uploader': '上传者',
   'Duration': '时长',
@@ -207,7 +203,7 @@ function t(key, params) {
 }
 
 // 侧栏静态文案（index.html 内 hardcode）按 data-page 翻译 + 右上角注入
-// 地球图标语言切换按钮（第409次，用户指定；fixed 定位样式见 admin.css）。
+// 地球图标语言切换按钮（fixed 定位样式见 admin.css）。
 // 页面内容（main 内）由各页函数渲染时经 t() 输出，无需此处处理。
 function initI18n() {
   const labels = {
@@ -221,7 +217,6 @@ function initI18n() {
   const btn = document.createElement('button');
   btn.className = 'lang-globe';
   btn.title = t('Switch language');
-  // 第411次：改用 emoji 字符（平台字体自带彩色，无需手画 SVG）。
   btn.textContent = '🌐';
   btn.style.fontSize = '17px';
   btn.addEventListener('click', () => {
