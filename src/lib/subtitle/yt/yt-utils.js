@@ -4,19 +4,15 @@
 // 职责：ensureXmlFormat()（字幕 baseUrl 补 v 参数）、extractYtcfg()（页面 <script>
 //       提取 INNERTUBE_API_KEY/clientVersion）、extractVarFromScripts()/
 //       extractBalancedJson()（花括号配对提取页面 JSON 变量）。
-// 来源：拆分自 src/lib/subtitle/youtube-fetcher.js（2026-09-27 拆分第三刀，
-//       纯机械搬移；随迁注释原样保留）。
 // 消费方：./caption-tracks.js（路径0-3）、./innertube.js（列表补拉/WEB_EMBEDDED_PLAYER）。
 // =============================================================================
 
 /**
  * 补全 YouTube 字幕 URL 的 v 参数（不修改 fmt）。
  *
- * 反思（2026-07-03 第五次修正）：
- *   之前结论"修改fmt会使签名失效"是错误的。fmt 不在 sparams 签名参数列表中，
- *   添加/修改 fmt 不会破坏签名。但 getPlayerResponse() 返回的 baseUrl 签名
- *   绑定了播放器会话，直接 fetch 无论 fmt 取何值都返回 0 字节。
- *   此函数仅补充 v 参数，fmt 由 fetchYouTubeTrack 中的 innertube 路径处理。
+ * 注意：getPlayerResponse() 返回的 baseUrl 签名绑定播放器会话，直接 fetch
+ *   无论 fmt 取何值都返回 0 字节。此函数仅补充 v 参数，fmt 由
+ *   fetchYouTubeTrack 中的 innertube 路径处理。
  *
  * @param {string} url 原始 baseUrl
  * @param {string} videoId 当前视频 ID

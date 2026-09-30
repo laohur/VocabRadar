@@ -4,7 +4,6 @@
 // 职责：setTracks()（填充轨道下拉框 + 自动加载链路：直取 → 9s/22s 模拟切轨，
 //       至多 4 次可见尝试）、ensureASRTrackOption()（无多轨道时保底 ASR 选项）、
 //       onTrackSelect()（用户切换轨道：ASR 轨道按覆盖率启动识别，常规轨道下载字幕）。
-// 来源：拆分自 src/content/video-sidebar.js（2026-09-27 拆分第四刀，纯机械搬移）。
 // 状态内聚：_tracks（轨道列表）、_trackFetchFn（按轨道下载函数）、
 //       setTracks._retryTimer/onTrackSelect._selToken（函数属性令牌）随函数迁入，
 //       仅本模块读写；_asrTrackIndex/_userPickedASR 仍属门面（asr-flow 同用），
@@ -39,17 +38,16 @@ let _trackFetchFn = null;     // 按轨道下载字幕的函数（fetchYouTubeTr
 
 // === 设置字幕轨道选择器 ===
 // tracks: 轨道列表, pickedIndex: 默认选中, fetchFn: 按轨道下载字幕的函数
-// 反思（2026-07-03）：
-//   1) 用户要求"字幕虚空轨道，要真实"——去掉"空(None)"选项，只列真实轨道。
-//      onTrackSelect 不再处理 idx=-1（选空）分支。
-//   2) ASR 按钮已移入 #beaver-track-row 与轨道同行；行始终显示（无轨道时
-//      只显示 ASR 按钮，select/label 隐藏），保证 ASR 按钮始终可用。
-//   3) ASR 作为最后一个轨道选项添加（🎤 ASR），用户可从下拉框选择。
-//      选择 ASR 轨道时启动 ASR（先回放缓存再实时识别），选择其他轨道时
-//      停止 ASR 并加载对应字幕。
-// 反思（2026-07-08）：用户要求"只有一种 asr，先取本地缓存，若在 asr 及时
-//   补充"。合并 Live/Cached 双轨道为单一 ASR 轨道，点击时 startASR 内部
-//   先回放缓存段再实时识别接续（replayCachedSegs + 实时识别）。
+// 用户要求"字幕虚空轨道，要真实"——去掉"空(None)"选项，只列真实轨道；
+//   onTrackSelect 不处理 idx=-1（选空）分支。
+// ASR 按钮移入 #beaver-track-row 与轨道同行；行始终显示（无轨道时
+//   只显示 ASR 按钮，select/label 隐藏），保证 ASR 按钮始终可用。
+// ASR 作为最后一个轨道选项添加（🎤 ASR），用户可从下拉框选择：
+//   选择 ASR 轨道时启动 ASR（先回放缓存再实时识别），选择其他轨道时
+//   停止 ASR 并加载对应字幕。
+// 用户要求"只有一种 asr，先取本地缓存，若在 asr 及时补充"：Live/Cached
+//   双轨道合并为单一 ASR 轨道，点击时 startASR 内部先回放缓存段再实时
+//   识别接续（replayCachedSegs + 实时识别）。
 export function setTracks(tracks, pickedIndex, fetchFn) {
   _tracks = tracks ? [...tracks] : [];
   _trackFetchFn = fetchFn;
@@ -85,7 +83,7 @@ export function setTracks(tracks, pickedIndex, fetchFn) {
   // 始终显示 select 和 label（因为有 ASR 选项）
   sel.style.display = '';
   if (label) label.style.display = '';
-  // 反思（2026-07-10 #85）：用户手动选了 ASR 轨道后，字幕异步到达触发 setTracks 时
+  // 用户手动选了 ASR 轨道后，字幕异步到达触发 setTracks 时
   //   不能覆盖用户的 ASR 选中态（否则"过一会又自己改成中文轨道"）。
   //   _userPickedASR=true 时保持 ASR 选中，否则用 pickedIndex。
   if (getUserPickedASR() && _asrTrackIndex >= 0) {
@@ -97,7 +95,7 @@ export function setTracks(tracks, pickedIndex, fetchFn) {
   }
   row.style.display = 'flex';
 
-  // 第一百四十四次（用户裁定"咋不模仿用户操作切换轨道？等很久还在刷"）：
+  // 用户裁定"咋不模仿用户操作切换轨道？等很久还在刷"：
   // 废除同调用反复重试。改为**模拟用户动作**：直取一次 → 9s 后模拟"切走再切回"
   // （走与手动完全相同的 onTrackSelect 路径，含其内部二重试与 path0 播放器等待）
   // → 22s 再模拟一轮 → 仍空则展开显示状态并停止（不再无限刷）。全程至多 4 次可见尝试。
@@ -134,7 +132,7 @@ export function setTracks(tracks, pickedIndex, fetchFn) {
   const __tick = async () => {
     try {
       __round++;
-      setAutoChainActive(__round < __ROUNDS.length); // 第一百四十五次：链路活动标记
+      setAutoChainActive(__round < __ROUNDS.length); // 链路活动标记
       if (__round >= __ROUNDS.length) {
         setAutoChainActive(false);
         // 链路走完仍空：展开亮出状态 + 单条汇总告警（不再刷）
@@ -143,7 +141,7 @@ export function setTracks(tracks, pickedIndex, fetchFn) {
           const rootNow = getRoot();
           try { if (rootNow && rootNow.classList.contains('beaver-collapsed')) toggleSidebarCollapse(false); } catch (e) { /* ignore */ }
         }
-        // 第一百八十二次：模块段归一——[youtube] 专属 lib/subtitle/youtube-fetcher.js，
+        // 模块段归一——[youtube] 专属 lib/subtitle/youtube-fetcher.js，
         //   本文件的日志一律用 [video-sidebar]，避免同名前缀跨文件混淆。
         console.warn('[VocabRadar][video-sidebar] YouTube 自动加载链路(含模拟切轨)走完仍未命中——请点侧栏徽标贴日志');
         return;
@@ -206,9 +204,9 @@ export function ensureASRTrackOption() {
 }
 
 // 用户切换字幕轨道
-// 反思（2026-07-03）：ASR 作为轨道之一，选择 ASR 轨道时启动实时识别，
+// ASR 作为轨道之一，选择 ASR 轨道时启动实时识别，
 // 选择其他轨道时停止 ASR（如运行中）并加载对应字幕。
-// 反思（2026-07-08）：合并 Live/Cached 双轨道为单一 ASR 轨道，点击时
+// Live/Cached 双轨道合并为单一 ASR 轨道，点击时
 //   startASR 内部先回放缓存段再实时识别接续（replayCachedSegs + 实时识别）。
 export async function onTrackSelect(idx) {
   const _root = getRoot();
@@ -218,14 +216,14 @@ export async function onTrackSelect(idx) {
   if (idx === -1) return;
 
   // === ASR 轨道被选中：按缓存覆盖率决定是否启动 ASR 继续识别 ===
-  // 反思（2026-07-09）：用户反馈「轨道切换asr之后，为啥asr按钮也按下去了？」。
-  //   根因：旧版调用 toggleASR（toggle 语义），ASR 已运行时会误停止。
-  //   修正：ASR 已运行时不重复触发（仅同步轨道选中态），未运行时才启动。
-  // 反思（2026-07-10 #86）：用户要求「选择asr轨道后，若识别区间未覆盖全文，则继续识别，
+  // 用户反馈「轨道切换asr之后，为啥asr按钮也按下去了？」：
+  //   根因：此前调用 toggleASR（toggle 语义），ASR 已运行时会误停止。
+  //   现行为：ASR 已运行时不重复触发（仅同步轨道选中态），未运行时才启动。
+  // 用户要求「选择asr轨道后，若识别区间未覆盖全文，则继续识别，
   //   asr按钮此时才默认选中」。即：缓存完整时仅选中轨道不启动 ASR（按钮不选中），
   //   缓存不完整时才启动 ASR 继续识别（按钮选中）。
   if (_tracks && _tracks[idx] && _tracks[idx].isASR) {
-    // #85: 用户手动选 ASR 轨道，置标记防止后续 setTracks 覆盖选中态
+    // 用户手动选 ASR 轨道，置标记防止后续 setTracks 覆盖选中态
     setUserPickedASR(true);
     if (isASRActive()) {
       log('用户选择 ASR 轨道, ASR 已运行, 仅同步选中态');
@@ -258,12 +256,12 @@ export async function onTrackSelect(idx) {
   }
 
   // === 常规轨道：如 ASR 运行中则先停止（跳过恢复，新轨道会自己加载字幕）===
-  // #85: 用户切换到常规轨道，清除 ASR 选中标记
+  // 用户切换到常规轨道，清除 ASR 选中标记
   setUserPickedASR(false);
   if (isASRActive()) {
     stopASRInternal(true);
   }
-  // 第一百四十五次：用户手动切轨 = 立即接管，后台自动链路停止（不与用户抢）
+  // 用户手动切轨 = 立即接管，后台自动链路停止（不与用户抢）
   clearTimeout(setTracks._retryTimer);
   setAutoChainActive(false);
 
@@ -271,7 +269,7 @@ export async function onTrackSelect(idx) {
   log('用户切换轨道:', idx, _tracks[idx].languageCode);
   if (panel) showLoading();
   try {
-    // 第一百三十四次：空结果自动重试×2（1.5s/4s）——手动"切走再切回"能成功证明
+    // 空结果自动重试×2（1.5s/4s）——手动"切走再切回"能成功证明
     // 多为时序问题（播放器/单例未热），不应让用户手动救。选轨令牌防过期重试覆盖。
     if (!onTrackSelect._selToken) onTrackSelect._selToken = 0;
     const selToken = ++onTrackSelect._selToken;

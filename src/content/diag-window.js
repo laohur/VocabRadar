@@ -1,22 +1,21 @@
 /**
- * diag-window.js —— 诊断中心路由窗（唯一诊断入口，第364次拆分）
+ * diag-window.js —— 诊断中心路由窗（唯一诊断入口）
  *
- * 用户指令（逐字）："诊断窗口十个路由窗口，点击哪个标签显示哪个。侧栏的诊断菜单改名，
+ * 需求（用户指令）："诊断窗口十个路由窗口，点击哪个标签显示哪个。侧栏的诊断菜单改名，
  *   大杂烩的诊断窗口也拆分独立。都从一个诊断路由窗口启动。分别是视频侧栏注入时机、
  *   加载耗时、正文提取、AI上下文、下载音频。"
  *
- * 四个标签（点击标签显示对应内容，记忆上次所在标签）：
- *   1. 注入时机 —— vs/inject-timing.js 六档切换（原右下角独立浮窗撤除，档位能力并入此）
- *   2. 加载耗时 —— 提示链路分段时间线（原 main-text.js renderHintTiming 迁入，
- *      数据源 window.__beaverHintTiming / __beaverHintBoot / __beaverWsDedup 等全局）
- *   3. 正文提取 —— 四方案耗时对比 + 预览（原 main-text.js renderDiagRows 迁入，
- *      测量本体 measureMainTextExtractors 仍留在 main-text.js——迁走的是窗，留下的是测量）
+ * 标签（点击标签显示对应内容）：
+ *   1. 注入时机 —— vs/inject-timing.js 六档切换（档位能力并入此窗，不再有独立浮窗）
+ *   2. 加载耗时 —— 提示链路分段时间线（数据源 window.__beaverHintTiming /
+ *      __beaverHintBoot / __beaverWsDedup 等全局）
+ *   3. 正文提取 —— 四方案耗时对比 + 预览（测量本体 measureMainTextExtractors
+ *      留在 main-text.js——迁走的是窗，留下的是测量）
  *   4. AI 上下文 —— 当前送给 AI 的正文来源/耗时/全文预览（同一次测算的 ai* 字段）
- *   （第398次：原「下载音频」标签随下载音频/录音工作流一并退役）
+ *   5. 字幕注释 —— ann-diag 四路证据
  *
- * 显隐语义（沿第363次）：菜单调用（缺省）→ 强制显示并重测；快捷键 Ctrl+Shift+V
- *   （reveal:false）→ 纯切换，仅唤出时重测。原 main-text 窗与 inject-timing 浮窗
- *   「同键双开」缺陷就此消除——本窗是 Ctrl+Shift+V 的唯一接收方。
+ * 显隐语义：菜单调用（缺省）→ 强制显示并重测；快捷键 Ctrl+Shift+V（reveal:false）
+ *   → 纯切换，仅唤出时重测。本窗是 Ctrl+Shift+V 的唯一接收方（避免同键多窗）。
  *
  * 容器 id = beaver-diag-center，已同步列入 main-text.js 的 OWN_UI_SELECTOR
  *   （正文提取必须跳过自家 UI，否则诊断窗文字会被当成正文喂给模型）。
@@ -38,10 +37,8 @@ const TABS = [
   ['ann', 'diag.tabAnn']
 ];
 
-// 记忆上次所在标签（页面刷新即回默认 extract——原大杂烩窗的主打内容）
-// 第三百七十四次（用户批复"诊断窗口打开，应当默认啥都标签不选"）：初始 null=不选任何标签。
-//   旧版默认 extract 还连带每次唤窗白跑四方案正文提取（第373次已改 ann，但仍带选中态）；
-//   现按批复改为无选中——内容区显示引导提示，点标签才加载对应诊断（全懒加载）。
+// 默认无选中标签（用户批复"诊断窗口打开，应当默认啥都标签不选"）：内容区显示引导提示，
+//   点标签才加载对应诊断（全懒加载，避免每次唤窗白跑正文提取测算）。
 let _curTab = null;
 
 // HTML 转义 / 毫秒格式化（各标签渲染共用）
@@ -57,7 +54,7 @@ async function renderTimingTab() {
   const cur = await readInjectTiming();
   let html = '<div class="pv"><b>【视频侧栏注入时机】当前档 ' + esc(cur) + '</b>'
     + '<div class="pvt">背景：评论区挂载前把侧栏插入右列文档流，会打断 B站 Vue 初始 hydration'
-    + '（第362次实锤：只有档0 致评论区消失）。默认档 3＝评论区挂载后再注入，30 秒超时兜底。</div></div>';
+    + '（实测：只有档0 致评论区消失）。默认档 3＝评论区挂载后再注入，30 秒超时兜底。</div></div>';
   html += '<div class="tgbar">';
   for (const [val, label, tip] of TIMING_LABELS) {
     html += '<button class="tgb' + ((val | 0) === cur ? ' cur' : '') + '" data-timing="' + esc(val)
@@ -127,7 +124,7 @@ function renderLoadTab() {
   const ex = t.extra || {};
   html += '<tr><td class="k">文本节点 / 批次 / 串行查词</td><td class="v">'
     + esc((ex.nodes || 0) + ' / ' + (ex.batches || 0) + ' / ' + (ex.queries || 0))
-    + '</td><td class="n">批间还各等一次空闲回调（最长 250ms/批，第207次 1000→250）</td></tr>';
+    + '</td><td class="n">批间还各等一次空闲回调（最长 250ms/批）</td></tr>';
   // 扫描挡量：dict-stats 环形账本（最多 8 批）聚合 text-hint 批次的挡量
   const thBatches = getBatches().filter((b) => b && b.source === 'text-hint');
   const agg = thBatches.reduce((s, b) => ({
@@ -209,7 +206,7 @@ function renderExtractTab(r) {
     + '①喂法对比＝同一个 Readability 喂入范围不同（整页克隆 / 子树克隆）；'
     + '②替代对比＝换掉 Readability 本体（方案五/六＝Defuddle 的整页/子树两种喂法；'
     + '自研密度法为零依赖候选）。整页克隆只是喂法，不是替代。'
-    + '选型（第206次用户裁定）：给 AI 的主链路＝方案五 Defuddle（整页克隆喂入），'
+    + '选型（用户裁定）：给 AI 的主链路＝方案五 Defuddle（整页克隆喂入），'
     + '自研密度法兜底、直接解析保底；Readability 退出主链，仅存本表对比。</td></tr>';
   html += '<tr><td class="k">Readability 模块加载</td><td class="v">' + ms(r.loadMs)
     + '</td><td class="n">首次约 90KB，之后走缓存</td></tr>';
@@ -250,7 +247,7 @@ function renderAiTab(r) {
     + '<div class="pvt" data-pv="ai">' + esc(r.aiPreview) + '…</div></div>';
 }
 
-// === 标签 6：字幕注释（第370次：ann-diag 四路证据——词典装载 / 字幕时间线 / 每句统计 / 翻译通道） ===
+// === 标签 6：字幕注释（ann-diag 四路证据——词典装载 / 字幕时间线 / 每句统计 / 翻译通道） ===
 // 数据源：window.__beaverAnnDiag()（lib/ann-diag.js 环形缓冲；打包版默认关日志也照常采集，
 // 本标签就是为「用户报字幕没注释+字幕晚到」取证据而生）。
 function renderAnnTab() {
@@ -313,14 +310,13 @@ function renderAnnTab() {
       : '<div class="pvt">无（本页未渲染视频字幕）</div>')
     + '</div>';
   // ④ 每句注释统计（0 注释是「跳过」还是「pending 拖住」一眼可见；out+pending 全 0 标红）
-  // 第三百七十二次：词0 句折叠——YouTube 字幕含大量 [music] 类无词噪音句，旧版 slice(-15)
-  //   末窗全被噪音句占据，正常句统计被挤出视野（取证盲区：用户贴的 51 句末 15 条全是词0，
-  //   真正要看的正常句 out/pending 根本看不到）。改为只显示有词句子（末 15 条倒序），
-  //   无词句折叠为计数行——噪音句 out 恒 0 无信息量，折叠不丢证据。
+  // 词0 句折叠：YouTube 字幕含大量 [music] 类无词噪音句，若直接倒序取末窗会被噪音句
+  //   占据，真正要看的正常句 out/pending 根本看不到（取证盲区）。改为只显示有词句子
+  //   （末 15 条倒序），无词句折叠为计数行——噪音句 out 恒 0 无信息量，折叠不丢证据。
   const _annWithWords = d.lines.filter((r) => r.words > 0);
   const _annNoWords = d.lines.length - _annWithWords.length;
-  // 第三百七十三次：全页聚合行——环形明细 100 条会被噪音句挤占，「有词 0 句」可能是
-  //   挤出假象；聚合计数不受 CAP 影响，先看全页总量再说明细可信度。
+  // 全页聚合行——环形明细有 CAP，「有词 0 句」可能是被噪音句挤出明细的假象；
+  //   聚合计数不受 CAP 影响，先看全页总量再说明细可信度。
   const _agg = d.linesAgg || { total: 0, withWords: 0, outPos: 0, pendingPos: 0 };
   html += '<div class="pv"><b>【④ 每句注释统计】</b><table>'
     + '<tr><td class="k">全页聚合</td><td class="v' + ((_agg.withWords > 0) ? '' : ' err') + '">'
@@ -341,7 +337,7 @@ function renderAnnTab() {
           + ' seen跳' + r.skipSeen + ' 高频跳' + r.skipHigh + ' oov=' + r.oov + ' ' + ms(r.ms) + '</td></tr>').join('') + '</table>'
       : '<div class="pvt">无有词句子（' + (d.lines.length ? '全部是 [music] 类无词噪音句' : '字幕算注未运行') + '）</div>')
     + '</div>';
-  // ④b 渲染层漏斗（第三百七十二次）：计算层 out>0 但页面无高亮时，看丢在哪段——
+  // ④b 渲染层漏斗：计算层 out>0 但页面无高亮时，看丢在哪段——
   //   raw→valid 递减=译文过滤（pickCleanShortTrans 空）；valid→shown 递减=阈值过滤；
   //   shown>0 仍无高亮=noAnn 开关或 DOM 层。noAnn=true 标红。
   const _renders = d.renders || [];
@@ -395,8 +391,7 @@ async function renderTab(shadow, tab) {
   } else if (tab === 'ann') {
     html = renderAnnTab();
   } else {
-    // 第三百七十四次：默认（null）无选中标签——不预载任何诊断数据（含正文提取测算）；
-    // 第398次：audio 标签退役后未知键也落此兜底
+    // 默认（null）无选中标签——不预载任何诊断数据（含正文提取测算）；未知键也落此兜底
     html = '<div class="tip">请点上方标签查看对应诊断（数据均为点击时才收集）。</div>';
   }
   html += '<div class="tip">页面：' + esc(location.host) + ' ｜ ' + new Date().toLocaleTimeString()
@@ -431,7 +426,6 @@ function switchTab(shadow, tab) {
  * 打开/复用「诊断中心」路由窗
  * @param {{reveal?: boolean}} opts
  *   reveal=false（快捷键调用）→ 纯切换显隐；缺省（菜单调用）→ 强制显示并重测。
- *   （第398次：audioDownload 注入参数随下载音频退役删除）
  * @returns {Promise<void>}
  */
 export async function openDiagCenter(opts = {}) {
@@ -442,12 +436,12 @@ export async function openDiagCenter(opts = {}) {
   } else {
     host = document.createElement('div');
     host.id = DIAG_HOST_ID;
-    // 创建即隐藏（诊断窗默认不可见，仅 Ctrl+Shift+V / 菜单唤出——第363次语义）
+    // 创建即隐藏（诊断窗默认不可见，仅 Ctrl+Shift+V / 菜单唤出）
     host.style.cssText = 'position:fixed;right:16px;bottom:16px;z-index:2147483646;display:none;';
     shadow = host.attachShadow({ mode: 'open' });
     shadow.innerHTML = `
       <style>
-        /* 样式承自原 main-text 诊断窗：resize:both + 拖动 + 视口宽松钳位（第195/213次） */
+        /* resize:both + 拖动 + 视口宽松钳位 */
         .box { width: 520px; height: calc(50vh + 78px); min-width: 340px; min-height: 220px;
                max-width: 96vw; max-height: 94vh;
                display: flex; flex-direction: column; resize: both; overflow: hidden;
@@ -570,7 +564,7 @@ export async function openDiagCenter(opts = {}) {
   const reveal = (opts.reveal === false) ? (host.style.display === 'none') : true;
   host.style.display = reveal ? 'block' : 'none';
   if (reveal) {
-    // 唤出即重测（第363次语义）：丢缓存，按当前标签重渲染
+    // 唤出即重测：丢缓存，按当前标签重渲染
     shadow.__r = null;
     switchTab(shadow, _curTab);
     // await renderTab 交给 switchTab 内部 catch，这里无需 await（显隐已定，渲染自跑）

@@ -1,5 +1,5 @@
 // ============================================================
-// 文件职责：站点停用规则（Deactivate）唯一实现（第二百七十次新建）
+// 文件职责：站点停用规则（Deactivate）唯一实现
 // 来源：用户需求——①引导页增 deactivate 栏（默认折叠，逐条记录：左地址输入、
 //   右功能点选 所有/网页提示/文本侧栏/视频侧栏/视频叠加字幕）；②两侧栏 ⋯ 菜单
 //   增「停用本站」项（写当前域规则→立即抑制→跳引导页停用栏微调）；③规则范围
@@ -13,7 +13,7 @@
 // 存储键：chrome.storage.local 'deactivateRules'
 //   值 = [{ pat:'example.com', query:true, hint:true, textSidebar:true, videoSidebar:true, overlay:true }, …]
 //   布尔字段 true = 在命中页面上"停用"该功能；五项全 true 即用户口中的「所有」。
-// 五大功能键：query=搜索栏/右键查询(272次新增) / hint=网页提示(text-hint) /
+// 五大功能键：query=搜索栏/右键查询 / hint=网页提示(text-hint) /
 //   textSidebar=文本侧栏(web-sidebar) / videoSidebar=视频侧栏(video-sidebar) /
 //   overlay=视频叠加字幕(subtitle-overlay)。
 //
@@ -100,6 +100,10 @@ export function matchPattern(pat, loc) {
   return true;
 }
 
+// "Extension context invalidated"＝扩展更新/重载后旧内容脚本的预期态（storage 同步抛错）；
+//   对账/启动链路会反复调用本读取，只留痕一次，后续静默（回退空数组不变）。
+let _ctxInvalidWarned = false;
+
 /** 读规则数组（storage 缺键/异常一律回退空数组，绝不抛错打断启动链路） */
 export function getDeactivateRules() {
   return new Promise((resolve) => {
@@ -115,7 +119,15 @@ export function getDeactivateRules() {
         resolve(Array.isArray(v) ? v : []);
       });
     } catch (e) {
-      console.warn('[VocabRadar][deactivate] storage 不可用，按无规则处理:', e);
+      const msg = e && (e.message || String(e));
+      if (msg && /Extension context invalidated/.test(msg)) {
+        if (!_ctxInvalidWarned) {
+          _ctxInvalidWarned = true;
+          console.warn('[VocabRadar][deactivate] storage 不可用（扩展已更新/重载，本页内容脚本失效），按无规则处理。刷新页面后恢复');
+        }
+      } else {
+        console.warn('[VocabRadar][deactivate] storage 不可用，按无规则处理:', e);
+      }
       resolve([]);
     }
   });

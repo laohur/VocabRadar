@@ -1,9 +1,9 @@
 // =============================================================================
-// log-flag.js —— 日志双阀门（第367次新增）
+// log-flag.js —— 日志双阀门
 // -----------------------------------------------------------------------------
 // 职责：debugLog（调试日志）/ diagLog（诊断日志）两个 storage 键的读取与即时生效，
 //       为各上下文提供同步查询接口 isDebugLog()/isDiagLog()。
-// 背景（2026-09-22 第三百六十七次）：config.json debug 默认改 false 后，打包默认静默；
+// 背景：config.json debug 默认改 false 后，打包默认静默；
 //       引导页 help 底部两个开关（guide.js renderHelp 尾部）勾选写 storage，
 //       本模块经 chrome.storage.onChanged 监听即时翻转，content script 无需刷新页面。
 // 语义（用户裁定）：

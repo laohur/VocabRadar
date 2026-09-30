@@ -1,11 +1,8 @@
-// VocabRadar 视频侧栏 · ASR 进度条 DOM 子模块（第一百三十八次拆分第一刀）
+// VocabRadar 视频侧栏 · ASR 进度条 DOM 子模块
 //
-// 用户裁定："有的文件太大拆分"——video-sidebar.js（~4900 行）按功能切块，
-// 本模块为第一刀：进度条的纯 DOM 三函数（显示/隐藏/百分比填充）。
+// 进度条的纯 DOM 三函数（显示/隐藏/百分比填充）。
 // 只依赖根元素获取器，零业务逻辑、零反向依赖——video-sidebar.js 经 init 注入
-// getRoot，避免循环 import；后续刀口（录制工作流/footer 动作）照此模式推进。
-// updateASRProgressFromStage 因耦合闸门评估/诊断日志，暂留主文件，待 deps
-// 注入方案覆盖 evaluateGate/pushDiagLine 后再切。
+// getRoot，避免循环 import。
 
 /** 根元素获取器（由 video-sidebar.js init 注入：() => _root） */
 let _getRoot = () => null;
@@ -28,9 +25,8 @@ export function showASRProgress(stage, detail) {
   if (bar) bar.style.display = '';
   if (stageEl) stageEl.textContent = stage || '';
   if (detailEl) detailEl.textContent = detail || '';
-  // 第一百三十九次（用户反馈"切换 ASR 后字幕区压缩为无"）：进度行出现会挤占
-  // 固定外框内的面板空间（面板地板 120px）。若当前外框高度不足以容纳
-  // 「其他固定行 + 面板地板」，一次性补偿差额到外框——属可用性让步，
+  // 进度行出现会挤占固定外框内的面板空间（面板地板 120px）。若当前外框高度
+  // 不足以容纳「其他固定行 + 面板地板」，一次性补偿差额到外框——属可用性让步，
   // 与"ASR 不重塑窗口"冲突处已折中：只在将压穿地板时发生，且写日志留痕。
   try {
     const PANEL_FLOOR = 120;

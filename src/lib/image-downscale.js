@@ -1,12 +1,12 @@
-// 图片等比缩放工具（第二百六十六次，2026-09-10，用户裁定："图片短边最长1280"）
+// 图片等比缩放工具（用户裁定："图片短边最长1280"）
 // 背景：网站 Creator/引导页/右键识别把原始截图（如 VLC 4K 快照，PNG 5-10MB）整包
-//   透传到 OCR（Tesseract offscreen / LLM 视觉 API），白耗传输且超视觉 API 预算。
-// 阈值依据（调研）：Tesseract.js 社区预处理惯例把图片控制在千像素级；
+//   透传到 LLM 视觉 API，白耗传输且超视觉 API 预算。
+// 阈值依据（调研）：图像预处理惯例把图片控制在千像素级；
 //   主流视觉 API 各有图片预算（Anthropic 建议长边≤1568、OpenAI 高清档按 768 短边切块，
 //   超限内部自行下采样）——本扩展按用户裁定统一"短边 ≤1280"，短边未超限原图不动。
 // 环境自适应：Service Worker 无 DOM → OffscreenCanvas + convertToBlob；
 //   扩展页/offscreen document 有 DOM → 普通 canvas + toBlob。createImageBitmap 两端皆可用。
-// CSP 纪律（同 guide/parser.js dataUrlToFile 第259次教训）：dataURL 一律 atob/btoa 手动
+// CSP 纪律（同 guide/parser.js dataUrlToFile 的教训）：dataURL 一律 atob/btoa 手动
 //   编解码，不用 fetch(dataUrl)——扩展页 connect-src 对 data: 依 CSP 配置可拒。
 // 失败不抛：任何一步失败都原样返回输入（scaled=false + error 说明），绝不阻断 OCR 主链路。
 

@@ -1,4 +1,4 @@
-// 词典层数据处理统计（2026-08-16 第七十次）
+// 词典层数据处理统计
 //
 // 背景：用户要求"要说明数据来源——每次处理要说处理了多少文本、分了多少词、有多少单词、
 //       各项属性多少从词典来、多少组装的"，且"要理解词典层的逻辑，而非在日志打印上做文章"。
@@ -15,7 +15,7 @@
 //   - 批次环形保留最近 MAX 批，经各模块 getDiagState 的 stats 字段输出到诊断悬浮窗。
 // 同页面内所有处理模块共享本实例（ESM 单例），诊断窗一次看到同一账本。
 
-// 第367次：logBatch 输出接 diagLog 阀门（引导页「诊断日志」开关）
+// logBatch 输出接 diagLog 阀门（引导页「诊断日志」开关）
 import { isDiagLog } from './log-flag.js';
 
 const MAX = 8;
@@ -89,7 +89,7 @@ export function resetBatches() { batches = []; }
  */
 export function logBatch(b) {
   if (!b) return;
-  // 第367次：诊断类日志接 diagLog 阀门（引导页「诊断日志」开关，storage.diagLog 即时生效）
+  // 诊断类日志接 diagLog 阀门（引导页「诊断日志」开关，storage.diagLog 即时生效）
   if (!isDiagLog()) return;
   const d = b.dict, a = b.asm;
   console.log(

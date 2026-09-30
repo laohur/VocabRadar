@@ -6,22 +6,16 @@
 //   - 监听 storage 变化，启停提示或热更新配色
 //   - 接收右键菜单消息，弹出查词面板
 
-// 第一百九十六次：boot 埋点——classic 入口开跑时刻（早于下方 ESM import）。
-//   用户实测「DCL→startHint」间隔 1685ms 占首提延迟的大头，但 th 埋点从 startHint 才开始，
-//   无法区分「浏览器注入等待」与「ESM 模块图装载」各占多少。本值由 th/core.js 装载时
-//   回填进 thTiming.marks['hint:scriptStart']（同一 performance.now() 时间基），诊断窗
-//   「网页提示链路耗时」表即显示三段：DCL→classic 入口→startHint→首高亮。
+// boot 埋点：classic 入口开跑时刻（早于下方 ESM import）。由 th/core.js 装载时回填进
+// thTiming.marks['hint:scriptStart']（同一 performance.now() 时间基），诊断窗
+// 「网页提示链路耗时」表显示三段：DCL→classic 入口→startHint→首高亮。
 try { window.__beaverHintScriptAt = performance.now(); } catch (_) { /* ignore */ }
 
 let _impl = null;
 
-// === 第二百次：启动链路可观测 + 自恢复（用户：火狐多页扫描慢、commandcode.ai 上
-//     startHint 永未发生且零痕迹）===
-// 旧问题：import() 失败被外层 try/catch 静默吞进 __beaverHintBoot（不打日志）；
-//   import() 挂起更是无任何记录；_impl=null 时 5s 对账也静默 return。
-//   违反"不遮蔽错误"——bundle 化后模块图装载链路一旦断（如某 chunk 被拦/加载失败），
-//   网页提示全灭且诊断表只剩一排"未发生"。现补三道观测 + 一次自恢复：
-//   ①boot.state 记 loading/ok/error/hang；②10s/30s 挂起告警；③失败 3s 后重试一次。
+// === 启动链路可观测 + 自恢复 ===
+// import() 失败/挂起必须出声（不遮蔽错误）：①boot.state 记 loading/ok/error/hang；
+// ②10s/30s 挂起告警；③失败 3s 后重试一次。
 let _importSettled = false;
 function _bootPatch(patch) {
   try {
@@ -29,7 +23,7 @@ function _bootPatch(patch) {
   } catch (_) { /* ignore */ }
 }
 
-// 同步 myWords 到网页 localStorage（供 VocabRadar 网站 My Words 页读取，2026-09-20）
+// 同步 myWords 到网页 localStorage（供 VocabRadar 网站 My Words 页读取）
 // 存储键 vocabradar_ext_my_words，格式 {new:[], known:[]}（对齐扩展 storage.myWords）
 function _syncMyWordsToWeb(mw) {
   try {
@@ -55,11 +49,11 @@ async function _loadImpl() {
   }
 }
 
-// === 第二百七十次：停用规则（Deactivate）gate ===
+// === 停用规则（Deactivate）gate ===
 // 命中「网页提示」停用规则时本页尽量不活动：不加载模块图（无 import）、不挂
 // 5s 对账定时器/可见性监听，仅留一个轻量 storage 监听，规则解除后再走完整
-// _hintBoot()。匹配/存储逻辑唯一来源 src/lib/deactivate.js（非打包入口文件，
-// 构建时原样进 dist，classic 入口可动态 import）。
+// _hintBoot()。匹配/存储逻辑唯一来源 src/lib/deactivate.js（构建时原样进 dist，
+// classic 入口可动态 import）。
 let _hintDeactLib = null;
 function _hintLoadDeactLib() {
   return import(chrome.runtime.getURL('src/lib/deactivate.js'))
@@ -77,10 +71,9 @@ function _hintSuppressed() {
     .then((s) => s.hint === true)
     .catch(() => false);
 }
-// 272次：Query（右键查询+查询栏）可用性——停用规则 query 项 + 全局开关。
+// Query（右键查询+查询栏）可用性：停用规则 query 项 + 全局开关。
 // 与网页提示解耦：提示关/停不影响查询，查询关/停不影响提示。
-// 286次：Query 拆分为右键查询（contextLookupEnabled）与查询栏（queryBarEnabled）；
-//   停用规则 query 项仍同时门控两者（规则语义不变）；旧 queryEnabled 仅作新键未设置时的回退。
+// 右键查询=contextLookupEnabled，查询栏=queryBarEnabled（旧键 queryEnabled 仅作未设置时回退）。
 function _querySuppressed() {
   if (!_hintDeactLib) return Promise.resolve(false);
   return _hintDeactLib.suppressionFor(location)
@@ -109,8 +102,8 @@ let _booted = false;
   console.log(`[VocabRadar][text-hint] content script 已加载 @ ${location.href}`);
   try {
     await _hintLoadDeactLib();
-    // 272次：整页不加载的判据由「网页提示停」改为「网页提示+搜索栏双停」——
-    // 提示被停时仍需加载模块图以服务右键查询/搜索栏（SHOW_CONTEXT_PANEL 监听在本文件）。
+    // 整页不加载的判据：「网页提示+搜索栏双停」——提示被停时仍需加载模块图
+    // 以服务右键查询/搜索栏（SHOW_CONTEXT_PANEL 监听在本文件）。
     const _sup0 = _hintDeactLib ? await _hintDeactLib.suppressionFor(location) : { hint: false, query: false };
     if (_sup0.hint && _sup0.query) {
       console.log('[VocabRadar][text-hint] 命中停用规则（网页提示+搜索栏全停），本页不加载提示模块（规则解除后自动恢复）');
@@ -124,12 +117,12 @@ let _booted = false;
   }
 })();
 
-// === boot：启动主体（第二百七十次自 IIFE 抽出；逻辑原样 + 规则实时停用分支）===
+// === boot：启动主体（幂等；含停用规则实时停用分支）===
 async function _hintBoot() {
   if (_booted) return;
   _booted = true;
   try {
-    // 挂起看门狗：10s 提醒、30s 定性（import 悬而不决时此前零痕迹）
+    // 挂起看门狗：10s 提醒、30s 定性
     const t0 = Date.now();
     const hangTimer = setInterval(() => {
       if (_importSettled) { clearInterval(hangTimer); return; }
@@ -156,28 +149,21 @@ async function _hintBoot() {
     }
     clearInterval(hangTimer);
 
-    // 诊断挂钩（2026-08-14 第五十四次）：向诊断悬浮窗暴露真实运行实例的状态。
+    // 诊断挂钩：向诊断悬浮窗暴露真实运行实例的状态。
     //   不能由 diagnose.js 二次 import 本模块（会得到独立实例，看不到运行时状态）。
     window.__beaverHintDiag = () => (_impl && typeof _impl.getDiagState === 'function')
       ? _impl.getDiagState()
       : null;
 
-    // 控制挂钩（2026-08-14 第五十六次）：诊断悬浮窗操作按钮直接调用模块方法。
-    //   关键：既写 storage（全链路同步）又直接调用 _impl（绕过可能丢失的 onChanged 事件），
-    //   幂等可重入。diagnose.js 的按钮就靠它"看网页是否变化"。
-    // 反思（2026-08-14 第五十八次）：start 原只调 startOrReport 不写 storage。
-    //   若 storage.textHintEnabled 仍为 false，5s 对账(reconcile)会 stopHint 杀掉手动启动
-    //   →"网页高亮闪一下又消失"。修正：start 先把 textHintEnabled 写 true 再启动。
-    // 反思（2026-08-15 第五十八次·续）：诊断窗任意手动操作（启动/重扫/删高亮/调参）都刷新
-    //   _lastManualAt，reconcile 在最近 8s 内有手动操作时不自动 stopHint（见 reconcile）。
-    //   避免"点完启动/重扫 5s 后被对账误杀"。
+    // 控制挂钩：诊断悬浮窗操作按钮直接调用模块方法。
+    //   既写 storage（全链路同步）又直接调 _impl（绕过可能丢失的 onChanged 事件），幂等可重入。
+    //   start 先把 textHintEnabled 写 true 再启动，否则 reconcile 会把手动启动停掉。
+    //   任意手动操作都刷新 _lastManualAt：reconcile 在最近 8s 内有手动操作时不自动 stopHint。
     let _lastManualAt = 0;
     const markManual = () => { _lastManualAt = Date.now(); };
-    // 2026-09-08：本页会话停用标记——网页侧栏 ✕ 关闭时连带撤掉页面高亮/注解
-    //   （用户："扩展侧栏中关闭后，影响并未消失"）。不写 storage（只影响本页，
-    //   刷新即恢复），但必须拦住 reconcile 的"存储要求启用→自动 startHint"复活路径，
-    //   否则 5s 对账会把手动 stopHint 无限复活。清除点：诊断窗 start / popup 显式
-    //   打开 textHintEnabled（onChanged）。
+    // 本页会话停用标记——网页侧栏 ✕ 关闭时连带撤掉页面高亮/注解。不写 storage
+    //   （只影响本页，刷新即恢复），但必须拦住 reconcile 的"存储要求启用→自动
+    //   startHint"复活路径。清除点：诊断窗 start / popup 显式打开 textHintEnabled（onChanged）。
     let _sessionStop = false;
     window.__beaverHintCtl = {
       start: async () => {
@@ -188,15 +174,14 @@ async function _hintBoot() {
         await startOrReport(s, 'ctl.start');
       },
       stop: () => { markManual(); _lastStartSig = ''; if (_impl) _impl.stopHint(); },
-      // 侧栏 ✕ 关闭专用：本页会话停用（不写 storage；reconcile 尊重该标记不再自动复活）
-      // 第二百六十九次：停用即清防抖签名——此后用户重新展开侧栏/点注释开（ctl.start）
-      //   不会被 #267 的 30s 同参防抖误拦（防抖只拦"运行中的重复启动"，不拦"停后再启"）。
+      // 侧栏 ✕ 关闭专用：本页会话停用（不写 storage；reconcile 尊重该标记不再自动复活）。
+      //   停用即清防抖签名，此后重新启动不会被 30s 同参防抖误拦（防抖只拦"运行中的重复启动"）。
       stopForPage: () => { markManual(); _sessionStop = true; _lastStartSig = ''; if (_impl) _impl.stopHint(); },
       rescan: () => { markManual(); if (_impl) _impl.rescanNow(); },
       clear: () => { markManual(); if (_impl) _impl.clearHighlights(); },
       setRank: (v) => {
         markManual();
-        const n = (typeof v === 'number' && isFinite(v)) ? v : 4000;
+        const n = (typeof v === 'number' && isFinite(v)) ? v : 5000;
         chrome.storage.local.set({ rankThreshold: n });
         if (_impl) _impl.setRankThreshold(n);
       },
@@ -207,21 +192,19 @@ async function _hintBoot() {
       },
       applyStyle: (id) => {
         markManual();
-        // 318次：'none' 哨兵非法——空串表示未启用文本样式。
+        // 'none' 哨兵非法——空串表示未启用文本样式
         chrome.storage.local.set({ textStyle: id || '' });
         if (_impl) _impl.applyTextStyleClass(id || '');
       }
     };
 
-    // 反思（2026-08-14 第五十六次修正）：storage 监听器原放在 startHint 之后注册，
-    //   若 startHint 抛错/挂起，监听器永不注册 → 后续在引导页/弹窗改设置全部失效
-    //   （诊断实证：effective.enabled=false 且 setRankThreshold 不生效，但 storage 值已改）。
-    //   修正：先注册监听器，再启动；并在窗口挂启动结果供诊断悬浮窗展示。
+    // storage 监听器必须先于 startHint 注册：若启动抛错/挂起，监听器永不注册，
+    //   后续在引导页/弹窗改设置全部失效。启动结果写窗口元数据供诊断悬浮窗展示。
     chrome.storage.onChanged.addListener((changes) => {
       if (!_impl) return;
-      // 第二百七十次：停用规则变化——命中「网页提示」立即停（语义同显式停用，
-      //   清会话停用标记与防抖签名）；解除不在此处自动重启，交给 reconcile
-      //   （wantEnabled 已并入规则判定）在下一周期自然恢复，避免双启动竞态。
+      // 停用规则变化：命中「网页提示」立即停（语义同显式停用，清会话停用标记与
+      //   防抖签名）；解除不在此处自动重启，交给 reconcile 在下一周期自然恢复，
+      //   避免双启动竞态。
       if ('deactivateRules' in changes) {
         _hintSuppressed().then((sup) => {
           if (sup) {
@@ -233,23 +216,19 @@ async function _hintBoot() {
         });
         return;
       }
-      // 主开关
-      // 反思（2026-08-15 第五十八次·续）：newValue 为 undefined（键被删除）时不应 stopHint，
-      //   统一"仅显式 false 才停用"语义（与 reconcile 一致）。
+      // 主开关：仅显式 false 才停用；newValue 为 undefined（键被删除）不 stopHint
       if ('textHintEnabled' in changes) {
         const _nv = changes.textHintEnabled.newValue;
         const _ov = changes.textHintEnabled.oldValue;
         if (_nv === false) {
           // 显式停用路径：标记已无意义，一并复位防悬挂
           _sessionStop = false;
-          _lastStartSig = '';   // 第二百六十九次：停用即清防抖签名，之后再启用不被 30s 防抖误拦
+          _lastStartSig = '';   // 停用即清防抖签名，之后再启用不被 30s 防抖误拦
           _impl.stopHint();
         } else if (_ov === false) {
-          // 第二百六十九次（用户报"扩展关闭侧栏后，网页依旧提示"）：只有真·关→开
-          //   切换（oldValue===false，popup/引导页显式重开=用户最新意图）才解除本页
-          //   会话停用并重启。旧版对任何非 false 写入都清 _sessionStop 并 startHint
-          //   ——storage 同值回声写（onChanged 对"写到相同值"也触发）会把 ✕ 关侧栏的
-          //   会话停用撤销并复活提示，日志实证 caller=onChanged 高频防抖命中即此因。
+          // 只有真·关→开切换（oldValue===false，popup/引导页显式重开=用户最新意图）
+          //   才解除本页会话停用并重启。对任何非 false 写入都重启的话，同值回声写
+          //   （onChanged 对"写到相同值"也触发）会把 ✕ 关侧栏的会话停用撤销并复活提示。
           _sessionStop = false;
           _hintGetSettings().then((s) => startOrReport(s, 'onChanged:textHintEnabled'));
         } else {
@@ -264,9 +243,7 @@ async function _hintBoot() {
       if ('textStyle' in changes) {
         _impl.applyTextStyleClass(changes.textStyle.newValue);
       }
-      // 301次：个性化/用户条目变化 → 刷新 extra 文本规则（无需重扫；类名不变即时生效）
-      // 377次：注释区字段改读 textStyle 同一条目，池条目编辑（annBg/annFg/圆角/字号/
-      //   斜体）也须重派颜色变量 → 补 updateColors
+      // 个性化/用户条目变化 → 刷新 extra 文本规则并重派颜色变量（无需重扫；类名不变即时生效）
       if ('annotationCustom' in changes || 'annotationUserStyles' in changes) {
         _hintGetSettings().then((s) => {
           _impl.refreshAnnExtraCss(s.annotationCustom, s.annotationUserStyles);
@@ -281,22 +258,22 @@ async function _hintBoot() {
       if ('rankThresholdMax' in changes) {
         _impl.setRankThresholdMax(changes.rankThresholdMax.newValue);
       }
-      // My Words（用户生词/熟词表）变化 → 全量重扫（熟词隐藏/生词显示双向生效，2026-09-18）
+      // My Words（用户生词/熟词表）变化 → 全量重扫（熟词隐藏/生词显示双向生效）
       if ('myWords' in changes) {
         const _mw = changes.myWords.newValue || {};
         _impl.setMyWordsLists(_mw.new, _mw.known);
-        // 同步到网页 localStorage（供 VocabRadar 网站 My Words 页读取，2026-09-20）
+        // 同步到网页 localStorage（供 VocabRadar 网站 My Words 页读取）
         _syncMyWordsToWeb(_mw);
       }
-      // 注释表外词开关变化 → 重扫（2026-08-07；2026-08-14 键名改 annotateOov）
+      // 注释表外词开关变化 → 重扫
       if ('annotateOov' in changes) {
         _impl.setAnnotateOov(changes.annotateOov.newValue);
       }
-      // 注释重复生词开关变化 → 重扫（2026-08-15 第六十二次）
+      // 注释重复生词开关变化 → 重扫
       if ('annotateRepeat' in changes) {
         _impl.setAnnotateRepeat(changes.annotateRepeat.newValue);
       }
-      // 280次：侧邻注释模板变化 → 清缓存重扫（与 annotateRepeat 同构，原 annBrackets）
+      // 侧邻注释模板变化 → 清缓存重扫
       if ('annTemplate' in changes) {
         _impl.setAnnTemplate(changes.annTemplate.newValue);
       }
@@ -304,11 +281,10 @@ async function _hintBoot() {
       const colorKeys = [
         'hintFirstEnabled', 'hintFirstBg', 'hintFirstFg',
         'hintLaterEnabled', 'hintLaterBg', 'hintLaterFg',
-        // 侧邻注释（2026-08-05）：注释底色/字色变化热更新；开关变化需重扫
-        // 377次：annotationStyle（文本侧栏栏指派）移出——pickColors 不再读它，
-        //   web-sidebar.js 已独立监听该键（142行），文本侧栏不受影响
+        // 侧邻注释：注释底色/字色热更新
+        // annotationStyle 已移出——pickColors 不读它，web-sidebar.js 独立监听该键
         'hintSideAnnotation', 'hintAnnotationBg', 'hintAnnotationFg',
-        // 280次：统一池——textStyle 条目 wordBg/wordFg 参与变量派生，变化也热更
+        // 统一池：textStyle 条目 wordBg/wordFg 参与变量派生，变化也热更
         'textStyle'
       ];
       if (colorKeys.some((k) => k in changes)) {
@@ -316,15 +292,10 @@ async function _hintBoot() {
       }
     });
 
-    // 启动文本提示（含自愈）：调用 startHint 并在失败时记录诊断信息
-    // 反思（2026-08-14 第五十六次）：startHint 内已尽量不抛错，但为万全，
-    //   捕获异常并记录到 window.__beaverHintBoot 供诊断窗展示，避免"静默不启动"。
-    // 第二百六十七次（用户报障"后台一直在不停地扫"，日志实证 [reset][已启动][分屏扫描]
-    //   [配色] 四条日志成环——即 startHint 被链式反复调用）：
-    //   ①caller 标签——startOrReport 每个调用方带名进入，控制台一眼定位驱动方；
-    //   ②同参防抖——30s 内同参数且上次启动成功时忽略重复启动。startHint 每次都
-    //   resetScan（侧栏清空）+ 整页重扫，重复调用纯属浪费；设置真变化（签名不同）、
-    //   模块已停（enabled=false 路径随每次启动翻新时间戳自然放行）、上次失败均放行。
+    // 启动文本提示（含自愈）：startHint 异常捕获并记录到 __beaverHintBoot，避免"静默不启动"。
+    // ①caller 标签——startOrReport 每个调用方带名进入，控制台一眼定位驱动方；
+    // ②同参防抖——30s 内同参数且上次启动成功时忽略重复启动（startHint 每次都
+    //   resetScan+整页重扫，重复调用纯属浪费；参数变化/模块已停/上次失败均放行）。
     //   防抖命中必打 warn（不静默），高频出现即暴露循环调用方。
     let _lastStartSig = '';
     let _lastStartOkAt = 0;
@@ -354,10 +325,10 @@ async function _hintBoot() {
     };
 
     const settings = await _hintGetSettings();
-    // 初始同步 myWords 到网页 localStorage（供 VocabRadar 网站 My Words 页读取，2026-09-20）
+    // 初始同步 myWords 到网页 localStorage（供 VocabRadar 网站 My Words 页读取）
     _syncMyWordsToWeb(settings.myWords || {});
-    // 272次：初始启动判据并入停用规则——提示被停则不 startHint（reconcile 的
-    // wantEnabled 亦含规则判定，规则解除后自动恢复）；查询不受影响。
+    // 初始启动判据并入停用规则——提示被停则不 startHint（reconcile 的 wantEnabled
+    // 亦含规则判定，规则解除后自动恢复）；查询不受影响。
     const _bootHintSup = await _hintSuppressed();
     // 启动结果元数据（诊断窗展示"为什么没启动"）
     window.__beaverHintBoot = {
@@ -372,16 +343,14 @@ async function _hintBoot() {
     } else if (_bootHintSup) {
       console.log('[VocabRadar][text-hint] init: 停用规则命中（网页提示），不启动提示');
     }
-    // 文本样式差异化（粗细/斜体/下划线/阴影等）单独应用
-    // 318次：哨兵 'none' 改 truthy 判定（空串=未启用）。
+    // 文本样式差异化（粗细/斜体/下划线/阴影等）单独应用；空串=未启用
     if (settings.textStyle) {
       _impl.applyTextStyleClass(settings.textStyle);
     }
-    // 301次：个性化/用户条目文本规则初始刷新（提示被停用规则拦下时也刷新，查询面板同样式）
+    // 个性化/用户条目文本规则初始刷新（提示被停用规则拦下时也刷新，查询面板同样式）
     try { _impl.refreshAnnExtraCss(settings.annotationCustom, settings.annotationUserStyles); } catch (_) { /* ignore */ }
-    // 反思（2026-08-14 第五十六次自愈）：若存储要求启动但模块仍处于未启用态
-    //   （首轮 startHint 被并发/页面时序干扰），延迟重试一次，避免"网页无提示"。
-    //   272次：提示被停用规则命中时同样不自愈（否则对抗规则）。
+    // 自愈：若存储要求启动但模块仍处于未启用态（首轮 startHint 被并发/页面时序干扰），
+    //   延迟重试一次，避免"网页无提示"。提示被停用规则命中时同样不自愈（否则对抗规则）。
     if (settings.textHintEnabled && !_bootHintSup) {
       setTimeout(async () => {
         const st = await _impl.getDiagState().catch(() => null);
@@ -392,19 +361,16 @@ async function _hintBoot() {
       }, 3000);
     }
 
-    // 反思（2026-08-14 第五十六次根因修正）：诊断实证 storage.textHintEnabled 由 false
-    //   变为 true 后，本 content script 的 storage.onChanged 并未触发（startedEver=false），
-    //   导致"网页无提示"。onChanged 事件在内容脚本侧偶发丢失（跨上下文消息不可靠）。
-    //   修正：不再依赖事件唯一通道，新增对账(reconcile)机制——定时 + 页面重新可见/聚焦时
-    //   直接读取 storage 与模块运行态比对：存储要求启用而模块未启用 → 自动 startHint；
-    //   参数漂移（rankThreshold/annotateOov）→ 热同步。此机制不改任何默认值，纯自愈。
-    //   对账日志走 console.warn，可被诊断悬浮窗"运行日志"捕获，便于确认恢复路径。
-    let _lastImplNullWarn = 0;   // 第二百次：_impl=null 的限频告警时间戳
-    let _lastMissingKeyWarn = 0; // 第二百零三次：textHintEnabled 缺键的限频告警时间戳
-    let _lastSessionStopWarn = 0; // 2026-09-08：会话停用期 reconcile 跳过的限频告警时间戳
+    // 对账（reconcile）：storage.onChanged 在内容脚本侧偶发丢失，不作为唯一通道——
+    //   定时 + 页面重新可见/聚焦时直接比对 storage 与模块运行态：
+    //   存储要求启用而模块未启用 → 自动 startHint；参数漂移 → 热同步。
+    //   纯自愈机制，不改任何默认值。对账日志走 console.warn，可被诊断悬浮窗捕获。
+    let _lastImplNullWarn = 0;    // _impl=null 限频告警时间戳（30s）
+    let _lastMissingKeyWarn = 0;  // textHintEnabled 缺键限频告警时间戳（60s）
+    let _lastSessionStopWarn = 0; // 会话停用期 reconcile 跳过限频告警时间戳（60s）
     const reconcile = async () => {
-      // 第二百次：_impl=null 不再静默——模块图未装载（挂起/失败）是"整页无提示"的直接
-      //   证据，对账周期必须出声（30s 限频防刷屏），并带上 boot.state 供诊断窗/日志取用。
+      // _impl=null = 模块图未装载（挂起/失败），是"整页无提示"的直接证据，必须出声
+      //   （限频防刷屏），并带上 boot.state 供诊断窗/日志取用。
       if (!_impl) {
         const now = Date.now();
         if (!_lastImplNullWarn || now - _lastImplNullWarn > 30000) {
@@ -419,37 +385,32 @@ async function _hintBoot() {
       if (!st || !st.effective) return;
       let s = null;
       try { s = await _hintGetSettings(); } catch (_) { return; }
-      // 第一百三十七次：恢复分支防御——旧版把含 textHintEnabled=undefined 的 settings
-      //   原样传给 startOrReport，startHint 内 falsy 判定静默中止，5s 对账永远空转
-      //   （用户日志实证）。_hintGetSettings 已加固，此处再兜底归一化并留痕。
+      // 兜底归一化：旧版曾把含 textHintEnabled=undefined 的 settings 传给
+      //   startOrReport，startHint 内 falsy 判定静默中止，对账永远空转。_hintGetSettings
+      //   已保证不产出 undefined，此处再防御一层并留痕。
       if (s && s.textHintEnabled === undefined) {
-        // 第二百零三次：限频——新装/新浏览器档案从未写入该键时，此 warn 每 5s 必刷，
-        //   淹没真日志（用户实测一屏全是它）。60s 至多一条；键真异常时线索仍在。
+        // 限频：新装/新浏览器档案从未写入该键时，此 warn 每 5s 必刷，淹没真日志——60s 至多一条
         const _now = Date.now();
         if (!_lastMissingKeyWarn || _now - _lastMissingKeyWarn > 60000) {
           _lastMissingKeyWarn = _now;
           console.warn('[VocabRadar][text-hint] 对账: settings.textHintEnabled 缺键（读取异常），按启用处理（60s 限频）');
         }
         s.textHintEnabled = true;
-        // 第二百四十五次（用户拍板"修"）：补救只写内存不回写 storage，缺键状态永远存在，
-        //   警告每 60s 反复出现（用户日志实证）。与 startHint 入口写法（L106）同款回写
-        //   顶层键，一次回写后键常驻，警告此后不再出现。回写失败静默（下轮对账再试）。
+        // 补救须回写 storage 顶层键（与 startHint 入口同款）：只写内存则缺键状态
+        //   永远存在，警告每 60s 反复出现；一次回写后键常驻。回写失败静默（下轮对账再试）。
         try { await chrome.storage.local.set({ textHintEnabled: true }); } catch (_) { /* ignore */ }
       }
-      // 反思（2026-08-15 第五十八次·续）：判定语义统一为"仅显式 false 才停用"。
-      //   诊断实证 storage.textHintEnabled=undefined（键缺失或异常值），旧判定 `if (s.textHintEnabled)`
-      //   把 undefined 判为 falsy → 走停用分支 → stopHint 杀掉正常启动的模块（"高亮闪一下又消失"）。
-      //   _hintGetSettings 默认 true，undefined 应视为启用（与 guide.js `!== false`、popup 语义一致）。
-      // 第二百七十次：wantEnabled 并入停用规则判定——命中「网页提示」规则时
-      //   与显式停用同语义（走下方停用分支 stopHint；解除后本判定放行自动 startHint）
+      // 判定语义统一为"仅显式 false 才停用"：undefined（缺键/异常值）视为启用，
+      //   与 guide.js `!== false`、popup 语义一致。
+      // wantEnabled 并入停用规则判定——命中「网页提示」规则时与显式停用同语义
+      //   （走下方停用分支 stopHint；解除后本判定放行自动 startHint）。
       const _supHint = await _hintSuppressed();
       if (_supHint && st.effective.enabled) {
         console.warn('[VocabRadar][text-hint] 对账: 停用规则命中（网页提示），保持停止');
       }
       const wantEnabled = (s.textHintEnabled !== false) && !_supHint;
-      // 2026-09-08：本页会话停用中（侧栏 ✕ 关闭触发）——存储仍要求启用也不自动复活，
-      //   否则 stopForPage 撤掉的注解 5s 内被对账冲回（用户："影响并未消失"）。
-      //   限频留痕不静默。
+      // 本页会话停用中（侧栏 ✕ 关闭触发）——存储仍要求启用也不自动复活，否则
+      //   stopForPage 撤掉的注解 5s 内被对账冲回。限频留痕不静默。
       if (wantEnabled && _sessionStop) {
         const _nowSS = Date.now();
         if (!_lastSessionStopWarn || _nowSS - _lastSessionStopWarn > 60000) {
@@ -460,9 +421,7 @@ async function _hintBoot() {
       }
       if (wantEnabled) {
         if (!st.effective.enabled || st.effective.startedEver === false) {
-          // 诊断（2026-08-20 第八十六次补充③）：打印启用态全貌，定位"对账恢复"真实原因
-          //   ——startedEver=false 说明首轮 startHint 未被调用（storage 当时为 false）；
-          //   lastStartError 非空说明 startHint 抛错；contextValid=false 说明扩展上下文已失效。
+          // 日志带启用态全貌（startedEver/lastStartError/contextValid），定位"对账恢复"真实原因
           console.warn('[VocabRadar][text-hint] 对账: 存储要求启用但模块未启用' +
             '（storage 事件可能丢失），自动恢复 startHint' +
             ' | effective.enabled=' + st.effective.enabled +
@@ -471,9 +430,8 @@ async function _hintBoot() {
             ' | contextValid=' + st.effective.contextValid +
             ' | storage.textHintEnabled=' + s.textHintEnabled +
             ' | boot=' + JSON.stringify(window.__beaverHintBoot || null));
-          // 第一百三十六次：textHintEnabled=undefined（键缺失/异常值）时同样打 storage 键
-          //   快照——旧版只在"停用分支"打印，用户日志实证恢复分支也会出现 undefined，
-          //   需定位键是否真存在及其类型（boot 显示 false、对账时 undefined 的矛盾来源）。
+          // textHintEnabled=undefined 时打 storage 键快照——恢复分支也会出现 undefined，
+          //   需定位键是否真存在及其类型
           if (s.textHintEnabled === undefined) {
             try {
               chrome.storage.local.get(null, (all) => {
@@ -505,10 +463,9 @@ async function _hintBoot() {
             st.effective.annotateRepeat + ' → ' + s.annotateRepeat);
           _impl.setAnnotateRepeat(s.annotateRepeat);
         }
-        // 326次：配色开关漂移对账——hintLaterEnabled/hintSideAnnotation 走 updateColors
-        //   通道，onChanged 偶发丢失（v56 已实证 storage 事件丢失）时运行态永久 stale，
-        //   即"弹窗关了、页上还多处亮"。updateColors 已重算 colors（325次），此处调即自愈
-        //   （只写 CSS 变量+类名，无 DOM 结构操作，不触发 08-06"点几次消失"）。
+        // 配色开关漂移对账——hintLaterEnabled/hintSideAnnotation 走 updateColors 通道，
+        //   onChanged 偶发丢失时运行态永久 stale（"弹窗关了、页上还多处亮"）。
+        //   updateColors 只写 CSS 变量+类名，无 DOM 结构操作，此处调用即自愈。
         if (typeof st.effective.laterEnabled === 'boolean' || typeof st.effective.sideAnnotation === 'boolean') {
           const wantLater = (s.hintLaterEnabled === true);
           const wantSide = (s.hintSideAnnotation === true);
@@ -521,15 +478,13 @@ async function _hintBoot() {
           }
         }
       } else if (st.effective.enabled) {
-        // 反思（2026-08-15 第五十八次·续）：诊断窗手动操作（启动/重扫/调参等）后 8s 内
-        //   不对账停用——用户正在调试，立即停掉会"高亮闪一下又消失"。
-        //   超过窗口仍不一致（storage 明确停用而模块启用）才 stopHint。
+        // 诊断窗手动操作（启动/重扫/调参等）后 8s 内不对账停用——用户正在调试，
+        //   立即停掉会"高亮闪一下又消失"。超过窗口仍不一致才 stopHint。
         if (Date.now() - _lastManualAt < 8000) {
           console.warn('[VocabRadar][text-hint] 对账: 存储要求停用但模块仍启用，' +
             '检测到最近 8s 内手动操作，跳过自动 stopHint（storage.textHintEnabled=' +
             s.textHintEnabled + '）');
-          // 反思（2026-08-15 第五十八次·续）：storage.textHintEnabled 异常时打 storage 键快照，
-          //   定位"启动时 true、对账时 undefined"的来源（键是否真存在、值类型）。
+          // textHintEnabled=undefined 时打 storage 键快照，定位异常值来源
           if (s.textHintEnabled === undefined) {
             try {
               chrome.storage.local.get(null, (all) => {
@@ -541,8 +496,6 @@ async function _hintBoot() {
           }
           return;
         }
-        // 反思（2026-08-15 第五十八次·续）：storage.textHintEnabled=undefined 时打印
-        //   storage 键快照，定位异常值来源（诊断实证：启动时 true、5s 后 undefined）。
         if (s.textHintEnabled === undefined) {
           try {
             chrome.storage.local.get(null, (all) => {
@@ -554,25 +507,22 @@ async function _hintBoot() {
         }
         console.warn('[VocabRadar][text-hint] 对账: 存储要求停用但模块仍启用，自动 stopHint' +
           '（storage.textHintEnabled=' + s.textHintEnabled + '）');
-        _lastStartSig = '';   // 第二百六十九次：停用即清防抖签名，之后再启用不被 30s 防抖误拦
+        _lastStartSig = '';   // 停用即清防抖签名，之后再启用不被 30s 防抖误拦
         _impl.stopHint();
       }
     };
     setInterval(reconcile, 5000);
-    // 反思（2026-08-20 第八十六次补充③）：首轮对账提前到 1.5s——若首轮 startHint 未启动
-    //   （storage 变更事件丢失，v56 已实证），旧版要等首个 5s 周期才恢复，用户感知"网页提示
-    //   出现很慢"。提前一档把恢复延迟从 ~5s 降到 ~1.5s；模块正常启用时 reconcile 为空操作。
+    // 首轮对账提前到 1.5s——若首轮 startHint 因 storage 事件丢失未启动，
+    //   不必等首个 5s 周期才恢复；模块正常启用时 reconcile 为空操作。
     setTimeout(reconcile, 1500);
     // 从引导页切回网页标签时立即对账（替代依赖 onChanged 的即时性）
     const reconcileOnVisible = () => { if (document.visibilityState === 'visible') reconcile(); };
     document.addEventListener('visibilitychange', reconcileOnVisible);
     window.addEventListener('focus', reconcileOnVisible);
 
-    // 记录右键点击位置（用于面板定位）
-    // 反思（2026-07-08）：用户反馈"右键查询的飘窗固定不动"。
-    //   根因：contextmenu 监听在冒泡阶段，B站/YouTube 播放器常 stopPropagation 阻止冒泡，
-    //   导致 _lastClickX/Y 为 null，positionPanel 回退到 (16,16) 固定位置。
-    //   修正：改用 capture 阶段（第三参数 true），在冒泡被拦截前捕获坐标。
+    // 记录右键点击位置（用于面板定位）。
+    // 必须用 capture 阶段：B站/YouTube 播放器常 stopPropagation 阻止冒泡，
+    //   冒泡阶段监听拿不到坐标，面板会回退到固定 (16,16) 位置。
     let _lastClickX = null;
     let _lastClickY = null;
     document.addEventListener('contextmenu', (e) => {
@@ -580,11 +530,11 @@ async function _hintBoot() {
       _lastClickY = e.clientY;
     }, true);
 
-    // 320次：选区文本净化——右键菜单 msg.text 来自 SW 的 selectionText，会把已插入
-    //   页面的 .beaver-page-insert 译文 / .beaver-side-ann 注释文本一并囊括（用户反馈
-    //   "先翻译一个词再选中一段翻译会让之前翻译囊括进来污染"）。从实时选区
-    //   cloneContents 复制到离屏容器，剔除扩展插入节点后取 textContent；选区已丢失
-    //   或剔除后为空则返回 ''，由调用方回落 msg.text。
+    // 选区文本净化：右键菜单 msg.text 来自 SW 的 selectionText，会把已插入页面的
+    //   .beaver-page-insert 译文 / .beaver-side-ann 注释文本一并囊括（"先翻译一个词
+    //   再选中一段翻译，之前翻译被囊括进来污染"）。从实时选区 cloneContents 复制到
+    //   离屏容器，剔除扩展插入节点后取 textContent；选区已丢失或剔除后为空则返回 ''，
+    //   由调用方回落 msg.text。
     function _cleanSelectionText() {
       try {
         const sel = window.getSelection();
@@ -598,10 +548,9 @@ async function _hintBoot() {
       } catch (_) { return ''; }
     }
 
-    // 右键菜单查词消息
-    // 272次：SHOW_CONTEXT_PANEL 由 Query 可用性门控，不再由网页提示负责——提示停了查询仍可用；
-    //   OPEN_QUERY_BAR——右键菜单无选中文本时弹查询栏输入（转发 window 事件给文本侧栏 UI）。
-    // 286次：两者分键门控——有选中文本走右键查询开关，无选中走查询栏开关。
+    // 右键菜单查词消息。分键门控：有选中文本走右键查询开关（SHOW_CONTEXT_PANEL，
+    //   由 Query 可用性门控，不归网页提示管——提示停了查询仍可用）；无选中走
+    //   查询栏开关（OPEN_QUERY_BAR，转发 window 事件给文本侧栏 UI）。
     chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       if (msg.type === 'SHOW_CONTEXT_PANEL' && msg.text) {
         _contextLookupAvailable().then((ok) => {
@@ -609,10 +558,9 @@ async function _hintBoot() {
             console.log('[VocabRadar][text-hint] 右键查询被开关/停用规则关闭，忽略');
             return;
           }
-          // 320次：净化后查询——剥离已插入译文/注释，避免污染查询文本；净化为空
-          //   （选区已丢/全被剔除）回落原始 msg.text，保证功能不中断
+          // 净化后查询：剥离已插入译文/注释避免污染；净化为空（选区已丢/全被剔除）
+          //   回落原始 msg.text，保证功能不中断
           const cleanText = _cleanSelectionText() || msg.text;
-          // w4：panel.js 已改动态转发，catch 打日志防加载失败被静默吞掉
           _impl.showContextPanel(cleanText, _lastClickX, _lastClickY)
             .catch((e) => console.error('[VocabRadar][text-hint] 查词面板加载失败', e));
         });
@@ -627,14 +575,12 @@ async function _hintBoot() {
       return true;
     });
 
-    // 监听 sidebar OCR 结果事件（同页面 content script 通信）
-    // 反思（2026-08-05 修正）：OCR 回归侧栏按钮点击截帧方式，结果通过自定义事件发送。
-    //   text-hint.js 监听 'beaver-ocr-result' 事件，调用 showOcrResultPanel 显示结果。
-    //   结果面板为 light DOM，生词受文本提示注释（高亮+侧邻注释），不自动消失。
+    // 监听 sidebar OCR 结果事件（同页面 content script 通信）：
+    //   'beaver-ocr-result' → showOcrResultPanel 显示结果面板（light DOM，
+    //   生词受文本提示注释，不自动消失）。
     window.addEventListener('beaver-ocr-result', (e) => {
       if (!_impl) return;
       const detail = e.detail || {};
-      // w4：panel.js 已改动态转发，catch 打日志防加载失败被静默吞掉
       _impl.showOcrResultPanel(detail.text || '', _lastClickX, _lastClickY, detail.info || '')
         .catch((e) => console.error('[VocabRadar][text-hint] OCR 结果面板加载失败', e));
     });
@@ -643,9 +589,9 @@ async function _hintBoot() {
   }
 }
 
-/** gate 期间的解除观察（第二百七十次）：规则解除即 boot；boot 幂等（_booted 标记），
- *  272次：解除判据同步改为「网页提示+搜索栏不全停」（只停其一时仍需加载模块图），
- *  boot 后本监听残留无害——运行中的规则启停由 boot 内主监听与 reconcile 接管 */
+/** gate 期间的解除观察：规则解除即 boot；boot 幂等（_booted 标记），boot 后本监听
+ *  残留无害——运行中的规则启停由 boot 内主监听与 reconcile 接管。
+ *  解除判据为「网页提示+搜索栏不全停」：只停其一时仍需加载模块图（查询功能在 gate 下可用）。 */
 function _hintInstallUnsuppressWatch() {
   try {
     chrome.storage.onChanged.addListener((changes, area) => {
@@ -663,72 +609,49 @@ function _hintInstallUnsuppressWatch() {
   }
 }
 
-/** 读取完整设置（含默认值） */
-// 第一百三十七次：曾改用带 DEFAULTS 对象的 get()+重试兜底。
-// 第一百三十八次（用户复测日志实证仍出现「缺键」且本轮不可能由上述实现产出）：
-//   带默认值对象的 chrome.storage.local.get 存在稳定的缺键异常，重试无效；
-//   而裸 get(null)（对账诊断快照）两次均完整返回全部键与正确值。
-//   釜底抽薪：改用 get(null) + JS 手工合并默认值——结构上杜绝任何一层
-//   （Chrome 默认值合并/序列化）参与，「读到的值要么是存储实值要么是本地默认」，
-//   绝不再产出 undefined。绝不把"读失败"当"用户关了"。
+// "Extension context invalidated"＝扩展更新/重载后旧内容脚本的预期态（runtime 已失效，
+//   storage 同步抛错）。对账每 5s 重试会反复触发，只留痕一次，后续静默（默认值兜底不变）。
+let _ctxInvalidWarned = false;
+
+/** 读取完整设置（含默认值）。
+ *  必须用 get(null) + JS 手工合并默认值：带默认值对象的 chrome.storage.local.get
+ *  存在稳定的缺键异常（重试无效），而裸 get(null) 完整返回全部键。手工合并在结构上
+ *  杜绝 Chrome 默认值合并/序列化参与，保证「读到的值要么是存储实值要么是本地默认」，
+ *  绝不产出 undefined；绝不把"读失败"当"用户关了"。 */
 function _hintGetSettings() {
   const DEFAULTS = {
     textHintEnabled: true,
-    // 272次：Query 独立开关（旧键，286次拆分为右键查询/查询栏后仅作回退，见 _storeFlag）
+    // Query 独立开关：兼容旧键（现细分为右键查询/查询栏两键，见 _storeFlag），仅作回退
     queryEnabled: true,
-    // 301次：注释个性化参数＋用户样式（pickColors 经 resolveAnnEntry 解析，直通 settings）
+    // 注释个性化参数＋用户样式（pickColors 经 resolveAnnEntry 解析，直通 settings）
     annotationCustom: null,
     annotationUserStyles: [],
-    // 反思（2026-08-14 第五十四次修正）：恢复默认，撤销第五十二次误改的 0。
-    //   2026-09-29（用户："默认提示4000-5000词频"）：默认 4000 / 上界 5000（全仓同批同步）
-    rankThreshold: 4000,
-    // 340次（My Words 过滤失效修复）：上界也一并补——本 DEFAULTS 手工合并只拷列出的键
-    //   （get(null) 全量拿、按白名单合），此前缺 rankThresholdMax → 刷新后上界恒回 Infinity 不限
-    rankThresholdMax: 5000,
-    // 340次（用户实测"进 Known 依旧提示/进 New 依旧不提示"根因）：缺 myWords → startHint 传给
-    //   scan.js 的 settings 永远没有 myWords → setMyWords(空) → 过滤全失效；onChanged 链路虽
-    //   正常但刷新/新开页面即失效。storage.myWords={new:[],known:[]}（小写单词数组）
+    // 词频下界默认 5000；上界 0 = 不限（Infinity），此键缺失会导致 My Words 过滤失效
+    rankThreshold: 5000,
+    rankThresholdMax: 0,
+    // myWords 缺失 → startHint 传给 scan.js 的 settings 永远没有 myWords →
+    //   过滤全失效（刷新/新开页面即失效）。storage.myWords={new:[],known:[]}（小写单词数组）
     myWords: { new: [], known: [] },
-    annotateOov: false,  // 注释表外词（2026-08-14 第五十四次：键名改名 + 默认不选）
-    annotateRepeat: false,  // 注释重复生词（2026-08-15 第六十二次：默认不选）
+    annotateOov: false,  // 注释表外词，默认不选
+    annotateRepeat: false,  // 注释重复生词，默认不选
     hintFirstEnabled: true,
-    // 反思（2026-08-18 第七十三次修正）：用户明确"网页提示默认配色是单词绿底白字，
-    //   注释是白底绿字"。旧版 #0d2014 墨绿近黑被用户视为黑色。
-    // 304次（用户"默认无底色"）：透明底；字色兜底绿字（仅生词条目无显式字段时生效，
-    //   pickColors 条目显式字段优先——第502次回退第501次误改的 'inherit'）。
+    // 生词条目默认透明底＋绿字（用户确认的默认观感；条目显式字段优先于此兜底）
     hintFirstBg: 'transparent',
     hintFirstFg: '#2e6b43',
-    // 反思（2026-08-05）：用户要求"生词多次出现 复选框 默认空"
+    // 以下三个复选框均按用户要求默认关闭
     hintLaterEnabled: false,
     hintLaterBg: 'transparent',
     hintLaterFg: '#2e6b43',
-    // 侧邻注释（2026-08-05）：用户要求"侧邻提示 复选框 默认空"
-    //   注释=白底绿字（用户明确）
     hintSideAnnotation: false,
     hintAnnotationBg: '#ffffff',
     hintAnnotationFg: '#2e6b43',
-    // 文本样式预设（第五十一次）：TEXT_STYLES 中的 id（318次：'none' 非法，未启用=空串）
-    // 308次：默认改绿色下划线样式（与 guide.js defaults 同步，网页提示端兜底须一致）
-    // 309次第二轮：名字定稿 'green-underline'（Green Underline，用户裁定），颜色主题化不变
-    // 309次第五轮（用户四栏统一裁定）：默认改 'green-background'（生词绿底白字），与 guide.js 一致
-    // 318次：默认语义=代指常量 ANN_DEFAULT_STYLE 的锚定（styles.js 唯一真源，版本变化才改
-    //   常量值，无 storage 指针键）；本文件 classic script 不便 import styles.js，此字面量
-    //   是常量的镜像兜底（仅 storage 全空时生效），真值锚点见 lib/styles.js
-    // 第501次曾移 green-wave；第502次镜像同步回 green-background；
-    // 第503次曾移 green-wave（误判）；
-    // 第504次（用户纠错"默认是绿色背景"）：ANN_DEFAULT_STYLE 回 green-background
-    //   （green-wave 条目保持 wordFg:'inherit' 即不动正文颜色），镜像同步回 green-background。
+    // 文本样式预设：TEXT_STYLES 中的 id（'none' 非法，未启用=空串）。
+    //   默认 'green-background' 与 guide.js defaults 同步（用户四栏统一裁定）
     textStyle: 'green-background',
-    // 279次：注释样式候选池（三处共享）
-    // 309次第五轮（用户四栏统一裁定）：默认 'green-background'，与 guide.js defaults 同步
-    // 318次：同上——'green-background' 是 ANN_DEFAULT_STYLE 常量的镜像兜底，非写死绝对回落
-    // 第501次曾移 green-wave；第502次镜像同步回 green-background；第503次曾随误判移 green-wave；
-    // 第504次：常量回 green-background，镜像同步。
+    // 注释样式候选池（三处共享），默认与 guide.js 同步
     annotationStyle: 'green-background',
-    // 280次：侧邻注释模板（annBrackets 布尔退役；
-    //   classic script 不便 import styles.js，默认值/迁移字面量与 lib/styles.js 保持一致）
-    // 284次：默认组合 {target} {annotation}（空格分隔，与 styles.js DEFAULT_ANN_TEMPLATE 同步）
-    // 306次：默认去空格 '{target}{annotation}'
+    // 侧邻注释模板（annBrackets 布尔已退役）。classic script 不便 import styles.js，
+    //   默认值/迁移字面量须与 lib/styles.js 的 DEFAULT_ANN_TEMPLATE 保持一致
     annTemplate: '{target}{annotation}'
   };
   return new Promise((resolve) => {
@@ -749,11 +672,9 @@ function _hintGetSettings() {
           for (const k of Object.keys(DEFAULTS)) {
             if (typeof all[k] !== 'undefined') merged[k] = all[k];
           }
-          // 280次：旧 annBrackets 布尔一次性迁移——annTemplate 从未设置且旧键存在时，
-          //   按旧值派生模板（true/缺省=默认模板，false=素释义）；不回写 storage，
-          //   读取时派生即可（引导页保存 annTemplate 后旧键不再参与）。
-          // 284次：默认模板随 DEFAULT_ANN_TEMPLATE 同步为 {target} {annotation}。
-          // 306次：去空格 '{target}{annotation}'（与引导页迁移同口径）。
+          // 旧 annBrackets 布尔一次性迁移：annTemplate 从未设置且旧键存在时，按旧值
+          //   派生模板（false=素释义）；不回写 storage，读取时派生即可（引导页保存
+          //   annTemplate 后旧键不再参与）。口径与引导页迁移一致。
           if (typeof all.annTemplate === 'undefined' && typeof all.annBrackets !== 'undefined') {
             merged.annTemplate = (all.annBrackets === false) ? '{annotation}' : '{target}{annotation}';
             delete merged.annBrackets;
@@ -761,7 +682,15 @@ function _hintGetSettings() {
           resolve(merged);
         });
       } catch (e) {
-        console.warn('[VocabRadar][text-hint] storage.get 抛错，用默认值兜底:', e);
+        const msg = e && (e.message || String(e));
+        if (msg && /Extension context invalidated/.test(msg)) {
+          if (!_ctxInvalidWarned) {
+            _ctxInvalidWarned = true;
+            console.warn('[VocabRadar][text-hint] storage.get 失败（扩展已更新/重载，本页内容脚本失效），用默认值兜底。刷新页面后恢复');
+          }
+        } else {
+          console.warn('[VocabRadar][text-hint] storage.get 抛错，用默认值兜底:', e);
+        }
         resolve({ ...DEFAULTS });
       }
     };

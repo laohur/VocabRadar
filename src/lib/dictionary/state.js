@@ -1,16 +1,12 @@
 // ============================================================
 // 文件职责：词典共享状态与源语言监听（src/lib/dictionary/state.js）
-// 来源：拆分自 src/lib/dictionary.js（ES Modules 模块化拆分）
-// 拆分日期：2026-08-28
-// 跨模块共享状态唯一属主（拆分铁律：绝不复制两份）：
+// 跨模块共享状态唯一属主（绝不复制两份）：
 //   dictState = { loadedLang, dictMap, loadPromise, currentLearnLang, quietBatch,
 //     ranksReadyLang, ranksPromise, _settleRanks }
-//   分阶段投影（2026-09-04）：ranks 先行——ranksReadyLang 记录 rank-only 就绪的语言，
+//   分阶段投影：ranks 先行——ranksReadyLang 记录 rank-only 就绪的语言，
 //   ranksPromise 供扫描侧先重扫出高亮；_settleRanks 是 ranks 承诺的 resolve 函数暂存
 //   （loadPromise 异常时兜底 resolve null，承诺永不悬空）。
-//   原单文件的模块级 let 变量（_loadedLang/_dictMap/_loadPromise/_currentLearnLang/
-//   _quietBatch）收拢为导出可变对象，word-loader.js / projection.js / query.js
-//   经 import 引用同一实例读写，与原单文件行为完全一致。
+//   word-loader.js / projection.js / query.js 经 import 引用同一实例读写。
 // 本文件还含：DEFAULT_SOURCE_LANG 常量、_ts() 时间戳辅助、setQuietBatch/
 //   getLearnLang 导出、chrome.storage 源语言初始读取与变更监听（模块加载时
 //   注册一次，ESM 模块缓存保证副作用只执行一次）。
@@ -21,22 +17,21 @@ export const DEFAULT_SOURCE_LANG = 'en';
 
 // === 加载状态 ===
 // 当前已加载的语言（缓存 key），避免同语言重复加载
-// 统一词典（2026-08-21 第八十九次）：Map<word_lower, entry>，entry 含单词全部属性--
+// 统一词典：Map<word_lower, entry>，entry 含单词全部属性--
 //   { rank, tags, lemma, translation, translationLang, phonetic }
-// 反思（2026-08-21 第八十九次）：用户明确"词典只有一个，所有关于单词的属性都在其中"。
-//   - rank/tags：装载/投影时全量就位；lemma：投影带出已持久化的词形（跨会话不再重还原）；
-//   - translation/translationLang/phonetic：体积大，词条保留字段、首次 lookupFull 按需直读
-//     IDB 懒填充，此后直读内存词典（不再每次查 IDB）。
-//   - 旧 _wordfreqMap/_wordlistsMap 两张表与 _lemmaCache 词形镜像全部废除，只此一表。
+// 用户裁定"词典只有一个，所有关于单词的属性都在其中"：
+//   - rank/tags：装载/投影时全量就位；lemma：投影带出已持久化的词形（跨会话免重还原）；
+//   - translation/translationLang/phonetic：体积大，词条保留字段、首次 lookupFull 按需
+//     直读 IDB 懒填充，此后直读内存词典（免每次查 IDB）。
 // 加载 Promise（避免并发加载）
-// 批量处理静音开关（2026-08-19 第八十次）：分屏扫描/整句注释等批量路径在批内置静音，
+// 批量处理静音开关：分屏扫描/整句注释等批量路径在批内置静音，
 //   使"一屏扫描只打印一条统计"（logBatch 汇总），①②③逐词日志仅在用户主动查词时打印。
 export const dictState = {
-  loadedLang: null,                    // 原 _loadedLang
-  dictMap: null,                       // 原 _dictMap
-  loadPromise: null,                   // 原 _loadPromise
-  currentLearnLang: DEFAULT_SOURCE_LANG, // 原 _currentLearnLang
-  quietBatch: false,                   // 原 _quietBatch
+  loadedLang: null,
+  dictMap: null,
+  loadPromise: null,
+  currentLearnLang: DEFAULT_SOURCE_LANG,
+  quietBatch: false,
   ranksReadyLang: null,                // 分阶段 Stage 1 就绪语言（rank-only 可扫）
   ranksPromise: null,                  // 分阶段 Stage 1 承诺（同语言复用）
   _settleRanks: null,                  // ranks 承诺 resolve 暂存（异常兜底用）
@@ -45,11 +40,10 @@ export const dictState = {
 };
 
 /** 设置/取消词典逐词日志静音（批量处理期间置 true，结束置 false）
- * 反思（2026-08-28 第一百六十八次）：旧版是**全局布尔**，多个批量路径并发时
- *   （text-hint 分屏扫描 processBatch 与 annotator 整句注释 getAnnotations 交错），
- *   任一路径的 finally setQuietBatch(false) 会提前解除其它仍在进行批次的静音，
- *   导致 ①②③ 逐词日志在扫描期间刷屏（用户："后台一直打印查询词典"）。
- *   修正：改为引用计数——置 true 计数加一，置 false 减一，计数为 0 才真正解除静音。
+ * 引用计数而非全局布尔：多个批量路径并发时（分屏扫描与整句注释交错），
+ *   任一路径的 finally 置 false 会提前解除其它仍在进行批次的静音，导致逐词日志
+ *   刷屏（用户："后台一直打印查询词典"）。置 true 计数加一，置 false 减一，
+ *   计数为 0 才真正解除静音。
  */
 let _quietDepth = 0;
 export function setQuietBatch(v) {
@@ -85,9 +79,6 @@ if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.local) {
     }
   });
 }
-
-// 反思（2026-08-21 第八十九次）：旧 _lemmaCache 词形镜像已废除--lemma 是词条属性，
-//   直接存于 _dictMap 词条的 lemma 字段（用户："词典只有一个，所有关于单词的属性都在其中"）。
 
 /**
  * 读取当前源语言（统一词典 key 前缀用）

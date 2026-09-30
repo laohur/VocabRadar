@@ -1,4 +1,4 @@
-// ========== G3（2026-09-08）：learn 面板「导入到我的卷轴」草稿导出 ==========
+// ========== learn 面板「导入到我的卷轴」草稿导出 ==========
 // 契约：docs/网站升级阶段二-边界与原型.md §4.3（卷轴草稿协议）+ §6.2（learn 面板按钮行）
 // 桥协议：网站侧 src/utils/draftBridge.js 头注释（内容脚本桥推送，两端同步约束）
 //
@@ -13,12 +13,11 @@
 import { _allAnnotations, _cachedLearnLang, _pageSentences, log } from './core.js';
 
 // 站点地址（「并且打开」跳转目标）。
-// 274次（用户裁定"本地版本跳本地，线上版本跳线上"）：按安装来源动态判定——
+// 用户裁定"本地版本跳本地，线上版本跳线上"：按安装来源动态判定——
 //   商店/AMO 正式安装的扩展 manifest 带 update_url → 线上站 vocabradar.com；
 //   本地开发/解包加载（无 update_url）→ 本地站 https://localhost:3001。
-//   之前是单一常量（本地 localhost），线上安装的用户点 learn 会跳到打不开的 localhost。
-// 281次修正：3005 是 274 次凭空定的端口，未核对网站侧 vite.config.js（port:3001+
-//   mkcert https）——以网站实际端口 3001 为准，别再臆造。
+//   单一常量（本地 localhost）会让线上安装的用户点 learn 跳到打不开的 localhost。
+// 端口以网站侧 vite.config.js 实际配置为准（3001 + mkcert https），不臆造。
 const SITE_URL_LOCAL = 'https://localhost:3001';
 const SITE_URL_ONLINE = 'https://vocabradar.com';
 let _siteUrl = null;
@@ -40,10 +39,9 @@ export function getSiteUrl() {
 export const DRAFT_CACHE_KEY = 'vocabradarDraftScrolls';
 
 // djb2 字符串哈希（仅用于稳定 id，非安全用途）
-// 274次：导出别名供视频侧栏草稿（id 前缀 ext-v-）复用同一哈希。
-// 275次修复：上一轮重构误删了 djb2 函数本体导致 importCurrentSidebarDraft 抛
-// ReferenceError: djb2 is not defined（草稿导入全挂）——本体回归，教训：删函数
-// 前先 grep 全部调用点，"只是加导出别名"也必须保留被别名的原函数。
+// 导出别名供视频侧栏草稿（id 前缀 ext-v-）复用同一哈希。
+// 坑位：djb2 本体不可删（曾因重构误删致 importCurrentSidebarDraft 抛
+// ReferenceError）——删函数前先 grep 全部调用点，"只是加导出别名"也必须保留被别名的原函数。
 function djb2(str) {
   let h = 5381;
   for (let i = 0; i < str.length; i++) h = ((h << 5) + h + str.charCodeAt(i)) >>> 0;

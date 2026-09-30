@@ -1,7 +1,7 @@
 // YouTube 页面逻辑入口（classic script）
 // 用动态 import 加载 ES module（详见 bilibili.js 注释）
 //
-// 第二百七十次：停用规则（Deactivate）gate——与 bilibili.js 同构：命中
+// 停用规则（Deactivate）gate——与 bilibili.js 同构：命中
 //   「视频侧栏」+「视频叠加字幕」双停规则时不加载 video-controller 模块图
 //   （尽量不活动），仅留解除观察监听，任一功能解除后自动补启。
 //   只停其一不在此拦截（细分编排由 vc/controller.js 按抑制表执行）。

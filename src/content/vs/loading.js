@@ -4,7 +4,6 @@
 // 职责：showLoading()（骨架屏 + 15s 超时兜底）、clearLoading()（去 loading 态并清
 //       超时计时器）、showNoSubtitle(msg)（无字幕/超时/错误提示，保留 tabs 可切换）、
 //       自动加载链路活动标记 _autoChainActive（期间超时兜底不抢跳）。
-// 来源：拆分自 src/content/video-sidebar.js（2026-09-27 拆分第四刀，纯机械搬移）。
 // 关系：依赖 ./logger.js（log）、./dom-utils.js（escapeHtml）、../../lib/i18n.js（t）；
 //       因需读取门面 _root/_subtitles，经 getRoot/getSubtitlesRef 对门面构成受控
 //       循环 import——本模块顶层仅自身状态与函数声明，getRoot()/getSubtitlesRef()
@@ -25,11 +24,11 @@ import { getRoot, getSubtitlesRef } from '../video-sidebar.js';
 // === 加载提示（字幕到达前显示） ===
 // 加载态：仅显示 header + 骨架动画，隐藏 tabs/toolbar/footer
 // 仿 videoseek 的 Skeleton active 样式（渐变呼吸动画条）
-// 加载超时计时器（反思 2026-07-07：用户反馈"有的视频你一直转转转还不自知"）
+// 加载超时计时器（用户反馈"有的视频你一直转转转还不自知"）
 // showLoading 后 15 秒未收到字幕/错误，自动 showNoSubtitle 兜底，避免 loading 永转。
 let _loadingTimeout = null;
 const LOADING_TIMEOUT_MS = 15000;
-// 第一百四十五次（用户裁定"抓取字幕都是后台操作，不要干扰正常操作"）：
+// 用户裁定"抓取字幕都是后台操作，不要干扰正常操作"：
 // 自动加载链路活动标记——期间 15s 超时兜底不再抢跳超时提示（链路自有终态），
 // 且 onTrackSelect 不重复刷骨架屏。
 let _autoChainActive = false;
@@ -41,7 +40,7 @@ export function showLoading(msg) {
   const _root = getRoot();
   if (!_root) return;
   const panel = _root.querySelector('#beaver-subtitle-panel');
-  // 第一百四十五次：后台化——面板已在 loading 态或已有真实字幕时不重绘不闪动
+  // 后台化——面板已在 loading 态或已有真实字幕时不重绘不闪动
   if (panel && panel.querySelector('.beaver-loading')) return;
   const _subtitles = getSubtitlesRef();
   if (panel && _subtitles && _subtitles.length > 0) return;
@@ -57,7 +56,7 @@ export function showLoading(msg) {
     <div class="beaver-skeleton-row"><div class="beaver-skeleton-bar time"></div><div class="beaver-skeleton-bar short"></div></div>
     <div style="text-align:center;color:#9499a0;font-size:13px;margin-top:8px"><span class="beaver-loading-spin"></span> ${escapeHtml(txt)}</div>
   </div>`;
-  // 反思（2026-07-07）：超时兜底。字幕获取卡死（网络不响应/API 异常未抛错）时，
+  // 超时兜底：字幕获取卡死（网络不响应/API 异常未抛错）时，
   // showLoading 不会被 clearLoading 清除，loading 永转。15秒后自动 showNoSubtitle。
   if (_loadingTimeout) clearTimeout(_loadingTimeout);
   _loadingTimeout = setTimeout(() => {
@@ -76,13 +75,12 @@ export function showLoading(msg) {
   }, LOADING_TIMEOUT_MS);
 }
 
-// 加载完成：去掉 loading class，恢复 tabs/toolbar/footer 显示
-// （2026-08-28 拆分第三刀：vs/subtitle-renderer 的 renderSubtitlePanel 调用，加 export 接驳）
+// 加载完成：去掉 loading class，恢复 tabs/toolbar/footer 显示（由 vs/subtitle-renderer 的 renderSubtitlePanel 调用）
 export function clearLoading() {
   const _root = getRoot();
   if (!_root) return;
   _root.classList.remove('loading');
-  // 反思（2026-07-07）：清除超时计时器，避免字幕正常到达后超时提示仍触发
+  // 清除超时计时器，避免字幕正常到达后超时提示仍触发
   if (_loadingTimeout) {
     clearTimeout(_loadingTimeout);
     _loadingTimeout = null;
@@ -98,10 +96,9 @@ export function clearLoadingTimeout() {
 }
 
 // === 显示"无字幕"提示 ===
-// 反思（2026-07-07）：用户要求"有啥显示啥"。
-//   旧版清空 _subtitles/_subEntries/_allAnnotations，导致 tabs 无法切换查看
-//   已收集的生词，且字幕 panel 内容全无。修正：只更新字幕 panel 显示提示，
-//   保留旧数据，tabs（字幕/生词表/练习）仍可点击，生词表保留已收集的生词。
+// 用户要求"有啥显示啥"：只更新字幕 panel 显示提示，保留 _subtitles/_subEntries/
+// _allAnnotations 旧数据（此前清空导致 tabs 无法切换查看已收集的生词，且字幕
+// panel 内容全无），tabs（字幕/生词表/练习）仍可点击，生词表保留已收集的生词。
 export function showNoSubtitle(msg) {
   const _root = getRoot();
   if (!_root) return;
@@ -121,6 +118,6 @@ export function showNoSubtitle(msg) {
     </div>`;
   }
   log('显示无字幕提示（保留 tabs 可切换）');
-  // 第一百四十七次（用户裁定"有时候还会自动折叠"=不可接受）：撤销无字幕自动折叠。
+  // 用户裁定"有时候还会自动折叠"=不可接受：撤销无字幕自动折叠。
   // 启动折叠/首批内容展开一次的既定策略不变；此后任何时刻都尊重用户当前展开态。
 }

@@ -1,14 +1,14 @@
 // =============================================================================
-// SW 工具集（2026-09-27 拆分自 service-worker.js）
+// SW 工具集
 // 职责：带超时 fetch、二进制⇄base64、PCM→WAV 编码、md5 包装。
 // 跨消息回传的二进制一律先转 base64（chrome.runtime 消息默认 JSON 序列化，
 //   ArrayBuffer 直传会变空对象——见 abToB64 注释）。
 // =============================================================================
-// 反思（2026-08-02）：import md5.js 作为副作用脚本，挂到 self.md5 供 md5Hex 使用
+// import md5.js 作为副作用脚本，挂到 self.md5 供 md5Hex 使用
 //   （js-md5 非 ESM，只能副作用引入；模块缓存保证只执行一次）
 import '../../lib/vendor/md5.js';
 
-// 反思（2026-08-12）：带超时的 fetch，避免翻译服务器不响应时永久挂起
+// 带超时的 fetch，避免翻译服务器不响应时永久挂起
 export async function fetchWithTimeout(url, options = {}, timeout = 8000) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeout);
@@ -20,8 +20,8 @@ export async function fetchWithTimeout(url, options = {}, timeout = 8000) {
   }
 }
 
-// ArrayBuffer → base64（2026-09-08 第二百四十次）：扩展消息回传二进制的统一出口。
-//   根因（官方博客《Unlock Structured Clone for Chrome Extension Messaging》2026-04）：
+// ArrayBuffer → base64：扩展消息回传二进制的统一出口。
+//   根因（官方博客《Unlock Structured Clone for Chrome Extension Messaging》）：
 //   chrome.runtime 消息默认 JSON 序列化（结构化克隆为 Chrome 148 起 manifest 可选项），
 //   JSON 下 ArrayBuffer 实测变空对象 {}（byteLength=undefined）——wordfreq 词频
 //   "压缩大小: NaN KB" 即此根因。凡经消息回传的二进制一律先转 base64 字符串

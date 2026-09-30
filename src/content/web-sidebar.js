@@ -2,30 +2,20 @@
 // 用动态 import 加载 ES module（与 text-hint.js 同模式），避免 content_scripts 静态 import 报错
 //
 // 职责：
-//   - 读取设置（webSidebarEnabled + 配色字段 + rankThreshold + annotateOov）
+//   - 读取设置（webSidebarEnabled + 配色字段 + 阈值 + 注释开关）
 //   - 监听 storage 变化，启停侧栏或热更新配色/阈值
-//   - 始终启动（默认折叠态），用户点击折叠条展开
-//   - 视频页面不启动文本侧栏（由 video-controller 启动视频侧栏）
-//
-// 第二百七十次：停用规则（Deactivate）gate——命中「文本侧栏」停用规则时本页尽量
-//   不活动：不加载模块图、不挂 history hook，仅留轻量解除观察监听；规则解除后走
-//   完整 _wsBoot()。规则运行中启停由 boot 内主监听的 deactivateRules 分支实时处理。
-//   匹配/存储逻辑唯一来源 src/lib/deactivate.js（非打包入口文件，构建时原样进 dist）。
+//   - 始终启动（默认折叠态），视频页面也启动（与视频侧栏共存）
+//   - 停用规则 gate：命中「文本侧栏」规则时本页尽量不活动——不加载模块图、
+//     不挂 history hook，仅留轻量解除观察监听；规则解除后走完整 _wsBoot()，
+//     规则运行中启停由 boot 内主监听的 deactivateRules 分支实时处理。
+//     匹配/存储逻辑唯一来源 src/lib/deactivate.js（构建时原样进 dist）
 
-// 反思（2026-08-07）：用户反馈"Identifier '_impl' has already been declared"。
-//   根因：text-hint.js 也用 let _impl，classic script 共享全局作用域，变量名冲突。
-//   修正：改用 _wsImpl 避免冲突。
+// classic script 与 text-hint.js 共享页面全局作用域，变量名须带 _ws 前缀避免冲突
 let _wsImpl = null;
-
-// 反思（2026-08-12）：用户要求"chrome edge 视频网站没有显示悬浮球"。
-//   旧版视频页面不启动文本侧栏（避免与视频侧栏冲突），但用户要求视频网站也要显示悬浮球。
-//   修正：视频页面也启动文本侧栏（悬浮球），与视频侧栏共存。
-// 第二百二十五次：删除死函数 isVideoPage（定义后零调用；《命名清查》查明旧注释
-//   "仍保留供 video-controller.js 使用"不实——video-controller 用自己的 isSupportedPage）。
 
 let _lastUrl = location.href;
 
-// === 第二百七十次：停用规则 gate（与 text-hint.js 同构） ===
+// === 停用规则 gate（与 text-hint.js 同构） ===
 let _wsDeactLib = null;
 function _wsLoadDeactLib() {
   return import(chrome.runtime.getURL('src/lib/deactivate.js'))
@@ -45,25 +35,21 @@ function _sidebarSuppressed() {
 }
 let _wsBooted = false;
 
-/** boot：启动主体（第二百七十次自 IIFE 抽出；逻辑原样 + 规则实时启停分支） */
+/** boot：启动主体（幂等；含停用规则实时启停分支） */
 async function _wsBoot() {
   if (_wsBooted) return;
   _wsBooted = true;
   try {
     _wsImpl = await import(chrome.runtime.getURL('src/content/web-sidebar-impl.js'));
 
-    // 诊断挂钩（2026-08-14 第五十四次）：向诊断悬浮窗暴露真实运行实例的状态。
+    // 诊断挂钩：向诊断悬浮窗暴露真实运行实例的状态
     window.__beaverWebSidebarDiag = () => (_wsImpl && typeof _wsImpl.getDiagState === 'function')
       ? _wsImpl.getDiagState()
       : null;
 
     const settings = await _wsGetSettings();
-    // 反思（2026-08-12）：用户要求"视频网站也要显示悬浮球"。
-    //   旧版视频页面不启动文本侧栏，现改为始终启动（与视频侧栏共存）。
     if (settings.webSidebarEnabled) {
-      // 反思（2026-08-12 第四十六次）：startWebSidebar 是 async，未 catch 时
-      //   Bing 等网站的注入错误会被吞掉，控制台无任何输出，难以诊断。
-      //   修正：包装为 Promise 并 catch，打印详细错误信息。
+      // startWebSidebar 是 async，必须 catch，否则注入错误被吞、控制台无输出
       Promise.resolve(_wsImpl.startWebSidebar(settings)).catch((e) => {
         console.error('[VocabRadar][web-sidebar] startWebSidebar 异常:', e);
       });
@@ -72,8 +58,7 @@ async function _wsBoot() {
     // 设置变化监听
     chrome.storage.onChanged.addListener((changes) => {
       if (!_wsImpl) return;
-      // 第二百七十次：停用规则变化——命中「文本侧栏」立即停（同主开关关闭语义）；
-      // 解除时按主开关现值恢复（文本侧栏无 reconcile 自愈，启停两向都在此处理）
+      // 停用规则变化：命中立即停（同主开关关闭语义）；解除时按主开关现值恢复
       if ('deactivateRules' in changes) {
         _sidebarSuppressed().then((sup) => {
           if (sup) {
@@ -108,7 +93,7 @@ async function _wsBoot() {
       if ('rankThresholdMax' in changes) {
         _wsImpl.setRankThresholdMax(changes.rankThresholdMax.newValue);
       }
-      // My Words（用户生词/熟词表）变化 → 全量重扫（2026-09-18）
+      // My Words（用户生词/熟词表）变化 → 全量重扫
       if ('myWords' in changes) {
         const _mw = changes.myWords.newValue || {};
         _wsImpl.setMyWordsLists(_mw.new, _mw.known);
@@ -117,16 +102,15 @@ async function _wsBoot() {
       if ('learnLanguage' in changes || 'meaningLanguage' in changes) {
         _wsGetSettings().then((s) => _wsImpl.updateLanguages(s));
       }
-      // 注释表外词开关变化 → 重扫（2026-08-07）
+      // 注释表外词开关变化 → 重扫
       if ('annotateOov' in changes) {
         _wsImpl.setAnnotateOov(changes.annotateOov.newValue);
       }
-      // 注释重复生词开关变化 → 重扫（2026-08-15 第六十二次）
+      // 注释重复生词开关变化 → 重扫
       if ('annotateRepeat' in changes) {
         _wsImpl.setAnnotateRepeat(changes.annotateRepeat.newValue);
       }
-      // 280次：侧邻注释模板变化 → 清缓存重扫（与 annotateRepeat 同构，原 annBrackets）
-      // 283次：模板分键——文本侧栏（annotationStyle 栏）只消费 webAnnTemplate
+      // 注释模板变化 → 清缓存重扫；文本侧栏只消费 webAnnTemplate（与字幕侧 annTemplate 分键）
       if ('webAnnTemplate' in changes) {
         _wsImpl.setAnnTemplate(changes.webAnnTemplate.newValue);
       }
@@ -142,20 +126,17 @@ async function _wsBoot() {
       if ('annotationStyle' in changes) {
         _wsImpl.updateAnnStyle(changes.annotationStyle.newValue);
       }
-      // 301次：个性化/用户条目变化 → 刷新规则表（类名不变即时生效，无需重扫）
+      // 个性化/用户条目变化 → 刷新规则表（类名不变即时生效，无需重扫）
       if ('annotationCustom' in changes || 'annotationUserStyles' in changes) {
         _wsGetSettings().then((s) => _wsImpl.refreshAnnPoolCss(s.annotationCustom, s.annotationUserStyles));
       }
     });
 
-    // 反思（2026-08-12）：视频页面也启动文本侧栏，SPA 导航不再停止/启动文本侧栏。
-    //   仅在 webSidebarEnabled 开关变化时启停（由 storage.onChanged 监听处理）。
-    //   （第二百二十五次：死函数 isVideoPage 已删除，此前的虚假保留注释一并更正。）
+    // SPA 导航不启停侧栏；启停仅由 storage.onChanged 的 webSidebarEnabled 分支处理
     const checkVideoNav = () => {
       const newUrl = location.href;
       if (newUrl === _lastUrl) return;
       _lastUrl = newUrl;
-      // 视频页面也启动文本侧栏，无需根据视频页面切换启停
     };
     // hook pushState/replaceState（幂等）
     if (!window.__beaverWebSidebarUrlHooked) {
@@ -194,8 +175,7 @@ async function _wsBoot() {
   }
 })();
 
-/** gate 期间的解除观察（第二百七十次）：规则解除即 boot；boot 幂等（_wsBooted），
- *  boot 后本监听残留无害——运行中的规则启停由 boot 内主监听接管 */
+/** gate 期间的解除观察：规则解除即 boot（boot 幂等；boot 后残留监听无害） */
 function _wsInstallUnsuppressWatch() {
   try {
     chrome.storage.onChanged.addListener((changes, area) => {
@@ -218,36 +198,25 @@ function _wsGetSettings() {
     chrome.storage.local.get({
       learnLanguage: 'en',
       meaningLanguage: 'zh',
-      // 反思（2026-08-14 第五十四次修正）：默认词频阈值恢复，撤销第五十二次误改的 0。
-      //   2026-09-29（用户："默认提示4000-5000词频"）：默认 4000 / 上界 5000（全仓同批同步）
-      rankThreshold: 4000,
-      // 340次（My Words 过滤失效修复）：此前缺两键 → 刷新后 _settings.myWords=undefined →
-      //   web-sidebar-impl setMyWords(空) 过滤失效；上界恒 Infinity 不限
-      rankThresholdMax: 5000,
+      // 词频下界默认 5000
+      rankThreshold: 5000,
+      // 上界 0 = 不限（Infinity）；此键缺失会导致 My Words 过滤失效
+      rankThresholdMax: 0,
       myWords: { new: [], known: [] },
       annotateOov: false,
       annotateRepeat: false,
-      // 280次：侧邻注释模板默认（annBrackets 布尔退役）
-      // 284次：默认组合 {target} {annotation}（与 styles.js 同步）；306次去空格
+      // 注释模板默认，与 lib/styles.js 默认同步
       annTemplate: '{target}{annotation}',
-      // 反思（2026-08-18 第七十三次修正）：默认配色曾是单词绿底白字。
-      // 304次（用户"默认无底色"）：改透明底绿字。
-      // 第502次回退第501次误改的 'inherit'（条目显式字段仍优先——G1 结构保留）。
+      // 默认透明底绿字；条目显式字段仍优先于默认值
       hintFirstBg: 'transparent',
       hintFirstFg: '#2e6b43',
       hintLaterBg: 'transparent',
       hintLaterFg: '#2e6b43',
       hintSideAnnotation: false,
-      // 309次第五轮（用户四栏统一裁定）：注释样式兜底默认改 'green-background'，
-      //   与 guide.js defaults 一致——storage 空时实际生效的是本兜底
-      // 318次：'green-background' 是代指常量 ANN_DEFAULT_STYLE 的镜像兜底（classic
-      //   script 不便 import styles.js；代指=常量锚定无指针键，版本变化才改常量值，
-      //   锚点见 lib/styles.js）
-      // 第501次曾移 green-wave；第502次（用户"默认样式改回绿背景"）镜像同步回。
-      // 第503次曾随误判移 green-wave；
-      // 第504次（用户纠错"默认是绿色背景"）：常量回 green-background，镜像同步。
+      // 'green-background' 镜像 lib/styles.js 的 ANN_DEFAULT_STYLE（classic script
+      //   不便 import styles.js；styles.js 常量变化时须同步此兜底）
       annotationStyle: 'green-background',
-      // 301次：个性化/用户条目缓存（applyAnnStyle 类切换之外，规则表刷新用）
+      // 个性化/用户条目缓存（applyAnnStyle 类切换之外，规则表刷新用）
       annotationCustom: null,
       annotationUserStyles: [],
       webSidebarEnabled: true,

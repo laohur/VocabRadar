@@ -5,7 +5,6 @@
 //       runVideoQuery()（query 标签查询，复用 th/panel 卡片，Shadow DOM 承载）、
 //       onLearnClickVs()（learn 按钮：字幕正文+生词组装草稿入缓存并跳转我的卷轴）、
 //       autoStartASR()（已废弃的无字幕自动识别入口，保留供未来恢复）。
-// 来源：拆分自 src/content/video-sidebar.js（2026-09-27 拆分第四刀，机械搬移）。
 // 关系：依赖 ./asr-flow.js（toggleASR）、./logger.js、../../lib/i18n.js（t）、
 //       ./toast.js、../th/panel.js、../ws/draft-export.js、./subtitle-renderer.js；
 //       经受控循环 import 对门面读状态（getVideoLearnLang/isASRActive/getRoot/
@@ -26,8 +25,8 @@ import { buildSubtitleBody, getAllAnnotations } from './subtitle-renderer.js';
 import { getRoot, getVideoLearnLang, isASRActive, currentVideoKey } from '../video-sidebar.js';
 
 /**
- * 反思（2026-08-08）：用户要求"音标前加一个喇叭按钮"。
  * 视频侧栏朗读单词（Web Speech API），使用 learnLanguage 设置语音。
+ * 用户要求"音标前加一个喇叭按钮"。
  * @param {string} word 要朗读的单词
  */
 export function speakWordVideo(word) {
@@ -61,8 +60,8 @@ export async function runVideoQuery(text) {
   const host = document.createElement('div');
   box.appendChild(host);
   const shadow = host.attachShadow({ mode: 'open' });
-  // 309次第六轮（用户"查询窗口只有 https://localhost:3001 字号才会偏大"）：本内嵌卡
-  //   与文本侧栏 query 标签同构——嵌套 host 被 `#beaver-sidebar * { font-size: inherit }`
+  // 字号基准 14px（用户报"查询窗口只有 https://localhost:3001 字号才会偏大"）：
+  //   本内嵌卡与文本侧栏 query 标签同构——嵌套 host 被 `#beaver-sidebar * { font-size: inherit }`
   //   锁死继承侧栏宿主 16px，卡根节点写死 14px 与右键面板/tooltip 同基准（同修详见 ws/ui.js）
   shadow.innerHTML = '<style>' + buildPanelCss() + '</style>'
     + '<div class="beaver-query-card" style="padding:10px 12px;background:#fbfdf9;border-radius:8px;font-size:14px;line-height:1.5;">'
@@ -119,10 +118,9 @@ export async function onLearnClickVs() {
 }
 
 // === 自动启动 ASR（已废弃，保留函数供未来需要时恢复）===
-// 反思（2026-07-06 三次修复）：用户反馈"语音识别为啥一直选中，哪怕是刷新网页"。
-// 旧版在无字幕时自动调用 autoStartASR()，导致每次刷新页面都自动启动 ASR，
-// 语音识别按钮一直处于选中态。修正：video-controller 不再调用此函数，
-// 改为显示"无字幕"提示，用户可手动点击 🎤 按钮或选择 ASR 轨道启动。
+// 用户反馈"语音识别为啥一直选中，哪怕是刷新网页"：无字幕时自动调用 autoStartASR()
+// 会每次刷新都自动启动 ASR，语音识别按钮一直处于选中态。现 video-controller
+// 不调用此函数，改为显示"无字幕"提示，用户可手动点击 🎤 按钮或选择 ASR 轨道启动。
 // 函数保留不删除，以防未来需要恢复自动启动行为。
 export function autoStartASR() {
   const _root = getRoot();

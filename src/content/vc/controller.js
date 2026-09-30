@@ -1,7 +1,5 @@
 // ============================================================
 // 文件职责：视频控制器启动主流程（src/content/vc/controller.js）
-// 来源：拆分自 src/content/video-controller.js（ES Modules 模块化拆分）
-// 拆分日期：2026-08-28
 // 内容：startVideoController（启动入口：设置读取 -> waitForVideo ->
 //   sidebar 骨架 -> 字幕获取（B站/YouTube/generic）-> 轨道优先级填充）、
 //   reviveSidebarIfPossible（侧栏复活通道）、getSettings、isSupportedPage、
@@ -22,37 +20,34 @@ import { startOverlay, stopOverlay, setOverlayEnabled, setRankThreshold, setRank
 import { startSidebar, updateSubtitles, showNoSubtitle, setTracks, destroySidebar, loadASRCacheIfAny, loadASRCacheWithCoverage, selectASRTrackAndContinue, currentVideoKey, isASRActive } from '../video-sidebar.js';
 import { vcState } from './state.js';
 import { waitForVideo, waitForVideoReady, observeVideoChange } from './video-detect.js';
-// 第二百七十次：停用规则（Deactivate）抑制表——匹配/存储唯一来源 lib/deactivate.js，
+// 停用规则（Deactivate）抑制表——匹配/存储唯一来源 lib/deactivate.js，
 //   本模块按「视频侧栏/视频叠加字幕」两位组合编排启动内容。
 import { suppressionFor } from '../../lib/deactivate.js';
-// 第364次：原第361次注入时机分档浮窗（startTimingSwitcher）撤除——浮窗并入
-// 诊断中心路由窗「注入时机」标签（src/content/diag-window.js），本模块不再挂浮窗。
 
-// 反思（2026-07-06 二次修复）：storage.onChanged 监听器注册位置 bug
-// 旧版将监听器注册在字幕处理之后（行158），如果字幕为空/失败走 autoStartASR 提前 return，
-// 监听器永远不注册，用户在 popup 切换 Subtitle Hints 完全无效。
-// 修正：监听器提前到 startVideoController 开头注册，且用 flag 防重复。
+// storage.onChanged 监听器必须注册在 startVideoController 开头（若放在字幕处理之后，
+// 字幕为空/失败走 autoStartASR 提前 return，监听器永不注册，popup 切换 Subtitle Hints
+// 完全无效），且用 flag 防重复。
 let _storageListenerRegistered = false;
 
 const PLATFORM = {
   BILIBILI: 'bilibili',
   YOUTUBE: 'youtube',
-  GENERIC: 'generic'  // 反思（2026-07-08 #44）：多站支持，无公开字幕API的站点
+  GENERIC: 'generic'  // 多站支持，无公开字幕API的站点
 };
 
-// 反思（2026-07-07）：用户反馈"字幕乱贴，不是一个视频"。
+// 用户反馈"字幕乱贴，不是一个视频"。
 // 根因：SPA 换集时旧 startVideoController 仍在 await subtitlesPromise，
 // 新 startVideoController 已开始，旧字幕后到达会覆盖新字幕（竞态）。
-// 修正：每次 startVideoController 递增 _requestId，字幕到达后检查 ID 是否匹配，
+// 每次startVideoController 递增 _requestId，字幕到达后检查 ID 是否匹配，
 // 不匹配则丢弃（过期字幕）。triggerReload 触发的新请求 ID 更大，旧请求被作废。
 let _requestId = 0;
 
-// 第三百七十一次（用户批复"事件驱动重拉"）：YouTube timedtext 捕获监听的当前 handler。
+// 用户批复"事件驱动重拉"：YouTube timedtext 捕获监听的当前 handler。
 //   每轮 startVideoController 注册本轮 handler 前先移除上一轮的（闭包绑定本轮
 //   video/settings/sup/myRequestId），换集重入不累积监听器。
 let _ttLastHandler = null;
 
-// 第二百七十次：抑制组合键（视频侧栏/叠加字幕两位布尔串）——startVideoController
+// 抑制组合键（视频侧栏/叠加字幕两位布尔串）——startVideoController
 // 每次启动刷新；deactivateRules 变化时与新组合比较，不同即清场重编排。
 let _lastSupKey = '';
 function _supKey(sup) {
@@ -63,22 +58,21 @@ function _supKey(sup) {
 function getSettings() {
   return new Promise((resolve) => {
     chrome.storage.local.get({
-      rankThreshold: 4000,   // 2026-09-29（用户："默认提示4000-5000词频"）：默认改 4000
-      rankThresholdMax: 5000,   // 词频范围上界，0/缺省=不限制（默认全表频段）
-      // 340次（My Words 过滤失效修复）：此前缺键 → getSettings 后转发 startOverlay 的
-      //   myWords=undefined → subtitle-overlay 真值守卫不清空但也从不 setMyWords → 失效
+      rankThreshold: 5000,   // 用户："改回原来的5000-∞"
+      rankThresholdMax: 0,   // 词频范围上界，0/缺省=不限制（默认全表频段）
+      // 缺键会让 subtitle-overlay 真值守卫不清空但也从不 setMyWords（My Words 过滤失效）
       myWords: { new: [], known: [] },
-      learnLanguage: 'en',   // 所学语言（第419次起字幕默认首选界面语言，此为次选）
+      learnLanguage: 'en',   // 所学语言（字幕默认首选界面语言，此为次选）
       meaningLanguage: 'zh',   // 释义语言
-      uiLanguage: 'en',      // 界面语言（第419次：字幕默认轨道首选）
-      sidebarEnabled: true,  // #88: 侧栏开关，默认显示
-      annotateRepeat: false  // 第二百七十次：overlay-only 模式直启 overlay 时透传注释重复生词开关
+      uiLanguage: 'en',      // 界面语言（字幕默认轨道首选）
+      sidebarEnabled: true,  // 侧栏开关，默认显示
+      annotateRepeat: false  // overlay-only 模式直启 overlay 时透传注释重复生词开关
     }, resolve);
   });
 }
 
 /** 判断当前页面是否为本扩展支持的目标视频页
- * 反思（2026-07-07）：用户要求"处理不了的视频不显示窗口，参照videoseek"。
+ * 用户要求"处理不了的视频不显示窗口，参照videoseek"。
  * 非目标页面（B站番剧/直播/首页/空间、YouTube非watch页）不注入侧栏，避免"现眼"。
  * B站仅普通视频页 /video/BVxxx 或 /video/avxxx 支持；番剧 /bangumi/、直播 /live/ 不支持。
  * YouTube 仅 /watch 页支持；首页/搜索/频道/shorts 等不支持。
@@ -91,7 +85,7 @@ function isSupportedPage(platform) {
   if (platform === PLATFORM.YOUTUBE) {
     return /\/(watch|shorts)($|\?|\/)/i.test(path);
   }
-  // 反思（2026-07-08 #44）：generic 平台（TikTok/抖音/小红书/X/FB/IG/流媒体）
+  // generic 平台（TikTok/抖音/小红书/X/FB/IG/流媒体）
   //   无统一 URL 模式判定视频页，放宽为"只要有 video 元素就支持"，
   //   由 waitForVideo 超时兜底（15秒无 video 则不注入侧栏）。
   if (platform === PLATFORM.GENERIC) {
@@ -101,7 +95,7 @@ function isSupportedPage(platform) {
 }
 
 /** 清理已存在的侧栏（SPA 从视频页导航到非视频页时调用）
- * 反思（2026-07-07）：必须调用 destroySidebar 而非简单 remove，
+ * 必须调用 destroySidebar 而非简单 remove，
  * 否则 reinjectGuard 的 MutationObserver 会重新插入已移除的 _root。
  */
 function removeExistingSidebar() {
@@ -113,8 +107,8 @@ function removeExistingSidebar() {
 }
 
 /**
- * 召唤复活视频侧栏（第一百三十六次）
- * 反思：YouTube/B站正片页上若侧栏因任何原因缺席（DOM 被 SPA 重渲染吞掉、
+ * 召唤复活视频侧栏
+ * YouTube/B站正片页上若侧栏因任何原因缺席（DOM 被 SPA 重渲染吞掉、
  *   重插失败等），startVideoController 会因 isSupportedPage 通过但 vcState.started（原 _started）守卫
  *   直接 return--用户点悬浮球/🎬 按钮毫无反应，整页"啥都没有"。
  *   此处提供显式复活通道：侧栏还在 DOM 就按状态机语义恢复（清 userClosed +
@@ -152,10 +146,7 @@ export function reviveSidebarIfPossible(platform) {
 export async function startVideoController(platform) {
   if (vcState.started) return;
 
-  // 第364次：原此处 startTimingSwitcher() 挂浮窗调用撤除（浮窗并入诊断中心，
-  //  见 src/content/diag-window.js；档位读写仍在 vs/inject-timing.js 单一属主）
-
-  // 第二百七十次：先读本页停用规则抑制组合——「视频侧栏」+「视频叠加字幕」全停
+  // 先读本页停用规则抑制组合——「视频侧栏」+「视频叠加字幕」全停
   // 即尽量不活动：清场（拆侧栏/停 overlay）后返回，仅保留 observeVideoChange
   // （幂等 history hook），SPA 换集回来时重跑本函数重新按规则编排。
   const sup = await suppressionFor(location);
@@ -170,46 +161,43 @@ export async function startVideoController(platform) {
     return;
   }
 
-  // 反思（2026-07-07 二次修复）：用户反馈"有的视频中没出现侧栏"。
+  // 用户反馈"有的视频中没出现侧栏"：
   // 根因：从非视频页（B站首页/搜索/频道）SPA 导航到视频页时，首次 startVideoController
   //   因 isSupportedPage 返回 false 直接 return，history hook 未注册。SPA 导航到视频页后
   //   URL 变化但无监听器触发，侧栏不出现。
-  // 修正：1) vcState.currentPlatform（原 _currentPlatform）赋值移到 isSupportedPage 检查之前；
-  //       2) 非目标页面也注册 history hook（幂等），确保 SPA 导航到视频页时能触发；
-  //       3) triggerReloadGlobal 去掉 if(!started) return，改为根据当前 URL 决定启动/清理。
+  // 1) vcState.currentPlatform 赋值移到 isSupportedPage 检查之前；
+  //    2) 非目标页面也注册 history hook（幂等），确保 SPA 导航到视频页时能触发；
+  //    3) triggerReloadGlobal 去掉 if(!started) return，改为根据当前 URL 决定启动/清理。
   vcState.currentPlatform = platform;  // 供 triggerReloadGlobal 用（无论是否目标页都赋值）
 
-  // 反思（2026-07-07）：用户要求"处理不了的视频不显示窗口，参照videoseek"。
+  // 用户要求"处理不了的视频不显示窗口，参照videoseek"。
   // 非目标页面不注入侧栏，避免在番剧/直播/首页等页面"现眼"。
   // SPA 导航到非目标页时，清理已存在的侧栏。
   if (!isSupportedPage(platform)) {
     console.log('[VocabRadar][video-controller] 非目标视频页，不注入侧栏:', location.href);
     removeExistingSidebar();
-    // 反思（2026-07-07 二次修复）：非目标页也注册 history hook，确保 SPA 导航到视频页时能触发
+    // 非目标页也注册 history hook，确保 SPA 导航到视频页时能触发
     observeVideoChange();
     return;
   }
 
   vcState.started = true;
   vcState.lastInitUrl = location.href;  // 记录当前 URL，供 triggerReloadGlobal 比较检测 loadstart 误触发
-  vcState.lastInitKey = currentVideoKey(); // 第一百零二次：视频稳定标识（bv/v/p/cid 组合），伪换集过滤基准
+  vcState.lastInitKey = currentVideoKey(); // 视频稳定标识（bv/v/p/cid 组合），伪换集过滤基准
   const myRequestId = ++_requestId;
   console.log('[VocabRadar][video-controller] startVideoController 请求 ID:', myRequestId, 'URL:', location.href);
 
-  // 反思（2026-07-09）：用户反馈「依旧不能识别视频切换」。
-  //   根因：observeVideoChange()（注册 history hook 检测换集）旧版只在字幕成功/通用路径调用，
-  //   字幕失败/无字幕/空字幕等提前 return 的路径均未注册 -> 首个视频无字幕时 hook 永不注册，
-  //   后续换集无法检测。修正：在 vcState.started=true 后立即注册（幂等），覆盖所有成功/失败路径。
-  //   下方 generic/success 路径的旧调用已移除（此处已注册，重复调用虽幂等但冗余）。
+  // 用户反馈「依旧不能识别视频切换」：observeVideoChange()（注册 history hook 检测换集）
+  //   此前只在字幕成功/通用路径调用，字幕失败/无字幕/空字幕等提前 return 的路径均未注册
+  //   -> 首个视频无字幕时 hook 永不注册，后续换集无法检测。
+  //   在 vcState.started=true 后立即注册（幂等），覆盖所有成功/失败路径。
   observeVideoChange();
 
   try {
     const settings = await getSettings();
     const video = await waitForVideo();
 
-    // 反思（2026-07-06 二次修复）：storage.onChanged 监听器提前注册
-    // 旧版在字幕处理成功后才注册，字幕失败/空时提前 return 导致监听器永不注册。
-    // 用户在 popup 切换 Subtitle Hints 完全无效。现在提前注册，用 flag 防重复。
+    // 提前注册 + flag 防重复（理由见模块顶部说明）
     if (!_storageListenerRegistered) {
       _storageListenerRegistered = true;
       chrome.storage.onChanged.addListener((changes) => {
@@ -220,19 +208,19 @@ export async function startVideoController(platform) {
         if (changes.rankThresholdMax) {
           setRankThresholdMax(changes.rankThresholdMax.newValue);
         }
-        // My Words（用户生词/熟词表）变化 → 清缓存重渲染（2026-09-18）
+        // My Words（用户生词/熟词表）变化 → 清缓存重渲染
         if (changes.myWords) {
           const _mw = changes.myWords.newValue || {};
           setMyWordsLists(_mw.new, _mw.known);
         }
-        // 反思（2026-07-10 #88）：用户在 popup 切换侧栏开关时，实时显示/隐藏侧栏。
+        // 用户在 popup 切换侧栏开关时，实时显示/隐藏侧栏。
         if (changes.sidebarEnabled) {
           import('../video-sidebar.js').then(({ showSidebar, hideSidebar }) => {
             if (changes.sidebarEnabled.newValue) showSidebar();
             else hideSidebar();
           }).catch(() => { /* ignore */ });
         }
-        // 第二百七十次：停用规则变化——抑制组合与当前编排不一致时清场重编排：
+        // 停用规则变化——抑制组合与当前编排不一致时清场重编排：
         //   destroySidebar 内含停 ASR/停 overlay/拆 observer，随后
         //   startVideoController 按新抑制表重建（全停则入口分支直接返回）。
         //   组合未变（同两位）则忽略——四大功能开关各自既有监听不受影响。
@@ -255,19 +243,17 @@ export async function startVideoController(platform) {
     }
 
     // 检测到 video 立即启动 sidebar 骨架（B站/YouTube），与字幕获取并行
-    // 反思（2026-07-09）：subtitleOverlay 已移除（用户要求「去掉字幕提示」），
-    //   侧栏始终创建并显示，用户可用 ✕ 按钮手动关闭。
-    // 反思（2026-07-10 #88）：根据 sidebarEnabled 决定初始可见性。
+    // subtitleOverlay 已移除（用户要求「去掉字幕提示」），侧栏始终创建并显示，
+    //   用户可用 ✕ 按钮手动关闭；根据 sidebarEnabled 决定初始可见性——
     //   sidebarEnabled=false 时 hidden=true，侧栏创建但 display:none。
-    // 第二百七十次：「视频侧栏」被停用规则命中时不建侧栏——若「视频叠加字幕」
+    // 「视频侧栏」被停用规则命中时不建侧栏——若「视频叠加字幕」
     //   允许（能走到这里必然允许，全停在函数入口已返回），后续走 overlay-only
     //   分支把字幕直接喂给 subtitle-overlay（见字幕结果处理处）。
     const sidebarHidden = settings.sidebarEnabled === false;
-    // 278次（用户报"视频侧栏依旧不可见"）：根因实锤——272次引入停用规则时条件写反。
-    //   deactivate.js 语义：sup.videoSidebar=true = 「视频侧栏」被停用。旧代码却在
-    //   被停时才建侧栏、未停时反而跳过；277次 V2 迁移把所有规则 videoSidebar 清成 false
-    //   后 sup.videoSidebar 恒 false → 所有视频页都走"未停用"错误分支=永不注入侧栏。
-    //   修正：未停用（!sup.videoSidebar）才建侧栏；被停用才走 overlay-only（下方各分支）。
+    // 用户报"视频侧栏依旧不可见"：deactivate.js 语义 sup.videoSidebar=true = 「视频侧栏」
+    //   被停用；此前条件写反（被停时才建侧栏、未停时反而跳过），所有视频页都走
+    //   "未停用"错误分支=永不注入侧栏。现在未停用（!sup.videoSidebar）才建侧栏；
+    //   被停用才走 overlay-only（下方各分支）。
     if (!sup.videoSidebar) {
       startSidebar(video, { hidden: sidebarHidden }).catch((e) => console.error('[VocabRadar][video-controller] sidebar 骨架启动失败:', e));
     } else {
@@ -275,13 +261,13 @@ export async function startVideoController(platform) {
       console.log('[VocabRadar][video-controller] 停用规则：视频侧栏被停用，仅叠加字幕模式（规则=', sup.matchedPats.join(','), '）');
     }
 
-    // 反思（2026-07-08 #44）：generic 平台（TikTok/抖音/小红书/X/FB/IG/流媒体）无公开字幕API，
+    // generic 平台（TikTok/抖音/小红书/X/FB/IG/流媒体）无公开字幕API，
     //   跳过字幕获取，直接走无字幕分支（先尝试 ASR 缓存，无缓存才显示"无字幕"提示）。
     //   用户确认范围「侧栏+ASR无字幕获取」。
     if (platform === PLATFORM.GENERIC) {
-      // 第二百七十次：侧栏被停时 generic 无字幕来源（公开字幕 API 缺失，ASR 采集在侧栏内），
+      // 侧栏被停时 generic 无字幕来源（公开字幕 API 缺失，ASR 采集在侧栏内），
       //   overlay-only 模式无从取字幕，视频链路到此为止（无界面）。
-      // 278次：条件随 242 行一起纠正——被停用（sup.videoSidebar=true）才到此分支
+      // 被停用（sup.videoSidebar=true）才到此分支
       if (sup.videoSidebar) {
         console.log('[VocabRadar][video-controller] generic+侧栏被停用：无字幕来源，不启动叠加字幕');
         return;
@@ -300,10 +286,10 @@ export async function startVideoController(platform) {
       return;
     }
 
-    // 第三百七十一次（用户批复"事件驱动重拉"）：YouTube timedtext 捕获信号 → 自动重拉。
+    // 用户批复"事件驱动重拉"：YouTube timedtext 捕获信号 → 自动重拉。
     //   getYouTubeSubtitles 是一次性拉取：初始未开 CC（或轨道晚到）时失败返回 null，
     //   走 showNoSubtitle/ASR 兜底后永不再试；用户随后点开 CC，播放器请求 timedtext 被
-    //   page-fetch.js 捕获（youtube-fetcher 广播 vr-timedtext-captured），旧版该信号
+    //   page-fetch.js 捕获（youtube-fetcher 广播 vr-timedtext-captured），此前该信号
     //   无人消费——侧栏永远"无字幕"。修法：监听信号重拉轨道，拿到字幕即 updateSubtitles
     //   （其内部自动同步 overlay）。防风暴：每视频轮次限 3 次；字幕已在手（_subOk）/
     //   ASR 运行中不重拉。换集重入：移除上一轮 handler 注册本轮（闭包绑定本轮
@@ -354,7 +340,7 @@ export async function startVideoController(platform) {
 
     // waitForVideoReady 与字幕获取并行：字幕获取不依赖 video.duration
     // 超时降级：video 未就绪仍继续取字幕（overlay 跳转可能延迟，但 sidebar 字幕可显示）
-    // 第419次：默认轨道首选界面语言（YouTube 第三参 / B站 第一参）
+    // 默认轨道首选界面语言（YouTube 第三参 / B站 第一参）
     const subtitlesPromise = (platform === PLATFORM.BILIBILI)
       ? getBilibiliSubtitles(settings.uiLanguage)
       : getYouTubeSubtitles(settings.learnLanguage, settings.meaningLanguage, settings.uiLanguage);
@@ -366,39 +352,38 @@ export async function startVideoController(platform) {
     }
 
     // 获取字幕（已与 waitForVideoReady 并行）
-    // 反思（2026-07-06）：用户反馈"一直转圈圈加载"。根因：subtitlesPromise 抛异常时
-    // 被外层 try-catch 捕获但只 console.error，未调 showNoSubtitle()，侧栏永远停在加载态。
-    // 修正：单独 try-catch 包裹 subtitlesPromise，异常时调用 showNoSubtitle() 清除加载态。
+    // 用户反馈"一直转圈圈加载"：subtitlesPromise 抛异常时被外层 try-catch 捕获但只
+    // console.error，未调 showNoSubtitle()，侧栏永远停在加载态。单独 try-catch 包裹
+    // subtitlesPromise，异常时调用 showNoSubtitle() 清除加载态。
     let result;
     try {
       result = await subtitlesPromise;
     } catch (e) {
       console.error('[VocabRadar][video-controller] 字幕获取失败:', e);
-      // 反思（2026-07-07）：过期请求的错误也丢弃，避免覆盖新请求的 loading 态
+      // 过期请求的错误也丢弃，避免覆盖新请求的 loading 态
       if (myRequestId !== _requestId) {
         console.log('[VocabRadar][video-controller] 过期请求(换集)，丢弃字幕获取失败');
         return;
       }
-      // 第二百七十次：overlay-only（侧栏被停）——无侧栏可显示错误/ASR 兜底，直接放弃
-      // 278次：条件纠正——被停用才走 overlay-only 放弃
+      // overlay-only（侧栏被停）——无侧栏可显示错误/ASR 兜底，直接放弃；被停用才到此分支
       if (sup.videoSidebar) {
         console.log('[VocabRadar][video-controller] overlay-only：字幕获取失败，无叠加内容');
         return;
       }
-      // 反思（2026-07-06 三次修复）：用户反馈"语音识别为啥一直选中，哪怕是刷新网页"。
-      // 旧版无字幕时自动启动 ASR（autoStartASR），导致每次刷新都自动选中语音识别按钮。
-      // 修正：不再自动启动 ASR，显示"无字幕"提示，用户可手动点击 🎤 按钮启动。
-      // 反思（2026-07-08 #41）：无字幕时先尝试加载 ASR 缓存（若有），无缓存才显示"无字幕"提示。
+      // 用户反馈"语音识别为啥一直选中，哪怕是刷新网页"：此前无字幕时自动启动 ASR
+      // （autoStartASR），每次刷新都自动选中语音识别按钮。现不自动启动 ASR，显示
+      // "无字幕"提示，用户可手动点击 🎤 按钮启动；无字幕时先尝试加载 ASR 缓存（若有），
+      // 无缓存才显示提示。
       if (await loadASRCacheIfAny()) {
-        _subOk = true;   // 371次：ASR 缓存已上屏，timedtext 重拉不再触发
+        _subOk = true;   // ASR 缓存已上屏，timedtext 重拉不再触发
       } else {
         showNoSubtitle();
       }
       return;
     }
 
-    // 反思（2026-07-07）：换集竞态保护。旧请求的字幕到达时，若已换集（ID 不匹配），
-    // 直接丢弃，绝不调 updateSubtitles 覆盖新视频的字幕。
+    // 换集竞态保护：旧请求的字幕到达时，若已换集（ID 不匹配），直接丢弃，
+    // 绝不调 updateSubtitles 覆盖新视频的字幕。
     if (myRequestId !== _requestId) {
       console.log('[VocabRadar][video-controller] 字幕到达但已换集，丢弃过期字幕:', result?.length || 0, '条');
       return;
@@ -406,25 +391,23 @@ export async function startVideoController(platform) {
 
     if (!result) {
       console.warn('[VocabRadar][video-controller] 该视频无字幕');
-      // 第二百七十次：overlay-only（侧栏被停）——无字幕即无叠加内容，不触侧栏 ASR 兜底
-      // 278次：条件纠正——被停用才走 overlay-only 放弃
+      // overlay-only（侧栏被停）——无字幕即无叠加内容，不触侧栏 ASR 兜底；被停用才到此分支
       if (sup.videoSidebar) {
         console.log('[VocabRadar][video-controller] overlay-only：该视频无字幕，无叠加内容');
         return;
       }
-      // 反思（2026-07-06 三次修复）：不再自动启动 ASR，避免每次刷新都自动选中语音识别
-      // 反思（2026-07-08 #41）：先尝试加载 ASR 缓存
+      // 不再自动启动 ASR，避免每次刷新都自动选中语音识别；先尝试加载 ASR 缓存
       if (await loadASRCacheIfAny()) {
-        _subOk = true;   // 371次：ASR 缓存已上屏，timedtext 重拉不再触发
+        _subOk = true;   // ASR 缓存已上屏，timedtext 重拉不再触发
       } else {
         showNoSubtitle();
       }
       return;
     }
 
-    // 第二百七十次：overlay-only 模式（视频侧栏被停、叠加字幕允许）——
-    //   字幕不进侧栏（无侧栏即无 ASR 兜底/轨道选择），直接喂 subtitle-overlay 渲染后返回。
-    // 278次：条件纠正——被停用（sup.videoSidebar=true）才走 overlay-only 直启
+    // overlay-only 模式（视频侧栏被停、叠加字幕允许）：字幕不进侧栏（无侧栏即无
+    // ASR 兜底/轨道选择），直接喂 subtitle-overlay 渲染后返回；被停用
+    //（sup.videoSidebar=true）才走 overlay-only 直启
     if (sup.videoSidebar) {
       const subs = Array.isArray(result) ? result : (result.subtitles || []);
       if (!subs.length) {
@@ -440,7 +423,7 @@ export async function startVideoController(platform) {
           annotateRepeat: settings.annotateRepeat === true
         });
         console.log('[VocabRadar][video-controller] overlay-only：叠加字幕已启动（', subs.length, '条）');
-        _subOk = true;   // 371次：叠加字幕已在手，timedtext 重拉不再触发
+        _subOk = true;   // 叠加字幕已在手，timedtext 重拉不再触发
       } catch (e) {
         console.error('[VocabRadar][video-controller] overlay-only 启动失败:', e);
       }
@@ -457,11 +440,9 @@ export async function startVideoController(platform) {
       pickedIndex = result.pickedIndex;
     }
 
-    // 反思（2026-07-28）：用户要求"asr的结果要记住并且应当优先加载"。
-    //   旧优先级（#86）：learnLanguage 匹配轨道 > ASR 缓存 > 其他字幕。
-    //   新优先级：ASR 缓存 > learnLanguage 匹配轨道 > 其他字幕 > fetch 第一条 > 空。
-    //   即：有 ASR 缓存时优先加载 ASR 缓存（不完整自动继续识别），
-    //   无 ASR 缓存才回退到普通字幕轨道。
+    // 用户要求"asr的结果要记住并且应当优先加载"：ASR 缓存 > learnLanguage 匹配轨道 >
+    // 其他字幕 > fetch 第一条 > 空。有 ASR 缓存时优先加载（不完整自动继续识别），
+    // 无缓存才回退到普通字幕轨道。
     const fetchFn = (platform === PLATFORM.BILIBILI) ? fetchBilibiliTrack : fetchYouTubeTrack;
     const learnLang = (settings.learnLanguage || 'en').toLowerCase();
     let preferredIndex = -1;
@@ -483,7 +464,7 @@ export async function startVideoController(platform) {
         console.log('[VocabRadar][video-controller] ASR 缓存命中, 优先加载 (coverage=' + asrResult.coverage.toFixed(2) + ')');
         setTracks(tracks, tracks ? tracks.length : 0, fetchFn);
         selectASRTrackAndContinue(asrResult.coverage);
-        _subOk = true;   // 371次：ASR 缓存已上屏，timedtext 重拉不再触发
+        _subOk = true;   // ASR 缓存已上屏，timedtext 重拉不再触发
       } else if (preferredIndex >= 0) {
         // 2. 无 ASR 缓存：有 learnLanguage 匹配轨道，优先使用
         console.log('[VocabRadar][video-controller] 无 ASR 缓存, 首选语言', learnLang, '匹配轨道 index=', preferredIndex);
@@ -497,7 +478,7 @@ export async function startVideoController(platform) {
         }
         if (subtitles && subtitles.length > 0) {
           await updateSubtitles(subtitles);
-          _subOk = true;   // 371次：字幕已上屏，timedtext 重拉不再触发
+          _subOk = true;   // 字幕已上屏，timedtext 重拉不再触发
         } else {
           showNoSubtitle();
         }
@@ -506,7 +487,7 @@ export async function startVideoController(platform) {
         // 3. 无 ASR 缓存，无首选语言匹配，但有其他语言字幕
         console.log('[VocabRadar][video-controller] 无 ASR 缓存, 使用其他语言字幕:', subtitles.length, '条');
         await updateSubtitles(subtitles);
-        _subOk = true;   // 371次：字幕已上屏，timedtext 重拉不再触发
+        _subOk = true;   // 字幕已上屏，timedtext 重拉不再触发
         setTracks(tracks, pickedIndex, fetchFn);
       } else if (tracks && tracks.length > 0 && fetchFn) {
         // 4. 有轨道但字幕为空：尝试 fetch 第一条
@@ -515,7 +496,7 @@ export async function startVideoController(platform) {
           const newSubs = await fetchFn(tracks[0]);
           if (newSubs && newSubs.length > 0) {
             await updateSubtitles(newSubs);
-            _subOk = true;   // 371次：字幕已上屏，timedtext 重拉不再触发
+            _subOk = true;   // 字幕已上屏，timedtext 重拉不再触发
             setTracks(tracks, 0, fetchFn);
           } else {
             showNoSubtitle();
@@ -530,16 +511,15 @@ export async function startVideoController(platform) {
       }
     } catch (e) {
       console.error('[VocabRadar][video-controller] sidebar 填充失败:', e);
-      // 反思（2026-07-07）：用户反馈"有的视频你一直转转转还不自知"。
-      // 旧版 catch 只 console.error，未清 loading 态，侧栏永远停在转圈。
-      // 修正：调用 showNoSubtitle 清除 loading 并显示错误提示。
+      // 用户反馈"有的视频你一直转转转还不自知"：此前 catch 只 console.error，未清
+      // loading 态，侧栏永远停在转圈。现调用 showNoSubtitle 清除 loading 并显示错误提示。
       showNoSubtitle('字幕渲染失败：' + (e && e.message ? e.message : String(e)));
     }
 
     // observeVideoChange() 已在函数开头注册（幂等），此处不再重复
   } catch (e) {
     console.error('[VocabRadar][video-controller] 启动失败:', e);
-    // 反思（2026-07-07）：外层 catch 同样需清 loading，避免任何未预期异常导致永转
+    // 外层 catch 同样需清 loading，避免任何未预期异常导致永转
     try { showNoSubtitle('启动失败：' + (e && e.message ? e.message : String(e))); } catch (_) { /* ignore */ }
   }
 }

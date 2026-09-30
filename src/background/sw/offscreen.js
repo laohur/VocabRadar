@@ -1,25 +1,19 @@
 // =============================================================================
-// offscreen 宿主生命周期（2026-09-27 拆分自 service-worker.js）
+// offscreen 宿主生命周期
 // 职责：Chromium chrome.offscreen 文档 / Firefox 后台页内回退 iframe 二选一宿主，
 //   加上 PING 就绪探针。OCR（EXTRACT_TEXT/PARSE_DOC/AUDIO_DECODE）三族消息共用。
 // 唯一状态：_asrFallbackFrame（Firefox 回退 iframe 引用）只在本文件读写。
 // =============================================================================
 import { _ts, log } from './log.js';
 
-// === ASR 宿主生命周期（offscreen document / Firefox 回退 iframe）===
-// 第三百九十四次（plan 阶段二③，用户裁定「扩展不再保留这两个模型」）：whisper 会话
-//   状态机（_asrActive/_asrTabId/persistAsrState/restoreAsrState/handleStartASR/
-//   handleStopASR）随本地模型推理一并移除；仅保留宿主生命周期管理（OCR/EXTRACT_TEXT/
-//   PARSE_DOC 三路共用）与 PING 就绪探针（waitOffscreenReady）。
-// Firefox 回退（2026-08-15 第六十四次；2026-08-30 第一百八十次改宿主位置）：
-//   Firefox 无 chrome.offscreen，offscreen.js 宿主运行于**后台 event page 自身 document** 内的
-//   隐藏 iframe（旧版建在网页 DOM 里，被网页 CSP 拦，详见 ensureFallbackIframe）。
-// 第二百二十五次：删除死变量 _asrFallbackMode（五处赋值、零读取，《命名清查》裁定）。
-// 后台页内的 ASR 宿主 iframe 引用（仅 Firefox；Chromium 后台为 SW 无 DOM，恒为 null）
+// === 宿主生命周期（offscreen document / Firefox 回退 iframe）===
+// Firefox 回退：Firefox 无 chrome.offscreen，offscreen.js 宿主运行于后台 event page
+//   自身 document 内的隐藏 iframe（网页 DOM 会被网页 CSP 拦，详见 ensureFallbackIframe）。
+// 后台页内的回退 iframe 引用（仅 Firefox；Chromium 后台为 SW 无 DOM，恒为 null）
 let _asrFallbackFrame = null;
 
 /**
- * 第一百七十九次：轮询 OFFSCREEN_PING，等待宿主（offscreen.js）注册好消息监听器
+ * 轮询 OFFSCREEN_PING，等待宿主（offscreen.js）注册好消息监听器
  * @param {number} timeoutMs 总超时（毫秒）
  * @returns {Promise<boolean>} 就绪返回 true
  */
@@ -41,25 +35,17 @@ async function waitOffscreenReady(timeoutMs) {
 }
 
 /**
- * Firefox 回退：在**后台页自身 document** 内创建隐藏 iframe（offscreen.html）承载 whisper
+ * Firefox 回退：在**后台页自身 document** 内创建隐藏 iframe（offscreen.html）承载宿主
  *
- * 反思（2026-08-30 第一百八十次，用户报障"asr 重装后依旧：Firefox 回退 iframe 内的
- *   ASR 宿主未就绪（8 秒内无 PING 应答）"）：
- *   - 旧实现把隐藏 iframe 建在**网页 DOM**里（由 content script / 引导页创建）。
- *     Firefox 自 76 起对内容脚本发起的 DOM 加载施加**网页** CSP。实测报障页
- *     learn.microsoft.com 的响应头 CSP 为 `default-src *`（且无 frame-src），
- *     而 CSP 的 `*` 只匹配网络 scheme、**不匹配 moz-extension:** →
- *     `<iframe src="moz-extension://…/offscreen.html">` 直接被拦，offscreen.js
- *     从未运行，OFFSCREEN_PING 永无应答。web_accessible_resources 已含
- *     src/offscreen/*，故不是权限问题；offscreen.js 顶层无 import/无 top-level await、
- *     onMessage 注册很早，故也不是"监听器注册晚于 load"（第 179 次的判断有误，此处纠正）。
- *   - 且旧的页面侧创建函数无论 load 还是 4 秒超时都 resolve({ok:true})，
- *     把失败遮蔽成成功，SW 侧只能等到 PING 超时才报错，掩盖了真实错因。
- * 修正：Firefox MV3 的后台**不是** Service Worker，而是带 DOM 的 event page
- *   （scripts/build.mjs#patchManifestForFirefox 把 background.service_worker
- *   改写为 background.scripts），后台页自身适用**扩展** CSP（含 wasm-unsafe-eval），
- *   因此把隐藏 iframe 建在后台页自己的 document 内即可完全绕开网页 CSP，
- *   与 Chromium 的 offscreen document 等价，OFFSCREEN 与 ASR 两族消息协议零改动。
+ * 用户报障"Firefox 回退 iframe 内的 ASR 宿主未就绪（8 秒内无 PING 应答）"后改入
+ *   后台页：旧实现把隐藏 iframe 建在网页 DOM 里（content script/引导页创建），
+ *   Firefox 自 76 起对内容脚本发起的 DOM 加载施加网页 CSP，CSP 的 `*` 只匹配
+ *   网络 scheme、不匹配 moz-extension: → iframe 被拦，offscreen.js 从未运行；
+ *   且旧页面侧创建函数无论成败都 resolve({ok:true})，把失败遮蔽成成功。
+ *   Firefox MV3 的后台不是 Service Worker，而是带 DOM 的 event page
+ *   （scripts/build.mjs#patchManifestForFirefox），适用扩展 CSP（含
+ *   wasm-unsafe-eval），iframe 建在后台页自身 document 内即可绕开网页 CSP，
+ *   与 Chromium 的 offscreen document 等价，OFFSCREEN 消息协议零改动。
  * @returns {Promise<{ok:boolean, error?:string}>} 真实结果，失败即报错，不做假成功
  */
 async function ensureFallbackIframe() {
@@ -107,8 +93,8 @@ async function ensureFallbackIframe() {
 }
 
 /**
- * 第一百八十次：回退 iframe 的运行时诊断快照（PING 超时时并入错误文案，
- * 便于区分"iframe 未加载"与"加载了但消息不通"两类失败，不再只给一句笼统超时）
+ * 回退 iframe 的运行时诊断快照（PING 超时时并入错误文案，便于区分
+ * "iframe 未加载"与"加载了但消息不通"两类失败，不再只给一句笼统超时）
  * @returns {string}
  */
 function describeFallbackFrame() {
@@ -124,8 +110,8 @@ function describeFallbackFrame() {
 }
 
 async function ensureOffscreen() {
-  // 反思（2026-08-15 第六十四次）：Firefox 无 chrome.offscreen，直接返回 false
-  //   （旧版访问 chrome.offscreen.hasDocument 抛 TypeError，被调用方 .catch 吞掉）。
+  // Firefox 无 chrome.offscreen，直接返回 false（直接访问 chrome.offscreen.hasDocument
+  //   会抛 TypeError，被调用方 .catch 吞掉）。
   if (typeof chrome.offscreen === 'undefined') return false;
   // 检查是否已有 offscreen document（hasDocument 在 Chrome 116+/Edge 116+ 可用）
   if (typeof chrome.offscreen.hasDocument === 'function') {
@@ -159,7 +145,7 @@ async function ensureOffscreen() {
   }
 }
 
-// === F1（2026-09-10，用户报 Firefox 传图「offscreen API 不可用」）：OCR/链接/文档宿主统一选择 ===
+// === OCR/链接/文档宿主统一选择（用户报 Firefox 传图「offscreen API 不可用」）===
 // Chromium：chrome.offscreen 建 offscreen document（ensureOffscreen 返 boolean，此处统一包
 //   成 {ok, error}）；Firefox：无 chrome.offscreen，但 MV3 后台是带 DOM 的 event page
 //   （build.mjs#patchManifestForFirefox），复用 ASR 先例 ensureFallbackIframe 在后台页内建
@@ -169,11 +155,11 @@ export async function ensureOffscreenHost() {
   if (typeof chrome.offscreen !== 'undefined') {
     const ok = await ensureOffscreen();
     if (!ok) return { ok: false, error: 'offscreen 创建失败' };
-    // 第二百六十六次（用户报障：网站传 PNG 报 "Could not establish connection.
-    //   Receiving end does not exist."）：建好宿主 ≠ 监听器就绪——createDocument 返回时
-    //   offscreen.js（ES module）的 onMessage 可能尚未注册，紧接着的 OFFSCREEN_*
-    //   正是这个报错。复用 ASR 先例 waitOffscreenReady（PING 握手，见 179/180 次），
-    //   OCR/链接/文档三路共用本函数，握手一次全部生效。
+    // 用户报障（网站传 PNG 报 "Could not establish connection. Receiving end does
+    //   not exist."）：建好宿主 ≠ 监听器就绪——createDocument 返回时 offscreen.js
+    //   （ES module）的 onMessage 可能尚未注册，紧接着的 OFFSCREEN_* 正是这个报错。
+    //   复用 waitOffscreenReady（PING 握手），OCR/链接/文档三路共用本函数，
+    //   握手一次全部生效。
     const ready = await waitOffscreenReady(8000);
     if (!ready) return { ok: false, error: 'offscreen 宿主 8 秒内无 PING 应答（监听器未就绪）' };
     return { ok: true };

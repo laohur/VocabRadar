@@ -5,7 +5,6 @@
 //       路径4/4b innertube fresh baseUrl（json3 + transcript XML）/ 路径A ANDROID 客户端 /
 //       路径B get_transcript / 路径5 SW 代理；全失败打汇总诊断行。
 //       含 exp=xpe（需 PoToken）轨道的 needsPot 短路逻辑与 backend 伪轨重调。
-// 来源：拆分自 src/lib/subtitle/youtube-fetcher.js（2026-09-27 拆分第三刀，机械搬移）。
 // 关系：依赖 ../subtitle-parser.js、./page-context.js（fetchViaPageContext）、
 //       ./player-intercept.js（路径0）、./innertube.js（路径4/A/B）、./backend.js（伪轨/路径5）。
 // 消费方：./caption-tracks.js（默认轨道下载）、门面 youtube-fetcher.js（re-export）。
@@ -26,33 +25,29 @@ import { fetchSubsViaBackend, fetchSubtitleViaServiceWorker } from './backend.js
 /**
  * 下载指定 YouTube 字幕轨道。
  *
- * 下载策略（2026-07-03 第六次修正）：
+ * 下载策略：
  *   0) 页面主世界拦截：检查缓存 + 用播放器 API 触发 YouTube 请求字幕，拦截响应
  *   1) 页面主世界 fetch 原始 baseUrl（核心路径！页面上下文 fetch 不受签名绑定限制）
  *   2) 页面主世界 fetch baseUrl + fmt=json3
  *   3) Content Script 直接 fetch（可能返回 0 字节，保留兜底）
  *   4) innertube WEB_EMBEDDED_PLAYER + fmt=json3（innertube 可能返回 0 轨道，保留兜底）
- *   A) ANDROID 客户端 captionTracks timedtext（第一百二十二次，无需 PoToken）
- *   B) get_transcript 面板数据（第一百二十二次，无需 PoToken）
+ *   A) ANDROID 客户端 captionTracks timedtext（无需 PoToken）
+ *   B) get_transcript 面板数据（无需 PoToken）
  *   5) service worker 代理（SW 不受 CORS 限制）
  *
- * 反思：v1-v5 的根本性错误是在 Content Script 隔离世界中操作。
- *   Content Script 与页面主世界 JavaScript 上下文隔离：
- *   - 猴子补丁 XMLHttpRequest 仅影响 CS 自身，无法拦截播放器 XHR
- *   - CS 的 fetch 虽带同源 cookie，但签名绑定播放器会话（Sec-Fetch-* 头等），
- *     YouTube 返回 0 字节
- *   正确方案：注入 page-fetch.js 到页面主世界，在页面上下文中 fetch 和拦截 XHR。
+ * 路径0/A/B 的存在根因：Content Script 与页面主世界隔离——CS 内补丁拦不到播放器
+ *   XHR，CS 的 fetch 签名绑定播放器会话返回 0 字节；只有页面主世界操作才有真数据。
  *
  * @param {Object} track {baseUrl, languageCode, name}
  * @returns {Promise<Array<{start, end, text}>|null>}
  */
 export async function fetchYouTubeTrack(track) {
   if (!track || !track.baseUrl) {
-    // 第399次：backend 伪轨（无 baseUrl）——经 SW 代理重调 backend 直出条目
+    // backend 伪轨（无 baseUrl）——经 SW 代理重调 backend 直出条目
     if (track && track._backend) {
       const resp = await fetchSubsViaBackend(track.languageCode);
       if (resp && resp.ok && Array.isArray(resp.cues) && resp.cues.length) return resp.cues;
-      // 第435次：伪轨重调失败原因透出（不遮蔽）
+      // 伪轨重调失败原因透出（不遮蔽）
       console.warn('[VocabRadar][youtube] 伪轨重调 backend 失败: '
         + (resp ? (resp.error || 'no cues') + (resp.message ? ' — ' + resp.message : '')
                 : 'SW 无响应（backend 未运行或消息通道异常）'));
@@ -66,7 +61,7 @@ export async function fetchYouTubeTrack(track) {
   const videoId = location.search.match(/[?&]v=([A-Za-z0-9_-]{11})/)?.[1]
     || location.pathname.match(/\/([A-Za-z0-9_-]{11})(?:[/?]|$)/)?.[1];
 
-  // === 第一百二十二次：PoToken 需求探测 ===
+  // === PoToken 需求探测 ===
   // baseUrl 含 exp=xpe ⇒ timedtext 必须 &pot=（BotGuard 运行时生成，扩展无法伪造），
   // 路径1/2/3/5 全部注定空 200——直接跳过省数秒等待，走路径0（播放器自带 pot）与 A/B 兜底。
   const needsPot = /exp=xpe/.test(track.baseUrl);
@@ -75,7 +70,7 @@ export async function fetchYouTubeTrack(track) {
   // === 路径 0：页面主世界拦截（检查缓存 + 触发播放器请求）===
   try {
     console.log('[VocabRadar][youtube] 路径0 页面拦截: 开始尝试, lang=', track.languageCode, 'kind=', track.kind || '-', 'videoId=', videoId);
-    // 第一百三十三次：把原轨道 kind/vss_id 带进播放器触发配置（自动生成轨必需）
+    // 把原轨道 kind/vss_id 带进播放器触发配置（自动生成轨必需）
     const interceptResp = await triggerAndInterceptSubtitle(track.languageCode, videoId, 8, { kind: track.kind || '', vss_id: track.vss_id || '' });
     if (interceptResp) {
       console.log('[VocabRadar][youtube] 路径0 页面拦截成功, resp长度=', interceptResp.length);
@@ -157,8 +152,8 @@ export async function fetchYouTubeTrack(track) {
     console.warn('[VocabRadar][youtube] 路径3 解析为空，继续尝试');
   }
 
-  // === 路径 4：innertube WEB_EMBEDDED_PLAYER + fmt=json3（第一百一十三次：按原轨道语言/kind 匹配）===
-  // 第一百三十二次：exp=xpe 轨道同样跳过本路径——WEB_EMBEDDED_PLAYER 返回的 baseUrl
+  // === 路径 4：innertube WEB_EMBEDDED_PLAYER + fmt=json3（按原轨道语言/kind 匹配）===
+  // exp=xpe 轨道同样跳过本路径——WEB_EMBEDDED_PLAYER 返回的 baseUrl
   // 同样不带 pot，请求注定空 200，白耗数秒后才轮到免 POT 的 A/B 通道。
   let freshBaseUrl = null;
   if (needsPot) {
@@ -217,15 +212,15 @@ export async function fetchYouTubeTrack(track) {
     console.warn('[VocabRadar][youtube] 路径4 innertube 获取 baseUrl 失败，跳过');
   }
 
-  // === 路径 A（第一百二十二次）：ANDROID 客户端 timedtext（无需 PoToken）===
-  // 第一百三十二次：不再以"路径3 是否拿到内容"为前置条件——xpe 轨道 text 恒为空，
-  // 旧条件恰好把 A 通道挡在门外（空轨道加载的帮凶之一）。
+  // === 路径 A：ANDROID 客户端 timedtext（无需 PoToken）===
+  // 不以"路径3 是否拿到内容"为前置条件——xpe 轨道 text 恒为空，
+  // 该条件恰好把 A 通道挡在门外。
   {
     const viaAndroid = await fetchTrackViaAndroidClient(videoId, { languageCode: track.languageCode, kind: track.kind || '' });
     if (viaAndroid && viaAndroid.length > 0) return viaAndroid;
   }
 
-  // === 路径 B（第一百二十二次）：get_transcript 面板数据（无需 PoToken）===
+  // === 路径 B：get_transcript 面板数据（无需 PoToken）===
   const viaTranscript = await fetchTrackViaGetTranscript(videoId);
   if (viaTranscript && viaTranscript.length > 0) return viaTranscript;
 
@@ -242,7 +237,7 @@ export async function fetchYouTubeTrack(track) {
     if (parsed && parsed.length > 0) return parsed;
   }
 
-  // === 全部失败：汇总诊断行（第一百二十四次）——把关键探测结果集中一行，便于贴日志定位
+  // === 全部失败：汇总诊断行——把关键探测结果集中一行，便于贴日志定位
   console.error('[VocabRadar][youtube] 所有下载渠道均失败 | lang=' + (track.languageCode || '?')
     + ' kind=' + (track.kind || '-')
     + ' exp=xpe=' + needsPot

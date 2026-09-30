@@ -1,7 +1,5 @@
 // ============================================================
 // 文件职责：字幕内容解析与共用工具（XML / JSON / timedtext 各格式 → 统一 [{start,end,text}]）
-// 来源：拆分自 src/lib/subtitle-fetcher.js（ES Modules 模块化拆分）
-// 拆分日期：2026-08-27
 // 符号：parseSubtitleContent（export，供 youtube-fetcher.js 调用）
 //   parseYouTubeTimedText / parseYouTubeTimedTextJson 仅被 parseSubtitleContent 内部调用，
 //   与其同文件放置以避免循环依赖，保持模块私有（不加 export）。
@@ -27,14 +25,12 @@ function parseYouTubeTimedText(xml) {
 }
 
 /**
- * 第三百七十四次：ASR JSON3 碎片事件合并成句。
- * 是啥：YouTube json3 ASR 轨的 events 是逐词/逐碎片渲染事件（实测一条视频解析出
- *   14331 条碎片，每条一两个词甚至 [Music]），而画面 CC 显示的是合并后的行——
- *   旧版逐 event 一句直接全量塞侧栏：渲染队列同步跑 14331 条阻塞主线程几十秒
- *   （用户报"等了很久也无注释"），碎片句内容也与画面 CC 对不上（"咋还能跟视频
- *   侧栏捕获的不一样"）。
- * 有啥用：把碎片吸并到正常字幕行（~80 字符/7s/句末标点切句），条数降 1-2 个数量级，
- *   内容与画面 CC 行一致；对已是整行的 events（合并条件不满足则每条独立）无副作用。
+ * ASR JSON3 碎片事件合并成句：YouTube json3 ASR 轨的 events 是逐词/逐碎片渲染
+ *   事件（实测一条视频可解析出 14331 条碎片，每条一两个词甚至 [Music]），逐条
+ *   全量塞侧栏会阻塞主线程几十秒（用户报"等了很久也无注释"），碎片句内容也与
+ *   画面 CC 行对不上。本函数把碎片吸并到正常字幕行（~80 字符/7s/句末标点切句），
+ *   条数降 1-2 个数量级，内容与画面 CC 行一致；对已是整行的 events（合并条件
+ *   不满足则每条独立）无副作用。
  * 参考：youtube-transcript-api / yt-dlp 对 json3 均做行级重组，本函数同思路。
  * @param {Array<{start,end,text}>} list 已解析的碎片列表（json3 events 天然按时间有序）
  * @returns {Array<{start,end,text}>} 合并后的字幕行
@@ -95,7 +91,7 @@ function parseYouTubeTimedTextJson(json) {
         result.push({ start, end: start + dur, text });
       }
     }
-    // 第三百七十四次：逐词碎片合并成句（长视频 ASR 实测 14331 条碎片 → 正常行数）
+    // 逐词碎片合并成句（长视频 ASR 实测 14331 条碎片 → 正常行数）
     const merged = mergeFragmentEvents(result);
     if (merged.length !== result.length) {
       console.log('[VocabRadar][subtitle-parser] JSON3 碎片合并:', result.length, '→', merged.length, '条');

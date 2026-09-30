@@ -73,7 +73,7 @@ async function startGuideWebSidebar() {
     const webMod = await import('../content/web-sidebar-impl.js');
     const settings = await new Promise((resolve) => {
       chrome.storage.local.get({
-        rankThreshold: 4000,
+        rankThreshold: 5000,
         annotateOov: false,
         annotateRepeat: false,
         // 310次：fallback 与 config.json 出厂值/guide.js defaults 对齐（原 'none' 脱节）
@@ -188,8 +188,8 @@ export const S = {
   //   Map<word, {count, translations}>，随识别实时累计，count=该词被注释的次数。
   asrAnnWords: new Map(),
   ocrAnnWords: new Map(),
-  rankThreshold: 4000,
-  rankThresholdMax: 5000,   // 词频范围上界（0=不限制）
+  rankThreshold: 5000,
+  rankThresholdMax: 0,   // 词频范围上界（0=不限制）；2026-09-29（用户："改回原来的5000-∞"）撤销 4000-5000 词频带
   annotateOov: false,
   learnLang: 'en'
 };
@@ -577,15 +577,15 @@ export function initAsrCommon() {
 
   // 读取运行参数（rank 阈值范围 / 注释开关 / 源语言）
   chrome.storage.local.get({
-    rankThreshold: 4000,
-    rankThresholdMax: 5000,   // 词频范围上界，0/缺省=不限制
+    rankThreshold: 5000,
+    rankThresholdMax: 0,   // 词频范围上界，0/缺省=不限制（2026-09-29 撤销 4000-5000 词频带）
     myWords: { new: [], known: [] },   // 330次：My Words 生词/熟词表（优先级高于词频范围）
     annotateOov: false,
     learnLanguage: 'en'
   }, (res) => {
-    S.rankThreshold = (typeof res.rankThreshold === 'number' && !isNaN(res.rankThreshold)) ? res.rankThreshold : 4000;
+    S.rankThreshold = (typeof res.rankThreshold === 'number' && !isNaN(res.rankThreshold)) ? res.rankThreshold : 5000;
     S.rankThresholdMax = (typeof res.rankThresholdMax === 'number' && !isNaN(res.rankThresholdMax))
-      ? res.rankThresholdMax : 5000;
+      ? res.rankThresholdMax : 0;
     // 词频上界同步到 annotator 模块级（识别注释走 getAnnotations 内部过滤）
     setRankMax(S.rankThresholdMax);
     // 330次：My Words 同步到 annotator 模块级（生词绕过词频范围、熟词一律跳过）

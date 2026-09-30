@@ -4,12 +4,11 @@
 // 职责：fetchSubsViaBackend()（SW → backend yt-dlp 提取，直出结构化条目）、
 //       backendSubtitlesFallback()（与 getYouTubeSubtitles 同构结果包装/失败回 prev）、
 //       fetchSubtitleViaServiceWorker()（SW 代理下载绕过 CS CORS）。
-// 来源：拆分自 src/lib/subtitle/youtube-fetcher.js（2026-09-27 拆分第三刀，机械搬移）。
 // 消费方：./caption-tracks.js（backendSubtitlesFallback）、
 //       ./track-download.js（fetchSubsViaBackend/fetchSubtitleViaServiceWorker）。
 // =============================================================================
 
-// === 第399次：字幕 backend 兜底（扩展五路全失败后 SW 代理调 backend yt-dlp） ===
+// === 字幕 backend 兜底（扩展五路全失败后 SW 代理调 backend yt-dlp） ===
 // SW case 'YTDL_SUBTITLES' → GET /api/ytdl/subtitles?url=&lang= → backend 用
 // yt-dlp subtitles/automatic_captions 提取，直出结构化条目 {start,end,text}（秒）。
 // 成功返回与 getYouTubeSubtitles 同构结果（伪轨 _backend=true、baseUrl 空——
@@ -40,7 +39,7 @@ export async function backendSubtitlesFallback(lang, prev) {
       pickedIndex: 0,
     };
   }
-  // 第435次：失败原因透出（不遮蔽）——backend 业务错误（error/message，如
+  // 失败原因透出（不遮蔽）——backend 业务错误（error/message，如
   // yt-dlp 撞 YouTube 机器人墙）与 SW 无响应（backend 未运行）分类如实打印
   if (!resp) {
     console.warn('[VocabRadar][youtube] backend 兜底失败: SW 无响应（backend 未运行或消息通道异常）');

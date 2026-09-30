@@ -1,4 +1,4 @@
-// VocabRadar 统一侧栏顶行构建器（第一百二十四次新建）
+// VocabRadar 统一侧栏顶行构建器
 //
 // 用户裁定："侧栏顶部用一个代码文件。"——视频侧栏（video-sidebar.js）与文本侧栏
 // （web-sidebar-impl.js）的顶行结构、按钮顺序、样式全部由本文件唯一定义；
@@ -6,8 +6,8 @@
 //
 // 顶行结构（统称"侧栏"，内容照旧）：
 //   [◎ VocabRadar] ······ [切换形态][🌐][⋯][◀][✕(仅文本)]
-//   - 左端 ◎ 为小图标（brandIconSVG），第一百七十六次由 🦫 替换而来；
-//     324次起 SVG 本体存 data/radar.svg，构建期注入（本文件只留 __RADAR_SVG__ 占位符）
+//   - 左端 ◎ 为小图标（brandIconSVG），SVG 本体存 data/radar.svg，构建期注入
+//     （本文件只留 __RADAR_SVG__ 占位符）
 //   - 切换形态：视频形态显示 📄（切去文本），文本形态显示 🎬（切回视频）
 //   - 折叠态约定：视频侧栏折叠=仅剩本顶行；文本侧栏折叠=悬浮球
 //
@@ -20,9 +20,8 @@ export const TOPBAR_FORM = { VIDEO: 'video', TEXT: 'text' };
 
 /**
  * 品牌小图标（内联 SVG）
- * 第一百七十六次（用户："侧栏顶行左端的图示字符显示不出来，换成小图标"）：
- *   原先标题前是 🦫（U+1F9AB，Emoji 11.0）。Windows 10 的旧版 Segoe UI Emoji 无此字形，
- *   渲染成空白方块（豆腐块），这正是用户看到"显示不出来"的原因。
+ * 不用 🦫 emoji：Windows 10 的 Segoe UI Emoji 无 U+1F9AB 字形，渲染成豆腐块
+ *   （用户报"显示不出来"），故改 SVG。
  * 为何用内联 SVG 而不是 <img src=chrome.runtime.getURL(icon16.png)>：
  *   1) 不依赖 web_accessible_resources 与网络/协议加载，任何宿主页面都必现；
  *   2) 无 <img> 的原生拖拽行为（ws/ui.js 曾因此踩坑，见该文件注释）；
@@ -30,10 +29,9 @@ export const TOPBAR_FORM = { VIDEO: 'video', TEXT: 'text' };
  * 图形取"雷达"意象（同心圆 + 中心点 + 扫描线），与产品名 VocabRadar 对应。
  * 导出原因：图片翻译面板（th/panel.js）等扩展自身界面同样需要这枚图标，
  *   由本文件唯一定义，避免各处各画一版。
- * 324次（用户："比较一下搜索栏和文本侧栏的小图标，没差异的话输出到data/radar.svg，
- *   以后从文件加载"）：比较结论＝搜索栏（ws/ui.js）与文本侧栏顶行/图片翻译面板全部
- *   调用本函数，同源无差异。SVG 本体移至 data/radar.svg 作为唯一图标源——本函数改返回
- *   __RADAR_SVG__ 占位符，构建期由 scripts/build.mjs 注入SVG文本（仿 __BUILD_STAMP__ 模式，
+ * SVG 本体存 data/radar.svg 作为唯一图标源（搜索栏 ws/ui.js 与文本侧栏顶行/
+ *   图片翻译面板全部调用本函数，同源无差异）：本函数返回 __RADAR_SVG__ 占位符，
+ *   构建期由 scripts/build.mjs 注入 SVG 文本（仿 __BUILD_STAMP__ 模式，
  *   运行时零 fetch/零异步/WAR 依赖，保留上方三大好处）。
  * @returns {string} SVG 字符串（构建后为 data/radar.svg 的内容）
  */
@@ -112,12 +110,10 @@ export function ensureTopbarCss() {
   flex-shrink: 0;
   gap: 8px;
 }
-/* 产品名（第一百七十四次）：用户反馈"文本侧栏顶部的产品名不明显"。
-   原为 1.15em/600/棕色 #6d4c41，在浅绿顶栏底上对比度弱、字号也不够。
-   改为 1.34em/700 + 主色深绿（对比度更高）+ 轻微字距。
-   第一百七十六次：标题由 [小图标 + 文字] 两块组成（原 🦫 emoji 在 Win10 无字形），
-   故改 inline-flex 让图标与文字垂直居中且留 6px 间距；省略号只加在文字块上，
-   避免容器过窄时把图标一起截掉。
+/* 产品名：1.34em/700 + 主色深绿——原 1.15em/600 棕色 #6d4c41 在浅绿顶栏底上
+   对比度弱、字号不够（用户反馈"文本侧栏顶部的产品名不明显"）。
+   标题由 [小图标 + 文字] 两块组成，inline-flex 让图标与文字垂直居中且留 6px 间距；
+   省略号只加在文字块上，避免容器过窄时把图标一起截掉。
    注意：本处是顶栏标题样式的唯一来源（id 选择器优先级高于 sidebar.css 的 .beaver-header .beaver-title）。 */
 #beaver-sidebar .beaver-title,
 #beaver-web-sidebar .beaver-title {
@@ -125,7 +121,7 @@ export function ensureTopbarCss() {
   align-items: center;
   gap: 6px;
   min-width: 0;
-  font-size: 1.2em;   // 第二百一十二次（用户："产品名字号略大"）1.34→1.2
+  font-size: 1.2em;
   font-weight: 700;
   letter-spacing: 0.3px;
   line-height: 1.25;
@@ -202,8 +198,8 @@ export function ensureTopbarCss() {
   user-select: none;
   -webkit-user-select: none;
 }
-/* 第一百三十二次：防御性 order——sidebar.css 曾有无作用域 .beaver-header{order:1}
- * （该文件被文本侧栏在所有页面加载以共用令牌），会把文本面板顶行排到最后。
+/* 防御性 order——sidebar.css 的无作用域 .beaver-header{order:1}
+ * （该文件被文本侧栏在所有页面加载以共用令牌）会把文本面板顶行排到最后。
  * 本规则 ID 特异性 + order:-1 保证文本侧栏顶行永远在最前（视频侧栏各行
  * 由 applyInlineOrder 写内联 style.order，不受影响）。 */
 #beaver-web-sidebar .beaver-web-panel > .beaver-header { order: -1; }

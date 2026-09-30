@@ -131,6 +131,22 @@ export function lookupWord(word, threshold = 0) {
 }
 
 /**
+ * 同形回显判定：源词与释义 trim+小写归一后相同。
+ * 「若源词跟释义相同，则不应当当作生词」（2026-09-30 用户裁定，全链路生效）。
+ * 翻译层（translator）按第460/461次既有裁定照常产出并缓存同形结果（不在此拦截），
+ *   生词认定层/渲染层据本判定拦截：IDB 直读同形→跳过、异步回填同形→splice+dropped、
+ *   阻塞模式同形→不 push；th/scan 网页正文高亮复用本判定。
+ * @param {string} word 源词
+ * @param {string} translation 释义
+ * @returns {boolean} 同形返回 true
+ */
+export function isSameForm(word, translation) {
+  const w = String(word || '').trim().toLowerCase();
+  const t = String(translation || '').trim().toLowerCase();
+  return w !== '' && w === t;
+}
+
+/**
  * 对一条字幕文本提取注解
  *
  * 流程：
@@ -182,8 +198,9 @@ async function getAnnotationsInner(text, rankThreshold = 0, seen = new Set(), on
   // 第一百八十五次（用户："也不知道你咋选词的…有高频词"）：旧版回退 0 等于"不过滤高频词"，
   //   与全仓默认阈值（popup/service-worker/th/core/ws/core/video-sidebar 等）不一致；
   //   一旦调用方漏传或传入 NaN（配置未就绪的竞态），高频词就整批漏进词表。
-  // 2026-09-29（用户："默认提示4000-5000词频"）：统一兜底改 4000（config.json rankThreshold 同步）。
-  const threshold = (typeof rankThreshold === 'number' && !isNaN(rankThreshold)) ? rankThreshold : 4000;
+  // 2026-09-29（用户："默认提示4000-5000词频"）：兜底曾改 4000；同日（用户："改回原来的5000-∞"）
+  //   撤销词频带，统一兜底恢复 5000（与 popup/sw/th/core/ws/core/video-sidebar/config.json 一致）。
+  const threshold = (typeof rankThreshold === 'number' && !isNaN(rankThreshold)) ? rankThreshold : 5000;
   // 第三百七十五次：垃圾 token 便宜守卫——单字母碎片与超长拼接串（频道 handle/URL 片，
   //   如诊断所见 crashcoursekids/youtubecrashcourse/bsky 类）不进 IDB 批量与翻译队列；
   //   英文实词长度恒在 2~24 区间，真词零影响（a/I 本就因高频被滤，此处只是提前止损）。
@@ -342,6 +359,14 @@ async function getAnnotationsInner(text, rankThreshold = 0, seen = new Set(), on
     if (idbTrans) {
       const cleanTrans = cleanDictEntry(idbTrans);
       if (cleanTrans) {
+        // 同形回显拦截（IDB 直读路径）：源词=释义（LLM 裸回显/同字形语言对脏缓存，
+        //   翻译层照常写缓存）→ 不是生词，不产注释。
+        //   跳过账复用 highFreq 通道（与上方熟词/高频跳过同哲学：不新增统计键）。
+        if (isSameForm(word, cleanTrans)) {
+          incScalar(stats, 'highFreq');
+          if (diagIdx >= 0) _diag[diagIdx] += ':同形跳过';
+          return; // 第369次：原循环 continue，processWord 内改 return
+        }
         // 释义来自统一词典(IDB)缓存译文（语言匹配）
         incField(stats, 'trans', 'dict');
         annotations.push({
@@ -374,6 +399,19 @@ async function getAnnotationsInner(text, rankThreshold = 0, seen = new Set(), on
       translate(word, priority).then((translated) => {
         ann.translations = translated ? [translated] : [];
         ann.pending = false;
+        // 同形回显拦截（异步回填才发现）：源词=释义 → 不是生词。
+        //   从 annotations splice 移除（渲染端持有的同引用数组随之收敛）+
+        //   打 dropped 标记，仍回调 onAsyncTranslate——渲染端据 dropped
+        //   删生词表词条/拆已挂高亮（「没有释义先标出来」的回收半程）。
+        //   reportTranslate 照常上报（渠道侧翻译确实成功，健康账不失真）。
+        if (translated && isSameForm(word, translated)) {
+          ann.dropped = true;
+          const _sameIdx = annotations.indexOf(ann);
+          if (_sameIdx >= 0) annotations.splice(_sameIdx, 1);
+          if (diagIdx >= 0) _diag[diagIdx] += ':同形丢弃';
+          onAsyncTranslate(ann);
+          return;
+        }
         reportTranslate({ word, ok: !!translated, ms: Date.now() - _trT0, async: 1 });
         onAsyncTranslate(ann);
       }).catch((e) => {
@@ -387,6 +425,13 @@ async function getAnnotationsInner(text, rankThreshold = 0, seen = new Set(), on
       const _trT0 = Date.now();   // 第三百七十次：翻译计时（诊断窗：通道健康/耗时）
       const translated = await translate(word, priority);
       reportTranslate({ word, ok: !!translated, ms: Date.now() - _trT0, async: 0 });
+      // 同形回显拦截（阻塞模式）：源词=释义 → 不是生词，不 push（无回调可打标记，
+      //   数组尚未含本词，直接 return 即整链不见此词）
+      if (translated && isSameForm(word, translated)) {
+        incScalar(stats, 'highFreq');
+        if (diagIdx >= 0) _diag[diagIdx] += ':同形跳过';
+        return;
+      }
       annotations.push({
         word,
         lemma,          // 词形还原原形（2026-08-14 第五十四次）

@@ -3,10 +3,9 @@
  * 作用：在 AudioWorklet 线程中持续采集 video.captureStream() 的音频 PCM，
  *   累积到 ASR_PCM_CHUNK 帧后通过 port.postMessage 传输到主线程（asr-client.js）。
  *
- * 反思（2026-07-09）：用户反馈「依旧过一会全是静音」。根因：旧版 ScriptProcessorNode
- *   是已废弃 API，onaudioprocess 回调在主线程执行，标签页后台/主线程繁忙时回调被挂起，
- *   _fallbackPcmBuffer 恒空 → 每段都走 fallback-silent 全静音分支。AudioWorklet 在独立的
- *   音频线程运行，不受主线程阻塞影响，是现代替代方案。
+ * 采用 AudioWorklet 而非 ScriptProcessorNode：后者已废弃且回调在主线程执行，
+ *   标签页后台/主线程繁忙时回调被挂起，采集会整段静音；AudioWorklet 在独立的
+ *   音频线程运行，不受主线程阻塞影响。
  *
  * 文件加载：通过 chrome.runtime.getURL('src/lib/asr-worklet-processor.js') 由
  *   audioCtx.audioWorklet.addModule() 加载，需在 manifest web_accessible_resources 中声明。

@@ -4,54 +4,39 @@
 //       HTML/正则/CSS 转义、时间格式化、按钮闪烁、短译文挑选、块文本提取、切句、
 //       侧栏状态持久化、配色与注音样式应用）。
 // 另含一处模块级副作用（全局唯一，不得重复注册）：源语言缓存的 chrome.storage 读取与 onChanged 监听。
-// 说明：由 web-sidebar-impl.js 机械拆分而来，代码逐字保留，未改动任何逻辑。
 //
-// 第一百八十次（2026-08-30）：原先这里有 ASR_FALLBACK_IFRAME 监听器，在**网页 DOM** 内
-//   创建隐藏 iframe（moz-extension://…/offscreen.html）承载 Firefox 的 whisper 宿主。
-//   该路径被网页 CSP 拦（Firefox 对内容脚本发起的 DOM 加载施加网页 CSP；实测
-//   learn.microsoft.com 的 `default-src *` 不匹配 moz-extension:），且旧实现无论成败
-//   都 resolve({ok:true}) 遮蔽错误。宿主已改建在后台 event page 自身 document 内
-//   （src/background/service-worker.js#ensureFallbackIframe），故此处整段删除。
-
-// （第二百二十五次：原 pickCleanShortTrans 导入随转发包装 pickRandomShortTrans 的删除一并移除）
-
-// 第367次：日志阀门（storage.debugLog 镜像 + onChanged 即时生效）
+// 坑：不得在网页 DOM 内创建隐藏 iframe 承载 Firefox 的 whisper 宿主——该路径会被网页 CSP 拦
+//   （Firefox 对内容脚本发起的 DOM 加载施加网页 CSP），且无论成败都 resolve 会遮蔽错误。
+//   宿主须建在后台自身 document 内（src/background/service-worker.js#ensureFallbackIframe）。
+// 日志阀门（storage.debugLog 镜像 + onChanged 即时生效）
 import { isDebugLog } from '../../lib/log-flag.js';
-// 第501次（G1 根治）：applyColors 按本栏条目（annotationStyle）显式字段派生变量，
-//   与 th pickColors 同口径（条目显式 > storage 取色 > 透明底/不变字兜底）。
+// applyColors 按本栏条目（annotationStyle）显式字段派生变量，与 th pickColors 同口径
+// （条目显式 > storage 取色 > 透明底/不变字兜底）。
 import { resolveAnnEntry } from '../../lib/styles.js';
 
 // 句子分隔正则：句号/感叹/问号/中文标点/换行
 const SENTENCE_SPLIT_RE = /[.!?。！？\n]+/;
-
-// 第二百二十五次：删除死常量 PROCESSED_ATTR（='data-beaver-web-gen'）——《命名清查》查明
-//   全库无任何读写该属性之处（正文处理代际标记实际由 th 侧 PROCESSED_ATTR='data-beaver-done'
-//   承担，本文件该常量从未被引用），连同与 th/core.js 同名不同值的混淆一并消除。
 
 // === 模块状态 ===
 export let _root = null;                  // 根元素 #beaver-web-sidebar
 
 export let _activeTab = 'sentences';     // 当前标签：sentences | words | asr | ocr
 
-export let _noAnnotation = false;        // 不显示注释（第二百三十九次：句标签工具栏加回 Annotation 按钮控制；inactive=true → 句子面板渲染 defuddle 提取的纯正文）
+export let _noAnnotation = false;        // 不显示注释（句标签工具栏 Annotation 按钮控制；inactive=true → 句子面板渲染 defuddle 提取的纯正文）
 
 export let _detailMode = false;          // 详略模式：false=简略，true=详细
 
-// 反思（2026-08-14 第五十四次修正）：默认词频阈值恢复，撤销第五十二次误改的 0。
-//   用户裁定"调整词频就能凸显，不应更改默认值"。
-//   2026-09-29（用户："默认提示4000-5000词频"）：默认改 4000（全仓同批同步）
-export let _rankThreshold = 4000;            // 词频阈值
+// 词频阈值。用户裁定"调整词频就能凸显，不应更改默认值"；后拍板"默认提示4000-5000词频"
+//   改 4000，同日又裁定"改回原来的5000-∞"恢复 5000（全仓同批同步）——默认 5000 为最终锚点。
+export let _rankThreshold = 5000;            // 词频阈值
 
-// 反思（2026-08-14 第五十四次）：设置键改名 localTranslateEnabled → annotateOov；
-//   默认 false（注释表外词默认不选）。
-export let _annotateOov = false;             // 注释表外词
+export let _annotateOov = false;             // 注释表外词（默认不选）
 
-// 注释重复生词（2026-08-15 第六十二次：默认不选，同一文本节点内重复词仅注释首次）
+// 注释重复生词（默认不选：同一文本节点内重复词仅注释首次）
 export let _annotateRepeat = false;
 
-// 280次：侧邻注释模板（annBrackets 布尔退役；ws/scanner.js 消费）
-// 284次：默认组合 {target} {annotation}（与 styles.js DEFAULT_ANN_TEMPLATE 同步）
-// 306次：默认去空格 '{target}{annotation}'（用户"看起来间距很大"）
+// 侧邻注释模板（ws/scanner.js 消费；与 styles.js DEFAULT_ANN_TEMPLATE 同步）。
+// 默认去空格 '{target}{annotation}'（用户："看起来间距很大"）。
 export let _annTemplate = '{target}{annotation}';
 
 export let _wordOnlyMode = false;        // 词单模式：仅显示单词
@@ -65,12 +50,11 @@ export let _allAnnotations = [];         // 生词本：所有首次出现的生
 
 export let _seenWords = new Set();       // 跨句子去重
 
-// 第一百八十六次（用户："依旧重复单词。"）：词表已收词键集（wordDedupKey 口径）。
-//   根因：collectToWordPanel 原先用 `_allAnnotations.some(...)` 判重，那是
-//   check-then-act —— 多句注释 Promise 各自 .then 里先扫一遍数组、再 push，
-//   两步之间可被另一句的回调插入同词，重复就此产生（与 annotator 第一百八十二次
-//   修过的 TOCTOU 同型）。改为独立键集：判重与登记在同一同步块内完成，
-//   且查询是 O(1)，不再随词表增长退化。
+// 词表已收词键集（wordDedupKey 口径）。用户报障"依旧重复单词。"：
+//   根因是 check-then-act —— collectToWordPanel 原先用 `_allAnnotations.some(...)` 判重，
+//   多句注释 Promise 各自 .then 里先扫一遍数组、再 push，两步之间可被另一句的回调
+//   插入同词，重复就此产生（TOCTOU 同型坑）。改为独立键集：判重与登记在同一同步块内
+//   完成，且查询是 O(1)，不随词表增长退化。
 //   与 _allAnnotations 的同步：set_allAnnotations 一律按新数组重建键集
 //   （覆盖所有清空/替换入口，不会漏清）；数组内 push 的路径须调 addWordKey。
 export let _wordKeys = new Set();
@@ -87,26 +71,26 @@ export function addWordKey(key) {
 
 export let _seenSentences = new Set();   // 页面句子去重（避免重复扫描）
 
-// 第一百三十九次（用户反馈"句子有重复单词"）：规范化句子键——两条扫描路径
-// （总线 data-beaver-orig 与 getBlockText 兜底）对同一可见句可能产出仅空白/
-// 大小写不同的字符串，精确匹配挡不住 → 同句入列两次、词重复出现。统一以
-// normSentKey（小写+空白折叠）为去重基准，原文仍按参数原样展示。
+// 规范化句子键（用户反馈"句子有重复单词"）：两条扫描路径（总线 data-beaver-orig
+// 与 getBlockText 兜底）对同一可见句可能产出仅空白/大小写不同的字符串，精确匹配
+// 挡不住 → 同句入列两次、词重复出现。统一以 normSentKey（小写+空白折叠）为去重基准，
+// 原文仍按参数原样展示。
 function normSentKey(s) {
   return String(s || '').toLowerCase().replace(/\s+/g, ' ').trim();
 }
 
-// 第一百八十三次（用户："文本侧栏的句子会重复"）：把规范化键导出——入库唯一汇入点
-//   appendPageSentence 需要用同一口径做"已在库则不再追加"的最终关口，
-//   mergeAnnotationsForSentence 也需用它取代精确相等查找（口径不一致会静默丢词条）。
+// 导出规范化键（用户："文本侧栏的句子会重复"）：入库唯一汇入点 appendPageSentence
+//   用同一口径做"已在库则不再追加"的最终关口，mergeAnnotationsForSentence 也用它
+//   取代精确相等查找（口径不一致会静默丢词条）。
 export { normSentKey };
 
-// 第一百九十三次（用户："文本侧栏的句子生词重复还没解决"）：页级首现句权威表。
+// 页级首现句权威表（用户："文本侧栏的句子生词重复还没解决"）。
 //   键 = wordDedupKey(词面 trim+小写)，值 = normSentKey(该词首次入库句子的规范化句键)。
 //   由入库唯一汇入点 appendPageSentence（及 merge 补词）在**同步代码内**登记：
 //   词首见即定格其首现句，此后渲染端（ws/scanner.js fillSlotAnnotations）据此补齐
-//   isFirst——不再依赖上游是否携带该字段（总线路径词条带 isFirst，但兜底路径
+//   isFirst——不依赖上游是否携带该字段（总线路径词条带 isFirst，但兜底路径
 //   lib/annotator.js#getAnnotations 不产出，历史缓存同样没有，`a.isFirst === false`
-//   对 undefined 恒不触发，第一百九十一/一百九十二次的判据因此形同虚设）。
+//   对 undefined 恒不触发，靠上游字段判断形同虚设）。
 //   语义：无论数据来自总线/历史块回放/兜底扫描，「注释重复生词」关闭时每个生词
 //   只在其首次入库的句子出提示（高亮+括号/注释行），其余句子保持纯文本。
 export let _firstSentMap = new Map();
@@ -123,7 +107,7 @@ export let _collectedSubs = new WeakSet();
 export let _scanScheduled = false;
 
 // === 工具函数 ===
-// 第367次：log 出口接 storage 阀门——原版无开关直出 console（日志刷屏根源之一）。
+// log 出口接 storage 阀门——无开关直出 console 是日志刷屏根源之一。
 //   引导页 help 底部「调试日志」开关勾选写 storage.debugLog，经 lib/log-flag.js
 //   onChanged 镜像即时生效，content script 无需刷新页面。
 export function log(...args) {
@@ -137,15 +121,13 @@ export function ts() {
 }
 
 // 冒泡提示（替代 alert）
-// 反思（2026-08-12 第四十六次）：用户反馈"Bing 等网站悬浮球依旧缺失"。
-//   根因：部分网站（如 cn.bing.com）的 SPA 框架会替换 document.body 或清除其子节点，
-//   导致 appendChild 到 body 的悬浮球被移除。
-//   修正：始终注入到 document.documentElement（<html>元素），不被框架替换；
-//   新增 MutationObserver 监听 _root 被移除时自动重新注入。
-// === 悬浮球位置视口夹取（2026-08-22 第九十四次）===
-// 反思：用户反馈引导页"过一会儿文本侧栏消失"——启动异步恢复 webSidebarPos 时，
-//   保存位置可能来自其他网页/更大视口/别的显示器，!important 内联定位把球放到
-//   当前视口之外（页面刚加载时球还在默认位，恢复一执行就"消失"）。
+// 用户反馈"Bing 等网站悬浮球依旧缺失"：部分网站（如 cn.bing.com）的 SPA 框架会替换
+//   document.body 或清除其子节点，appendChild 到 body 的元素被移除。故注入根固定用
+//   document.documentElement（<html>元素），并配 MutationObserver 在 _root 被移除时自动重注入。
+
+// 悬浮球位置视口夹取。用户反馈引导页"过一会儿文本侧栏消失"——启动异步恢复
+//   webSidebarPos 时，保存位置可能来自其他网页/更大视口/别的显示器，!important
+//   内联定位把球放到当前视口之外（页面刚加载时球还在默认位，恢复一执行就"消失"）。
 //   恢复与保存一律夹取到当前视口内（48px 球体留边）。
 export function clampPosToViewport(left, top) {
   const size = 48;
@@ -158,16 +140,15 @@ export function clampPosToViewport(left, top) {
   };
 }
 
-// === 第一百八十七次：面板矩形的视口夹取（用户："侧栏位置乱跑"）===
-// 反思：旧版展开态面板也走 clampPosToViewport——那是按 **48px 悬浮球** 写死的夹取，
-//   maxT = 视口高 - 48。一个 380×760 的面板只要 top 略大，就被夹到 “视口高-48”，
-//   于是面板整体沉到视口底边只露 48px，用户看到的就是“位置乱跑”。
-//   本函数按面板自身宽高夹取，保证整块面板留在视口内；装不下时贴左上。
-// 第二百四十六次（用户："侧栏不能拖动太低"；拍板"把手可见即可"）：top 上限从
-//   "整高不出屏"（innerHeight - h，75vh 侧栏顶部最多到 25vh）放宽为"把手可见即可"
-//   ——标题栏约 42px（sidebar-topbar.js padding 10+10 + 内容），取 44px 留屏内可抓，
-//   主体允许探出下沿。与 ui.js onMove 的拖动 clamp 同语义，恢复路径不再把用户拖低的
-//   位置拉回。x 方向与 top 下限保持"不出上/左沿"不变（用户未诉求放宽）。
+// 面板矩形的视口夹取（用户："侧栏位置乱跑"）：展开态面板曾误走 clampPosToViewport
+//   ——那按 **48px 悬浮球** 写死夹取，maxT = 视口高 - 48，一个 380×760 的面板只要
+//   top 略大就被夹到"视口高-48"，整体沉到视口底边只露 48px。本函数按面板自身宽高
+//   夹取，保证整块面板留在视口内；装不下时贴左上。
+// top 上限口径（用户："侧栏不能拖动太低"；拍板"把手可见即可"）：从"整高不出屏"
+//   （innerHeight - h）放宽为"把手可见即可"——标题栏约 42px（sidebar-topbar.js
+//   padding 10+10 + 内容），取 44px 留屏内可抓，主体允许探出下沿。与 ui.js onMove
+//   的拖动 clamp 同语义，恢复路径不把用户拖低的位置拉回。x 方向与 top 下限保持
+//   "不出上/左沿"不变（用户未诉求放宽）。
 export function clampRectToViewport(left, top, width, height, grabH = 44) {
   const w = Math.max(0, Number(width) || 0);
   const h = Math.max(0, Number(height) || 0);
@@ -218,8 +199,8 @@ export function toast(msg, opts) {
   el.style.bottom = '30px';
   el.style.transform = 'translateX(-50%)';
   getInjectionRoot().appendChild(el);
-  // 反思（2026-08-15 第六十五次）：错误提示至少展示 5 秒；鼠标悬停/键盘焦点进入时
-  //   计时暂停（不自动消失），离开后按剩余时间继续，便于读完报错信息。
+  // 错误提示至少展示 5 秒；鼠标悬停/键盘焦点进入时计时暂停（不自动消失），
+  //   离开后按剩余时间继续，便于读完报错信息。
   const dur = Math.max(o.duration || 2500, o.error ? 5000 : 0);
   let timer = null;
   let deadline = Date.now() + dur;
@@ -263,7 +244,7 @@ export function cssEscape(s) {
 }
 
 export function formatTime(sec) {
-  // 第436次：≥1 小时用 h:mm:ss（与视频侧栏 dom-utils.js 同行为），不足仍 m:ss
+  // ≥1 小时用 h:mm:ss（与视频侧栏 dom-utils.js 同行为），不足仍 m:ss
   if (sec == null || isNaN(sec)) return '0:00';
   const total = Math.max(0, Math.floor(sec));
   const h = Math.floor(total / 3600);
@@ -280,28 +261,23 @@ function flashButton(btn) {
   setTimeout(() => { btn.style.background = orig; }, 300);
 }
 
-// 第二百二十五次：删除转发包装 pickRandomShortTrans（《命名清查》裁定：它早已无随机语义、
-//   只是 lib/dict-clean.js#pickCleanShortTrans 的同名转发；调用方 ws/scanner.js 已改为直调）。
-
 // === 状态管理（展开/收起/关闭） ===
-// 反思（2026-08-12）：用户反馈"悬浮球跟侧栏切换时位置动来动去"。
-//   根因：旧版 collapse 基于侧栏 rect 计算球位置（ballX = rect.right - 48），
-//   拖动侧栏后折叠时球位置偏移；expand/collapse 循环时因 rect 取值时序差异位置逐渐偏移。
-//   修正：expand 前保存球位置到 _preExpandPos，collapse 时恢复到该位置，
-//   不基于侧栏 rect 计算。球位置固定，不随侧栏移动。
+// 用户反馈"悬浮球跟侧栏切换时位置动来动去"：collapse 基于侧栏 rect 计算球位置
+//   （ballX = rect.right - 48），拖动侧栏后折叠时球位置偏移；expand/collapse 循环时
+//   因 rect 取值时序差异位置逐渐偏移。现改为 expand 前保存球位置到 _preExpandPos，
+//   collapse 时恢复到该位置，不基于侧栏 rect 计算。球位置固定，不随侧栏移动。
 export let _preExpandPos = null;
 
-// 第一百三十四次（Phase C 就地展开折叠 + 矩形持久化）：
 // _panelRect = 展开态矩形的唯一内存权威；shellRectText = 其持久化键。
-// 第一百八十七次：持久化口径由「文档坐标」改为「视口坐标」——侧栏是 position:fixed，
-//   存文档坐标再减当前滚动量，刷新后滚动量不同就会算错位置（用户："侧栏位置乱跑"）。
+// 持久化口径是「视口坐标」——侧栏是 position:fixed，存文档坐标再减当前滚动量，
+//   刷新后滚动量不同就会算错位置（用户："侧栏位置乱跑"）。
 // expand 优先级：anchor(形态切换，矩形原样) > _panelRect(就地还原) > 传统推算(首次)。
-// collapse 前先 savePanelRect——"折叠时记住，展开时原样搬回"，位置不再乱窜。
+// collapse 前先 savePanelRect——"折叠时记住，展开时原样搬回"，位置不乱窜。
 export let _panelRect = null; // {left,top,width,height} 视口坐标
 
 /**
- * 反思（2026-08-08）：用户要求"音标前加一个喇叭按钮"。
  * 朗读单词（Web Speech API），使用 learnLanguage 设置语音。
+ * 音标前喇叭按钮（用户要求"音标前加一个喇叭按钮"）触发。
  * @param {string} word 要朗读的单词
  */
 // 缓存 learnLanguage，避免每次朗读都读 storage
@@ -339,11 +315,10 @@ async function loadState() {
 /**
  * 获取 block 内文本，智能拼接：相邻文本节点间无空白则补空格，块级元素间补换行。
  *
- * 反思（2026-08-13）：用户反馈"找正文时找出的生词黏连"。
- *   根因：block.textContent 把 block 内所有文本节点文本首尾直接相接，
+ * 用户反馈"找正文时找出的生词黏连"：block.textContent 把所有文本节点首尾直接相接，
  *   相邻 inline 文本节点之间丢失空格（如 <span>love</span><span>beaver</span>
- *   → "lovebeaver"），tokenizer 把黏连串识别成一个生词。
- *   修正：自行遍历文本节点，按浏览器渲染规则拼接：
+ *   → "lovebeaver"），tokenizer 把黏连串识别成一个生词。故自行遍历文本节点，
+ *   按浏览器渲染规则拼接：
  *   - 相邻文本节点之间无空白时补一个空格（避免生词黏连）
  *   - 块级元素（p/div/li/br 等）前后补换行
  *   - 跳过隐藏元素（display:none / visibility:hidden）的文本
@@ -353,19 +328,20 @@ async function loadState() {
 export function getBlockText(block) {
   const parts = [];
   const BLOCK_TAGS = new Set(['P','DIV','LI','TD','TH','H1','H2','H3','H4','H5','H6','BLOCKQUOTE','DD','DT','CAPTION','FIGCAPTION','ARTICLE','SECTION','MAIN','TR','UL','OL','TABLE','BR']);
-  // 2026-09-02 短行合并修复：行内短句（如 <span>短行</span><span>短行</span>）在同一块内
-  //   旧逻辑仅对 BLOCK_TAGS 补换行，行内 span 之间只补空格，导致"多短行→一长句"。
-  //   新增：同父容器下的不同行内子元素视作换行分隔，保持短行独立。
+  // 短行合并：行内短句（如 <span>短行</span><span>短行</span>）在同一块内，
+  //   行内 span 之间若只补空格会导致"多短行→一长句"。同父容器下的不同行内子元素
+  //   视作换行分隔，保持短行独立。
+  //   （与 th/scan.js#getBlockOriginText 的拼接规则同步，改一处须同步另一处）
   const INLINE_TAGS = new Set(['SPAN','B','I','EM','STRONG','A','FONT','U','S','SUP','SUB','CODE','MARK','SMALL','BIG','LABEL','Q','CITE','ABBR','TIME','VAR','SAMP','KBD']);
   const walker = document.createTreeWalker(block, NodeFilter.SHOW_TEXT, {
     acceptNode(node) {
       if (!node.textContent || !node.textContent.trim()) return NodeFilter.FILTER_REJECT;
       const el = node.parentElement;
       if (!el) return NodeFilter.FILTER_REJECT;
-      // 反思（2026-08-16 第六十八次）：本函数已降级为兜底——主路径优先读 text-hint
-      //   记录的 data-beaver-orig（页面选出的原文本），仅旧 span 无记录时才走本函数。
-      //   第六十七次加入的 .beaver-side-ann 跳过保留作为兜底防线：即便无 data-beaver-orig，
-      //   也跳过页面侧注释（如 "Labs(实验室)"），避免句子含 "(实验室)" 再被注释一遍。
+      // 本函数已降级为兜底——主路径优先读 text-hint 记录的 data-beaver-orig
+      //   （页面选出的原文本），仅无记录的 span 才走本函数。
+      //   .beaver-side-ann 跳过是兜底防线：即便无 data-beaver-orig，也跳过页面侧
+      //   注释（如 "Labs(实验室)"），避免句子含 "(实验室)" 再被注释一遍。
       try {
         if (el.closest && el.closest('.beaver-side-ann')) return NodeFilter.FILTER_REJECT;
       } catch (e) { /* ignore */ }
@@ -440,10 +416,10 @@ export function splitSentences(text) {
 // === 配色应用 ===
 export function applyColors(settings) {
   if (!_root || !settings) return;
-  // 第501次（G1 根治）：与 th pickColors 同口径——本栏条目（annotationStyle）显式
-  //   字段 > storage 显式取色 > 兜底。旧版仅在 hintFirst* 非空时写变量，storage 无值
-  //   即落 css 旧兜底，条目色兑现不到句子生词/生词表词条，与样式卡显示不一致。
-  // 第502次回退第501次误改的 fg 兜底 'inherit'（原 304次透明底绿字口径）。
+  // 与 th pickColors 同口径——本栏条目（annotationStyle）显式字段 > storage 显式取色
+  //   > 兜底。若仅在 hintFirst* 非空时写变量，storage 无值即落 css 兜底，条目色兑现
+  //   不到句子生词/生词表词条，与样式卡显示不一致。fg 兜底保持 '#2e6b43'
+  //   （透明底绿字口径），不可改 'inherit'（透明底会失去可读性）。
   const entry = resolveAnnEntry(settings.annotationStyle, settings.annotationCustom, settings.annotationUserStyles);
   const firstBg = (entry && entry.wordBg !== undefined) ? entry.wordBg
     : (settings.hintFirstBg || 'transparent');
@@ -456,8 +432,8 @@ export function applyColors(settings) {
 }
 
 // === 侧栏注释样式预设（引导页选择，无+11种） ===
-// 反思（2026-08-13 第五十次）：root 加/换 beaver-ann-style-{id} 类，
-//   web-sidebar.css 中定义各类实际配色，覆盖句子生词/内联注释/详细词头。
+// root 加/换 beaver-ann-style-{id} 类，web-sidebar.css 中定义各类实际配色，
+//   覆盖句子生词/内联注释/详细词头。
 export function applyAnnStyle(styleId) {
   if (!_root) return;
   const id = (typeof styleId === 'string' && styleId !== 'none') ? styleId : '';
@@ -472,7 +448,7 @@ export function applyAnnStyle(styleId) {
 export function set_activeTab(v) { _activeTab = v; }
 export function set_allAnnotations(v) {
   _allAnnotations = v;
-  // 第一百八十六次：数组被整体替换（清空/重排）时同步重建词键集，
+  // 数组被整体替换（清空/重排）时同步重建词键集，
   //   否则清空后旧键仍在，新一轮扫描会把所有词判成"已收"而全数丢弃。
   _wordKeys = new Set();
   if (Array.isArray(v)) {
@@ -484,8 +460,7 @@ export function set_allAnnotations(v) {
 }
 export function set_annotateOov(v) { _annotateOov = v; }
 export function set_annotateRepeat(v) { _annotateRepeat = v; }
-// 280次：侧邻注释模板 setter（原 set_annBrackets）
-// 284次：回落默认同步 {target} {annotation}；306次去空格 '{target}{annotation}'
+// 侧邻注释模板 setter：空值回落默认 '{target}{annotation}'（与 styles.js DEFAULT_ANN_TEMPLATE 同步）
 export function set_annTemplate(v) { _annTemplate = (typeof v === 'string' && v.trim()) ? v : '{target}{annotation}'; }
 export function set_annotationsCache(v) { _annotationsCache = v; }
 export function set_collectedSubs(v) { _collectedSubs = v; }

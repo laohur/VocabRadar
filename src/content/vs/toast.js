@@ -2,11 +2,10 @@
 // vs/toast.js —— 冒泡提示子模块
 // -----------------------------------------------------------------------------
 // 职责：toast() 冒泡提示（替代 alert，非致命错误用；含错误态 ≥5s、悬停暂停计时）。
-// 来源：拆分自 src/content/video-sidebar.js（2026-09-27 拆分第四刀，纯机械搬移）。
 // 关系：因需读取门面 _cfg.toastDuration，经 getCfg() 对门面构成受控循环 import
 //       ——本模块顶层仅函数声明，绝不触碰门面绑定，getCfg() 调用全部发生在
 //       toast 函数体内（运行时门面已初始化完毕，安全）。
-//       原 L237 `_cfg.toastDuration` 改走 `getCfg().toastDuration`。
+//       toastDuration 改走 `getCfg().toastDuration`。
 //       门面经 `export { toast } from './vs/toast.js'` 接驳导出，
 //       外部引用方（vs/ocr.js 等）路径与符号不变。
 // =============================================================================
@@ -48,7 +47,7 @@ export function toast(msg, opts) {
     }
   }
   document.body.appendChild(el);
-  // 反思（2026-08-15 第六十五次）：错误提示至少展示 5 秒；鼠标悬停/键盘焦点进入时
+  // 错误提示至少展示 5 秒；鼠标悬停/键盘焦点进入时
   //   计时暂停（不自动消失），离开后按剩余时间继续，便于读完报错信息。
   const dur = Math.max(o.duration || getCfg().toastDuration, o.error ? 5000 : 0);
   let timer = null;

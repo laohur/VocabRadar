@@ -5,15 +5,11 @@
 //   2. selectEnglishTokens：从 token 列表中筛选英文单词
 //   3. extractEnglishWords：分词 + 选词 + 过滤单字母/音效标注
 //
-// 反思（2026-08-08）：用户反馈"为啥不用 Intl.Segmenter？"。
-//   旧版用手写正则分词，存在以下问题：
-//   - 正则 [^\W_]+(?:['\u2019\-][^\W_]+)* 无法正确处理所有缩写/所有格边界
-//   - 对 CJK 语言只能按单字符切，无法做中文分词
-//   - Intl.Segmenter（Chrome 87+ 内置，零依赖）原生支持词级分词，
-//     正确处理缩写（don't）、所有格（child's）、连字符词、CJK 分词
-//   修正：优先使用 Intl.Segmenter 进行分词，不支持时回退到正则。
+// 分词优先使用 Intl.Segmenter（Chrome 87+ 内置，零依赖）：原生支持词级分词，
+//   正确处理缩写（don't）、所有格（child's）、连字符词、CJK 分词；手写正则无法
+//   正确处理所有缩写/所有格边界，对 CJK 只能按单字符切。不支持时回退到正则。
 //
-// 正则回退方案（与旧版完全一致，保留兼容性）
+// 正则回退方案
 // 必须带 g flag：String.match(无g) 只返回首个匹配，导致整句只取第一个词
 // （历史 bug：字幕 "it's the muffin man" 只返回 ["it's"]，丢失 muffin/man）
 const TOKENIZE_PATTERN = new RegExp(
@@ -51,12 +47,9 @@ function getWordSegmenter() {
 
 /** 分词：将文本拆分为各类 token
  *
- * 反思（2026-08-08 第二次）：用户再次反馈"你咋分词的，为啥不用 Intl.Segmenter？"。
- *   上一版虽加了 Intl.Segmenter，但过滤逻辑有误：
- *   仅检查 trimmed && /[^\s]/ 保留了标点符号 token，
- *   导致 selectEnglishTokens 的 SELECT_PATTERN 匹配异常。
- *   修正：使用 Intl.Segmenter 的 isWordLike 属性过滤，
- *   仅保留词级 token（排除标点、空白、符号）。
+ * 优先使用 Intl.Segmenter，按 isWordLike 属性过滤，仅保留词级 token
+ *   （排除标点、空白、符号——若只按非空白过滤，保留的标点 token 会使
+ *   selectEnglishTokens 的 SELECT_PATTERN 匹配异常）。
  */
 export function simpleTokenize(text) {
   if (!text) return [];
@@ -75,7 +68,7 @@ export function simpleTokenize(text) {
     return tokens;
   }
 
-  // 回退：正则分词（与旧版完全一致）
+  // 回退：正则分词
   return text.match(TOKENIZE_PATTERN) || [];
 }
 
@@ -85,10 +78,9 @@ export function selectEnglishTokens(tokens) {
 }
 
 /** 分词+选词：从文本中提取英文单词
- *  反思（2026-07-05）：用户要求"字幕内的非内容而是符号，不作为单词"。
  *  字幕中常见的 [Music]、(applause) 等标注是音效描述，不是台词内容，
- *  其中的英文词不应作为生词提取。在分词前先剥离方括号/圆括号内的内容。
- *  反思（2026-07-05）：用户要求"不要递归注释。本工具、字幕内的非内容而是符号，不作为单词"。
+ *  其中的英文词不作为生词提取（用户要求"字幕内的非内容而是符号，不作为单词"）：
+ *  分词前先剥离方括号/圆括号内的内容。
  *  单字母（I, a）不是有意义的生词，过滤掉。最小词长 2 字符。
  */
 export function extractEnglishWords(text) {

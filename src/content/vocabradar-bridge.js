@@ -1,4 +1,4 @@
-// ========== G3（2026-09-08）：通道 A 内容脚本桥（扩展草稿缓存 → VocabRadar 网站） ==========
+// ========== 通道 A：内容脚本桥（扩展草稿缓存 → VocabRadar 网站） ==========
 // 契约：网站侧 src/utils/draftBridge.js 头注释（两端同步约束，改动需两端同步）：
 //   时机 ①页面加载时推一次（覆盖「扩展先存、网站后开」）
 //       ②chrome.storage.onChanged 推增量（覆盖「网站先开、扩展后存」）
@@ -41,23 +41,21 @@
     console.error('[VocabRadar][bridge] onChanged 监听失败', e);
   }
 
-  // ========== G4（2026-09-08）：通道 B —— 网站 Creator 解析请求转发 ==========
+  // ========== 通道 B：网站 Creator 解析请求转发 ==========
   // 契约（两端同步约束，网站侧 src/utils/extParseChannel.js 头注释同文）：
   //   ping: { type:'vocabradar:parse-ping', from:'vocabradar-web', reqId }
   //         → 立即回 parse-response {ok:true, pong:true}（不经 SW；网站 1.5s 超时判未装）
   //   请求: { type:'vocabradar:parse-request', from:'vocabradar-web', reqId,
-//           kind:'link'|'image'|'document'|'llm',
-//           payload:{url}|{imageDataUrl, lang}|{docKind, b64, name}|{prompt} }
-//         → chrome.runtime.sendMessage({type:'PARSE_MATERIAL'}) 转发 SW
-//         → SW 响应 {ok, text?|title?|error?|code?} 原样回传页面 parse-response
-//   （B2，2026-09-10：document kind 为文件字节 b64 透传，本桥只转发不改写；透传无 kind 白名单）
-//   （W1，2026-09-11：llm kind 为提示词 payload:{prompt} 透传，SW 走 LLM 聊天返回 {ok, text}；
-//    供网站阅读理解 AI 生成与 AI 润色共用；本桥仍只转发不改写）
-//   （343次，2026-09-19：另有 kind:'translation'（payload {word,source,target}），
-//    SW handleBridgeTranslation 走快渠道返回 {ok, text, channel}；
-//    第460次：本桥对 translation 先试浏览器内置（见下方 tryBuiltinTranslation），
-//    700ms 未命中才转发 SW——website 侧契约不变，只是 channel 可能为"浏览器内置"）
-  //   接收校验：ev.source===window 且 from==='vocabradar-web'（G2 通道A 同款纪律）；
+  //           kind:'link'|'image'|'document'|'llm'|'translation',
+  //           payload:{url}|{imageDataUrl, lang}|{docKind, b64, name}|{prompt}|{word,source,target} }
+  //         → chrome.runtime.sendMessage({type:'PARSE_MATERIAL'}) 转发 SW
+  //         → SW 响应 {ok, text?|title?|error?|code?} 原样回传页面 parse-response
+  //   document/llm/translation 均为透传：本桥只转发不改写、无 kind 白名单
+  //     （llm 走 SW LLM 聊天返回 {ok, text}，供网站阅读理解 AI 生成与 AI 润色共用；
+  //      translation 走 SW 快渠道返回 {ok, text, channel}；本桥对 translation 先试
+  //      浏览器内置（见 tryBuiltinTranslation），700ms 未命中才转发 SW——
+  //      website 侧契约不变，只是 channel 可能为"浏览器内置"）
+  //   接收校验：ev.source===window 且 from==='vocabradar-web'（与通道 A 同款纪律）；
   //   reqId 由网站侧生成并配对，本桥原样带回，不做去重。
   const PARSE_PING = 'vocabradar:parse-ping';
   const PARSE_REQ = 'vocabradar:parse-request';
@@ -72,9 +70,9 @@
     }
   }
 
-  // ========== 第460次（2026-09-28）：翻译类请求「浏览器内置优先」快路径 ==========
-  // 说人话：网站要一个词的译文时，旧版一律转发 SW 走在线渠道；其实扩展内容侧
-  //   本就有 Chrome Translator API（本地神经网络，最优渠道）——本桥是 classic script
+  // ========== 翻译类请求「浏览器内置优先」快路径 ==========
+  // 网站要一个词的译文时，不必一律转发 SW 走在线渠道：扩展内容侧本就有
+  //   Chrome Translator API（本地神经网络，最优渠道）。本桥是 classic script
   //   （IIFE），用动态 import() 引 src/lib/translator/builtin-translator.js 模块
   //   （在 manifest web_accessible_resources 的 src/lib/* 内），模块缓存与本扩展
   //   其他内容脚本（同 isolated world）共享同一单例，getTranslator 直接可用。
@@ -156,7 +154,7 @@
       if (!m || typeof m !== 'object' || m.from !== FROM_WEB) return;
       if (m.type === PARSE_PING) { replyParse(m.reqId, { ok: true, pong: true }); return; }
       if (m.type !== PARSE_REQ) return;
-      // 第460次：翻译类先试浏览器内置（700ms 竞速），未命中再转发 SW 在线快渠道
+      // 翻译类先试浏览器内置（700ms 竞速），未命中再转发 SW 在线快渠道
       if (m.kind === 'translation' && m.payload && m.payload.word) {
         tryBuiltinTranslation(m.payload).then(function (hit) {
           if (hit) { replyParse(m.reqId, { ok: true, text: hit, channel: '浏览器内置' }); return; }

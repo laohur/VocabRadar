@@ -1,5 +1,5 @@
 // =============================================================================
-// SW 日志门面（2026-09-27 拆分自 service-worker.js）
+// SW 日志门面
 // 职责：时间戳格式 _ts、调试开关 _debug（config.json 读取）、受控输出 log。
 // 唯一属主：_debug 只在本文件读写；各子模块一律 import { _ts, log } 使用，
 //   不得自建时间戳或直读 config.json（口径唯一）。
@@ -11,7 +11,7 @@ export function _ts() {
   return d.toLocaleTimeString('en-GB', { hour12: false }) + '.' + String(d.getMilliseconds()).padStart(3, '0');
 }
 
-// 反思（2026-08-03）：用户要求"网络请求等打印日志遵循调试开关"。
+// 用户要求"网络请求等打印日志遵循调试开关"：
 //   _debug 从 config.json 读取，false 时只输出 console.warn（错误），
 //   true 时输出 console.log（调试信息：网络请求、渠道、转发日志等）
 let _debug = false;

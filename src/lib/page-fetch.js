@@ -3,14 +3,13 @@
  *
  * 作用：此脚本在页面主世界执行，在页面上下文中执行 fetch 请求并拦截 XHR/fetch。
  *
- * 注入方式（第一百七十八次改为双轨）：
+ * 注入方式（双轨）：
  *   1. Chrome/Edge：data/manifest.json 中以声明式 content_script 注入
  *      （"world": "MAIN" + "run_at": "document_start"）。这是**决定性**的一环：
  *      借鉴 VideoSeek（ytIndex 以 world:MAIN + document_start 注册，模块顶层立刻
  *      YoutubeInjectHelper.initInject()），拦截补丁必须在 YouTube 播放器自身脚本
- *      之前就位，播放器自己请求的每条 /api/timedtext 才会被记下。
- *      旧实现是**懒注入**（用户点取字幕时才 <script src> 注入），此时播放器早已
- *      发完请求，补丁装上等于空网；而播放器对已加载轨道不会重复请求 → 白等 8 秒。
+ *      之前就位，播放器自己请求的每条 /api/timedtext 才会被记下（播放器对已加载
+ *      轨道不会重复请求，若点取字幕时才懒注入装补丁，请求早已发完，等于空网）。
  *   2. Firefox：MV3 不支持 content_scripts[].world="MAIN"，build.mjs 会剥离该条；
  *      仍走 youtube-fetcher.js injectPageScript() 的 <script src> 懒注入路径。
  *   两条路径并存时靠 window.__beaverPageFetchInjected 去重，只装一次补丁。
@@ -34,7 +33,7 @@
  *     （document_start 注入时 READY 早于 CS 监听器建立，必须能补问一次）
  *   - Content Script 用 url='__beaver_timedtext_query__' 回查页面侧 timedtext 缓存
  *     （同理：document_start 期间捕获并广播的 CAPTURE 消息，CS 那时还没监听，会丢；
- *       故页面侧必须自留一份缓存供事后回查——这是本次修复的关键补齐项）
+ *       故页面侧必须自留一份缓存供事后回查）
  *
  * 安全：仅处理 youtube.com 域名的按需 fetch，不泄露其他请求信息。
  */
@@ -45,7 +44,7 @@
   if (window.__beaverPageFetchInjected) return;
   window.__beaverPageFetchInjected = true;
 
-  // === timedtext 页面侧缓存（第一百七十八次新增）===
+  // === timedtext 页面侧缓存 ===
   // 为什么必需：本脚本在 document_start 就位，播放器随后自发的 timedtext 请求会被
   // 立刻捕获并 postMessage 广播；但内容脚本是 document_idle 才加载、且监听器建立
   // 更晚，那些早期广播无人接收即丢失。故页面侧自留缓存，供内容脚本事后回查。
@@ -70,7 +69,7 @@
     } catch (e) { /* 忽略 */ }
   }
 
-  // === B站 playurl 响应捕获（第一百零七次 P1 方案C，借鉴 VideoSeek injectXhr）===
+  // === B站 playurl 响应捕获（借鉴 VideoSeek injectXhr）===
   // 页面播放器自身会请求 /x/player/wbi/playurl（签名/cookie/referer/风控天然合法），
   // 我们只旁路读响应，按 cid 缓存并 postMessage 上报给内容脚本。
   // 注意：本文件经 <script src=chrome-extension://...> 注入，与内联注入同样受页面 CSP 约束；
@@ -110,7 +109,7 @@
 
   XMLHttpRequest.prototype.open = function (method, url) {
     this._beaverUrl = url;
-    // 第一百零七次：B站 playurl 响应捕获（load 事件路径，覆盖 addEventListener 用法）
+    // B站 playurl 响应捕获（load 事件路径，覆盖 addEventListener 用法）
     if (isBiliPlayurl(url)) {
       var selfX = this;
       this.addEventListener('load', function () {
@@ -123,10 +122,9 @@
   };
 
   // 拦截 addEventListener('readystatechange', ...) 方式
-  // ⚠ 第一百七十八次修 bug：旧实现重新赋值形参 listener，但本文件顶部有 'use strict'，
-  //   严格模式下形参与 arguments 对象**不联动**，末尾 origAddEventListener.apply(this, arguments)
-  //   传下去的仍是**原始未包装的 listener** → 这条拦截路径此前完全失效。
-  //   改为构造新的实参数组显式传递包装后的 listener。
+  // ⚠ 严格模式下形参与 arguments 对象不联动：直接重赋形参 listener，末尾
+  //   origAddEventListener.apply(this, arguments) 传下去的仍是未包装的原 listener，
+  //   拦截失效。故构造新的实参数组显式传递包装后的 listener。
   XMLHttpRequest.prototype.addEventListener = function (type, listener) {
     if (type === 'readystatechange' && typeof listener === 'function'
         && this._beaverUrl && String(this._beaverUrl).indexOf('/api/timedtext') !== -1) {
@@ -163,7 +161,7 @@
         }
       };
 
-      // 第一百七十八次：再加 load 事件兜底——播放器若既不用 onreadystatechange
+      // 再加 load 事件兜底——播放器若既不用 onreadystatechange
       // 也不用 addEventListener('readystatechange')（如内部用 load/loadend），
       // 上面两条都拦不到。借鉴 B站 playurl 分支已验证可用的 load 路径。
       try {
@@ -183,7 +181,7 @@
   window.fetch = function (input, init) {
     var url = typeof input === 'string' ? input : (input && input.url) || '';
     var promise = origFetch.apply(this, arguments);
-    // 第一百零七次：B站 playurl fetch 路径捕获
+    // B站 playurl fetch 路径捕获
     if (isBiliPlayurl(url)) {
       promise.then(function (resp) {
         if (resp.ok) {
@@ -216,7 +214,7 @@
     if (event.source !== window) return;
     if (!event.data || typeof event.data !== 'object') return;
 
-    // 第一百七十八次：READY 补答——本脚本 document_start 就绪时内容脚本（document_idle）
+    // READY 补答——本脚本 document_start 就绪时内容脚本（document_idle）
     // 尚未建立监听，那条 BEAVER_PAGE_FETCH_READY 必然丢失。内容脚本主动 PING，此处补答。
     if (event.data.type === 'BEAVER_PAGE_FETCH_PING') {
       window.postMessage({ type: 'BEAVER_PAGE_FETCH_READY' }, '*');
@@ -225,9 +223,9 @@
 
     if (event.data.type !== 'BEAVER_FETCH_REQUEST') return;
 
-    // 第一百七十八次：timedtext 页面侧缓存回查——把 document_start 期间捕获、
-    // 但内容脚本当时无法接收的记录整批补给内容脚本。这是"VideoSeek 能、我不行"
-    // 的关键补齐：VideoSeek 的 injectedData 与播放器同世界常驻，天然可事后取。
+    // timedtext 页面侧缓存回查——把 document_start 期间捕获、但内容脚本当时
+    // 无法接收的记录整批补给内容脚本（VideoSeek 的 injectedData 与播放器同世界
+    // 常驻，天然可事后取；本缓存即等价机制）。
     if (event.data.id && event.data.url === '__beaver_timedtext_query__') {
       window.postMessage({
         type: 'BEAVER_FETCH_RESPONSE',
@@ -239,7 +237,7 @@
       return;
     }
 
-    // 第一百零七次：B站 playurl 缓存查询（按 cid；cid 为空回最近一条）
+    // B站 playurl 缓存查询（按 cid；cid 为空回最近一条）
     var id0 = event.data.id;
     var url0 = event.data.url;
     if (id0 && url0 === '__beaver_bili_playurl_query__') {

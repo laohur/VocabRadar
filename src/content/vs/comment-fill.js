@@ -5,7 +5,6 @@
 //       容器（findMainCommentContainer）、自动展开评论区、跨 shadow DOM 递归查找
 //       并填入评论输入框（deepQuery/deepQueryAll/isInCommentItem/fillCommentInput）、
 //       最小滚动定位（scrollMinIntoView）。
-// 来源：拆分自 src/content/video-sidebar.js（2026-08-28 拆分第二刀，纯机械搬移）。
 // 关系：依赖 ./logger.js（log）与 ./dom-utils.js（escapeHtml）。仅被门面
 //       video-sidebar.js 的评论按钮流程调用；deepQuery/deepQueryAll/isInCommentItem
 //       为本模块内部实现细节，不对外导出。

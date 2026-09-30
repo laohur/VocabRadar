@@ -1,5 +1,5 @@
-/* 第二百一十三次：顶行 .beaver-header/.beaver-title/.beaver-settings-btn 的遗留样式已删除——
-   两种侧栏的顶部样式唯一来源是 lib/sidebar-topbar.js 的 ensureTopbarCss（共享）。
+/* 顶行 .beaver-header/.beaver-title/.beaver-settings-btn 的样式唯一来源是
+   lib/sidebar-topbar.js 的 ensureTopbarCss（两栏共享）。
    本文件只保留与顶行无关或带 #beaver-sidebar 作用域的布局规则。 */
 
 /* VocabRadar 侧边栏样式
@@ -22,7 +22,7 @@
  *       .beaver-mp-panel         练习小程序二维码
  *     .beaver-footer             底部：复制 + 弹幕 + 评论 按钮
  *
- * 设计风格（2026-07-08 重构）：Material Design 3 + 马卡龙绿主题。
+ * 设计风格：Material Design 3 + 马卡龙绿主题。
  *   - 标准马卡龙绿 #A8E6CF 为种子派生 M3 tonal palette。
  *   - primary 用 tonal 40 深绿（active/CTA，白字可读），primary-container 用 tonal 80
  *     马卡龙绿本体（浅绿容器 + 深字，M3 selected/active 项用此）。
@@ -65,13 +65,12 @@
 
   --beaver-outline: #c2c9bf;              /* outline-variant（细分隔，少用）*/
 
-  /* 侧邻注释配色（2026-08-05）：与 text-hint-impl 共用，popup 取色框控制
-   *   text-hint-impl.applyColorVars 会覆盖 :root 的这两个变量
-   *   此处仅声明默认值兜底（文本提示未启动时视频提示仍有配色）
-  * 反思（2026-08-05 修正）：用户要求"注释为单词的前后景互换"（304次作废，改无底色）。
-  *   反思（2026-08-11 第三十八次）旧口径已作废。
-  *   单词: 无底色 字色 #2e6b43 → 注释: 无底色 字色 #2e6b43 */
-  --beaver-ann-bg: transparent;           /* 注释底色（304次：无底色）*/
+  /* 侧邻注释配色：与 text-hint-impl 共用，popup 取色框控制；
+   *   text-hint-impl.applyColorVars 会覆盖 :root 的这两个变量，
+   *   此处仅声明默认值兜底（文本提示未启动时视频提示仍有配色）。
+   *   用户要求"注释为单词的前后景互换"，后裁定无底色：
+   *   单词: 无底色 字色 #2e6b43 → 注释: 无底色 字色 #2e6b43 */
+  --beaver-ann-bg: transparent;           /* 注释底色（无底色）*/
   --beaver-ann-fg: #2e6b43;               /* 注释字色（绿）*/
 
   /* M3 shape scale（圆角比 MD1 更大更柔和）*/
@@ -111,10 +110,9 @@
   box-sizing: border-box;
 }
 
-/* 浮动兜底：找不到合适容器时 fixed 定位，确保可见（YouTube 等）
- * 第一百二十三次：默认右上角与悬浮球/文本侧栏统一（top 80px→20px）
- * 第一百三十二次：默认身形改**竖版 16:9**（用户裁定"很矮…16:9竖侧栏"），
- * 旧 420×236 横版扁盒废弃；JS 注入路径用 defaultFloatSize() 同公式 */
+/* 浮动兜底：找不到合适容器时 fixed 定位，确保可见（YouTube 等）。
+ * 默认右上角，与悬浮球/文本侧栏统一；默认身形为竖版 16:9
+ * （用户裁定"很矮…16:9竖侧栏"），JS 注入路径用 defaultFloatSize() 同公式。 */
 #beaver-sidebar.beaver-floating {
   position: fixed;
   top: 20px;
@@ -144,14 +142,12 @@
 }
 
 /* 例外：产品名称加粗 + 棕色辅色（用户要求"除了产品名称"） */
-/* CSS order 强制各区块视觉顺序一致，防止标签页切换时标签页布局错乱
- * 第一百二十二次：非面板行全部 flex-shrink:0——固定高度容器内容超高时，
- * 只允许 .beaver-panel 收缩（此前 asr-progress/footer 无 shrink 保护，
- * ASR 进度条出现时各行互相挤压，字幕区被急剧压缩的元凶之一）
- * 第一百三十二次：必须加 #beaver-sidebar 作用域！本文件被 web-sidebar-impl.js
- * 在所有页面加载（共用 --beaver-* 设计令牌），裸类名 .beaver-header{order:1}
- * 会命中文本侧栏顶行——文本面板其余子元素均为默认 order:0，顶行被排到
- * 面板最底部（用户反馈"文本侧栏的顶行给挪到底部了"的根因）。 */
+/* CSS order 强制各区块视觉顺序一致，防止标签页切换时标签页布局错乱。
+ * 非面板行全部 flex-shrink:0：固定高度容器内容超高时只允许 .beaver-panel
+ * 收缩（否则 ASR 进度条出现时各行互相挤压，字幕区被急剧压缩）。
+ * 必须加 #beaver-sidebar 作用域！本文件被 web-sidebar-impl.js 在所有页面
+ * 加载（共用 --beaver-* 设计令牌），裸类名 .beaver-header{order:1} 会命中
+ * 文本侧栏顶行——文本面板其余子元素均为默认 order:0，顶行被排到面板最底部。 */
 #beaver-sidebar .beaver-header { order: 1; flex-shrink: 0; }
 #beaver-sidebar .beaver-tabs { order: 2; flex-shrink: 0; }
 #beaver-sidebar .beaver-toolbar { order: 3; flex-shrink: 0; }
@@ -159,7 +155,7 @@
 #beaver-sidebar .beaver-footer { order: 6; flex-shrink: 0; }
 /* 浮层不受 order 影响（position:absolute/fixed） */
 
-/* 第一百二十二次：.hidden 失效修复——模板用 classList.toggle('hidden') 切换
+/* .hidden 失效修复：模板用 classList.toggle('hidden') 切换
  * 词表工具栏与面板显隐，但 CSS 只有 .beaver-panel.hidden 规则，词表工具栏
  * （Export 行）在字幕页常驻显示，白占一行挤压字幕区。补齐通用规则。 */
 #beaver-sidebar [data-tab-toolbar].hidden,
@@ -168,10 +164,10 @@
 }
 
 /* 顶行：背景色区分（--beaver-bg-soft），无 border-bottom */
-/* === 折叠/展开按钮（2026-08-12 第四十六次）===
+/* === 折叠/展开按钮 ===
  * 用户要求"视频侧栏顶行有折叠按钮，切换折叠展开，应当能记住"。
  * 折叠时仅显示标题行，隐藏 tabs/toolbar/panel/footer。
- * 第一百二十二次：📄 形态切换按钮与折叠按钮同款样式（顶行统一，首按钮=切换形态）。 */
+ * 📄 形态切换按钮与折叠按钮同款样式（顶行统一，首按钮=切换形态）。 */
 .beaver-header .beaver-collapse-btn,
 .beaver-header .beaver-form-btn {
   background: var(--beaver-btn-bg);
@@ -199,11 +195,10 @@
   display: none !important;
 }
 
-/* 反思（2026-08-13 第五十三次）：用户反馈"视频侧栏折叠后变成空白一大块"。
- *   根因：#beaver-sidebar{min-height:200px !important} 折叠后仍生效，
- *   JS 折叠只清了 height/maxHeight 内联样式（无 important，压不过 CSS !important），
- *   隐藏了子元素但容器最小 200px → 空白区。
- *   修正：折叠态强制清 min-height/max-height/height，只留标题行高度。 */
+/* 折叠后空白一大块的根因：#beaver-sidebar{min-height:200px !important}
+ * 折叠后仍生效，JS 折叠只清了 height/maxHeight 内联样式（无 important，
+ * 压不过 CSS !important），隐藏了子元素但容器最小 200px → 空白区。
+ * 故折叠态强制清 min-height/max-height/height，只留标题行高度。 */
 #beaver-sidebar.beaver-collapsed {
   min-height: auto !important;
   height: auto !important;
@@ -280,20 +275,17 @@
 }
 
 /* 面板内容区 */
-/* 反思（2026-07-10 #83）：旧版 min-height:80px 阻止 flex 子元素收缩，
-   当 header+tabs+toolbar+footer 总高 + 80px > 容器 height 时，
-   面板无法收缩导致内容溢出、侧栏视觉高度超出设定值。
-   修正：min-height 改 0，允许面板在 flex 布局中正确收缩到任意高度，
-   overflow-y:auto 保证内容多时滚动而非撑高容器。
-   反思（2026-07-13 #93）：用户要求"字幕应当可以滚动查看全部，生词表也是"。
-   全量渲染模式下，所有字幕和生词都渲染到 DOM，面板必须支持滚动。
-   overflow-y:auto 确保内容超出面板高度时显示滚动条。 */
+/* min-height 必须 0：非 0 值（曾用 80px）会阻止 flex 子元素收缩——
+   header+tabs+toolbar+footer 总高 + 最小高 > 容器 height 时，面板无法收缩
+   导致内容溢出、侧栏视觉高度超出设定值。overflow-y:auto 保证内容多时滚动
+   而非撑高容器（用户要求"字幕应当可以滚动查看全部，生词表也是"；
+   全量渲染模式下所有字幕和生词都渲染到 DOM，面板必须支持滚动）。 */
 .beaver-panel {
   flex: 1;
   overflow-y: auto;
   padding: 8px;
-  /* 第一百三十九次（用户反馈"切换 ASR 后字幕区压缩为无"）：ASR 进度行出现时
-   * 固定外框下 flex 把面板挤到 0 高。地板 120px 保证字幕区始终可见；
+  /* ASR 进度行出现时（用户反馈"切换 ASR 后字幕区压缩为无"），固定外框下
+   * flex 把面板挤到 0 高。地板 120px 保证字幕区始终可见；
    * 配合 vs-asr-progress 的外框亏损补偿（见该文件），不足部分一次性补进外框。 */
   min-height: 120px;
   order: 4;
@@ -315,9 +307,9 @@
 }
 
 /* 字幕条目：active 用柔和灰绿背景 + inset 阴影左侧主色条（非 border-left）。
- * 反思（2026-07-09）：用户要求「该行只有当前字幕才改色」「不同含义颜色不要混淆」。
- *   旧版 active 用 --beaver-bg-active(马卡龙绿) 与注释词头背景同色混淆。
- *   改为 --beaver-bg-container-high(灰绿) 柔和高亮，把马卡龙绿让给注释词头突出用。 */
+ * 用户要求「该行只有当前字幕才改色」「不同含义颜色不要混淆」——
+ * active 不用马卡龙绿（与注释词头背景同色会混淆），改灰绿柔和高亮，
+ * 把马卡龙绿让给注释词头突出用。 */
 .beaver-sub-item {
   padding: 6px 10px;
   margin: 0 10px 2px;
@@ -332,7 +324,7 @@
 
 /* 字幕行：grid 两列布局，左列时间专用（3em），右列正文。
  * 时间戳文本自带两个空格分隔正文，正文换行在右列内对齐，不顶格。
- * 反思（2026-07-07）：用户反馈"时间跟字幕正文间隔那么大干啥"，4.5em→3em。 */
+ * 3em 系按用户反馈"时间跟字幕正文间隔那么大干啥"由 4.5em 收窄而来。 */
 .beaver-sub-text {
   display: grid;
   grid-template-columns: 3em 1fr;
@@ -348,16 +340,13 @@
 }
 
 /* 字幕正文生词：跟随用户设置的首次/后续配色（句中对比度浅），保持整行文字可读。
- * 反思（2026-07-09 #67）：用户要求「字幕行内的生词当然要有自己底色」。
- *   之前改为 background:none 完全无底色，过于极端。
- *   句中生词应有浅底色（--beaver-first-bg/--beaver-later-bg 用户设置），注释词头用深底色
- *   （--beaver-primary 深绿 #2e6b43 + 白字），形成句中浅、注释深的强弱对比。
- *   用 #beaver-sidebar ID 选择器 + !important 覆盖 text-hint-impl 注入的全局 .beaver-word 样式。
- *   不加粗、继承文字色，保持整行可读性。
- * 反思（2026-08-07 修正）：用户反馈"字幕区暗底暗字"。
- *   根因：color:inherit 继承 --beaver-text(#1a1f1a 深色)，但 background 用 --beaver-first-bg
- *   （用户可能设为 #2e6b43 深绿），深色字+深色底=暗底暗字。
- *   修正：字色改用 --beaver-first-fg（用户设置的搭配字色），确保字色与底色始终搭配。 */
+ * 用户要求「字幕行内的生词当然要有自己底色」——句中生词用浅底色
+ * （--beaver-first-bg/--beaver-later-bg 用户设置），注释词头用深底色
+ * （--beaver-primary 深绿 #2e6b43 + 白字），形成句中浅、注释深的强弱对比。
+ * 用 #beaver-sidebar ID 选择器 + !important 覆盖 text-hint-impl 注入的全局
+ * .beaver-word 样式。不加粗、继承文字色，保持整行可读性。
+ * 字色必须用 --beaver-first-fg（与底色搭配的用户设置）而非 inherit：
+ * inherit 继承 --beaver-text 深色，底色为深绿时即"暗底暗字"。 */
 #beaver-sidebar .beaver-sub-text .beaver-word {
   display: inline-block !important;
   vertical-align: baseline !important;
@@ -393,7 +382,7 @@
   margin-top: 2px;
 }
 
-/* 第436次（用户裁定"超过小时的，用时分秒时间"）：视频 ≥1h 时根节点挂
+/* 视频时长 ≥1h 时（用户裁定"超过小时的，用时分秒时间"）根节点挂
  * .beaver-hourly（subtitle-renderer.js setHourlyFormat 同步切换），时间格式
  * 统一为 h:mm:ss（最宽 10:00:00 共 8 字符 + 两空格），左列从 3em 加宽到 5em。
  * 两处必须同步：字幕行与注释行左列是对齐的时间专用列。 */
@@ -405,21 +394,20 @@
 .beaver-ann-content {
   /* grid 第二列：释义内容，与正文对齐。
    * 显式指定 grid-column:2，左列(3em)严格留空给时间专用。
-   * 反思（2026-07-09 #68）：用户要求「不是叫你各项内换行，而是整体一段自然换行」。
-   * 反思（2026-08-15 第六十五次）：段独立化——单词/喇叭音标/几阶/标签/释义各为独立段，
-   *   每段左右空白包裹（padding 0 6~8px），段与段上下不黏连（块级堆叠+2px 间隔），
-   *   释义保持块级自然换行。 */
+   * 用户要求「不是叫你各项内换行，而是整体一段自然换行」。
+   * 段独立化：单词/喇叭音标/几阶/标签/释义各为独立段，
+   * 每段左右空白包裹（padding 0 6~8px），段与段上下不黏连（块级堆叠+2px 间隔），
+   * 释义保持块级自然换行。 */
   grid-column: 2;
 }
 
-/* 释义区生词词头：深绿背景 + 白字，强对比度突出（句中正文浅底色，强弱对比让注释突出）
- * 反思（2026-07-09 #67）：注释词头用 --beaver-primary(#2e6b43 深绿) + 白字（强对比度），
- *   字幕正文生词用 --beaver-bg-active(#a8e6cf 浅马卡龙绿)（句中对比度浅），
- *   形成句中浅、注释深的强弱对比。
- * 反思（2026-07-09 #73）：用户反馈「侧栏窗口会形变」。
- *   根因：display:inline 的元素有 background+padding 时，背景不覆盖完整行高，渲染异常。
- *   修正：有背景色的元素用 display:inline-block（背景正确渲染），无背景色的用 inline（自然换行）。
- *   inline-block 不会在元素内部断行（单词完整不拆），inline 在任意空格断行（释义自然流动）。 */
+/* 释义区生词词头：深绿背景 + 白字，强对比度突出（句中正文浅底色，强弱对比让注释突出）。
+ * 注释词头用 --beaver-primary(#2e6b43 深绿) + 白字，字幕正文生词用浅色，
+ * 形成句中浅、注释深的强弱对比。
+ * 有背景色的元素必须 display:inline-block：inline 的 background+padding
+ * 不覆盖完整行高，渲染异常（用户反馈"侧栏窗口会形变"的根因）；
+ * inline-block 不会在元素内部断行（单词完整不拆），inline 在任意空格断行
+ * （释义自然流动）——无背景色的元素用 inline。 */
 .beaver-ann-line .beaver-ann-word {
   display: block;
   width: max-content;
@@ -429,11 +417,11 @@
   padding: 0 8px;
   border-radius: 3px;
   font-weight: 500;
-  /* 反思（2026-08-15 第六十五次）：词头为独立段，左右留白包裹 */
+  /* 词头为独立段，左右留白包裹 */
   margin: 2px 6px;
 }
 
-/* 括号：紧贴生词词头，正常文字色 inline（2026-07-22 新增，格式 生词(注释)） */
+/* 括号：紧贴生词词头，正常文字色 inline（格式 生词(注释)） */
 .beaver-ann-line .beaver-ann-paren {
   display: inline;
   color: var(--beaver-text-soft);
@@ -442,11 +430,10 @@
 
 /* 简略模式正文内联注释（侧邻注释）：紧跟生词高亮 span 后，括号包裹释义
  * 格式：<span class="beaver-word">word</span><span class="beaver-ann-inline">(释义)</span>
- * 反思（2026-07-22）：用户要求「字幕的单词注释跟在字幕正文里面的生词后，不另起一行」。
- * 反思（2026-07-28）：用户要求释义加背景色区分强弱，不再无背景。
- * 反思（2026-08-05）：配色复用 --beaver-ann-bg/fg（与 text-hint-impl 侧邻注释共用），
- *   不再用 --beaver-bg-active（浅马卡龙绿），改为注释独立配色（默认浅马卡龙黄底深棕字），
- *   生词绿系与注释黄系区分强弱，符合"释义时生词应当改背景色以区分强弱"。 */
+ * 用户要求「字幕的单词注释跟在字幕正文里面的生词后，不另起一行」；
+ * 释义加背景色区分强弱（不再无背景）；配色复用 --beaver-ann-bg/fg
+ * （与 text-hint-impl 侧邻注释共用），生词绿系与注释黄系区分强弱，
+ * 符合"释义时生词应当改背景色以区分强弱"。 */
 #beaver-sidebar .beaver-sub-text .beaver-ann-inline {
   display: inline !important;
   color: var(--beaver-ann-fg) !important;
@@ -457,7 +444,7 @@
 }
 
 .beaver-ann-line .beaver-ann-trans {
-  /* 释义为独立段，块级整体自然换行（延续 #68），左右留白包裹 */
+  /* 释义为独立段，块级整体自然换行，左右留白包裹 */
   display: block;
   color: var(--beaver-text);
   padding: 0 8px;
@@ -470,7 +457,7 @@
   display: block;
   color: var(--beaver-text);
   margin-top: 2px;
-  /* 反思（2026-08-15 第六十五次）：释义为独立段，左右留白包裹、不触碰左缘 */
+  /* 释义为独立段，左右留白包裹、不触碰左缘 */
   padding: 0 8px;
   margin: 2px 0;
   word-break: break-word;
@@ -482,10 +469,9 @@
   font-style: italic;
 }
 
-/* 标签：自带浅绿灰背景色（与词头深绿区分，颜色不混淆） */
-/* 反思（2026-08-05 修正）：用户反馈"词表标签们连在一起无法区分"。
- *   根因：多个标签 span 紧贴在一起（无 margin），背景色连成一片。
- *   修正：添加 margin-right 间距，让标签之间有视觉分隔。 */
+/* 标签：自带浅绿灰背景色（与词头深绿区分，颜色不混淆）。
+ * 标签间须有 margin 间距：多个 span 紧贴时背景连成一片
+ * （用户反馈"词表标签们连在一起无法区分"）。 */
 .beaver-ann-line .beaver-ann-tags {
   display: inline-block;
   vertical-align: baseline;
@@ -497,7 +483,7 @@
   font-size: 0.85em;
 }
 
-/* 反思（2026-08-15 第六十五次）：几阶为独立段，左右留白包裹 */
+/* 几阶为独立段，左右留白包裹 */
 .beaver-ann-line .beaver-ann-rank {
   display: block;
   color: var(--beaver-text-soft);
@@ -506,24 +492,23 @@
   margin: 2px 0;
 }
 
-/* 注音（2026-08-05 新增）：详细模式词头后的注音 span
- *   反思（2026-08-05）：用户要求"使用 phonemize 给单词注音，用在单词详细注释的时候"。
- *   仅详细模式渲染（简略模式不显示），位于词头之后、Rank 之前。
- *   样式定位为辅助信息（弱于词头深绿背景），用斜体灰字、不带背景色，
- *   与 Rank 同级，遵循"强弱相宜"设计原则。
- *   注音内容异步填充（phonetics.getPhonetic 懒加载 5MB bundle，首次 1-2 秒），
- *   未填充前 span 为空不占位，避免详细行闪烁。 */
+/* 注音：详细模式词头后的注音 span，用户要求"使用 phonemize 给单词注音，
+ * 用在单词详细注释的时候"。仅详细模式渲染（简略模式不显示），位于词头之后、
+ * Rank 之前。样式定位为辅助信息（弱于词头深绿背景），灰字不带背景色，
+ * 与 Rank 同级，遵循"强弱相宜"设计原则。
+ * 注音内容异步填充（phonetics.getPhonetic 懒加载 5MB bundle，首次 1-2 秒），
+ * 未填充前 span 为空不占位，避免详细行闪烁。 */
 .beaver-ann-line .beaver-ann-phonetic {
   display: inline;
   color: var(--beaver-text-soft);
-  /* 反思（2026-08-09）：用户要求"注音不要倾斜"，去掉 font-style: italic */
-  /* 反思（2026-09-04）：用户反馈"注音用的啥字体，咋看不懂"。注音此前继承宿主页面
-     字体，缺 IPA 扩展区字形即豆腐块。统一指定系统字体栈（扩展装不到字体文件，
-     只能用系统栈；Segoe UI 是 Win10 默认且 IPA/变音符号覆盖最好，其余为回退）。 */
+  /* 注音不倾斜（用户要求） */
+  /* 统一指定系统字体栈：注音若继承宿主页面字体，缺 IPA 扩展区字形即豆腐块
+     （扩展装不到字体文件，只能用系统栈；Segoe UI 是 Win10 默认且 IPA/变音符号
+     覆盖最好，其余为回退）。 */
   font-family: "Segoe UI", "Microsoft YaHei", "Noto Sans", "Charis SIL", "Doulos SIL", "Arial Unicode MS", Arial, sans-serif;
   font-size: 0.9em;
   margin-left: 0;
-  /* 反思（2026-08-15 第六十五次）：与喇叭构成同一段，右侧留白包裹、左侧紧贴喇叭 */
+  /* 与喇叭构成同一段，右侧留白包裹、左侧紧贴喇叭 */
   padding: 0 6px 0 0;
 }
 
@@ -534,9 +519,8 @@
   padding-right: 0;
 }
 
-/* 生词表条目注音（2026-08-06 新增 span 时漏写基础样式，此处补字体与空隐藏；
- * 反思（2026-09-04）："注音有结果才显示"——空 span 直接 display:none；
- * 字体栈同上，防宿主页面字体缺 IPA 字形。 */
+/* 生词表条目注音：字体栈同上，防宿主页面字体缺 IPA 字形；
+ * "注音有结果才显示"——空 span 直接 display:none。 */
 #beaver-word-panel .beaver-w-phonetic {
   display: inline;
   color: var(--beaver-text-soft);
@@ -547,8 +531,8 @@
   display: none;
 }
 
-/* === 喇叭朗读按钮（2026-08-08）=== */
-/* 反思：用户要求"音标前加一个发音按钮"，点击朗读单词（Web Speech API）。2026-08-09 耳机改喇叭。 */
+/* === 喇叭朗读按钮 === */
+/* 用户要求"音标前加一个发音按钮"，点击朗读单词（Web Speech API）。 */
 .beaver-w-speak,
 .beaver-ann-speak {
   display: inline-block;
@@ -558,7 +542,7 @@
   cursor: pointer;
   font-size: 0.85em;
   padding: 0 2px;
-  /* 反思（2026-08-15 第六十五次）：喇叭为独立段起点，左侧留白包裹 */
+  /* 喇叭为独立段起点，左侧留白包裹 */
   margin-left: 6px;
   margin-left: 2px;
   line-height: 1;
@@ -571,8 +555,8 @@
   opacity: 1;
 }
 
-/* 生词表条目：整体一段自然换行（与注释行同理，不用 flex）
- * 反思（2026-07-09 #68）：用户要求生词表同理，word/trans/tags/rank 整体一段自然换行。 */
+/* 生词表条目：整体一段自然换行（与注释行同理，不用 flex）——
+ * 用户要求 word/trans/tags/rank 整体一段自然换行。 */
 .beaver-word-item {
   padding: 6px 10px;
   margin-bottom: 2px;
@@ -583,11 +567,10 @@
   background: var(--beaver-bg-container-high); /* hover 用柔和灰绿，避免马卡龙绿过重 */
 }
 
-/* 生词表词头：跟随用户设置的首次出现配色（强对比度突出）
- * 反思（2026-07-09 #73）：inline-block 确保背景正确渲染（inline 背景不覆盖行高）
- * 反思（2026-07-28）：用户要求生词表词头背景色跟随用户设置，不再固定深绿
- * 第一百零八次：用户裁定撤销第六十五次的"分段独占一行"，恢复单行紧凑——
- * 词头/词形/释义/标签/几阶同行排列，过长自然折行 */
+/* 生词表词头：跟随用户设置的首次出现配色（强对比度突出）——
+ * 用户要求词头背景色跟随用户设置，不再固定深绿。
+ * inline-block 确保背景正确渲染（inline 背景不覆盖行高）。
+ * 用户裁定单行紧凑：词头/词形/释义/标签/几阶同行排列，过长自然折行。 */
 .beaver-word-item .beaver-w-word {
   display: inline-block;
   width: max-content;
@@ -601,14 +584,13 @@
 }
 
 .beaver-word-item .beaver-w-trans {
-  /* 第一百零八次：随单行化改回行内 */
   display: inline;
   color: var(--beaver-text);
   margin-right: 6px;
   word-break: break-word;
 }
 
-/* 词形还原原形（2026-08-14 第五十四次）：词汇表词头旁显示，弱化不抢眼 */
+/* 词形还原原形：词汇表词头旁显示，弱化不抢眼 */
 .beaver-word-item .beaver-w-lemma {
   display: inline;
   color: var(--beaver-text-soft);
@@ -616,8 +598,8 @@
   margin-right: 6px;
 }
 
-/* 原形折叠（2026-09-04）：用户要求"从Lemma: word▶ 改为斜体+底色，点击展开，
- * 移除前后缀"。原形 chip 本身即按钮：斜体＋底色（与标签同系弱化），无"原形："前缀、
+/* 原形折叠：用户要求"从Lemma: word▶ 改为斜体+底色，点击展开，移除前后缀"。
+ * 原形 chip 本身即按钮：斜体＋底色（与标签同系弱化），无"原形："前缀、
  * 无 ▶/▼ 后缀；点击展开同族，展开态（.open）换深底色区分；title 保留文字说明。 */
 .beaver-word-item .beaver-w-lemma-toggle {
   display: inline-block;
@@ -645,7 +627,7 @@
   margin: 2px 0;
   padding: 2px 10px;
   border-radius: 8px;
-  /* 反思（2026-09-04 二轮）：展开块底色向右扩展（与 chip 同系），同行列词不斜体；
+  /* 展开块底色向右扩展（与 chip 同系），同行列词不斜体；
      当前词 <b> 加粗由浏览器默认样式承担，此处不清零。 */
   background: var(--beaver-secondary-container);
   color: var(--beaver-on-secondary-container);
@@ -722,9 +704,9 @@
   cursor: not-allowed;
 }
 
-/* 第一百七十八次（用户："asr ocr 下载音频按钮都改为只有图标，前两个按钮可以更窄
-   而不至于多行"）：icon-only 按钮（#beaver-asr-toggle/#beaver-ocr/#beaver-dlaudio）
-   不参与 flex:1 拉伸、padding 收窄，把宽度让给文字按钮，避免 footer 两排换行。
+/* icon-only 按钮（#beaver-asr-toggle/#beaver-ocr/#beaver-dlaudio）不参与
+   flex:1 拉伸、padding 收窄，把宽度让给文字按钮，避免 footer 两排换行
+   （用户："asr ocr 下载音频按钮都改为只有图标，前两个按钮可以更窄而不至于多行"）。
    特异性（0,2,1）高于 .beaver-footer-row button（0,1,1）与 .beaver-asr-toggle-btn（0,1,0），
    可覆盖二者的 flex 与 padding。 */
 .beaver-footer-row button.beaver-icon-btn {
@@ -833,7 +815,7 @@
   position: fixed;
   background: rgba(50, 50, 50, 0.95);
   color: #fff;
-  /* 第一百二十七次：漂浮提示字号地板——Material body=16sp，显式声明防页面继承缩小 */
+  /* 漂浮提示字号地板：Material body=16sp，显式声明防页面继承缩小 */
   font-size: 16px;
   padding: 8px 14px;
   border-radius: var(--beaver-radius);
@@ -866,9 +848,9 @@
   to   { opacity: 1; }
 }
 
-/* === 拖动样式（2026-08-08）=== */
-/* 反思：用户要求"悬浮球、侧栏都应当可拖动"，任意拖动而非左右。
- * 第一百二十二次：grab 光标仅浮动形态（data-mode="float"）——YT/B站横屏内嵌
+/* === 拖动样式 === */
+/* 用户要求"悬浮球、侧栏都应当可拖动"，任意拖动而非左右。
+ * grab 光标仅浮动形态（data-mode="float"）——YT/B站横屏内嵌
  * 形态位置由布局管理，不绑拖动也不显示拖动光标。 */
 #beaver-sidebar[data-mode="float"] .beaver-header {
   cursor: grab;
@@ -888,7 +870,7 @@
   transform: none !important;
 }
 
-/* === 右下角调整大小手柄（第一百二十二次新增）===
+/* === 右下角调整大小手柄 ===
  * 仅浮动形态显示；对标文本侧栏 Win 窗口式手柄，向右增宽向下增高。 */
 #beaver-sidebar .beaver-resize-handle {
   position: absolute;
@@ -903,8 +885,8 @@
   display: none;
   touch-action: none;
 }
-/* 第一百四十九次（用户反馈"字幕区右下角多了调节按钮"）：手柄仅浮动形态显示，
- * 内嵌（横屏/竖屏）形态尺寸由布局与锁定策略管理，不再提供手柄。 */
+/* 手柄仅浮动形态显示（用户反馈"字幕区右下角多了调节按钮"）：
+ * 内嵌（横屏/竖屏）形态尺寸由布局与锁定策略管理，不提供手柄。 */
 #beaver-sidebar[data-mode="float"] .beaver-resize-handle {
   display: block;
 }
@@ -933,9 +915,9 @@
   line-height: 1.6;
 }
 
-/* 第一百四十八次（用户裁定"抓取是后台操作，不要干扰正常操作"）：
- * 撤销 .loading 隐藏 tabs/toolbar/footer/track-row 的规则——后台加载期间
- * 菜单必须保持可见可点，骨架动画只出现在字幕面板内部。 */
+/* 加载态约束（用户裁定"抓取是后台操作，不要干扰正常操作"）：不得隐藏
+ * tabs/toolbar/footer/track-row——后台加载期间菜单必须保持可见可点，
+ * 骨架动画只出现在字幕面板内部。 */
 
 #beaver-sidebar.loading .beaver-subtitle-panel {
   flex: 1;
@@ -1023,11 +1005,11 @@
   display: none;
 }
 
-/* === 词单模式（2026-08-07）=== */
+/* === 词单模式 === */
 /* 用户要求"点击后只剩单词，移走所有注释" */
-/* CSS 隐藏音标/释义/标签/词阶，只剩单词文本 */
-/* 反思（2026-09-04）：补隐藏 .beaver-w-lemma/.beaver-w-lemma-toggle/.beaver-w-lemma-group
- * （与网页侧第六十八次同口径，词单只剩单词；此前视频侧词单漏藏原形）。 */
+/* CSS 隐藏音标/释义/标签/词阶，只剩单词文本。
+ * 原形相关元素（.beaver-w-lemma/.beaver-w-lemma-toggle/.beaver-w-lemma-group）
+ * 与网页侧词单同口径一并隐藏。 */
 #beaver-word-panel.beaver-word-only .beaver-word-item {
   padding: 2px 0;
   border-bottom: none;
@@ -1067,14 +1049,13 @@
 }
 
 /* === 语言设置：🌐符号按钮 + 展开式三种语言面板 ===
- * 反思（2026-08-02）：用户要求"侧栏应该用符号，展开三种选择"，参照 BeaverWord/web。
- *   旧版为 header 内联 select#beaver-ui-lang（仅界面语言，占位宽）。
- *   新版为 🌐 图标按钮（与 ⋯ 设定按钮并列），点击展开浮层，含三种语言下拉菜单：
- *     (1) 目标语言（TRANSLATE_LANGS 42种）
- *     (2) 释义语言（TRANSLATE_LANGS 42种）
- *     (3) 界面语言（UI_LANGS 10种）
- *   浮层默认隐藏（display:none），.show 类显示。
- *   浮层 position:absolute 贴在 header 下方，背景 surface-container 区分，无 border。
+ * 用户要求"侧栏应该用符号，展开三种选择"，参照 BeaverWord/web。
+ * 🌐 图标按钮（与 ⋯ 设定按钮并列），点击展开浮层，含三种语言下拉菜单：
+ *   (1) 目标语言（TRANSLATE_LANGS 42种）
+ *   (2) 释义语言（TRANSLATE_LANGS 42种）
+ *   (3) 界面语言（UI_LANGS 10种）
+ * 浮层默认隐藏（display:none），.show 类显示。
+ * 浮层 position:absolute 贴在 header 下方，背景 surface-container 区分，无 border。
  */
 .beaver-lang-btn {
   background: var(--beaver-btn-bg);
@@ -1102,8 +1083,8 @@
 
 /* 语言设置浮层：默认隐藏，.show 类显示。
  * position:absolute 贴 header 下方，z-index 高于面板内容，宽度与 header 对齐。
- * 反思（2026-08-02）：用 background surface-container-high 区分浮层与正文，
- *   无 border，圆角 M3 medium，elevation-2 阴影体现浮层悬浮。 */
+ * background 用 surface-container-high 区分浮层与正文，无 border，
+ * 圆角 M3 medium，elevation-2 阴影体现浮层悬浮。 */
 .beaver-lang-panel {
   display: none;
   position: absolute;
@@ -1226,9 +1207,8 @@
   gap: 8px;
 }
 
-/* 第一百二十二次：阶段与详情单行省略——回退模式等长文案此前会折成多行，
-   在固定高度容器里把字幕区急剧顶压缩（用户反馈"asr 之后字幕区急剧压缩"）。
-   全文始终可在控制台 [ASR][diag] 查看。 */
+/* 阶段与详情单行省略：等长文案若折成多行，会在固定高度容器里把字幕区急剧顶压缩
+   （用户反馈"asr 之后字幕区急剧压缩"）。全文始终可在控制台 [ASR][diag] 查看。 */
 .beaver-asr-progress-stage {
   color: var(--beaver-text);
   white-space: nowrap;
@@ -1263,11 +1243,10 @@
 
 /* ASR 结果用 .beaver-sub-item 渲染（与普通字幕同源），追加到字幕区域底部。 */
 
-/* 字幕间断分隔符：纯空行，无文字，仅视觉间隔
- * 反思（2026-07-28 #bug3 二次修正）：用户要求"空行，不要写时间"。
- *   旧版显示"— 00:13 ~ 00:19 —"时间文本，改为纯空白间隔。
- *   连续多个大间隔合并为一个分隔符，仅在间断区间起点显示。
- *   阈值从 2s 提到 5s：ASR 自然句间停顿 2-4s 不算间断，仅更长静默才算。 */
+/* 字幕间断分隔符：纯空行，无文字，仅视觉间隔。
+ * 用户要求"空行，不要写时间"，不显示任何时间文本。
+ * 连续多个大间隔合并为一个分隔符，仅在间断区间起点显示。
+ * 阈值 5s：ASR 自然句间停顿 2-4s 不算间断，仅更长静默才算。 */
 .beaver-sub-gap {
   min-height: 16px;
   margin: 8px 0;
@@ -1339,21 +1318,21 @@
   margin-right: 6px;
 }
 
-/* === 视频侧栏注释样式（280次：手写 16 条退役） ===
- * 统一池 52 条声明改由 video-sidebar.js 注入 buildAnnPoolCss 生成的样式表
+/* === 视频侧栏注释样式 ===
+ * 统一池 52 条声明由 video-sidebar.js 注入 buildAnnPoolCss 生成的样式表
  * （style#beaver-ann-pool-css-vs，根 #beaver-sidebar，同选择器同 !important 语义）。
  * root 类名 beaver-ann-style-{id} 仍由 applyAnnStyle 读 storage.videoAnnotationStyle 切换。 */
 
-/* === query 标签（274次）：输入行 + 结果区（原 learn/mp 练习页改造，与文本侧栏同构） === */
+/* === query 标签：输入行 + 结果区（与文本侧栏同构） === */
 #beaver-sidebar .beaver-qrow {
   display: flex;
   align-items: center;
   gap: 6px;
   padding: 8px 10px 4px;
 }
-/* 278次（用户"查询输入框跟周围颜色几乎无区分度"）：与文本侧栏 beaver-web-qinput
-   同步——浅描边在近白面板上消失，改中性深描边。
-   280次：查询栏统一交互——非激活=透明底+半透明描边+占位符隐藏；
+/* 查询输入框：与文本侧栏 beaver-web-qinput 同步——浅描边在近白面板上消失，
+   改中性深描边（用户反馈"查询输入框跟周围颜色几乎无区分度"）。
+   统一交互：非激活=透明底+半透明描边+占位符隐藏；
    激活（聚焦）=白底实态+主绿描边+占位符显现。 */
 #beaver-sidebar .beaver-qinput {
   flex: 1 1 auto;

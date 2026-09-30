@@ -11,7 +11,7 @@
  * 设计风格：复用 sidebar.css 的 Material Design 3 令牌（--beaver-* 变量），
  *   圆角、阴影、背景色分层，不用 border。字号 16px，导航栏（tabs）小一号。
  *
- * 4 标签结构（2026-08-07）：句 / 词汇 / 🎤 / 📷 独立标签，
+ * 4 标签结构：句 / 词汇 / 🎤 / 📷 独立标签，
  *   ASR 与 OCR 分开，每个标签有独立面板内容区。
  *   句标签为主功能（页面文本扫描），展开即扫描页面正文。
  */
@@ -44,7 +44,7 @@
 
   --beaver-outline: #c2c9bf;
 
-  --beaver-ann-bg: transparent;   /* 304次：默认无底色 */
+  --beaver-ann-bg: transparent;   /* 默认无底色 */
   --beaver-ann-fg: #2e6b43;
 
   --beaver-radius: 12px;
@@ -55,10 +55,9 @@
   --beaver-shadow-2: 0 2px 6px rgba(26,31,26,.12), 0 1px 2px rgba(26,31,26,.08);
   --beaver-shadow-3: 0 4px 12px rgba(26,31,26,.12), 0 1px 3px rgba(26,31,26,.08);
 
-  /* 兜底默认配色（304次：透明底绿字；会被用户设置覆盖）
-   * 反思（2026-08-11 第三十八次）：曾用生词深底浅字/注释浅底深字反相对比，304次作废。
-   * 第501次曾改 fg inherit；第502次（用户"默认样式改回绿背景"）回退为绿字兜底——
-   *   applyColors 按条目派生（条目显式字段优先）后本兜底仅在异常路径生效。 */
+  /* 兜底默认配色：透明底绿字，会被用户设置覆盖。
+   * applyColors 按条目派生（条目显式字段优先，用户裁定默认回绿字），
+   * 本兜底仅在异常路径生效。 */
   --beaver-first-bg: transparent;
   --beaver-first-fg: #2e6b43;
   --beaver-later-bg: transparent;
@@ -66,7 +65,7 @@
 }
 
 /* === 防御性 CSS 重置 ===
- * 反思（2026-08-12）：Bing 等网站全局 CSS（通配符 *、元素选择器 button/input 等）
+ * Bing 等网站全局 CSS（通配符 *、元素选择器 button/input 等）
  *   覆盖侧栏样式导致悬浮球不可见。关键属性加 !important 确保不被覆盖。
  */
 #beaver-web-sidebar {
@@ -94,12 +93,12 @@
 }
 
 /* 子元素防御性重置
- * 反思（2026-08-12）：Bing 等网站的通配符 * 重置和元素选择器
+ * Bing 等网站的通配符 * 重置和元素选择器
  *   会覆盖侧栏内部元素样式。加 !important 确保关键属性不被覆盖。
- * 反思（2026-08-16 第六十七次）：margin/padding 去 !important——
- *   !important 会把侧栏自身的条目间距也清零（sub-item margin/padding 失效
- *   → 句子文字紧贴边框）。侧栏内部规则（如 #beaver-web-sidebar .beaver-web-sub-item）
- *   特异性 (1,1,0) 已高于本站普通 reset，去掉 !important 后由内部规则接管。 */
+ * margin/padding 必须去 !important：!important 会把侧栏自身的条目间距也清零
+ *   （sub-item margin/padding 失效 → 句子文字紧贴边框）。侧栏内部规则
+ *   （如 #beaver-web-sidebar .beaver-web-sub-item）特异性 (1,1,0) 已高于
+ *   本站普通 reset，去掉 !important 后由内部规则接管。 */
 #beaver-web-sidebar * {
   box-sizing: border-box !important;
   margin: 0;
@@ -117,9 +116,9 @@
 
 /* 表单元素单独重置：Bing 等网站的 button/input/select 全局样式
  *   会覆盖侧栏内按钮/输入框样式。用 all:unset + 重新设置基础样式。
- * 反思（2026-08-12 第四十一次）：all:unset 会覆盖 hidden 属性导致 <input type="file" hidden> 可见。
- *   修正：input[type="file"] 单独用 display:none !important 保证隐藏。
- * 反思（2026-08-16 第六十七次）：margin/padding/background/color 去 !important——
+ * all:unset 会覆盖 hidden 属性导致 <input type="file" hidden> 可见，
+ *   故 input[type="file"] 单独用 display:none !important 保证隐藏。
+ * margin/padding/background/color 必须去 !important——
  *   background:transparent !important 会把词单按钮选中态（.beaver-web-tool-btn.active
  *   的 background:var(--beaver-primary)）压成透明（按钮选中无颜色），margin/padding
  *   !important 会把按钮内边距清零。去掉后侧栏内部类规则按特异性正常接管（
@@ -154,18 +153,16 @@
 }
 
 /* === 三种状态 ===
- * 反思（2026-08-09 第十次）：用户要求"悬浮球默认在右上角"。
- *   旧版 top:75vh（3/4高度），用户明确要求改为右上角（top:20px）。
- *   与 injectCriticalCSS 中的同步关键样式 top:20px 一致。
- * 反思（2026-08-12）：collapsed 关键属性加 !important 防止被网站覆盖。
- * 272次：折叠态由 48px 圆球改为搜索栏；274次降噪、275次（用户"移除三角，颜色用
- *   淡主题色"）——只剩 图标+一单词输入框（104px），:focus-within 展到 280px，
- *   底色用淡主题色（--beaver-primary-light）。 */
-/* 282次（用户"你现在错得离谱，重新画"）：.collapsed 全部视觉（容器底色/边框/
-   阴影/宽度/输入框/占位符）收敛到 ui.js injectCriticalCSS 独占——异步 <link>
-   与同步 <style> 特异性平级时 link 后加载胜出，关键层的透明底+半透明边框一直
-   被本文件旧规则（淡绿实底+阴影）覆盖，四轮改动不生效。本文件删除全部
-   .collapsed 视觉规则，防止双层再打架；仅保留 query-off 收圆（无视觉冲突）。 */
+ * 悬浮球默认在右上角（用户要求），与 injectCriticalCSS 中的同步关键样式
+ *   top:20px 一致。collapsed 关键属性加 !important 防止被网站覆盖。
+ * 折叠态已由 48px 圆球改为搜索栏（用户裁定：移除三角、颜色用淡主题色）——
+ *   只剩 图标+一单词输入框（104px），:focus-within 展到 280px，
+ *   底色用淡主题色（--beaver-primary-light）。
+ * .collapsed 全部视觉（容器底色/边框/阴影/宽度/输入框/占位符）收敛到
+ *   ui.js injectCriticalCSS 独占——异步 <link> 与同步 <style> 特异性平级时
+ *   link 后加载胜出，关键层的透明底+半透明边框一直被本文件旧规则（淡绿实底+
+ *   阴影）覆盖，多轮改动不生效。本文件不再保留 .collapsed 视觉规则，防止双层
+ *   再打架；仅保留 query-off 收圆（无视觉冲突）。 */
 #beaver-web-sidebar.collapsed.query-off {
   width: 48px !important;
   height: 48px !important;
@@ -188,17 +185,16 @@
 }
 
 /* === 展开态：从右上角悬浮球位置向右下方展开 ===
- * 反思（2026-08-13）：用户要求"悬浮球向右下方展开为文本侧栏。悬浮球应当在右上角"。
- *   旧版 expanded 用 top:50%+translateY(-50%) 垂直居中，不符合"从球位置向下展开"。
- *   修正：展开态 top:20px（与悬浮球一致），right:16px，从右上角向下展开。
+ * 用户要求"悬浮球向右下方展开为文本侧栏。悬浮球应当在右上角"——
+ *   展开态 top:20px（与悬浮球一致），right:16px，从右上角向下展开。
  *   高度 75vh，拖动后 .dragged 态覆盖为 JS 设 left/top 自由定位。
  *   留出血：padding 内边距加大，内容不紧贴边缘。
- * 第一百三十四次（用户裁定"手柄反人类/不动的底板/位置乱窜"根因）：本块原有
- *   width/height/right/top !important——author !important 压过 JS 内联样式，
- *   拖动/调尺寸写内联全部无效或半效（JS 记忆与实际渲染脱节＝一切漂移之源）！
- *   全部去 !important：默认值走 .expanded:not(.dragged)，JS 内联成为唯一写入者。 */
+ * 本块不得带 width/height/right/top !important：author !important 会压过
+ *   JS 内联样式，拖动/调尺寸写内联全部无效或半效（JS 记忆与实际渲染脱节
+ *   ＝一切漂移之源，用户裁定"手柄反人类/不动的底板/位置乱窜"根因）。
+ *   默认值走 .expanded:not(.dragged)，JS 内联成为唯一写入者。 */
 #beaver-web-sidebar.expanded {
-  /* 第一百三十七次（用户裁定）：默认宽高比 **1:2**——380×760 基准，随视口钳制 */
+  /* 默认宽高比 1:2（用户裁定）——380×760 基准，随视口钳制 */
   width: min(380px, calc(100vw - 24px));
   height: min(760px, calc(100vh - 24px));
   border-radius: var(--beaver-radius, 12px);
@@ -216,7 +212,7 @@
   transform: none;
 }
 
-/* 第一百三十四次：底板残影加固——两态互斥显示用 !important 钉死，
+/* 底板残影加固：两态互斥显示用 !important 钉死，
  * 杜绝任何 class 组合/页面干扰下"球与面板同屏"（用户所见"不动的底板背景"） */
 #beaver-web-sidebar.collapsed .beaver-web-panel {
   display: none !important;
@@ -237,7 +233,7 @@
   display: none;
 }
 
-/* === 折叠态把手：搜索栏（272次，原 48px 悬浮球）===
+/* === 折叠态把手：搜索栏（原 48px 悬浮球）===
  * collapsed 态由 100%×100% 规则铺满容器，本规则只给方向与缺省尺寸；
  * 三件套（图标/输入框/三角）样式见下方 .beaver-qbar-*。 */
 #beaver-web-sidebar .beaver-web-collapse-tab {
@@ -251,8 +247,8 @@
   overflow: hidden;
 }
 
-/* 272次：搜索栏左端品牌图标——点击展开侧栏 / 右键召唤视频侧栏 / 拖拽把手。
-   274/275次：淡主题色底上用主绿描边 */
+/* 搜索栏左端品牌图标：点击展开侧栏 / 右键召唤视频侧栏 / 拖拽把手。
+   淡主题色底上用主绿描边 */
 #beaver-web-sidebar .beaver-qbar-icon {
   flex: 0 0 auto;
   width: 30px;
@@ -272,20 +268,20 @@
   height: 20px;
   display: block;
 }
-/* 282次：中段搜索框 .beaver-qbar-input 的全部样式（透明底/无边框/占位符显隐）
-   已上移 ui.js injectCriticalCSS 钉死（!important），本文件删除，防双层打架。
-   282次：query 标签——输入行 */
+/* 中段搜索框 .beaver-qbar-input 的全部样式（透明底/无边框/占位符显隐）
+   已上移 ui.js injectCriticalCSS 钉死（!important），本文件不写，防双层打架。 */
+/* query 标签——输入行 */
 #beaver-web-sidebar .beaver-web-qrow {
   display: flex;
   align-items: center;
   gap: 6px;
   padding: 8px 10px 4px;
 }
-/* 278次（用户"查询输入框跟周围颜色几乎无区分度"）：#c2c9bf 浅描边在近白面板
-   （--beaver-bg #fbfdf9）上消失——改中性深描边，focus 主绿不变。
-   285次：常态即白底（用户"展开输入框没有底色而用外框颜色"）；
-   286次：聚焦绿描边不保留——聚焦边框与常态同色；
-   占位符仍非聚焦隐藏、聚焦显现。 */
+/* 查询输入框：#c2c9bf 浅描边在近白面板（--beaver-bg #fbfdf9）上消失——
+   改中性深描边，focus 主绿不变（用户反馈"查询输入框跟周围颜色几乎无区分度"）。
+   常态即白底（用户"展开输入框没有底色而用外框颜色"）；
+   聚焦只去外框线，边框色与常态一致（用户"聚焦绿描边不保留"）；
+   占位符非聚焦隐藏、聚焦显现。 */
 #beaver-web-sidebar .beaver-web-qinput {
   flex: 1 1 auto;
   min-width: 0;
@@ -295,12 +291,12 @@
   padding: 0 10px;
   font-size: 13px;
   color: var(--beaver-text, #1a1f1a);
-  /* 285次（用户"展开输入框没有底色而用外框颜色"）：常态即白底，不再透明融进面板 */
+  /* 常态即白底，不再透明融进面板（用户"展开输入框没有底色而用外框颜色"） */
   background: #ffffff;
 }
 #beaver-web-sidebar .beaver-web-qinput:focus {
   outline: none;
-  /* 286次（用户"聚焦绿描边不保留"）：聚焦只去外框线，边框色与常态一致 */
+  /* 聚焦只去外框线，边框色与常态一致 */
   border-color: rgba(26, 31, 26, 0.30);
   background: #ffffff;
 }
@@ -332,7 +328,7 @@
 #beaver-web-sidebar .beaver-web-panel {
   display: none;  /* expanded 态显示 */
   flex-direction: column;
-  width: 420px;   /* 第一百二十三次：随 expanded 等宽调整 380→420 */
+  width: 420px;   /* 随 expanded 等宽（380→420） */
   height: 100%;
   background: var(--beaver-bg);
   overflow: hidden;
@@ -341,7 +337,7 @@
 }
 
 /* === 标题栏 ===
- * 第一百二十二次：顶行与视频侧栏统一——同 padding(10px 14px)、同标题字号(1.15em)、
+ * 顶行与视频侧栏统一——同 padding(10px 14px)、同标题字号(1.15em)、
  * 同首按钮=切换形态（🎬 视频 / 📄 文本），统称"侧栏"，内容照旧。 */
 #beaver-web-sidebar .beaver-web-header {
   display: flex;
@@ -361,7 +357,7 @@
 #beaver-web-sidebar .beaver-web-header-actions {
   display: flex;
   align-items: center;
-  gap: 8px; /* 第一百二十三次：按钮拥挤反馈——4px→8px */
+  gap: 8px; /* 按钮拥挤反馈——4px→8px */
 }
 
 #beaver-web-sidebar .beaver-web-icon-btn {
@@ -437,7 +433,7 @@
   display: flex;
 }
 
-/* === 第一百二十三次：⋯ 设定浮层（复用语言面板定位/显隐，条目为全宽按钮） === */
+/* === ⋯ 设定浮层（复用语言面板定位/显隐，条目为全宽按钮） === */
 #beaver-web-sidebar .beaver-web-settings-pop {
   min-width: 180px;
 }
@@ -493,7 +489,7 @@
 
 /* === 标签页（导航栏，字号小一号）===
  * 2 个标签：句 / 词汇
- * 第一百三十四次（用户反馈"占地超宽，还会越来越宽"）：旧 flex:1 把每个标签
+ * 标签不得用 flex:1（用户反馈"占地超宽，还会越来越宽"）：flex:1 会把每个标签
  *   拉到半条面板宽且随面板变宽持续拉伸——改为内容自适应宽度、居中排布、
  *   超长省略，标签行不再随任何尺寸变化增宽。 */
 #beaver-web-sidebar .beaver-web-tabs {
@@ -533,7 +529,7 @@
 }
 
 /* === 工具栏 ===
- * 反思（2026-08-16 第六十九次）：按钮/工具条空隙规格同文本——左右一空格、上下半空格。 */
+ * 按钮/工具条空隙规格同文本——左右一空格、上下半空格。 */
 #beaver-web-sidebar .beaver-web-toolbar {
   display: flex;
   align-items: center;
@@ -583,8 +579,8 @@
 }
 
 /* === 公共参数行（rank 等公共参数，在标签行之上）===
- * 反思（2026-08-12 第四十六次）：用户要求"rank 在标签行之上，这是公共参数"。
- *   从 toolbar 移出 rank，独立为公共参数行，所有标签页共享。 */
+ * 用户要求"rank 在标签行之上，这是公共参数"——从 toolbar 移出 rank，
+ *   独立为公共参数行，所有标签页共享。 */
 #beaver-web-sidebar .beaver-web-common-bar {
   display: flex;
   align-items: center;
@@ -620,7 +616,7 @@
   display: none !important;
 }
 
-/* 反思（2026-08-14 第五十八次）：移除 web-sidebar 字幕样式浮层（含按钮与样例卡网格）。
+/* web-sidebar 字幕样式浮层已移除（含按钮与样例卡网格）：
  *   字幕样式选择集中在引导页（subtitleStyle 全局 key），文本侧栏不再提供该入口。 */
 
 
@@ -641,7 +637,7 @@
   display: none;
 }
 
-/* === 练习页（第一百三十五次）：小程序二维码，与视频侧栏 mp 面板同源观感 === */
+/* === 练习页：小程序二维码，与视频侧栏 mp 面板同源观感 === */
 #beaver-web-sidebar .beaver-web-mp-panel {
   display: flex;
   flex-direction: column;
@@ -667,12 +663,10 @@
 }
 
 /* 可滚动内容区
- * 反思（2026-08-13）：用户要求"文本侧栏过于局促，要留点出血"。
- * 反思（2026-08-15 第五十九次）：用户再次反馈"侧栏过于局促"，加大留白。
- * 反思（2026-08-16 第六十八次）：与条目外边距同源收敛——面板内距 24px→18px。
- * 反思（2026-08-16 第六十九次）：用户裁定空隙规格"左右一空格（≈4px）、上下半空格（≈2px）"，
- *   且"按钮和文字都一样"——四周空隙统一收敛到 4px/2px 级（不再 18px+）。
- *   面板内距 2px 4px，条目自身 margin 0（段间距由 flex gap 提供），避免空隙叠加。 */
+ * 留出血：用户反复反馈"文本侧栏过于局促"，曾加大留白；后按用户裁定空隙规格
+ *   "左右一空格（≈4px）、上下半空格（≈2px）"且"按钮和文字都一样"——
+ *   四周空隙统一收敛到 4px/2px 级。面板内距 2px 4px，条目自身 margin 0
+ *   （段间距由 flex gap 提供），避免空隙叠加。 */
 #beaver-web-sidebar .beaver-web-panel-scroll {
   flex: 1;
   overflow-y: auto;
@@ -682,12 +676,12 @@
   display: flex;
   flex-direction: column;
   gap: 2px;
-  /* 第一百八十三次（用户："句子的进度条应当跟词汇的一致"，进度条即面板右侧滚动条）：
-   *   句/词两个面板本就共用本条规则，观感却不同——根因在滚动条规格没被完全钉住：
-   *   ① 只写了 ::-webkit-scrollbar（Firefox 落回系统默认宽滚动条，两 tab 内容量不同时更明显）；
-   *   ② 无 scrollbar-gutter，内容不溢出的一侧不占槽、溢出的一侧占 6px，切 tab 时宽度跳动。
-   *   修正：补标准属性 scrollbar-width/scrollbar-color（跨引擎同宽同色）+ scrollbar-gutter: stable
-   *   （两 tab 恒定预留同一滚动槽），使两侧滚动条完全一致。 */
+  /* 句/词两个面板共用本条规则，进度条必须完全一致（用户："句子的进度条应当
+   * 跟词汇的一致"，进度条即面板右侧滚动条）：
+   * ① 只写 ::-webkit-scrollbar 时 Firefox 落回系统默认宽滚动条，两 tab 内容量不同时更明显；
+   * ② 无 scrollbar-gutter，内容不溢出的一侧不占槽、溢出的一侧占 6px，切 tab 时宽度跳动。
+   * 补标准属性 scrollbar-width/scrollbar-color（跨引擎同宽同色）+ scrollbar-gutter: stable
+   * （两 tab 恒定预留同一滚动槽），使两侧滚动条完全一致。 */
   scrollbar-width: thin;
   scrollbar-color: var(--beaver-text-disabled) transparent;
   scrollbar-gutter: stable;
@@ -697,7 +691,7 @@
   width: 6px;
 }
 
-/* 第一百八十三次：补轨道透明——旧版只定义 thumb，轨道走浏览器默认（浅色底上呈灰槽），
+/* 补轨道透明——只定义 thumb 时轨道走浏览器默认（浅色底上呈灰槽），
  *   句 tab 通常有溢出、词 tab 常无，两侧轨道观感不一致。 */
 #beaver-web-sidebar .beaver-web-panel-scroll::-webkit-scrollbar-track {
   background: transparent;
@@ -754,8 +748,7 @@
   flex-wrap: wrap;
 }
 
-/* 反思（2026-08-13 第五十次）：继续增强——按钮更高更像按钮（min-height 40px），
- *   文字稍大，便于点击。 */
+/* 输入按钮：更高更像按钮，文字稍大，便于点击。 */
 #beaver-web-sidebar .beaver-web-input-btn {
   flex: 0 1 auto;
   min-width: 0;
@@ -825,12 +818,9 @@
 }
 
 /* === 句子条目（与 sidebar.js .beaver-sub-item 同风格）===
- * 反思（2026-08-15 第六十次修正）：用户澄清"出血"= 文本段独立、段与段有距离、
- *   与边框左右有距离，能分清。且明确"不是加底色、不是加行距"。
- * 反思（2026-08-16 第六十六次）：补上段上边距（原 margin 0 20px 20px 顶部贴边框）。
- * 反思（2026-08-16 第六十八次）：空隙太大收敛：段左右 padding 18px→8px、
- *   外边距 20px→10px、上下 12/16→6/8px。
- * 反思（2026-08-16 第六十九次）：空隙规格定稿——左右一空格（≈4px）、上下半空格（≈2px）。
+ * "出血"= 文本段独立、段与段有距离、与边框左右有距离，能分清
+ *   （用户澄清：不是加底色、不是加行距）。
+ * 空隙规格定稿——左右一空格（≈4px）、上下半空格（≈2px）。
  *   段间距由 panel-scroll flex gap 提供，条目 margin 归零，水平空隙 4px（面板）+ 2px（段内留白）。 */
 #beaver-web-sidebar .beaver-web-sub-item {
   padding: 0 2px;
@@ -884,7 +874,7 @@
 }
 
 /* 简略模式正文内联注释 */
-/* 反思（2026-08-13 第五十三次）：改 inline-block，胶囊形/圆角/背景才能正确渲染 */
+/* inline-block：胶囊形/圆角/背景才能正确渲染 */
 #beaver-web-sidebar .beaver-web-sub-text .beaver-web-ann-inline {
   display: inline-block;
   color: var(--beaver-ann-fg);
@@ -911,15 +901,13 @@
   display: block;
 }
 
-/* 反思（2026-08-15 第六十五次）：文本侧栏段独立化（用户反复要求）——
+/* 文本侧栏段独立化（用户反复要求）——
  *   单词/喇叭音标/词形还原/几阶/标签/释义各为独立文本段，
  *   段与段之间上下左右都不黏连：上下用块级堆叠 + 2px 间隔，左右用两侧留白。
- * 反思（2026-08-16 第六十六次）：统一各段左右空隙（rank/tags/detail-trans 原 margin
- *   左 0 贴边，现全部 6px 与单词段对齐），并加大注释行上下间隔（行与行、行与正文分开）。
- * 反思（2026-08-16 第六十七次）：用户反馈"各项注释你给换行"——第六十六次把
- *   word/rank/detail-trans 设 display:block，每项各自独占一行（单词一行、几阶一行、
- *   释义一行），视觉散乱且纵向拉长。修正：同一条注释的各元素改为内联流动
- *   （inline/inline-block），沿一行自然换行，元素间用左右空隙分隔；喇叭与音标保持紧贴。 */
+ * 各段左右空隙统一 6px 与单词段对齐，注释行上下加大间隔。
+ * 同一条注释的各元素必须内联流动（inline/inline-block）而非 display:block：
+ *   block 会把单词/几阶/释义各占一行，视觉散乱且纵向拉长（用户反馈"各项注释
+ *   你给换行"）；内联沿一行自然换行，元素间用左右空隙分隔，喇叭与音标保持紧贴。 */
 #beaver-web-sidebar .beaver-web-ann-line .beaver-web-ann-word {
   display: inline-block;
   max-width: 100%;
@@ -938,13 +926,13 @@
 #beaver-web-sidebar .beaver-web-ann-line .beaver-web-ann-phonetic {
   display: inline;
   color: var(--beaver-text-soft);
-  /* 反思（2026-08-09）：用户要求"注音不要倾斜"，去掉 font-style: italic */
-  /* 反思（2026-09-04）：用户反馈"注音用的啥字体，咋看不懂"。统一指定系统字体栈
-     （扩展装不到字体文件，只能用系统栈；Segoe UI 是 Win10 默认且 IPA/变音符号
-     覆盖最好，其余为回退），防宿主页面字体缺 IPA 字形。 */
+  /* 注音不要倾斜（用户要求），去掉 font-style: italic */
+  /* 注音统一系统字体栈：扩展装不到字体文件，只能用系统栈；Segoe UI 是 Win10
+     默认且 IPA/变音符号覆盖最好，其余为回退，防宿主页面字体缺 IPA 字形
+     （用户反馈"注音用的啥字体，咋看不懂"）。 */
   font-family: "Segoe UI", "Microsoft YaHei", "Noto Sans", "Charis SIL", "Doulos SIL", "Arial Unicode MS", Arial, sans-serif;
   font-size: 0.9em;
-  /* 反思（2026-08-10）：用户要求"喇叭音标应当紧贴"，左侧 margin 保持 0 紧贴喇叭按钮 */
+  /* 喇叭音标紧贴（用户要求）：左侧 margin 保持 0 紧贴喇叭按钮 */
   margin-left: 0;
   padding: 0 4px 0 0;
 }
@@ -988,9 +976,9 @@
 }
 
 /* === 生词表条目（与 sidebar.js .beaver-word-item 同风格）===
- * 反思（2026-08-15 第六十次修正）：与句子条目一致，去卡片底色，改外边距 + 水平留白
- * 反思（2026-08-16 第六十八次）：条目压行：单词/喇叭/音标/释义/几阶/标签沿一行内联流动。
- * 反思（2026-08-16 第六十九次）：空隙规格同句子条目——左右一空格、上下半空格，margin 归零。 */
+ * 与句子条目一致：去卡片底色，改外边距 + 水平留白；
+ * 单词/喇叭/音标/释义/几阶/标签沿一行内联流动；空隙规格同句子条目——
+ * 左右一空格、上下半空格，margin 归零。 */
 #beaver-web-sidebar .beaver-web-word-item {
   padding: 0 2px;
   margin: 0;
@@ -1022,11 +1010,11 @@
 #beaver-web-sidebar .beaver-web-word-item .beaver-w-phonetic {
   display: inline;
   color: var(--beaver-text-soft);
-  /* 反思（2026-08-09）：用户要求"注音不要倾斜"，去掉 font-style: italic */
-  /* 反思（2026-09-04）：注音统一系统字体栈（同上），空 span 直接隐藏（"有结果才显示"）。 */
+  /* 注音不要倾斜（用户要求），去掉 font-style: italic */
+  /* 注音统一系统字体栈（同上），空 span 直接隐藏（"有结果才显示"）。 */
   font-family: "Segoe UI", "Microsoft YaHei", "Noto Sans", "Charis SIL", "Doulos SIL", "Arial Unicode MS", Arial, sans-serif;
   font-size: 0.9em;
-  /* 反思（2026-08-10）：用户要求"喇叭音标应当紧贴"，左侧 margin 保持 0 紧贴喇叭按钮；
+  /* 喇叭音标紧贴（用户要求）：左侧 margin 保持 0 紧贴喇叭按钮；
      与喇叭构成同一段，左右空白由喇叭左侧与音标右侧留白包裹 */
   margin-left: 0;
   padding: 0 4px 0 0;
@@ -1043,7 +1031,7 @@
   padding: 0 4px 0 0;
 }
 
-/* 原形折叠（2026-09-04）：与视频侧 sidebar.css 同口径（斜体＋底色 chip 即按钮，
+/* 原形折叠：与视频侧 sidebar.css 同口径（斜体＋底色 chip 即按钮，
  * 无前后缀；展开态 .open 换深底色）。 */
 #beaver-web-sidebar .beaver-web-word-item .beaver-w-lemma-toggle {
   display: inline-block;
@@ -1071,7 +1059,7 @@
   margin: 2px 0;
   padding: 2px 10px;
   border-radius: 8px;
-  /* 反思（2026-09-04 二轮）：与视频侧同口径（块底色向右扩展，同行列词不斜体）。 */
+  /* 与视频侧同口径（块底色向右扩展，同行列词不斜体）。 */
   background: var(--beaver-secondary-container);
   color: var(--beaver-on-secondary-container);
   font-size: 0.9em;
@@ -1113,9 +1101,9 @@
 
 /* === 词单模式 ===
  * CSS 隐藏音标/释义/标签/词阶/词形/喇叭按钮，只剩单词文本。
- * 反思（2026-08-09）：用户要求"词单你加啥喇叭"——词单模式隐藏喇叭按钮。
- * 反思（2026-08-16 第六十八次）：词单模式补隐藏 .beaver-w-lemma（词形）——
- *   旧隐藏列表漏掉词形，词单仍显示 "词形: run" 一类行（用户："词表中你不是纯单词"）。
+ * 用户要求"词单你加啥喇叭"——词单模式隐藏喇叭按钮；
+ * 隐藏列表必须包含 .beaver-w-lemma（词形），漏掉时词单仍显示
+ * "词形: run" 一类行（用户："词表中你不是纯单词"）。
  */
 #beaver-web-sidebar .beaver-web-word-only .beaver-web-word-item {
   padding: 0;
@@ -1127,7 +1115,7 @@
 #beaver-web-sidebar .beaver-web-word-only .beaver-w-rank,
 #beaver-web-sidebar .beaver-web-word-only .beaver-w-speak,
 #beaver-web-sidebar .beaver-web-word-only .beaver-w-lemma,
-/* 反思（2026-09-04）：原形折叠新增的按钮与展开组同样只剩单词时隐藏。 */
+/* 原形折叠新增的按钮与展开组同样只剩单词时隐藏。 */
 #beaver-web-sidebar .beaver-web-word-only .beaver-w-lemma-toggle,
 #beaver-web-sidebar .beaver-web-word-only .beaver-w-lemma-group {
   display: none !important;
@@ -1294,7 +1282,7 @@
   position: fixed;
   background: rgba(50, 50, 50, 0.95);
   color: #fff;
-  /* 第一百二十七次：漂浮提示字号地板——Material body=16sp，显式声明防页面继承缩小 */
+  /* 漂浮提示字号地板——Material body=16sp，显式声明防页面继承缩小 */
   font-size: 16px;
   padding: 8px 14px;
   border-radius: var(--beaver-radius, 12px);
@@ -1329,8 +1317,8 @@
   to   { opacity: 1; }
 }
 
-/* === 喇叭朗读按钮（2026-08-08）=== */
-/* 反思：用户要求"音标前加一个发音按钮"，点击朗读单词（Web Speech API）。2026-08-09 耳机改喇叭。 */
+/* === 喇叭朗读按钮 === */
+/* 音标前加发音按钮，点击朗读单词（Web Speech API；用户初为耳机图标，后改喇叭）。 */
 #beaver-web-sidebar .beaver-w-speak,
 #beaver-web-sidebar .beaver-web-ann-speak {
   display: inline-block;
@@ -1339,7 +1327,7 @@
   border: none;
   cursor: pointer;
   font-size: 0.85em;
-  /* 反思（2026-08-10）：用户要求"喇叭音标应当紧贴"，右侧 padding 归零使喇叭紧贴音标 */
+  /* 喇叭音标紧贴（用户要求）：右侧 padding 归零使喇叭紧贴音标 */
   padding: 0 0 0 2px;
   margin-left: 2px;
   line-height: 1;
@@ -1352,12 +1340,11 @@
   opacity: 1;
 }
 
-/* === 拖动样式（2026-08-08）=== */
-/* 反思：用户要求"悬浮球、侧栏都应当可拖动"，任意拖动而非左右 */
-/* 反思（2026-08-12 第四十一次）：火狐拖动时文字被选中干扰拖动。
-   加 user-select:none + -moz-user-select:none 防止火狐选中文字。 */
-/* 反思（2026-08-13 第四十九次）：加 touch-action:none 防止触摸屏拖动时
-   浏览器接管手势滚动/缩放，导致 Pointer Events 拖动中断。 */
+/* === 拖动样式 === */
+/* 悬浮球、侧栏都应当可拖动（用户要求），任意拖动而非左右。
+ * 火狐拖动时文字被选中干扰拖动：加 user-select:none + -moz-user-select:none。
+ * touch-action:none 防止触摸屏拖动时浏览器接管手势滚动/缩放，
+ *   导致 Pointer Events 拖动中断。 */
 #beaver-web-sidebar .beaver-web-collapse-tab {
   cursor: grab;
   user-select: none;
@@ -1374,10 +1361,10 @@
   -webkit-user-drag: none;
   touch-action: none;
 }
-/* 拖动后自由定位，脱离 top/right/bottom/transform 固定
- * 反思（2026-08-09）：去掉 !important——!important 会覆盖内联 style.top，
+/* 拖动后自由定位，脱离 top/right/bottom/transform 固定。
+ * 不得用 !important：!important 会覆盖内联 style.top，
  *   导致 position:fixed + top:auto + bottom:auto 使侧栏跳到静态位置（页面底部），
- *   侧栏飞出视口消失。改为不使用 !important，靠源码顺序（.dragged 在 .collapsed/.expanded 之后）
+ *   侧栏飞出视口消失。靠源码顺序（.dragged 在 .collapsed/.expanded 之后）
  *   同优先级后者胜出。内联 style 会进一步覆盖此处 CSS。 */
 #beaver-web-sidebar.dragged {
   bottom: auto;
@@ -1389,9 +1376,9 @@
   /* 拖动后展开面板保持圆角，高度由 JS 或用户调整决定 */
 }
 
-/* === 可调尺寸手柄（2026-08-09 重设计）===
- * 第一百三十四次（用户反馈"右下角调整反人类"）：16px 角块命中区太小且只有
- *   斜向一种操作。改为三向命中：右缘整条(10px 宽,ew-resize) + 下缘整条
+/* === 可调尺寸手柄 ===
+ * 三向命中（用户反馈"右下角调整反人类"——16px 角块命中区太小且只有
+ *   斜向一种操作）：右缘整条(10px 宽,ew-resize) + 下缘整条
  *   (10px 高,ns-resize) + 右下角(20px,nwse-resize)，光标随区域反馈。
  *   热区元素由模板新增 #beaver-web-resize-edge-r / -edge-b，事件同 makeResizable。 */
 #beaver-web-sidebar .beaver-web-resize-handle {
@@ -1432,13 +1419,13 @@
   display: block;
 }
 
-/* === 文本侧栏注释样式预设（280次：手写 16 条退役） ===
- * 统一池 52 条声明改由 web-sidebar-impl.js 注入 buildAnnPoolCss 生成的样式表
+/* === 文本侧栏注释样式预设 ===
+ * 统一池 52 条声明由 web-sidebar-impl.js 注入 buildAnnPoolCss 生成的样式表
  * （style#beaver-ann-pool-css-ws，根 #beaver-web-sidebar，同选择器同 !important 语义）。
  * root 类名 beaver-ann-style-{id} 仍由 applyAnnStyle 读 storage.annotationStyle 切换；
  * 网页提示（页面侧）不注入此表，其颜色经 pickColors 从池条目派生 CSS 变量。 */
 
-/* G3（2026-09-08）：learn 面板按钮行（§6.2，二维码上方）——导入当前侧栏内容为草稿卷轴 */
+/* learn 面板按钮行（§6.2，二维码上方）——导入当前侧栏内容为草稿卷轴 */
 #beaver-web-sidebar .beaver-web-draft-row {
   display: flex;
   gap: 8px;

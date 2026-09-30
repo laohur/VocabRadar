@@ -2,18 +2,17 @@
 // vs/logger.js —— 调试日志子模块
 // -----------------------------------------------------------------------------
 // 职责：调试开关 _debug 与带时间戳的 log() 输出（唯一来源）。
-// 来源：拆分自 src/content/video-sidebar.js（2026-08-28 拆分第二刀，纯机械搬移）。
 // 关系：无外部依赖；其余 vs/* 模块与门面 video-sidebar.js 通过 import { log }
 //       使用；门面 loadConfig 读取配置后调 setDebug(cfg.debug) 同步开关
-//       （原门面内 `_debug = !!cfg.debug` 的等价接驳，开关唯一写入点仍在此模块）。
-// 第367次：log 出口叠加 storage 阀门——config.json debug 默认 false（打包静默），
+//       （开关唯一写入点仍在此模块）。
+// log 出口叠加 storage 阀门——config.json debug 默认 false（打包静默），
 //       引导页 help 底部「调试日志」开关勾选写 storage.debugLog，本模块经
 //       lib/log-flag.js 的 onChanged 镜像即时生效，content script 无需刷新页面。
 //       生效条件 = config.debug（打包期） || storage.debugLog（运行期勾选）。
-// 日志前缀（2026-08-30 第一百八十次，按用户裁定统一）：本模块输出
-//       `[VocabRadar][video-sidebar][时间]` —— **特指视频侧栏**。旧前缀 `[sidebar]`
-//       字面上会被误读成"公共侧栏"，且同一个视频侧栏此前混用 [sidebar] /
-//       [Sidebar][size] / [VocabRadar][sidebar] 三种写法，本次全部收敛。
+// 日志前缀（用户裁定统一）：本模块输出
+//       `[VocabRadar][video-sidebar][时间]` —— **特指视频侧栏**。前缀 `[sidebar]`
+//       字面上会被误读成"公共侧栏"，且同一视频侧栏曾混用 [sidebar] /
+//       [Sidebar][size] / [VocabRadar][sidebar] 三种写法，已全部收敛。
 //       网页文本侧栏另有一套：`[VocabRadar][web-sidebar]`（src/content/ws/core.js#log）。
 // =============================================================================
 

@@ -7,7 +7,6 @@
 //   - 注释获取统一入口（Promise 缓存 + 跨字幕去重 + 生词收集守卫）
 //   - ASR 识别结果插入字幕面板（appendASRSubtitle，与普通字幕同源处理）
 //   - 底部按钮：词单切换 onWordListToggle / 复制 onCopy / 评论填入 onCommentClick
-// 来源：拆分自 video-sidebar.js（拆分日期：2026-08-28）
 // 关系：
 //   - 渲染状态归属本模块：_subEntries/_allAnnotations/_seenWords/_noAnnotation/
 //     _detailMode/_activeSubIdx/_windowSlots/_windowSize/_annotationsCache/
@@ -26,34 +25,34 @@ import { formatTime, setHourlyFormat, copyToClipboard, flashButton, escapeHtml, 
 import { pickRandomLinesForComment, findMainCommentContainer, ensureYtCommentsLoaded, expandCommentBox, fillCommentInput, scrollMinIntoView } from './comment-fill.js';
 import { autoExpandOnce, requestSyncHeightOnce } from './sidebar-layout.js';
 import { getAnnotations, getRankMax, rankToStage, resetDiag } from '../../lib/annotator.js';
-// 第461次：视频侧栏字幕注释的翻译优先级档（2=视频侧栏，先于网页正文批量）
+// 视频侧栏字幕注释的翻译优先级档（2=视频侧栏，先于网页正文批量）
 import { PRIO_VIDEO } from '../../lib/translator.js';
 import { lemmaFamily } from '../../lib/lemmatizer.js';
-// 第508次（用户"评论带上[注音]"）：补 getPhoneticsBatch——评论组装前批量预取注音
+// 用户"评论带上[注音]"：补 getPhoneticsBatch——评论组装前批量预取注音
 import { getPhonetic, getPhoneticsBatch } from '../../lib/phonetics.js';
 import { t } from '../../lib/i18n.js';
 import { isBalancedParens, pickCleanShortTrans } from '../../lib/dict-clean.js';
-// 第三百七十二次：渲染层漏斗上报——计算层有产出但页面无高亮时区分三段过滤（译文/阈值/开关）
+// 渲染层漏斗上报——计算层有产出但页面无高亮时区分三段过滤（译文/阈值/开关）
 import { reportRender } from '../../lib/ann-diag.js';
-// 2026-09-04（原形折叠）：diverse-lemmas 语言名单（纯数据无依赖），用于判定
+// 原形折叠：diverse-lemmas 语言名单（纯数据无依赖），用于判定
 // 当前目标语是否有词形还原覆盖；无覆盖语种不显示常显原形（中/日原形即本身，无意义）。
 import { LANGUAGES } from '../../lib/vendor/diverse-lemmas/languages.js';
 import { addSubtitle as overlayAddSubtitle } from '../subtitle-overlay.js';
-// 第一百七十一次：视频侧栏底部对话按钮 —— 对话面板唯一实现在 lib/chat.js
+// 视频侧栏底部对话按钮 —— 对话面板唯一实现在 lib/chat.js
 import { openChatPanel } from '../../lib/chat.js';
 import {
   getRoot, getSubtitlesRef, getActiveVideo, getRankThreshold, getAnnotateOov,
   getAnnotateRepeat, getAnnTemplate, getCfg, getActiveTab, getSyncEnabled, showNoSubtitle, clearLoading, toast
 } from '../video-sidebar.js';
-// 280次：注释模板拆分（{word} 丢弃，取前后字面量包释义）
+// 注释模板拆分（{word} 丢弃，取前后字面量包释义）
 import { splitAnnTemplate } from '../../lib/styles.js';
 
-// === 渲染状态（拆分自门面"模块状态"区，机械搬移） ===
+// === 渲染状态 ===
 let _subEntries = [];         // 当前窗口内的字幕条目 [{sub, annotations, el, subIdx}]
 let _allAnnotations = [];     // 生词本：所有首次出现的生词注释
 let _seenWords = new Set();   // 跨字幕去重
-// 第一百八十六次（用户："依旧重复单词。"）：词表已收词键集（wordDedupKey 口径）。
-//   旧版 collectAnnotations 用 `_allAnnotations.some(...)` 判重，是 check-then-act：
+// 用户："依旧重复单词。"：词表已收词键集（wordDedupKey 口径）。
+//   此前 collectAnnotations 用 `_allAnnotations.some(...)` 判重，是 check-then-act：
 //   多条字幕的注释 Promise 各自 .then 里"先扫数组、后 insertAnnotationsOrdered push"，
 //   两步之间可被另一条字幕的回调插入同词 → 重复。改为键集判重+当场登记（同步无窗口）。
 //   与 _allAnnotations 的同步一律走 setAllAnnotations()，避免键集与数组各清一半。
@@ -70,7 +69,7 @@ function setAllAnnotations(arr) {
 }
 
 /**
- * 生词本只读快照（274次：视频侧栏 learn 草稿组装用）。
+ * 生词本只读快照（视频侧栏 learn 草稿组装用）。
  * 返回内部数组引用——外部只许读不许改写，写入一律走 setAllAnnotations（唯一替换入口）。
  */
 export function getAllAnnotations() {
@@ -86,14 +85,14 @@ function addWordKey(key) {
 let _noAnnotation = false;    // 不显示注释（Annotation 按钮非 active 时为 true）
 let _detailMode = false;      // 详略模式：false=简略（注释跟在生词后不另起一行），true=详细（注释另起一行，老版本格式）
 let _activeSubIdx = -1;       // 当前激活字幕索引
-// === 全量渲染模式（2026-07-13 #93）===
-// 反思：用户反馈"字幕限制死了，不可滚动查看。应当可以滚动查看全部，生词表也是"。
-//   旧版滑动窗口固定 5 个槽位，用户无法查看完整字幕列表。改为全量渲染所有字幕，
+// === 全量渲染模式 ===
+// 用户反馈"字幕限制死了，不可滚动查看。应当可以滚动查看全部，生词表也是"。
+//   此前滑动窗口固定 5 个槽位，用户无法查看完整字幕列表。改为全量渲染所有字幕，
 //   面板区域 overflow-y:auto 支持滚动，highlightCurrent 仅负责高亮当前行。
 let _windowSlots = [];        // 保留变量名兼容旧代码
 let _windowSize = 0;          // 全量渲染模式下窗口大小为 0
 let _annotationsCache = new Map();  // sub对象 -> annotations Promise 缓存（按需获取，避免重复查词）
-// 反思（2026-07-08）：_annotationsCache 改存 Promise（原存 Array）。
+// _annotationsCache 改存 Promise（原存 Array）。
 //   根因：appendASRSubtitle 先 splice sub 进 getSubtitlesRef() 再 await getAnnotations，
 //   await 期间 timeupdate → updateSlotContent 见缓存未命中 → fetchAnnotationsForSlot
 //   又调 getAnnotations。两者共享 _seenWords，后完成的用 [] 覆盖缓存 → 内联注释消失。
@@ -105,28 +104,28 @@ let _collectedSubs = new WeakSet();  // 已收集进 _allAnnotations 的 sub 对
 // 表外单词用非阻塞翻译（onAsyncTranslate 回调），避免首次下载 Translator
 // 模型（几十 MB）阻塞首屏——先显示"翻译中..."占位，翻译完成后异步回填 DOM。
 //
-// 全量渲染架构（2026-07-13 #93）：
-//   反思：用户反馈"字幕限制死了，不可滚动查看。应当可以滚动查看全部，生词表也是"。
-//   旧版滑动窗口固定 5 个槽位，用户无法查看完整字幕列表。改为全量渲染所有字幕，
+// 全量渲染架构：
+//   用户反馈"字幕限制死了，不可滚动查看。应当可以滚动查看全部，生词表也是"。
+//   此前滑动窗口固定 5 个槽位，用户无法查看完整字幕列表。改为全量渲染所有字幕，
 //   面板区域支持滚动，highlightCurrent 仅负责高亮当前行并滚动到可视区。
-// 反思（2026-07-13 #92）：用户反馈「asr，生词表有内容，过了一会儿再看看，全都没了」。
+// 用户反馈「asr，生词表有内容，过了一会儿再看看，全都没了」。
 //   根因：appendASRSubtitle 首批字幕到达时先调 collectAnnotations（push _allAnnotations +
 //   appendWordPanelItems），再调 renderSubtitlePanel（清空 _allAnnotations/_seenWords/
 //   _annotationsCache/_collectedSubs）→ 已收集的生词数据丢失。后续若 renderWordPanel 被调用
 //   （如 rerender），从空的 _allAnnotations 重建 → 生词表空白。
-//   修正：新增 keepAnnotations 参数，appendASRSubtitle 调用时传 true 保留注释状态。
+//   新增 keepAnnotations 参数，appendASRSubtitle 调用时传 true 保留注释状态。
 //   renderSubtitlePanel 默认 keepAnnotations=false（全量重渲染场景需要清空）。
 async function renderSubtitlePanel(keepAnnotations = false) {
   const panel = getRoot().querySelector('#beaver-subtitle-panel');
   panel.innerHTML = '';
   _subEntries = [];
   if (!keepAnnotations) {
-    setAllAnnotations([]);   // 第一百八十六次：同步清词键集
+    setAllAnnotations([]);   // 同步清词键集
     _seenWords.clear();
     _annotationsCache.clear();
     _collectedSubs = new WeakSet();
   }
-  // 反思（2026-07-28）：_asrCacheLoaded 重置移到 updateSubtitles 中，
+  // _asrCacheLoaded 重置移到 updateSubtitles 中，
   //   避免 renderSubtitlePanel 被重新渲染时误清缓存标记导致频繁刷新。
   _windowSlots = [];
   _activeSubIdx = -1;
@@ -138,7 +137,7 @@ async function renderSubtitlePanel(keepAnnotations = false) {
   }
   clearLoading();
 
-  // 第436次（用户裁定"超过小时的，用时分秒时间"）：面板级小时格式开关。
+  // 用户裁定"超过小时的，用时分秒时间"：面板级小时格式开关。
   //   视频 duration ≥1h 或已有字幕段最大 start ≥1h → 整面板统一 h:mm:ss，
   //   避免逐条判定造成的 m:ss/h:mm:ss 混排（grid 时间列宽窄不齐）。
   //   ref 最大 start 兜底 duration 未知场景（ASR 段已推进到小时级）。
@@ -150,8 +149,8 @@ async function renderSubtitlePanel(keepAnnotations = false) {
     getRoot().classList.toggle('beaver-hourly', useH);
   }
 
-  // 全量渲染所有字幕（2026-07-13 #93）
-  // 反思（2026-07-28 #bug3 三次修正）：
+  // 全量渲染所有字幕
+  // 分隔符口径（用户要求）：
   //   1) 用户要求"空行，不要写时间"→ 分隔符改为纯空行（无 textContent）
   //   2) 用户要求"前后连续区间应当合并"→ 连续大间隔合并为一个分隔符
   //   3) 阈值从 2s 提到 5s：ASR 自然句间停顿 2-4s 不算间断
@@ -159,10 +158,10 @@ async function renderSubtitlePanel(keepAnnotations = false) {
   //     仅在"大间隔"变为"非大间隔"的转折点（即间断区间的起点）插入一个分隔符。
   const GAP_THRESHOLD = 5.0;
   let wasDiscontinuous = false;
-  // 第三百七十四次：先在 DocumentFragment 里建好全部行，循环结束一次性挂载。
+  // 先在 DocumentFragment 里建好全部行，循环结束一次性挂载。
   //   原逐行 panel.appendChild 在超长字幕（json3 碎片 14331 条实测）下触发上千次
   //   重排，是"等了很久也无注释"卡顿的放大器；碎片已由 parser 合并根治，此处
-  //   消除逐行挂载开销且不改变任何行为（第93次"可滚动查看全部"全量模式保留）。
+  //   消除逐行挂载开销且不改变任何行为（"可滚动查看全部"全量模式保留）。
   const frag = document.createDocumentFragment();
   for (let i = 0; i < getSubtitlesRef().length; i++) {
     const sub = getSubtitlesRef()[i];
@@ -189,7 +188,7 @@ async function renderSubtitlePanel(keepAnnotations = false) {
     _subEntries.push({ sub, annotations: null, el: slot, subIdx: i });
   }
   panel.appendChild(frag);
-  // 第三百七十五次：不再对全部行即时 fire 注释（5540 行会瞬间塞满 translator 串行队列），
+  // 不对全部行即时 fire 注释（5540 行会瞬间塞满 translator 串行队列），
   //   改走懒注释（可视区滑入才算注 + 首屏直算当前播放附近行），见 armLazyAnnotation。
   armLazyAnnotation();
 
@@ -198,7 +197,7 @@ async function renderSubtitlePanel(keepAnnotations = false) {
   const v = getActiveVideo();
   const curT = (v && isFinite(v.currentTime)) ? v.currentTime : 0;
   highlightCurrent(curT);
-  // 第一百二十五次：面板渲染后补测一次高度（ASR 首批/轨道切换路径）
+  // 面板渲染后补测一次高度（ASR 首批/轨道切换路径）
   requestSyncHeightOnce();
   log('字幕面板已全量渲染, 总字幕=', getSubtitlesRef().length);
 }
@@ -218,7 +217,7 @@ function createEmptySlot() {
   return div;
 }
 
-// === 懒注释（第三百七十五次）===
+// === 懒注释 ===
 // YouTube json3 合并后仍有 5540 行（14331 碎片实测）：首屏对全部行 fire getAnnotations
 // 会把几千个生词瞬间塞进 translator 全局串行队列——一个慢词拖住全队列（诊断实测
 // 112~126s/词），侧栏又走低优先级更被页面高优先级插队 → 注释全卡在 pending，
@@ -308,30 +307,57 @@ function onPanelClick(e) {
   }
 }
 
-// === 渲染单条字幕条目 ===
-// 反思（2026-07-07）：滑动窗口重构后此函数已无调用方，由 createEmptySlot +
-//   updateSlotContent + fillSlotAnnotations 替代。删除避免误用与代码膨胀。
 // === 表外单词异步翻译完成回调 ===
 // getAnnotations 非阻塞模式下，表外单词 translate 完成后调用此函数。
 // - 有译文：去掉 pending + 填译文 → 注释行/生词条目显示译文
 // - 无译文（translate 失败/translator 关闭）：移除字幕条目中的注释行（"没结果就算了"），
 //   但生词表条目保留——词表为空是用户反馈的问题，单词本身仍应展示（无译文而已）。
-//   反思（2026-07-05）：旧版无译文时移除生词表条目，导致 translator 关闭时词表全空。
-//   反思（2026-07-13 #94）：当 getAnnotateOov()=false 时，表外词（rank=null）不应显示注释。
+//   此前无译文时移除生词表条目，导致 translator 关闭时词表全空。
+//   当 getAnnotateOov()=false 时，表外词（rank=null）不应显示注释。
 //   虽然 collectAnnotations 已过滤表外词，但 onAsyncTranslate 仍会处理翻译结果并更新 UI。
-//   修正：表外词且未开启注释时直接返回，不更新字幕注释和生词表。
+//   表外词且未开启注释时直接返回，不更新字幕注释和生词表。
 function onAsyncTranslate(ann) {
   if (!getRoot() || !ann || !ann.word) return;
   if (ann.rank === null && !getAnnotateOov()) return;
-  // 第一百七十七次：与 createWordPanelItem 的 data-word 同键（trim+小写）
+  // 同形回显（ann.dropped，annotator 异步回填时已把该词从注释数组 splice 并标记）：
+  //   源词=释义 → 不是生词。删生词表 DOM 条目 + 从 _allAnnotations 移除
+  //   （评论/复制/导出/对话全直读该数组）。_wordKeys/_seenWords 键保留——
+  //   其他字幕不再收集此词，杜绝重复收集→再翻译→再丢弃的空转。
+  //   slot 重绘守卫不能用 anns.some(word===)（该词已 splice，恒 false）——
+  //   改按字幕文本含该词正则判定（与 highlightWords 的 \b 口径一致），
+  //   重绘用已 splice 的缓存数组，高亮/注释自然消失。
+  if (ann.dropped) {
+    const key = wordDedupKey(ann.word);
+    const wordSel = cssEscape(key);
+    getRoot().querySelectorAll(`.beaver-word-item[data-word="${wordSel}"]`).forEach((item) => item.remove());
+    const _dropIdx = _allAnnotations.findIndex((a) => wordDedupKey(a && a.word) === key);
+    if (_dropIdx >= 0) _allAnnotations.splice(_dropIdx, 1);
+    const dropRe = new RegExp('\\b' + escapeReg(ann.word) + '\\b', 'i');
+    getRoot().querySelectorAll('.beaver-sub-item').forEach((slot) => {
+      const idxAttr = slot.dataset.idx;
+      if (idxAttr == null || idxAttr === '-1') return;
+      const subIdx = parseInt(idxAttr, 10);
+      if (isNaN(subIdx)) return;
+      const sub = getSubtitlesRef()[subIdx];
+      if (!sub || !dropRe.test(String(sub.text || ''))) return;
+      const p = _annotationsCache.get(sub);
+      if (!p) return;
+      Promise.resolve(p).then((anns) => {
+        if (!Array.isArray(anns)) return;
+        fillSlotAnnotations(slot, sub, anns);
+      });
+    });
+    return;
+  }
+  // 与 createWordPanelItem 的 data-word 同键（trim+小写）
   const wordSel = cssEscape(wordDedupKey(ann.word));
   const hasTrans = (ann.translations && ann.translations.length > 0);
-  // 反思（2026-07-22）：字幕区改为 生词(注释)，注释为随机短义项；
+  // 字幕区改为 生词(注释)，注释为随机短义项；
   //   生词表仍用完整释义 translations.join('；')。
   //   简略/详细模式统一走 fillSlotAnnotations 重绘整个 slot（fillSlotAnnotations 内部根据 _detailMode 分支，
   //   并过滤无翻译词）。pending 词翻译成功后该词有翻译，fillSlotAnnotations 不再过滤，显示高亮+注释。
   //   翻译失败（无 shortTrans）时 fillSlotAnnotations 过滤掉该词，不高亮、不显示。
-  // 第一百二十三次：生词表完整释义同样过滤括号不配对的截断残片
+  // 生词表完整释义同样过滤括号不配对的截断残片
   const wordPanelTransTxt = hasTrans
     ? ann.translations.filter((s) => Boolean(s) && isBalancedParens(s)).join('；')
     : '';
@@ -370,8 +396,8 @@ function onAsyncTranslate(ann) {
 // === 高亮字幕中的生词 ===
 // 简略模式（inlineAnnotations=true）：注释直接跟在生词高亮 span 后，不另起一行。
 //   格式：<span class="beaver-word">word</span><span class="beaver-ann-inline">(释义)</span>
-//   释义为确定性短义项（lib/dict-clean.js#pickCleanShortTrans，225 次起直调）。无释义时仅高亮，不加括号。
-// 反思（2026-07-22）：用户要求「字幕的单词注释跟在字幕正文里面的生词后，不另起一行，这是简略模式。
+//   释义为确定性短义项（lib/dict-clean.js#pickCleanShortTrans）。无释义时仅高亮，不加括号。
+// 用户要求「字幕的单词注释跟在字幕正文里面的生词后，不另起一行，这是简略模式。
 //   详细模式是之前老版本（注释另起一行）」。
 function highlightWords(text, annotations, inlineAnnotations = false) {
   if (!annotations || annotations.length === 0) return escapeHtml(text);
@@ -381,11 +407,8 @@ function highlightWords(text, annotations, inlineAnnotations = false) {
   // 用占位符避免嵌套替换
   const placeholders = [];
   for (const a of sorted) {
-    // 反思（2026-07-28）：用户反馈"一行之中你注释了两次"。
-    //   旧版用 'gi' 全局替换，同一行同一词全部高亮+注释。
-    //   修正：去掉 g 标志，只替换首次出现，后续出现不高亮不注释。
-    // 反思（2026-08-15 第六十二次）：注释重复生词 勾选后恢复 'gi'，每次出现都注释。
-    // 第一百九十一次：与 ws/scanner.js highlightWords 同步对齐——重复开关关闭时，
+    // 用户反馈"一行之中你注释了两次"。注释重复生词勾选后 'gi' 全局替换，每次出现都注释；
+    // 与 ws/scanner.js highlightWords 同步对齐——重复开关关闭时，
     //   后续出现（isFirst===false）不包高亮 span 保持纯文本（页面 .beaver-hide-later
     //   默认透明语义的字幕侧对应实现），消除同一生词多处重复提示。
     if (!getAnnotateRepeat() && a.isFirst === false) continue;
@@ -397,7 +420,7 @@ function highlightWords(text, annotations, inlineAnnotations = false) {
     if (inlineAnnotations) {
       const shortTrans = pickCleanShortTrans(a.translations);
       if (shortTrans) {
-        // 280次：注释按模板拼装（{word} 变量丢弃——词已在高亮 span 中，取前后字面量包释义）
+        // 注释按模板拼装（{word} 变量丢弃——词已在高亮 span 中，取前后字面量包释义）
         const { pre, post } = splitAnnTemplate(getAnnTemplate());
         replacement += `<span class="beaver-ann-inline">${escapeHtml(pre)}${escapeHtml(shortTrans)}${escapeHtml(post)}</span>`;
       }
@@ -426,13 +449,13 @@ function renderWordPanel() {
 /**
  * 创建单条生词表条目 DOM 元素
  *
- * 反思（2026-09-04）：原形折叠三件套（lemmaDisplayOf/supportsLemmaLang/toggleLemmaGroup
+ * 原形折叠三件套（lemmaDisplayOf/supportsLemmaLang/toggleLemmaGroup
  * 与下方 createWordPanelItem 内渲染配合）。目标语言缓存不从门面 video-sidebar.js
  * 导入 getVideoLearnLang，避免门面↔子模块循环 import；与 _videoLearnLang 同源
  * （storage learnLanguage），各自监听跟随。
  */
 let _renderLearnLang = 'en';
-// 2026-09-04（原形折叠诊断）：首个词表条目渲染时打一行门闸状态（之后不再打），
+// 原形折叠诊断：首个词表条目渲染时打一行门闸状态（之后不再打），
 // 用户反馈"没见着原形/折叠按钮"时凭此行区分：扩展未更新 / 语种无覆盖 / 其他。
 let _lemmaDiagDone = false;
 try {
@@ -462,7 +485,7 @@ function supportsLemmaLang(lang) {
 
 /**
  * 条目展示用原形：有还原结果用还原值，否则用词面小写（原词即原形也说）
- * 反思（2026-09-04）：用户反馈"首字母还在大写"——历史 IDB 存在表层大小写原形坏档，
+ * 用户反馈"首字母还在大写"——历史 IDB 存在表层大小写原形坏档，
  *   此处统一小写（词典惯例），归组键本就小写不受影响。
  * @param {{word:string,lemma?:string|null}} a 注释条目
  * @returns {string} 原形文本（小写键形式）
@@ -485,8 +508,8 @@ function lemmaKeyOf(a) {
 /**
  * 原形折叠开关（导出给门面 video-sidebar.js 的点击委托调用）
  *
- * 反思（2026-09-04）：用户要求"展开的时候再查"——归组查询发生在点击展开瞬间。
- * 反思（2026-09-04 二轮）：展开改纯词单行——此前逐行列词＋释义，但上下文译文常 pending、
+ * 用户要求"展开的时候再查"——归组查询发生在点击展开瞬间。
+ * 展开改纯词单行——此前逐行列词＋释义，但上下文译文常 pending、
  *   家族词多无缓存译文，空释义行像 bug。现同行只列词（`, ` 分隔，块底色，不斜体）：
  *   ①上下文成员（_allAnnotations 现场值，当前词置顶加粗）；②SW 反查整表补齐家族
  *   （lemmaFamily 只要词不要详情，又快一截），去重后追加。用户问"为啥只有大写没有
@@ -561,10 +584,10 @@ function createWordPanelItem(a) {
   }
   const div = document.createElement('div');
   div.className = 'beaver-word-item' + (a.pending ? ' pending' : '');
-  // 第一百七十七次：data-word 统一存规范化键（trim+小写），与 appendWordPanelItems
+  // data-word 统一存规范化键（trim+小写），与 appendWordPanelItems
   //   的查重 selector、onAsyncTranslate 的回填 selector 三处同键，否则查重形同虚设。
   div.dataset.word = wordDedupKey(a.word);
-  // 第一百八十四次：把词序键写进 DOM，appendWordPanelItems 靠它定位插入点，
+  // 把词序键写进 DOM，appendWordPanelItems 靠它定位插入点，
   //   使词表 DOM 顺序恒等于字幕顺序（而非注释异步完成顺序）。
   div.dataset.seq = String(annSeq(a));
   const rankText = rankToStage(a.rank);
@@ -572,27 +595,27 @@ function createWordPanelItem(a) {
     ? escapeHtml(a.translations.join('；'))
     : '';
   const tagsText = (a.tags && a.tags.length > 0) ? escapeHtml(a.tags.join(',')) : '';
-  // 反思（2026-07-09 #68）：整体一段自然换行，各 span 用空格分隔，inline 文本流。
+  // 整体一段自然换行，各 span 用空格分隔，inline 文本流。
   //   只渲染有内容的 span，避免空 span 产生多余空格。
-  // 反思（2026-08-03 修正）：用户反馈"视频提示字幕区有释义，生词表中却没有"。
-  //   根因：pending 状态下 translations 为空，旧版不创建 .beaver-w-trans span，
+  // 用户反馈"视频提示字幕区有释义，生词表中却没有"。
+  //   根因：pending 状态下 translations 为空，此前不创建 .beaver-w-trans span，
   //   onAsyncTranslate 翻译成功后 item.querySelector('.beaver-w-trans') 返回 null
   //   → 释义无法填入。字幕区有释义是因为 fillSlotAnnotations 重建整个 slot。
-  //   修正：始终创建 .beaver-w-trans span（即使为空），便于 onAsyncTranslate 后续更新。
-  // 反思（2026-08-06 修正）：用户反馈"没看到音标"。
+  //   始终创建 .beaver-w-trans span（即使为空），便于 onAsyncTranslate 后续更新。
+  // 用户反馈"没看到音标"。
   //   根因：音标仅在详细模式注释行中显示，生词表不显示音标。
-  //   修正：生词表条目也加音标 span，异步填充。
+  //   生词表条目也加音标 span，异步填充。
   let html = `<span class="beaver-w-word">${escapeHtml(a.word || '')}</span>`;
-  // 反思（2026-08-08）：用户要求"音标前加一个喇叭按钮"。点击朗读单词（Web Speech API）。
-  // 反思（2026-08-10）：用户要求"喇叭音标应当紧贴"，去掉两者之间的空格
+  // 用户要求"音标前加一个喇叭按钮"。点击朗读单词（Web Speech API）。
+  // 用户要求"喇叭音标应当紧贴"，去掉两者之间的空格
   html += ` <button class="beaver-w-speak" data-word="${escapeHtml(a.word || '')}" title="🔊">🔊</button><span class="beaver-w-phonetic" data-word="${escapeHtml(a.word || '')}"></span>`;
-  // 词形（2026-08-14 第五十四次）：词汇表显示词形还原原形（running→run）。
+  // 词形：词汇表显示词形还原原形（running→run）。
   //   与悬浮提示/右键面板的 lemma-row 一致，仅当原形不同于词面时显示。
-  // 反思（2026-09-04）：用户要求"词形还原即便原形也要说，右加上折叠符号，
+  // 用户要求"词形还原即便原形也要说，右加上折叠符号，
   //   若展开列出所有同原词形的单词，展开的时候再查"。
   //   词形还原有覆盖的语种（diverse-lemmas LANGUAGES 名单，如 en/de/fr 有，zh/ja 无）常显
   //   原形 chip＋折叠（toggleLemmaGroup，懒查）；无覆盖语种（中/日等）沿用旧口径（仅原形≠词面时显示）。
-  // 反思（2026-09-04）：用户要求 chip 化——"从Lemma: word▶ 改为斜体+底色，
+  // 用户要求 chip 化——"从Lemma: word▶ 改为斜体+底色，
   //   点击展开，移除前后缀"。原形 chip 即按钮（斜体＋底色见 CSS），无"原形："前缀
   //   无 ▶/▼ 后缀，展开态靠 .open 换底色区分，title 保留文字说明。
   const lemmaText = lemmaDisplayOf(a);
@@ -617,7 +640,7 @@ function createWordPanelItem(a) {
 
 /**
  * 异步填充生词表条目的音标
- * 反思（2026-08-06）：用户反馈"没看到音标"，生词表也应显示音标。
+ * 用户反馈"没看到音标"，生词表也应显示音标。
  * @param {HTMLElement} item 生词表条目 div
  * @param {string} word 单词
  */
@@ -635,7 +658,7 @@ async function fillWordPanelPhonetic(item, word) {
 }
 
 /**
- * 第一百八十四次（用户："侧栏中 词汇的顺序跟句子/字幕的顺序不一致"）：词序键。
+ * 用户："侧栏中 词汇的顺序跟句子/字幕的顺序不一致"：词序键。
  * 根因：词表顺序此前等于"注释 Promise 完成顺序"——renderSubtitlePanel 循环里
  *   collectAnnotationsForSlot 是并发 fire（不 await），谁先查完词谁先进表，
  *   与字幕先后无关。修正：给每条注释打上「字幕时间 × 句内词序」复合键，
@@ -655,8 +678,8 @@ function makeSeq(sub, wordIdx) {
 }
 
 /**
- * 第一百八十五次（用户裁定："不可兜底首位。右列首位你是妄想。"）：
- *   缺失词序键者一律排表尾，绝不占首位（旧版回退 0 恰好抢占表首，
+ * 用户裁定："不可兜底首位。右列首位你是妄想。"：
+ *   缺失词序键者一律排表尾，绝不占首位（此前回退 0 恰好抢占表首，
  *   与用户裁定相反，也是"词序与字幕不一致"的最显眼表现）。
  */
 const SEQ_TAIL = Number.MAX_SAFE_INTEGER;
@@ -681,7 +704,7 @@ function insertAnnotationsOrdered(fresh) {
 }
 
 /**
- * 第一百七十七次：生词去重键（trim + 小写）
+ * 生词去重键（trim + 小写）
  * 用户反馈"评论提示里 ego 重复两遍"。根因：collectAnnotations 往 _allAnnotations
  * 直接 push，数组层从未按词去重；而 appendWordPanelItems 只在 DOM 层查重，
  * 于是面板看着不重复，走 _allAnnotations 的评论/复制/导出却重复。
@@ -692,7 +715,7 @@ function wordDedupKey(w) {
 }
 
 /**
- * 第一百八十七次（用户："字幕注释了高频词"）：注释显示口径的唯一关口。
+ * 用户："字幕注释了高频词"：注释显示口径的唯一关口。
  *
  * 根因：高频词/表外词过滤此前只做在 collectAnnotations 的词表分支（fresh），
  *   而字幕行注释走 fillSlotAnnotations(slot, sub, anns)，用的是**未过滤的 anns**。
@@ -726,7 +749,7 @@ function appendWordPanelItems(anns) {
   if (!getRoot() || !anns || anns.length === 0) return;
   const panel = getRoot().querySelector('#beaver-word-panel');
   if (!panel) return;
-  // 第一百七十七次：批内也去重（同一批里可能含同词的不同词面，如 Ego/ego）
+  // 批内也去重（同一批里可能含同词的不同词面，如 Ego/ego）
   const batchSeen = new Set();
   for (const a of anns) {
     const key = wordDedupKey(a.word);
@@ -736,22 +759,22 @@ function appendWordPanelItems(anns) {
     if (panel.querySelector(`.beaver-word-item[data-word="${wordSel}"]`)) continue;
     batchSeen.add(key);
     const div = createWordPanelItem(a);
-    // 第一百八十七次（用户："视频侧栏字幕跟词汇顺序无关"）：条目创建后立即写
+    // 用户："视频侧栏字幕跟词汇顺序无关"：条目创建后立即写
     //   dataset.seq。insertItemBySeq 依赖读取已有条目的 dataset.seq 定位插点，
     //   不写则 Number(undefined)=NaN → 一律按 SEQ_TAIL 处理 → 插序整体倒置。
     const seq = annSeq(a);
     div.dataset.seq = String(seq);
-    // 第一百八十四次：按 seq 有序插入 —— 从末尾往前找第一个 seq 不大于本词的条目，
+    // 按 seq 有序插入 —— 从末尾往前找第一个 seq 不大于本词的条目，
     //   插到它后面；无则插到最前。异步先到的靠后字幕词不会再霸占表首。
     insertItemBySeq(panel, div, seq);
   }
   log('词表增量追加:', anns.length, '词, 总计:', _allAnnotations.length);
-  // 第一百八十五次：每批追加后安排一次全量重排兜底（见 resortWordPanelSoon）
+  // 每批追加后安排一次全量重排兜底（见 resortWordPanelSoon）
   resortWordPanelSoon();
 }
 
 /**
- * 第一百八十五次（用户："两种侧栏中 词汇的顺序跟字幕的顺序不一致"）：
+ * 用户："两种侧栏中 词汇的顺序跟字幕的顺序不一致"：
  *   增量插入的顺序只在"插入时 seq 已正确"时才成立；ASR 追加字幕、异步翻译回填、
  *   注释开关切换等场景一旦有条目晚打/漏打 seq，顺序就永久错乱且无纠正机会。
  *   现补防抖收尾重排：以 _allAnnotations（按 seq 有序）为准重挂 DOM，并清除
@@ -788,7 +811,7 @@ function resortWordPanel() {
     uniq.push(a);
   }
   const dupRemoved = _allAnnotations.length - uniq.length;
-  // 第一百八十六次：整体替换（同步重建词键集），不再原地 length=0+push，
+  // 整体替换（同步重建词键集），不原地 length=0+push，
   //   否则被清掉的重复词键滞留键集，该词此后再也无法入表。
   setAllAnnotations(uniq);
   // 2. DOM：按数组顺序重挂（appendChild 会移动已有节点），多余条目移除
@@ -814,7 +837,7 @@ function resortWordPanel() {
 }
 
 /**
- * 第一百八十四次：把条目按 seq 插入面板（保持面板与字幕同序）。
+ * 把条目按 seq 插入面板（保持面板与字幕同序）。
  * @param {HTMLElement} panel 词表面板
  * @param {HTMLElement} div 待插入条目
  * @param {number} seq 本条目的词序键
@@ -823,8 +846,8 @@ function insertItemBySeq(panel, div, seq) {
   const items = panel.querySelectorAll('.beaver-word-item');
   let ref = null;   // 插入位置的后继节点
   for (let i = 0; i < items.length; i++) {
-    // 第一百八十五次：dataset.seq 缺失/非法时按 SEQ_TAIL（表尾）解读，与 annSeq 一致，
-    //   旧版 `|| 0` 会让无键条目被当成最小键而霸占表首。
+    // dataset.seq 缺失/非法时按 SEQ_TAIL（表尾）解读，与 annSeq 一致，
+    //   此前 `|| 0` 会让无键条目被当成最小键而霸占表首。
     const raw = Number(items[i].dataset.seq);
     const cur = isFinite(raw) ? raw : SEQ_TAIL;
     if (cur > seq) { ref = items[i]; break; }
@@ -839,11 +862,11 @@ export async function rerender() {
 }
 
 // === 仅重渲染面板（注释按钮切换时）===
-// 反思（2026-07-08）：需同时清 _collectedSubs，否则注释 off→on 时 sub 已标记 collected，
+// 需同时清 _collectedSubs，否则注释 off→on 时 sub 已标记 collected，
 //   collectAnnotations 跳过 push，生词无法重新进入生词表/内联。
-// 反思（2026-07-22）：用户反馈「点击 detail 并没有切换」。
-//   根因：旧版清缓存后调 highlightCurrent，但 highlightCurrent 不重绘注释。
-//   修正：annotation 切换清缓存+清 _seenWords+遍历 slot 重新调 collectAnnotationsForSlot 重新获取；
+// 用户反馈「点击 detail 并没有切换」。
+//   根因：此前清缓存后调 highlightCurrent，但 highlightCurrent 不重绘注释。
+//   annotation 切换清缓存+清 _seenWords+遍历 slot 重新调 collectAnnotationsForSlot 重新获取；
 //   detail 切换不清缓存，直接调 rerenderSlotsFromCache 从缓存重绘（见 detail 按钮绑定）。
 export function rerenderPanelOnly() {
   // 清除注释缓存 + 已收集标记 + 去重集合，让 collectAnnotationsForSlot 重新获取（应用 _noAnnotation 新值）
@@ -851,7 +874,7 @@ export function rerenderPanelOnly() {
   _collectedSubs = new WeakSet();
   _seenWords = new Set();
   // 遍历所有 slot 重新触发注释获取+回填
-  // 第三百七十五次：改走懒注释（全量 fire 会重演 5540 行堵队列，开关注换即卡死）
+  // 改走懒注释（全量 fire 会重演 5540 行堵队列，开关注换即卡死）
   armLazyAnnotation();
   // 重新高亮当前行
   const v = getActiveVideo();
@@ -881,8 +904,8 @@ export function rerenderSlotsFromCache() {
 
 // === 高亮当前字幕（全量渲染模式）===
 // 全量渲染模式下，所有字幕已渲染到 DOM，highlightCurrent 仅负责高亮当前行并滚动到可视区。
-// 反思（2026-07-13 #93）：用户要求"字幕应当可以滚动查看全部"。
-//   旧版滑动窗口固定槽位，改为全量渲染后，highlightCurrent 只处理高亮和滚动，
+// 用户要求"字幕应当可以滚动查看全部"。
+//   此前滑动窗口固定槽位，改为全量渲染后，highlightCurrent 只处理高亮和滚动，
 //   不再更新槽位内容。
 export function highlightCurrent(time) {
   if (typeof time !== 'number' || !isFinite(time)) return;
@@ -908,10 +931,10 @@ export function highlightCurrent(time) {
   _windowSlots.forEach((s) => s.classList.remove('active'));
   if (idx >= 0 && idx < _windowSlots.length) {
     _windowSlots[idx].classList.add('active');
-    // 反思（2026-07-14 #97）：用户反馈「视频提示滚动字幕时候，不要让网页跳动。我正在写字，视频播放，视频提示字幕同步的时候会让整个网页跳动」。
+    // 用户反馈「视频提示滚动字幕时候，不要让网页跳动。我正在写字，视频播放，视频提示字幕同步的时候会让整个网页跳动」。
     //   根因：scrollIntoView 不仅滚动目标容器（字幕面板），还会滚动所有可滚动的父级元素（包括整个网页），
     //   导致用户正在输入时网页被意外滚动。
-    //   修正：改为直接操作面板的 scrollTop，只滚动字幕面板本身，不影响父级网页。
+    //   改为直接操作面板的 scrollTop，只滚动字幕面板本身，不影响父级网页。
     const panel = getRoot().querySelector('#beaver-subtitle-panel');
     if (panel) {
       const slot = _windowSlots[idx];
@@ -943,7 +966,7 @@ function updateSlotContent(slot, subIdx) {
 
   // 注释统一走 collectAnnotationsForSlot（内部用 Promise 缓存复用，避免重复查词）。
   // 先同步显示纯文本（无高亮），注释 Promise resolve 后回填高亮+注释行。
-  // 反思（2026-07-08）：原版区分缓存命中/未命中两条路径，缓存存 Array 时存在竞态覆盖。
+  // 此前区分缓存命中/未命中两条路径，缓存存 Array 时存在竞态覆盖。
   //   改 Promise 缓存后统一一条路径，collectAnnotationsForSlot 内部 await ensureAnnotations
   //   命中已 resolve 的 Promise 仅一次微任务延迟（paint 前完成，无闪烁）。
   slot.querySelector('.beaver-sub-content').textContent = sub.text || '';
@@ -955,16 +978,16 @@ function updateSlotContent(slot, subIdx) {
 function fillSlotAnnotations(slot, sub, anns) {
   const contentSpan = slot.querySelector('.beaver-sub-content');
   const annContainer = slot.querySelector('.beaver-ann-container');
-  // 2026-09-27（用户"无论有没有释义，提示都应当有"）：正文高亮不再过滤无译文词
+  // 用户"无论有没有释义，提示都应当有"：正文高亮不过滤无译文词
   //   （高亮 span 自带 dataset，hover 弹卡兜底查询）。注释行仍仅渲染有译文/pending
-  //   的词，维持 2026-07-22「没翻译的不要显示」要求（见下方注释行循环头部守卫）。
+  //   的词，维持「没翻译的不要显示」要求（见下方注释行循环头部守卫）。
   //   validAnns 保留"有译文"口径供漏斗上报（诊断连续性），不再参与正文过滤。
   const annList = anns || [];
   const validAnns = annList.filter(a => pickCleanShortTrans(a.translations));
-  // 第一百八十七次：字幕行与词表共用同一份阈值/表外词过滤，杜绝字幕注释高频词
+  // 字幕行与词表共用同一份阈值/表外词过滤，杜绝字幕注释高频词
   const shownAnns = filterByCurrentRank(annList);
-  // 第三百七十二次：渲染层漏斗上报——raw(计算层产出)→valid(有译文)→shown(过阈值)
-  //   定位丢在哪段；2026-09-27 起 shown 为高亮口径（含无译文词），valid 仍为有译文数。
+  // 渲染层漏斗上报——raw(计算层产出)→valid(有译文)→shown(过阈值)
+  //   定位丢在哪段；shown 为高亮口径（含无译文词），valid 仍为有译文数。
   try {
     reportRender({
       text: String(sub.text || '').slice(0, 30),
@@ -974,7 +997,7 @@ function fillSlotAnnotations(slot, sub, anns) {
       shown: shownAnns.length
     });
   } catch (_) {}
-  // 反思（2026-07-22）：用户要求「字幕的单词注释跟在字幕正文里面的生词后，不另起一行，这是简略模式。
+  // 用户要求「字幕的单词注释跟在字幕正文里面的生词后，不另起一行，这是简略模式。
   //   详细模式是之前老版本」。
   //   简略模式：highlightWords 第三参 true，注释作为 inline span 跟在生词后；annContainer 清空。
   //   详细模式：highlightWords 第三参 false，annContainer 渲染独立注释行（老版本格式 生词(注释)）。
@@ -995,7 +1018,7 @@ function fillSlotAnnotations(slot, sub, anns) {
   //   简略模式：注释跟在生词后（inline），仅随机短义项，不另起一行。
   //   详细模式：独立成行，显示 Rank、标签、完整释义。
   for (const a of shownAnns) {
-    // 2026-09-27：无译文且非 pending 的词不渲染注释行（维持 2026-07-22
+    // 无译文且非 pending 的词不渲染注释行（维持
     //   「没翻译的不要显示」；正文已高亮可 hover 弹卡）。pending 显示"翻译中..."。
     if (!pickCleanShortTrans(a.translations) && !a.pending) continue;
     const line = document.createElement('div');
@@ -1006,12 +1029,12 @@ function fillSlotAnnotations(slot, sub, anns) {
       // 详细模式：显示完整注释信息
       // 1. 词头（深绿背景白字）
       html += `<span class="beaver-ann-word">${escapeHtml(a.word || '')}</span>`;
-      // 反思（2026-08-08）：用户要求"音标前加一个喇叭按钮"。点击朗读单词（Web Speech API）。
+      // 用户要求"音标前加一个喇叭按钮"。点击朗读单词（Web Speech API）。
       html += `<button class="beaver-ann-speak" data-word="${escapeHtml(a.word || '')}" title="🔊">🔊</button>`;
       // 2. 注音（异步填充，phonemize 懒加载 5MB bundle）
-      //    反思（2026-08-05）：用户要求"用在单词详细注释的时候"，仅详细模式显示
+      //    用户要求"用在单词详细注释的时候"，仅详细模式显示
       html += `<span class="beaver-ann-phonetic" data-word="${escapeHtml(a.word || '')}"></span>`;
-      // 3. 阶数（如有；第六十三次：不再显示原始 rank 数字，只显示阶数）
+      // 3. 阶数（如有；不显示原始 rank 数字，只显示阶数）
       if (a.rank != null && isFinite(a.rank)) {
         html += `<span class="beaver-ann-rank">${rankToStage(a.rank)}</span>`;
       }
@@ -1022,7 +1045,7 @@ function fillSlotAnnotations(slot, sub, anns) {
         }
       }
       // 5. 全部释义（保留词典完整条目）
-      // 第一百二十三次：过滤括号不配对的截断残片（历史缓存中已存的 "短裤( shor" 类条目）
+      // 过滤括号不配对的截断残片（历史缓存中已存的 "短裤( shor" 类条目）
       const allTrans = (a.translations || []).filter((s) => Boolean(s) && isBalancedParens(s));
       if (allTrans.length > 0) {
         html += `<span class="beaver-ann-detail-trans">${escapeHtml(allTrans.join(' | '))}</span>`;
@@ -1042,7 +1065,7 @@ function fillSlotAnnotations(slot, sub, anns) {
     line.innerHTML = `<div class="beaver-ann-content">${html}</div>`;
     annContainer.appendChild(line);
     // 注音异步填充（仅详细模式）
-    // 反思（2026-08-05）：用户要求"使用 phonemize 给单词注音，用在单词详细注释的时候"。
+    // 用户要求"使用 phonemize 给单词注音，用在单词详细注释的时候"。
     //   phonetics.getPhonetic 懒加载 phonemize-bundle.mjs（5.1MB），首次调用 1-2 秒，
     //   后续命中 _cache Map 直接返回。await 期间 line 可能被 fillSlotAnnotations 重绘移除，
     //   故 await 后校验 line.isConnected，避免向已脱离 DOM 的 span 写入（无效且浪费）。
@@ -1056,11 +1079,10 @@ function fillSlotAnnotations(slot, sub, anns) {
 
 /**
  * 异步填充详细注释行的注音 span
- * 反思（2026-08-05）：
  *   - line 可能在 await 期间被 fillSlotAnnotations 重绘替换（换集/重扫），需 isConnected 校验
  *   - getPhonetic 内部已缓存（_cache Map），同一单词重复调用 O(1)
  *   - 注音失败返回空串，span 保持空（CSS :empty 不占位）
- * 反思（2026-08-05 修正）：用户反馈"没看到音标"。
+ * 用户反馈"没看到音标"。
  *   - 新增 console.log 诊断日志，打印 word 和结果，便于排查
  *   - 新增 span.isConnected 校验（span 可能随 line 一起被重绘移除）
  *   - 新增加载中占位符 "…"，让用户知道注音正在加载（bundle 5.1MB 首次 1-2 秒）
@@ -1073,7 +1095,7 @@ async function fillPhoneticAsync(line, word, context) {
   // 加载中占位符（让用户知道注音正在加载）
   span.textContent = '…';
   try {
-    // 反思（2026-09-04）：日文连带上下文查注音——字幕整句透传，ja 包内句 parse 取 token 读法；
+    // 日文连带上下文查注音——字幕整句透传，ja 包内句 parse 取 token 读法；
     //   非 ja 语言忽略 context 参数，行为不变。
     const phon = await getPhonetic(word, undefined, context);
     // await 期间 line 可能已被重绘移除（fillSlotAnnotations 重建 annContainer.innerHTML）
@@ -1103,12 +1125,12 @@ async function fillPhoneticAsync(line, word, context) {
 }
 
 // === 注释获取统一入口（Promise 缓存，杜绝 appendASRSubtitle 与渲染槽位竞态）===
-// 反思（2026-07-08）：用户反馈"字幕列表一两个生词，生词表十几个生词，匹配么？"。
+// 用户反馈"字幕列表一两个生词，生词表十几个生词，匹配么？"。
 //   根因：appendASRSubtitle 先 splice sub 进 getSubtitlesRef()，再 await getAnnotations（让出事件循环）。
 //   await 期间 timeupdate → updateSlotContent 见缓存未命中 → fetchAnnotationsForSlot 又调
 //   getAnnotations。两者共享 _seenWords：先完成的拿真实生词并入 _allAnnotations；后完成的
 //   拿 []（词已 seen）并覆盖 _annotationsCache → 字幕内联注释消失，生词表却累计正确。
-//   修正：_annotationsCache 改存 Promise；ensureAnnotations 缓存复用，collectAnnotations
+//   _annotationsCache 改存 Promise；ensureAnnotations 缓存复用，collectAnnotations
 //   保证 _allAnnotations.push/appendWordPanelItems 只执行一次（_collectedSubs 守卫），
 //   并在换集（sub 被移出 getSubtitlesRef()）后跳过陈旧 push。
 
@@ -1126,19 +1148,19 @@ function ensureAnnotations(sub) {
 
 // 获取注释并收集进生词表（_allAnnotations.push + appendWordPanelItems 仅首次执行）。
 // 守卫：_collectedSubs 防重复 push；getSubtitlesRef().indexOf(sub)===-1 防换集后陈旧 push。
-// 反思（2026-07-13 #94）：用户要求"默认不注释表外词，取消了注释表外词，生词表依然有表外词"。
+// 用户要求"默认不注释表外词，取消了注释表外词，生词表依然有表外词"。
 //   根因：getAnnotations 返回所有注释（含表外词），collectAnnotations 未过滤直接 push。
-//   修正：当 getAnnotateOov()=false 时，过滤掉 rank=null 的表外词，只收集词典内单词。
+//   当 getAnnotateOov()=false 时，过滤掉 rank=null 的表外词，只收集词典内单词。
 async function collectAnnotations(sub) {
   const anns = await ensureAnnotations(sub);
   const subIdx = getSubtitlesRef().indexOf(sub);
   if (subIdx === -1) return anns;  // sub 已被换集移除，不收集
   if (!_collectedSubs.has(sub)) {
     _collectedSubs.add(sub);
-    // 第一百八十七次：过滤口径抽到 filterByCurrentRank，与字幕行注释完全一致
+    // 过滤口径抽到 filterByCurrentRank，与字幕行注释完全一致
     //   （原本表外词过滤与高频词过滤分散两处，字幕行漏了高频词过滤）
     const filtered = filterByCurrentRank(anns);
-    // 第一百七十七次（用户："评论提示里 ego 重复两遍"）：_allAnnotations 数组层去重。
+    // 用户："评论提示里 ego 重复两遍"：_allAnnotations 数组层去重。
     //   此前直接 push，重复来源有二：① rerenderPanelOnly 清了 _seenWords 却没清
     //   _allAnnotations，注释按钮 off→on 会把同一批词再 push 一遍；② 同批内同词的
     //   不同词面（Ego/ego）。评论/复制/导出/对话全直读 _allAnnotations，故此处必须去重。
@@ -1146,14 +1168,14 @@ async function collectAnnotations(sub) {
     const fresh = filtered.filter((a) => {
       const key = wordDedupKey(a.word);
       if (!key || batchSeen.has(key)) return false;
-      // 第一百八十六次：键集判重+当场登记，消除 check-then-act 竞态
+      // 键集判重+当场登记，消除 check-then-act 竞态
       if (!addWordKey(key)) return false;
       batchSeen.add(key);
       return true;
     });
-    // 第一百八十四次：在收集处打词序键 —— 高位取字幕 start（面板即按 start 升序排），
+    // 在收集处打词序键 —— 高位取字幕 start（面板即按 start 升序排），
     //   低位取该词在本句注释数组中的下标（= 原文出现顺序，annotator 全链无重排）。
-    // 第一百八十五次：句内词序按 wordDedupKey 定位，不再依赖对象同一性
+    // 句内词序按 wordDedupKey 定位，不依赖对象同一性
     //   （anns.indexOf(a) 在 a 来自 filtered 的浅层拷贝或跨批对象时返回 -1 → 词序退化为 0）。
     const baseKeys = anns.map((x) => wordDedupKey(x && x.word));
     for (const a of fresh) {
@@ -1185,14 +1207,14 @@ async function collectAnnotationsForSlot(slot, subIdx) {
 
 // === 底部按钮处理 ===
 
-// 词单模式：点击后只剩单词，移走所有注释（2026-08-07）
+// 词单模式：点击后只剩单词，移走所有注释
 // 用户要求"导出按钮改称词单，不再飘窗，点击后只剩单词，移走所有注释"
-// 反思（2026-08-07）：旧版用弹窗+textarea，用户嫌飘窗。
+// 此前用弹窗+textarea，用户嫌飘窗。
 //   改为视图切换：点击切换到词表面板，CSS 隐藏音标/释义/标签/词阶，只剩单词。
 //   再点击恢复正常视图。按钮 active 态指示当前是否词单模式。
-// 反思（2026-08-07 修正）：用户反馈"词汇按钮扩展到了整行"。
+// 用户反馈"词汇按钮扩展到了整行"。
 //   根因：隐藏字幕/练习标签后，词汇标签 flex:1 扩展整行。
-//   修正：不隐藏标签页，只切换到词汇面板+CSS隐藏注释列。切其他标签时自动退出词单模式。
+//   不隐藏标签页，只切换到词汇面板+CSS隐藏注释列。切其他标签时自动退出词单模式。
 let _wordOnlyMode = false;
 export function onWordListToggle() {
   if (_allAnnotations.length === 0) {
@@ -1223,9 +1245,9 @@ export function onWordListToggle() {
 
 // 复制：复制当前标签页整个面板的文本（字幕+注释 或 生词表）到剪切板
 // 滑动窗口模式：字幕 tab 遍历所有 getSubtitlesRef()（非仅窗口内），注释从 _annotationsCache 读
-// 反思（2026-08-03）：用户反馈"视频提示生词表明明一堆，复制或者评论按钮说没有单词"。
-//   旧版用 hasTranslation 过滤无译文的词，导致词表有词但复制报"无内容"。
-//   修正：不再过滤，无译文词也纳入复制（释义列显示"-"）；仅当字幕未加载或生词表为空时才提示。
+// 用户反馈"视频提示生词表明明一堆，复制或者评论按钮说没有单词"。
+//   此前用 hasTranslation 过滤无译文的词，导致词表有词但复制报"无内容"。
+//   不过滤，无译文词也纳入复制（释义列显示"-"）；仅当字幕未加载或生词表为空时才提示。
 export async function onCopy() {
   const body = await buildPanelBody();
   // body === null 表示当前标签页（练习）不支持导出/复制，提示已在 buildPanelBody 内发出
@@ -1249,27 +1271,27 @@ export async function onCopy() {
 }
 
 /**
- * 第一百八十三次：单独拼装「字幕全文 + 各条注释」
+ * 单独拼装「字幕全文 + 各条注释」
  * 抽出的理由：复制/导出要的是"当前标签页所见内容"，而对话要讨论的恒是字幕文本；
- *   旧版三方共用 buildPanelBody，切到生词表标签后点对话就把整张词汇表预填进输入框
+ *   此前三方共用 buildPanelBody，切到生词表标签后点对话就把整张词汇表预填进输入框
  *   （用户："历史对话预填对话咋成了词汇表？"）。抽出此函数供对话单独调用，
  *   复制/导出的行为完全不变。
- * 第四百四十五次（用户："字幕窗口复制，用的侧邻注释复制出来却是详细注释了"）：
+ * 用户："字幕窗口复制，用的侧邻注释复制出来却是详细注释了"：
  *   注释行格式跟随页内详略模式——侧邻（简略）模式复制 `word(短释义)`，与页内
  *   inline 注释同形；详细模式维持四段 `word | 释义 | 标签 | 词阶`。过滤口径同时
  *   跟随页内显示（有译文 pickCleanShortTrans + filterByCurrentRank 过阈值），
  *   所见即所得：页内没显示的词，复制里也不再出现。
- * 第四百四十五次（用户："聊天窗口选取正文错误，带了注释"）：includeAnns=false
+ * 用户："聊天窗口选取正文错误，带了注释"：includeAnns=false
  *   只出字幕正文（对话讨论的是原文，注释不属于正文），chat 调用点改传 false；
  *   learn 草稿/复制/导出默认 true 行为不变。
- * 第四百四十六次（用户："显示的是啥就是啥，注释按钮、详细按钮都应当作用"）：
+ * 用户："显示的是啥就是啥，注释按钮、详细按钮都应当作用"：
  *   复制内容完整跟随页内显示状态——注释按钮 off（_noAnnotation）时只出字幕
  *   正文不带任何注释行；注释按钮 on 时格式随 _detailMode（简略=侧邻短释义 /
  *   详细=四段完整格式）。显示口径唯一关口，杜绝"页内没注释、复制却带注释"。
  * @param {boolean} [includeAnns=true] 是否携带注释行（仍受页内注释按钮开关约束）
  * @returns {Promise<string>} 字幕正文文本
  */
-// 274次：导出——视频侧栏 learn 草稿（文本=字幕正文）与 chat 共用同一正文源
+// 导出——视频侧栏 learn 草稿（文本=字幕正文）与 chat 共用同一正文源
 export async function buildSubtitleBody(includeAnns = true) {
   let body = '';
   // 整个字幕面板：每条字幕 + 其下所有注释（格式随详略模式，见函数头）
@@ -1277,12 +1299,12 @@ export async function buildSubtitleBody(includeAnns = true) {
     const sub = getSubtitlesRef()[i];
     if (!sub) continue;
     body += `${formatTime(sub.start)} ${sub.text || ''}\n`;
-    // 第四百四十六次：includeAnns 且页内注释按钮开（!_noAnnotation）才带注释
+    // includeAnns 且页内注释按钮开（!_noAnnotation）才带注释
     //   （用户："显示的是啥就是啥"）——注释按钮 off 时复制只有正文，与页内一致
     if (!includeAnns || _noAnnotation) continue;
     const annsP = _annotationsCache.get(sub);
     const anns = annsP ? await annsP : [];
-    // 第四百四十五次：口径对齐 fillSlotAnnotations——有译文 + 过阈值，仅出页内所显
+    // 口径对齐 fillSlotAnnotations——有译文 + 过阈值，仅出页内所显
     const validAnns = (anns || []).filter(a => pickCleanShortTrans(a.translations));
     for (const a of filterByCurrentRank(validAnns)) {
       body += _detailMode
@@ -1294,7 +1316,7 @@ export async function buildSubtitleBody(includeAnns = true) {
 }
 
 /**
- * 第一百七十一次：拼装当前标签页正文（复制 / 导出共用，避免两处格式分叉）
+ * 拼装当前标签页正文（复制 / 导出共用，避免两处格式分叉）
  * @returns {Promise<string|null>} 正文文本；null 表示当前标签页不支持（已 toast）
  */
 async function buildPanelBody() {
@@ -1314,7 +1336,7 @@ async function buildPanelBody() {
 }
 
 /**
- * 第一百七十一次：导出当前标签页正文为 .txt 文件（copy 右侧按钮）
+ * 导出当前标签页正文为 .txt 文件（copy 右侧按钮）
  * manifest 未申请 downloads 权限，走 Blob + URL.createObjectURL + a[download]。
  */
 export async function onExportFile() {
@@ -1351,16 +1373,16 @@ export async function onExportFile() {
 }
 
 /**
- * 第一百七十一次：视频侧栏对话按钮（评论按钮左侧）
- * 第一百七十四次：按用户要求"没有内容也能唤起"——正文为空不再 toast 拦截，
+ * 视频侧栏对话按钮（评论按钮左侧）
+ * 按用户要求"没有内容也能唤起"——正文为空不 toast 拦截，
  *   照样打开空面板（此时无引用、输入框为空），由用户自由提问。
- * 第一百八十三次（用户："预填对话咋成了词汇表？"）：讨论对象恒为字幕全文。
- *   旧版走 buildPanelBody，会随当前标签页变化——切到生词表就预填整张词汇表、
+ * 用户："预填对话咋成了词汇表？"：讨论对象恒为字幕全文。
+ *   此前走 buildPanelBody，会随当前标签页变化——切到生词表就预填整张词汇表、
  *   切到练习页则 toast 拦截后预填空。对话要讨论的是原文，与看哪个标签页无关，
  *   故改为直接调 buildSubtitleBody（复制/导出仍走 buildPanelBody，行为不变）。
- * 第一百八十四次：传 kind='sidebar' —— 用 chatSidebarPrompt（"总结上文"），
+ * 传 kind='sidebar' —— 用 chatSidebarPrompt（"总结上文"），
  *   字幕全文由面板顶部「The context is」上下文区承载。
- * 第四百四十五次（用户："聊天窗口选取正文错误，带了注释"）：buildSubtitleBody(false)
+ * 用户："聊天窗口选取正文错误，带了注释"：buildSubtitleBody(false)
  *   只取字幕正文——对话讨论的是原文，注释不是正文，且注释已随逐词渲染在页面上。
  */
 export async function onChatClickVs() {
@@ -1375,18 +1397,18 @@ function hasTranslation(a) {
 }
 
 // 格式化单条注释为文本行：单词 | 释义 | 标签 | 词阶
-// 反思（2026-07-08）：用户要求"单词注释除了释义，还有标签、词阶属性，评论中也带上"。
-//   旧版评论只有"单词 释义"，缺少标签和词阶。统一为完整四段格式。
+// 用户要求"单词注释除了释义，还有标签、词阶属性，评论中也带上"。
+//   此前评论只有"单词 释义"，缺少标签和词阶。统一为完整四段格式。
 //   释义完整不简化（annotator.js 已移除 sim_translate 截断）。
-// 反思（2026-08-03）：用户反馈"视频提示生词表明明一堆，复制或者评论按钮说没有单词"。
+// 用户反馈"视频提示生词表明明一堆，复制或者评论按钮说没有单词"。
 //   根因：复制/评论用 hasTranslation 过滤掉无译文的词，导致词表有词但按钮报"无单词"。
-//   修正：复制/评论不再过滤无译文词，无译文时释义列显示"-"（与标签列空值处理一致）。
+//   复制/评论不过滤无译文词，无译文时释义列显示"-"（与标签列空值处理一致）。
 function formatAnnotationLine(a, forComment, phon) {
   const transArr = a.translations || [];
   const trans = transArr.length > 0 ? transArr.join('；') : '-';
   const tags = (a.tags && a.tags.length > 0) ? a.tags.join(',') : '-';
   const stage = (a.rank !== null && a.rank !== undefined) ? rankToStage(a.rank) : '表外';
-  // 第508次（用户"评论带上[注音]，{原形}若非原形"）：评论行单词后带 [注音]
+  // 用户"评论带上[注音]，{原形}若非原形"：评论行单词后带 [注音]
   //   （getPhoneticsBatch 批量预取，缺失回空不拼）；词面非原形（a.lemma 与 word
   //   大小写不敏感不等，同 ws/scanner.js 口径）再带 {原形}。复制路径不传参维持原格式。
   let head = a.word;
@@ -1398,30 +1420,29 @@ function formatAnnotationLine(a, forComment, phon) {
   return `${head} | ${trans} | ${tags} | ${stage}`;
 }
 
-// 第四百四十五次：侧邻注释文本格式——与页内简略模式 inline 注释同形：word(短释义)
+// 侧邻注释文本格式——与页内简略模式 inline 注释同形：word(短释义)
 // 调用方已保证 a 过滤自 validAnns（有译文），'|| -' 仅为不丢条目的兜底
 function formatAnnotationSide(a) {
   return `${a.word}(${pickCleanShortTrans(a.translations) || '-'})`;
 }
 
 // 评论按钮：点击即把整个生词本填入"视频正下方主评论框"
-// 反思修复（2026-07-01）：
+// 两处关键修复：
 //   1. 旧实现 scrollMinIntoView(bili-comments) 会把整个评论区滚进视口，bili-comments
 //      很长，主评论框在其顶部之上（视频正下方），结果 deepQuery 命中评论区底部"回复框"。
 //      改为：滚到"主评论框容器"（#comment , .comment-wrapper, bili-comments 顶部），
 //      用 block:'center' 让主评论框居中，绝不在评论列表里找框。
 //   2. 空内容保护：_allAnnotations 为空或译文全 pending 时禁止只填前缀。
 //   3. fillCommentInput 限定在"视频正下方主评论区"内查找，不进入评论项列表。
-// 反思修复（2026-07-19）：
-//   用户反馈"有些评论有字数限制，随机选取"。各平台/场景评论上限不同（B站前端实测约 1000
+// 用户反馈"有些评论有字数限制，随机选取"。各平台/场景评论上限不同（B站前端实测约 1000
 //   字符，回复框更短，其他平台差异更大）。组装全文后若超 commentMaxLen，需随机选取若干
 //   行重新组装，保证可发送。算法：Fisher-Yates 打乱行索引→贪心加入直到再加超限→
 //   恢复原始字幕顺序（保证阅读连贯）。单行就超限的极端情况下，该行被跳过。
 export async function onCommentClick() {
-  // 反思（2026-08-03）：用户反馈"视频提示生词表明明一堆，复制或者评论按钮说没有单词"。
-  //   旧版用 hasTranslation 过滤无译文的词，导致词表有词但评论报"无单词"。
-  //   修正：不再过滤，所有生词均纳入评论（无译文词释义列显示"-"）；仅当生词表为空时才提示。
-  // 第508次（用户"评论带上[注音]，{原形}若非原形"）：组装前批量预取注音——
+  // 用户反馈"视频提示生词表明明一堆，复制或者评论按钮说没有单词"。
+  //   此前用 hasTranslation 过滤无译文的词，导致词表有词但评论报"无单词"。
+  //   不过滤，所有生词均纳入评论（无译文词释义列显示"-"）；仅当生词表为空时才提示。
+  // 用户"评论带上[注音]，{原形}若非原形"：组装前批量预取注音——
   //   getPhoneticsBatch 并行走 getPhonetic 内存/持久化缓存（不传 lang 随
   //   getPhonetic 内部回落学习语言；失败回空串不拼）。去重词表避免重复查。
   //   formatAnnotationLine(a, true, phon) 启用 [注音]/{原形} 增强格式。
@@ -1460,7 +1481,7 @@ export async function onCommentClick() {
 
   // 定位"视频正下方主评论框容器"：B站结构为 #commentapp > bili-comments，
   // 主评论框在 bili-comments 顶部（评论列表之上）。滚到该容器顶部而非底部。
-  // YouTube 评论区懒加载：未滚到时占位不在 DOM 里，旧流程第一次点击只滚加载、
+  // YouTube 评论区懒加载：未滚到时占位不在 DOM 里，此前第一次点击只滚加载、
   // 第二次才真填。先主动等占位出现，一次点成。
   if (/youtube\./.test(location.hostname)) {
     await ensureYtCommentsLoaded(6000);
@@ -1485,28 +1506,27 @@ export async function onCommentClick() {
 }
 
 // 追加一条 ASR 识别结果到字幕区域（作为普通字幕条目，与普通字幕完全同源）。
-// 2026-07-04 重构：预识别架构简化时间逻辑。
 //   asr-client 的 onText 回调直接返回视频相对秒数（seg.start/seg.end），
 //   无需墙钟偏移反算。B站路径通过 PCM 偏移精确计算，回退路径通过 video.currentTime 跟踪。
 //   offscreen 启用 return_timestamps=true，返回 chunk 级时间戳，
 //   asr-client 按 chunk 拆分后逐条调用 onText，每条字幕有精确的起止时间。
 //   ASR 结果直接进入 getSubtitlesRef()，复制/OCR/评论和 highlightCurrent 自动生效。
-//   滑动窗口模式（2026-07-07）：不再直接插入 DOM/_subEntries，只插入 getSubtitlesRef() +
+//   滑动窗口模式：不直接插入 DOM/_subEntries，只插入 getSubtitlesRef() +
 //   缓存注释。窗口内容由 highlightCurrent 在下次 timeupdate 时自然更新。
 // seg: {start, end, text}（start/end 为视频相对秒数）。
-// 反思（2026-07-05）：用户反馈"字幕要按照时间顺序，不是识别顺序"。
-// 旧版直接 push 到末尾，若识别段乱序到达（如 Whisper 处理时间差异），字幕顺序错乱。
-// 修正：按 start 时间二分查找插入位置，保持 getSubtitlesRef() 有序。
+// 用户反馈"字幕要按照时间顺序，不是识别顺序"。
+// 此前直接 push 到末尾，若识别段乱序到达（如 Whisper 处理时间差异），字幕顺序错乱。
+// 按 start 时间二分查找插入位置，保持 getSubtitlesRef() 有序。
 export async function appendASRSubtitle(seg) {
   if (!getRoot() || !seg || !seg.text) return;
-  // 第一百三十三次：首批 ASR 结果到达 → 自动展开一次（启动折叠态的解除）
+  // 首批 ASR 结果到达 → 自动展开一次（启动折叠态的解除）
   autoExpandOnce();
   // seg.start/seg.end 已经是视频相对秒数，直接使用
   let videoStart = (typeof seg.start === 'number' && isFinite(seg.start)) ? seg.start : 0;
   let videoEnd = (typeof seg.end === 'number' && isFinite(seg.end)) ? seg.end : (videoStart + 5);
   if (videoStart < 0) videoStart = 0;
   if (videoEnd <= videoStart) videoEnd = videoStart + 1;
-  // 第436次：ASR 段推进到小时级 → 切整面板 h:mm:ss（只开不关——时长一旦过小时，
+  // ASR 段推进到小时级 → 切整面板 h:mm:ss（只开不关——时长一旦过小时，
   //   不会回落；renderSubtitlePanel 全量渲染时会按最新时长重新判定/复位）。
   if (videoStart >= 3600) {
     setHourlyFormat(true);
@@ -1529,7 +1549,7 @@ export async function appendASRSubtitle(seg) {
 
   // 插入 getSubtitlesRef()
   getSubtitlesRef().splice(insertIdx, 0, sub);
-  // 反思（2026-08-06）：同步单条 ASR 字幕到视频内字幕 overlay（全屏时显示）
+  // 同步单条 ASR 字幕到视频内字幕 overlay（全屏时显示）
   overlayAddSubtitle(sub);
 
   // 走生词注释流程（统一入口 collectAnnotations，避免与渲染槽位竞态覆盖缓存）
@@ -1539,16 +1559,16 @@ export async function appendASRSubtitle(seg) {
       'noAnn=', _noAnnotation, 'rank=', getRankThreshold(),
       'anns=', anns.length, '总生词=', _allAnnotations.length);
 
-  // 全量渲染模式：直接创建字幕条目并追加到面板（2026-07-13 #93）
+  // 全量渲染模式：直接创建字幕条目并追加到面板
   const panel = getRoot().querySelector('#beaver-subtitle-panel');
   if (panel) {
-    // 2026-09-27（bug2：ASR 前台一直无更新的分支空洞）：加载占位在场或尚无任何槽位
-    //   都强制走全量渲染。旧版外层"占位||无槽位"、内层再判"无槽位"，组合出
+    // ASR 前台一直无更新的分支空洞：加载占位在场或尚无任何槽位
+    //   都强制走全量渲染。此前外层"占位||无槽位"、内层再判"无槽位"，组合出
     //   "占位在场但已有槽位"时既不重渲染也不追加的空洞段（seg 只进了 ref，
     //   面板永不显示）。合并后占位必被 renderSubtitlePanel 清除，段必上屏。
     if (panel.querySelector('.beaver-loading') || _windowSlots.length === 0) {
       // 首批 ASR 结果：初始化全量渲染面板
-      // 反思（2026-07-13 #92）：传 keepAnnotations=true 保留 collectAnnotations 已收集的生词，
+      // 传 keepAnnotations=true 保留 collectAnnotations 已收集的生词，
       //   避免 renderSubtitlePanel 清空 _allAnnotations 后生词表丢失已收集的内容。
       renderSubtitlePanel(true);
     } else {
@@ -1558,7 +1578,7 @@ export async function appendASRSubtitle(seg) {
       slot.querySelector('.beaver-sub-time').textContent = formatTime(sub.start || 0) + '\u00a0\u00a0';
       slot.querySelector('.beaver-sub-content').textContent = sub.text || '';
 
-      // 反思（2026-07-28 #bug3 三次修正）：
+      // 三处修正：
       //   1) 分隔符改为纯空行（无 textContent）
       //   2) 阈值提到 5s：ASR 自然句间停顿不算间断
       //   3) 合并连续间隔：仅在间断区间起点插入一个分隔符
@@ -1611,7 +1631,7 @@ export async function appendASRSubtitle(seg) {
   }
 }
 // ============================================================================
-// 2026-08-28 拆分第三刀：渲染状态接驳导出（门面经此读写，等价于原同模块直接赋值）
+// 渲染状态接驳导出（门面经此读写，等价于原同模块直接赋值）
 // ============================================================================
 export function setNoAnnotation(v) { _noAnnotation = v; }
 export function setDetailMode(v) { _detailMode = v; }
@@ -1620,13 +1640,13 @@ export function getDetailMode() { return _detailMode; }
 // 语句与原门面内联清空块逐字一致，仅提取为函数（机械搬移，行为不变）
 export function resetRenderState() {
   _subEntries = [];
-  setAllAnnotations([]);   // 第一百八十六次：同步清词键集
+  setAllAnnotations([]);   // 同步清词键集
   _seenWords.clear();
   _annotationsCache.clear();
   _collectedSubs = new WeakSet();
   _windowSlots = [];
   _activeSubIdx = -1;
-  // 第三百七十五次：换集/销毁时断开懒注释 observer（防旧 slot 引用滞留）
+  // 换集/销毁时断开懒注释 observer（防旧 slot 引用滞留）
   try { if (_lazyObserver) _lazyObserver.disconnect(); } catch (_) { /* ignore */ }
   _lazyObserver = null;
 }

@@ -4,34 +4,33 @@
 //       query bar 与视频侧栏的存在性同步。
 // 当前作用：query bar = 图标边框 + 输入框（无悬浮球）；默认折叠态输入框透明无占位符
 //   （占位符经 ::placeholder transparent 隐藏），:focus-within 展开后显示占位符。
-// 说明：由 web-sidebar-impl.js 机械拆分而来，代码逐字保留，未改动任何逻辑。
 //       跨模块共享状态一律来自 ./core.js，写入走 core 导出的 set_xxx 接缝，绝不另存副本。
 
 import { LANG_NAMES, LANG_NAMES_EN, TRANSLATE_LANGS, UI_LANGS, setLang, t } from '../../lib/i18n.js';
-// 第二百四十三次：expand 是侧栏扫描回填翻译（ws/scanner.js schedulePendingTranslate）的手势源头，
+// expand 是侧栏扫描回填翻译（ws/scanner.js schedulePendingTranslate）的手势源头：
 //   展开点击（click 手势）同步链上 prime 内置翻译，扫描回填的 translate 即可复用实例。
 import { primeTranslator } from '../../lib/translator.js';
-// 272次：顶行构建器同源的品牌小图标（搜索栏左端）
+// 顶行构建器同源的品牌小图标（搜索栏左端）
 import { brandIconSVG, buildTopbarHTML, ensureTopbarCss } from '../../lib/sidebar-topbar.js';
 import { SUBTITLE_TEXT_STYLES, findStyle, SUB_DEFAULT_STYLE } from '../../lib/styles.js';
-// 272次：query 标签复用右键搜索卡片（唯一定义 th/panel.js：同 CSS/同结构/同渲染核心；
+// query 标签复用右键搜索卡片（唯一定义 th/panel.js：同 CSS/同结构/同渲染核心；
 // ES module 按 URL 单实例，与 text-hint bundle 共享同一 thState/模块状态）
 import { buildPanelCss, buildCardInnerHTML, renderQueryCard, bindLemmaChipClick } from '../th/panel.js';
-// 272次：query bar 可用性 = 查询栏开关 queryBarEnabled（旧 queryEnabled 回退）+ 停用规则 query 项（与网页提示解耦）
+// query bar 可用性 = 查询栏开关 queryBarEnabled（queryEnabled 为未升级用户的兼容回退键）+ 停用规则 query 项（与网页提示解耦）
 import { suppressionFor } from '../../lib/deactivate.js';
 import { reviveSidebarIfPossible, startVideoController } from '../video-controller.js';
 import { _activeTab, _allAnnotations, _cachedLearnLang, _detailMode, _pageSentences, _panelRect, _preExpandPos, _root, _wordOnlyMode, clampPosToViewport, clampRectToViewport, formatTime, getInjectionRoot, log, saveState, set_activeTab, set_detailMode, set_noAnnotation, set_panelRect, set_preExpandPos, set_wordOnlyMode, toast, ts } from './core.js';
 import { rerenderAllSlots, schedulePageScan, toggleLemmaGroup } from './scanner.js';
-// 第一百七十一次：文本侧栏底部对话按钮 —— 对话面板唯一实现在 lib/chat.js
+// 文本侧栏底部对话按钮 —— 对话面板唯一实现在 lib/chat.js
 import { openChatPanel } from '../../lib/chat.js';
-// 第一百八十五次：给 AI 的正文提取（Readability 优先），唯一实现在 lib/main-text.js；
-// 第364次：诊断窗拆分为诊断中心路由窗（openDiagCenter），openMainTextDiag 随之撤除
+// 给 AI 的正文提取（Readability 优先），唯一实现在 lib/main-text.js
 import { getAiMainText } from '../../lib/main-text.js';
+// 诊断中心路由窗
 import { openDiagCenter } from '../diag-window.js';
-// G3（2026-09-08）：learn 面板草稿导入（§6.2）——组装+落缓存唯一实现在 ./draft-export.js
+// learn 面板草稿导入（§6.2）——组装+落缓存唯一实现在 ./draft-export.js
 import { importCurrentSidebarDraft, getSiteUrl } from './draft-export.js';
-// 第二百七十次：⋯ 菜单「停用本站」——写当前域「网页提示」停用规则（272 次默认由
-//   四项全停改单停提示；匹配/存储唯一实现 lib/deactivate.js）
+// ⋯ 菜单「停用本站」——写当前域「网页提示」单停规则（用户裁定"设定抑制默认是抑制网页提示，
+//   不是所有"；匹配/存储唯一实现 lib/deactivate.js）
 import { upsertDeactivateRule } from '../../lib/deactivate.js';
 
 // === 构建 DOM 骨架 ===
@@ -48,7 +47,7 @@ export function buildSidebar() {
     </div>
     <!-- 展开面板 -->
     <div class="beaver-web-panel" id="beaver-web-panel">
-      <!-- 第一百二十四次：顶行统一构建器（src/lib/sidebar-topbar.js 唯一来源）——
+      <!-- 顶行统一构建器（src/lib/sidebar-topbar.js 唯一来源）——
            视频/文本两形态同结构同顺序；ids 映射保留既有事件绑定；✕ 仅文本侧栏 -->
       ${buildTopbarHTML({ form: 'text', showClose: true, ids: {
         form: 'beaver-web-video-btn',
@@ -58,8 +57,8 @@ export function buildSidebar() {
         close: 'beaver-web-close-btn'
       }, titles: { form: t('ws.videoSidebar'), settings: t('ws.settings'), collapse: t('ws.collapse'), close: t('ws.close') } })}
       <!-- 语言设置浮层 -->
-      <!-- 反思（2026-08-09）：用户要求"侧栏语言设定包括界面，界面有十大语言"。 -->
-      <!--   新增界面语言下拉框（UI_LANGS 10种），切换后实时刷新侧栏界面文案。 -->
+      <!-- 用户要求"侧栏语言设定包括界面，界面有十大语言"：
+           界面语言下拉框（UI_LANGS 10种），切换后实时刷新侧栏界面文案。 -->
       <div class="beaver-web-lang-panel" id="beaver-web-lang-panel">
         <div class="beaver-web-lang-row">
           <label class="beaver-web-lang-label">${t('lang.ui')}</label>
@@ -74,12 +73,11 @@ export function buildSidebar() {
           <select class="beaver-web-lang-select" id="beaver-web-meaning-lang"></select>
         </div>
       </div>
-      <!-- 第一百二十三次：⋯ 设定浮层（与视频侧栏顶行对齐） -->
-      <!-- 第二百零四次（用户："⋯改为下拉，点击选项后再跳转"；"原来诊断窗口入口按钮移除"）：
-           171 次的"点 ⋯ 直接跳引导页"撤销——⋯ 恢复下拉展开，菜单项＝引导页/诊断窗口/重置/关闭；
-           工具栏的 ⏱ 诊断入口按钮移除，其功能并入本菜单（openMainTextDiag 绑定随之迁来）。 -->
+      <!-- ⋯ 设定浮层（与视频侧栏顶行对齐） -->
+      <!-- 用户裁定"⋯改为下拉，点击选项后再跳转"：菜单项＝引导页/诊断窗口/重置/关闭；
+           工具栏的 ⏱ 诊断入口按钮移除，其功能并入本菜单 -->
       <div class="beaver-web-lang-panel beaver-web-settings-pop" id="beaver-web-settings-pop">
-        <!-- 第二百七十次：⋯ 菜单「停用本站」——写当前域全停规则并跳引导页停用栏微调 -->
+        <!-- 「停用本站」——写当前域「网页提示」单停规则 -->
         <button class="beaver-web-settings-item" id="beaver-web-deactivate-item">⏸ ${t('ws.deactivate')}</button>
         <button class="beaver-web-settings-item" id="beaver-web-guide-item">📖 ${t('ws.openGuide')}</button>
         <button class="beaver-web-settings-item" id="beaver-web-diag-item">🩺 ${t('ws.diagCenter')}</button>
@@ -89,11 +87,11 @@ export function buildSidebar() {
       <div class="beaver-web-tabs">
         <div class="beaver-web-tab active" data-tab="sentences">${t('ws.tabSentences')}</div>
         <div class="beaver-web-tab" data-tab="words">${t('ws.tabWords')}</div>
-        <!-- 272次：learn 标签改为 query——页面如同右键搜索（卡片复用 th/panel.js 唯一实现）；
+        <!-- learn 标签改为 query——页面如同右键搜索（卡片复用 th/panel.js 唯一实现）；
              原练习页（草稿导入按钮行+小程序码）整体移除，功能并入底部 learn 按钮 -->
         <div class="beaver-web-tab" data-tab="query">${t('tab.query')}</div>
       </div>
-      <!-- 句标签工具栏：第二百三十九次加回注释总开关（用户："在detail之前 也加Annotation标签按钮"）——
+      <!-- 句标签工具栏：注释总开关（用户："在detail之前 也加Annotation标签按钮"）——
            active=网页提示（text-hint 高亮/侧邻注释）+ 侧栏句子注释标记；
            取消=撤掉网页提示（stopForPage，本页会话停用）+ 句子面板渲染 defuddle 提取的纯正文（_noAnnotation=true）。
            初始 active 态由 textHintEnabled 校正（见绑定区 storage.get）。 -->
@@ -117,9 +115,9 @@ export function buildSidebar() {
           <div class="beaver-web-empty-tip">${t('ws.noWords')}</div>
         </div>
       </div>
-      <!-- 272次：query 标签面板——输入行 + 结果卡（Shadow DOM 承载右键搜索卡片，样式不漏宿主页）；
-           275次：搜索框 Enter 与右键菜单（无选中）落到这里。276次：占位符 query... 只在
-           展开后的本输入框显示（折叠搜索条不显示）；🔍 查询按钮按裁定不加背景色 -->
+      <!-- query 标签面板——输入行 + 结果卡（Shadow DOM 承载右键搜索卡片，样式不漏宿主页）；
+           搜索框 Enter 与右键菜单（无选中）落到这里；占位符只在展开后的本输入框显示
+           （折叠搜索条不显示）；🔍 查询按钮按裁定不加背景色 -->
       <div class="beaver-web-tab-panel hidden" data-tab="query" id="beaver-web-tab-query">
         <div class="beaver-web-qrow">
           <input class="beaver-web-qinput" id="beaver-web-query-input" type="text" spellcheck="false"
@@ -130,26 +128,18 @@ export function buildSidebar() {
           <div class="beaver-web-empty-tip">${t('ws.queryTip')}</div>
         </div>
       </div>
-      <!-- 底部工具栏：复制按钮
-           反思（2026-08-16 第六十八次）："注释按钮移走"——原句子工具栏的注释开关
-           与详情按钮并排，用户要求移走，曾移至底部工具栏挨着复制。
-           反思（2026-08-16 第六十九次）：用户再次要求"注释按钮移走"→ 彻底移除注释
-           开关按钮（含 HTML/绑定/onAnnotationClick），注释常显（_noAnnotation 恒为 false）。
-           第二百三十九次：用户要求加回——注释开关恢复到句标签工具栏（detail 之前，
-           与视频侧栏 Annotation 按钮同语义），并联动 text-hint 网页提示启停。 -->
+      <!-- 底部工具栏：复制 + learn + 对话。注释开关现居句标签工具栏（detail 之前，
+           与视频侧栏 Annotation 按钮同语义），联动 text-hint 网页提示启停。 -->
       <div class="beaver-web-footer">
         <button class="beaver-web-action-btn" id="beaver-web-copy" title="${t('ws.copy')}">📋 ${t('ws.copy')}</button>
-        <!-- 272次：export 改 learn——导入卷轴草稿并跳转网站「我的卷轴」（原 learn 标签
-             「Import and Open」行为）；274次：图标 📱→🎯（用户裁定），跳转按本地/线上
-             构建自动判定（getSiteUrl）；原导出文件功能移除 -->
+        <!-- learn——导入卷轴草稿并跳转网站「我的卷轴」；跳转按本地/线上构建自动判定（getSiteUrl）；
+             图标 🎯（用户裁定） -->
         <button class="beaver-web-action-btn" id="beaver-web-learn-btn" title="${t('btn.learn')}">🎯 ${t('btn.learn')}</button>
         <button class="beaver-web-action-btn" id="beaver-web-chat" title="${t('btn.chat')}">💬</button>
-        <!-- 第二百零四次（用户："原来诊断窗口入口按钮移除"）：⏱ 诊断入口按钮移除，
-             功能并入 ⋯ 下拉菜单（#beaver-web-diag-item） -->
       </div>
       <!-- 可调尺寸手柄（右下角，Win 窗口风格） -->
       <div class="beaver-web-resize-handle" id="beaver-web-resize-handle"></div>
-      <!-- 第一百三十四次：三向命中热区——右缘(ew)/下缘(ns)整条，角手柄(nwse)加大到20px -->
+      <!-- 三向命中热区——右缘(ew)/下缘(ns)整条，角手柄(nwse)加大到20px -->
       <div class="beaver-web-resize-edge-r" id="beaver-web-resize-edge-r"></div>
       <div class="beaver-web-resize-edge-b" id="beaver-web-resize-edge-b"></div>
     </div>
@@ -158,7 +148,7 @@ export function buildSidebar() {
 }
 
 // === 绑定事件 ===
-// 第一百七十一次（用户反馈"文本侧栏不要双击就消失"）：
+// 用户报障"文本侧栏不要双击就消失"：
 //   根因——展开态面板锚点与悬浮球完全重合（同为 right:16px/top:20px），双击悬浮球时
 //   第一击展开面板，第二击正好落在顶行右上角的 ◀/✕ 按钮上（球心与按钮几何重叠），
 //   侧栏立刻被折叠/关闭 = "双击就消失"。本文件从未绑定 dblclick，纯属误触。
@@ -192,9 +182,8 @@ export function bindEvents() {
     expandToQuery(String(qbarInput.value || '').trim());
   });
 
-  // 图标右键 → 召唤视频侧栏（2026-08-20 第八十六次补充③；272次收窄到图标本体，
-  //   输入框右键保留浏览器原生文本菜单）
-  // 反思：右键菜单（contextmenu）在拖拽场景下也应保留；不拦截整个文档
+  // 图标右键 → 召唤视频侧栏（收窄到图标本体——输入框右键保留浏览器原生文本菜单）。
+  //   右键菜单（contextmenu）在拖拽场景下也应保留；不拦截整个文档
   //   （文档级 contextmenu 由 text-hint.js capture 阶段记录坐标，互不影响）。
   _root.querySelector('#beaver-qbar-icon').addEventListener('contextmenu', (e) => {
     e.preventDefault();
@@ -202,10 +191,10 @@ export function bindEvents() {
     summonVideoSidebar();
   });
 
-  // 顶行 🎬 按钮 → 切换到视频形态（第一百二十二次：统称"侧栏"，双向切换）
+  // 顶行 🎬 按钮 → 切换到视频形态（统称"侧栏"，双向切换）
   // 已有视频侧栏时派发 beaver-unified-open 让其展开；否则召唤 generic 视频侧栏；
   // 自身收起为悬浮球——一次只呈现一种形态。
-  // 第一百三十六次（用户反馈"点击视频侧栏按钮，没有提示就变为悬浮球了"）：
+  // 用户报障"点击视频侧栏按钮，没有提示就变为悬浮球了"：
   //   收起改为**条件执行**——仅当视频侧栏确实在场/成功召唤时才收起为球。
   //   召唤失败（页面无 video：toast 提示后保持展开）不再收起，恢复"提示无视频，
   //   本身不动"的历史行为；YouTube/B站正片页经 reviveSidebarIfPossible 复活成功后才收起。
@@ -238,7 +227,7 @@ export function bindEvents() {
   });
 
   // 收起/关闭按钮
-  // 第一百七十一次：保护窗内（刚展开 400ms）忽略——防双击悬浮球第二击误触
+  // 保护窗内（刚展开 400ms）忽略——防双击悬浮球第二击误触
   _root.querySelector('#beaver-web-collapse-btn').addEventListener('click', () => {
     if (inExpandGuard()) { log('展开保护窗内忽略折叠点击（疑双击误触）'); return; }
     collapse();
@@ -248,9 +237,9 @@ export function bindEvents() {
     close();
   });
 
-  // 第一百二十三次：⋯ 设定浮层（重置位置与尺寸 / 关闭）
-  // 第二百零四次（用户："⋯改为下拉，点击选项后再跳转而不是点击...就跳转"）：
-  //   171 次的"点 ⋯ 直接跳引导页"撤销——⋯ 恢复下拉展开（先关其他浮层再 toggle 自身），
+  // ⋯ 设定浮层（重置位置与尺寸 / 关闭）
+  // 用户裁定"⋯改为下拉，点击选项后再跳转而不是点击...就跳转"：
+  //   点 ⋯ 直接跳引导页的方案撤销——⋯ 恢复下拉展开（先关其他浮层再 toggle 自身），
   //   引导页/诊断窗口降级为菜单项，点击选项才执行。
   const setBtn = _root.querySelector('#beaver-web-settings-btn');
   const setPop = _root.querySelector('#beaver-web-settings-pop');
@@ -273,10 +262,10 @@ export function bindEvents() {
       log('⋯菜单 打开引导页失败：' + String(err && err.message || err));
     }
   });
-  // 菜单项：停用本站（第二百七十次；第二百七十二次默认改单停「网页提示」——用户裁定
-  //   "设定抑制默认是抑制网页提示，不是所有"）：写当前域 hint 停用规则，规则写入即经
-  //   storage.onChanged 撤本页高亮/侧注；文本侧栏自身与其余三项不受影响，随后跳引导页
-  //   停用栏（地址=当前域名）供改通配范围与勾选四大选项。
+  // 菜单项：停用本站（用户裁定"设定抑制默认是抑制网页提示，不是所有"——默认单停
+  //   「网页提示」）：写当前域 hint 停用规则，规则写入即经 storage.onChanged 撤本页
+  //   高亮/侧注；文本侧栏自身与其余三项不受影响，随后跳引导页停用栏（地址=当前域名）
+  //   供改通配范围与勾选四大选项。
   _root.querySelector('#beaver-web-deactivate-item').addEventListener('click', async () => {
     closeAllPopups();
     const pat = location.hostname;
@@ -293,8 +282,7 @@ export function bindEvents() {
       log('⋯菜单 打开引导页失败：' + String((err && err.message) || err));
     }
   });
-  // 菜单项：诊断中心路由窗（第364次：openMainTextDiag 拆分为 openDiagCenter；
-  // 第398次：audioDownload 注入参数随下载音频退役删除，两入口调用形态一致）
+  // 菜单项：诊断中心路由窗
   _root.querySelector('#beaver-web-diag-item').addEventListener('click', () => {
     closeAllPopups();
     openDiagCenter().catch((e) => {
@@ -312,12 +300,12 @@ export function bindEvents() {
     close();
   });
 
-  // 反思（2026-08-08）：用户要求"悬浮球、侧栏都应当可拖动"。
+  // 用户要求"悬浮球、侧栏都应当可拖动"：
   //   悬浮球（折叠态）和标题栏（展开态）均可拖动，拖动时切换为自由定位（脱离右侧/顶部固定）。
   makeDraggable();
 makeResizable();
 
-  // 272次：搜索栏可用性（Query 开关/停用规则）初始化 + 实时刷新 + 右键菜单跳转监听
+  // 搜索栏可用性（Query 开关/停用规则）初始化 + 实时刷新 + 右键菜单跳转监听
   ensureQueryAvailabilityWatcher();
   applyQueryAvailability();
 
@@ -326,12 +314,12 @@ makeResizable();
     tab.addEventListener('click', () => switchTab(tab.dataset.tab));
   });
 
-  // 工具栏（第二百三十九次：加回注释总开关，与详情/词表按钮并列）
+  // 工具栏（注释总开关与详情/词表按钮并列）
   _root.querySelector('#beaver-web-annotation').addEventListener('click', onAnnotationClick);
   _root.querySelector('#beaver-web-detail').addEventListener('click', onDetailClick);
   _root.querySelector('#beaver-web-export').addEventListener('click', onWordListToggle);
 
-  // 272次：query 标签——查询按钮（输入行内），Enter 在输入框 keydown 里另行处理
+  // query 标签——查询按钮（输入行内），Enter 在输入框 keydown 里另行处理
   _root.querySelector('#beaver-web-query-run').addEventListener('click', () => {
     const input = _root.querySelector('#beaver-web-query-input');
     runSidebarQuery(input ? String(input.value || '').trim() : '');
@@ -342,7 +330,7 @@ makeResizable();
     runSidebarQuery(String(_qTabInput.value || '').trim());
   });
 
-  // 第二百三十九次：Annotation 按钮初始态对齐 text-hint 全局开关（与 scanner.js 口径
+  // Annotation 按钮初始态对齐 text-hint 全局开关（与 scanner.js 口径
   //   一致：仅显式 false 才算关）。全局关提示的用户按钮置 inactive 且侧栏走纯正文，
   //   保证"按钮态=实际行为"；读回后重绘一次覆盖首帧（HTML 模板默认 active）。
   try {
@@ -355,12 +343,9 @@ makeResizable();
     });
   } catch (e) { /* ignore */ }
 
-  // 反思（2026-08-14 第五十八次）：移除 web-sidebar 字幕样式按钮（原 bindSubtitleStylePanel）。
-  //   字幕样式选择集中在引导页，启动时恢复已保存的 overlay 字幕样式 class 保留。
-
-  // 反思（2026-08-13 第五十次）：启动时恢复已保存的 overlay 字幕样式 class
-  // 318次：缺省值引用 SUB_DEFAULT_STYLE 常量（'none' 非法已全清）；存量 'none'
-  //   由 applyOverlayStyleClass 内部回落常量并写盘迁移。
+  // 字幕样式选择集中在引导页；此处仅启动时恢复已保存的 overlay 字幕样式 class
+  //   （缺省值引用 SUB_DEFAULT_STYLE 常量；存量 'none' 由 applyOverlayStyleClass
+  //   内部回落常量并写盘迁移）。
   try {
     chrome.storage.local.get({ subtitleStyle: SUB_DEFAULT_STYLE }, (res) => {
       const saved = res.subtitleStyle || SUB_DEFAULT_STYLE;
@@ -373,17 +358,15 @@ makeResizable();
 
   // 复制按钮：复制当前标签页的全部句子文本
   _root.querySelector('#beaver-web-copy').addEventListener('click', onCopyClick);
-  // 272次：底部 learn 按钮——导入卷轴草稿并跳转网站「我的卷轴」（原 learn 标签
-  //   「Import and Open」行为 + 📱 手机图标）；原导出文件按钮移除
+  // 底部 learn 按钮——导入卷轴草稿并跳转网站「我的卷轴」
   _root.querySelector('#beaver-web-learn-btn').addEventListener('click', onDraftImportAndOpenClick);
   _root.querySelector('#beaver-web-chat').addEventListener('click', onChatClick);
-  // G3（2026-09-08）：learn 面板按钮行已随 learn 标签整体移除（272次并入底部 learn 按钮）
-  // 第二百零四次：⏱ 正文提取耗时诊断按钮移除——入口并入 ⋯ 下拉菜单
-  //   （#beaver-web-diag-item，openMainTextDiag 绑定迁至该处）
+  // learn 面板按钮行已随 learn 标签整体移除（并入底部 learn 按钮）；
+  // ⏱ 正文提取耗时诊断按钮移除——入口并入 ⋯ 下拉菜单（#beaver-web-diag-item）
 
-  // 反思（2026-08-08）：喇叭按钮朗读（Web Speech API）。
+  // 喇叭按钮朗读（Web Speech API）。
   //   事件委托：所有 .beaver-w-speak 和 .beaver-web-ann-speak 按钮统一处理。
-  // 反思（2026-09-04）：生词表原形折叠按钮（.beaver-w-lemma-toggle）同委托处理，
+  // 生词表原形折叠按钮（.beaver-w-lemma-toggle）同委托处理，
   //   归组查询在展开瞬间发生（toggleLemmaGroup 内部读 _allAnnotations 现场值）。
   _root.addEventListener('click', (e) => {
     const tgl = e.target.closest('.beaver-w-lemma-toggle');
@@ -405,7 +388,7 @@ makeResizable();
 }
 
 // === 语言面板（复用 sidebar.js 模式）===
-// 反思（2026-08-09）：用户要求"侧栏语言设定包括界面，界面有十大语言"。
+// 用户要求"侧栏语言设定包括界面，界面有十大语言"：
 //   新增界面语言下拉框（UI_LANGS 10种），切换后调用 setLang() 实时刷新界面文案。
 function bindLanguagePanel() {
   const langBtn = _root.querySelector('#beaver-web-lang-btn');
@@ -423,7 +406,7 @@ function bindLanguagePanel() {
   }
 
   // 填充目标/释义语言选项（42种）
-  // 第二百二十八次（用户："释义语言统一英文名称"）：释义下拉用英文名，学习下拉仍本地化名
+  // 用户裁定"释义语言统一英文名称"：释义下拉用英文名，学习下拉仍本地化名
   for (const lang of TRANSLATE_LANGS) {
     const opt1 = document.createElement('option');
     opt1.value = lang;
@@ -481,36 +464,34 @@ function bindLanguagePanel() {
 
 // === 注入关键 CSS（同步，确保 query bar 立即可见）===
 // query bar = 图标边框 + 输入框（无悬浮球）。
-// 反思（2026-08-07）：<link> 异步加载 CSS，加载前 query bar 无样式不可见。
-//   修正：用 <style> 同步注入 collapsed 态关键样式，不依赖 <link>。
-// 当前口径：默认折叠态输入框透明、无占位符视觉（::placeholder transparent）；
-//   点击/聚焦 :focus-within 展开后显示占位符（主流做法：CodePen 展开式搜索框 + MDN ::placeholder）。
-// 272次：折叠态由 48px 圆球改为搜索栏；274次（用户"搜索栏太张扬，本来就是为了
-//   轻量加的"）降噪——去绿底改中性半透明白、默认宽度收到 icon+一单词输入框+三角
-//   （约 150px，:focus-within 展到 300px）、三角去底色；.query-off（Query 关）48px 圆。
-// 282次（用户"你现在错得离谱，重新画"）：根因终于查清——本层与 web-sidebar.css
-//   的 .collapsed 规则特异性同为 (1,1,0) 且都带 !important，异步 <link> 后加载
-//   胜出，本层非激活视觉（透明底+半透明边框）一直被 web-sidebar.css 的淡绿实底
-//   覆盖，此前四轮改动全部白做。修正：视觉全部收敛到本层独占（同步注入必胜）——
-//   非激活=104px 透明底+半透明边框 rgba(28,77,50,0.30)+无阴影+占位符隐藏；
-//   激活（:focus-within）=延长 300px+白底+边框近不透明 rgba(28,77,50,0.9)+
-//   占位符显现；输入框自身样式也钉进本层（透明底/无边框/无描边），
+// <link> 异步加载 CSS，加载前 query bar 无样式不可见——用 <style> 同步注入
+//   collapsed 态关键样式，不依赖 <link>。
+// 折叠态：输入框透明、无占位符视觉（::placeholder transparent）；点击/聚焦
+//   :focus-within 展开后显示占位符（CodePen 展开式搜索框 + MDN ::placeholder 主流做法）。
+// 视觉口径（用户逐次裁定）：
+// - 折叠态由 48px 圆球改为搜索栏；用户"搜索栏太张扬，本来就是为了轻量加的"——
+//   降噪：去绿底改中性半透明白、默认宽度收到 icon+一单词输入框+三角（约 150px，
+//   :focus-within 展到 300px）、三角去底色；.query-off（Query 关）48px 圆。
+// - 用户裁定"你现在错得离谱，重新画"——根因：本层与 web-sidebar.css 的 .collapsed
+//   规则特异性同为 (1,1,0) 且都带 !important，异步 <link> 后加载胜出，本层非激活
+//   视觉（透明底+半透明边框）一直被 web-sidebar.css 的淡绿实底覆盖。视觉全部收敛到
+//   本层独占（同步注入必胜）——非激活=104px 透明底+半透明边框 rgba(28,77,50,0.30)+
+//   无阴影+占位符隐藏；激活（:focus-within）=延长 300px+白底+边框近不透明
+//   rgba(28,77,50,0.9)+占位符显现；输入框自身样式也钉进本层（透明底/无边框/无描边），
 //   web-sidebar.css 删除全部 .collapsed 与 .beaver-qbar-input 冲突块。
-// 283次（用户"改为半透明，无绿边，中间输入框透明；查询栏跟文本侧栏转换尽量位置
-//   不动，左上角算位置"）：三处修正——
-//   1. 半透明底（用户澄清"主题色，马卡龙绿，浅色，半透明"）：折叠 rgba(198,233,208,0.50)、
-//      激活 rgba(198,233,208,0.90)，输入框保持透明（绿底透出即输入区）；
-//   2. 无绿边：border 全部去除（282 的半透明绿边即用户所说"绿边"）；
+// - 用户"改为半透明，无绿边，中间输入框透明；查询栏跟文本侧栏转换尽量位置
+//   不动，左上角算位置"——1. 半透明底（用户澄清"主题色，马卡龙绿，浅色，半透明"）：
+//   折叠 rgba(198,233,208,0.50)、激活 rgba(198,233,208,0.90)，输入框保持透明
+//   （绿底透出即输入区）；2. 无绿边：border 全部去除（半透明绿边即用户所说"绿边"）；
 //   3. 左上角锚定：展开侧栏左缘 = 100vw − 16 − min(380, 100vw−24)
-//      = min(calc(100vw − 396px), 8px)（web-sidebar.css .expanded 右 16px 反推），
-//      折叠条 left 锚定同值（宽视口=100vw−396px；窄视口≤404px 收边 8px），
-//      折叠↔展开切换时左上角坐标不动；折叠条向右生长（left 定位 + width 过渡）。
-// 284次纠正：旧注释"278次用户改口径：折叠也显示占位符"系误记（用户从未说过），已删除；
-//   模板字符串内 HTML 注释一并清除（esbuild/terser 不剥字符串内注释，会随上传包发布）。
-// 285次（用户"折叠看不到输入框"）：输入框透明底+无边框在绿底上隐形——改自带底色
+//   = min(calc(100vw − 396px), 8px)（web-sidebar.css .expanded 右 16px 反推），
+//   折叠条 left 锚定同值（宽视口=100vw−396px；窄视口≤404px 收边 8px），
+//   折叠↔展开切换时左上角坐标不动；折叠条向右生长（left 定位 + width 过渡）。
+// - 用户"折叠看不到输入框"——输入框透明底+无边框在绿底上隐形：改自带底色
 //   rgba(255,255,255,.72)+淡描边（折叠即见框），:focus-within 后白底实态；
-//   占位符仍折叠隐藏、展开显现（口径不变）。
-// 287次（用户"输入框不要浓边框色"）：描边 38%→16%、聚焦 60%→28%，只留浅痕。
+//   占位符仍折叠隐藏、展开显现。
+// - 用户"输入框不要浓边框色"——描边 38%→16%、聚焦 60%→28%，只留浅痕。
+//   （模板字符串内不写 HTML 注释：esbuild/terser 不剥字符串内注释，会随上传包发布。）
 export function injectCriticalCSS() {
   if (document.getElementById('beaver-web-critical-css')) return;
   const style = document.createElement('style');
@@ -529,8 +510,7 @@ style.textContent = `
 #beaver-web-sidebar.collapsed.query-off .beaver-qbar-input{display:none !important;}
 #beaver-web-sidebar.collapsed.query-off .beaver-web-collapse-tab{justify-content:center !important;}
 `;
-  // 反思（2026-08-12 第四十四次）：head 可能不存在（frameset 等特殊页面），
-  //   回退到 document.documentElement
+  // head 可能不存在（frameset 等特殊页面），回退到 document.documentElement
   (document.head || document.documentElement).appendChild(style);
 }
 
@@ -556,13 +536,13 @@ export function injectCSS() {
   }
 }
 
-// 召唤视频侧栏（2026-08-20 第八十六次补充③）
+// 召唤视频侧栏
 // 仅 bilibili/youtube 自动出现视频侧栏；其他站点视频侧栏不自动出现（generic.js
 // hasMeaningfulVideo 检测不通过或未启动），用户可经悬浮球右键 / 顶行 🎬 按钮手动召唤。
 function summonVideoSidebar() {
-  // 第一百三十二次：页面已有视频侧栏（含被 ✕ 关闭或 📄 切走的）——直接派发复活事件
+  // 页面已有视频侧栏（含被 ✕ 关闭或 📄 切走的）——直接派发复活事件
   // （video-sidebar wireUnifiedFormEvents 负责清 userClosed/恢复显示/展开）。
-  // 旧逻辑依赖 startVideoController 幂等 no-op，✕ 关闭后点球右键会毫无反应。
+  // 若依赖 startVideoController 幂等 no-op，✕ 关闭后点球右键会毫无反应。
   const vsb = document.querySelector('#beaver-sidebar');
   if (vsb && document.contains(vsb)) {
     window.dispatchEvent(new CustomEvent('beaver-unified-open', { detail: { form: 'video' } }));
@@ -574,16 +554,16 @@ function summonVideoSidebar() {
     return;
   }
   console.log('[VocabRadar][web-sidebar] 召唤视频侧栏, platform=generic', location.href);
-  // 第一百三十六次：分平台复活——YouTube/B站正片页侧栏缺席时，旧逻辑走
-  //   startVideoController('generic')，被 _started 守卫吞掉（无任何反馈即死路）；
-  //   改走 reviveSidebarIfPossible：在 DOM 则恢复、缺席则强制重启控制器。
-  //   generic 站点维持原路径（控制器未启动，startVideoController 正常生效）。
+  // 分平台复活——YouTube/B站正片页侧栏缺席时，走 startVideoController('generic')
+  //   会被 _started 守卫吞掉（无任何反馈即死路）；改走 reviveSidebarIfPossible：
+  //   在 DOM 则恢复、缺席则强制重启控制器。generic 站点维持原路径
+  //   （控制器未启动，startVideoController 正常生效）。
   const host = location.hostname;
   if (/(^|\.)youtube\.com$/i.test(host) || /(^|\.)bilibili\.com$/i.test(host)) {
     reviveSidebarIfPossible(/(^|\.)youtube\.com$/i.test(host) ? 'youtube' : 'bilibili');
     return;
   }
-  // 反思：startVideoController 有 _started 守卫——bilibili/youtube 已启动时为幂等 no-op；
+  // startVideoController 有 _started 守卫——bilibili/youtube 已启动时为幂等 no-op；
   //   其他站 generic 未启动则真正启动（waitForVideo 找 video，无字幕走 ASR 缓存/无字幕提示）。
   startVideoController('generic').catch((e) => {
     console.warn('[VocabRadar][web-sidebar] 召唤视频侧栏失败:', e);
@@ -596,9 +576,9 @@ function savePanelRect() {
   if (!(r.width > 50) || !(r.height > 50)) return;
   set_panelRect({ left: Math.round(r.left), top: Math.round(r.top), width: Math.round(r.width), height: Math.round(r.height) });
   try {
-    // 第一百八十七次（用户："侧栏位置乱跑"）：改存 **视口坐标**。
-    //   反思：#beaver-web-sidebar 是 position:fixed，定位基准永远是视口，与文档滚动无关。
-    //   旧版存 docX/docY（= 视口坐标 + 当时滚动量），恢复时再减 **当前** 滚动量。
+    // 用户报障"侧栏位置乱跑"：改存 **视口坐标**。
+    //   #beaver-web-sidebar 是 position:fixed，定位基准永远是视口，与文档滚动无关。
+    //   此前存 docX/docY（= 视口坐标 + 当时滚动量），恢复时再减 **当前** 滚动量；
     //   刷新后滚动位置几乎必然不同（浏览器恢复滚动、锚点跳转、懒加载撑高），
     //   得到的 left/top 与保存时完全不同 —— 这就是"位置乱跑"的第一因。
     //   保留 docX/docY 仅为兼容旧数据读取路径，权威值是 left/top。
@@ -617,8 +597,8 @@ function applyPanelRect(rect) {
   // 尺寸原样（仅钳进视口上限），位置夹回视口——外形一个像素不变（除非视口装不下）
   const w = Math.max(280, Math.min(Math.round(rect.width), window.innerWidth - 16));
   const h = Math.max(220, Math.min(Math.round(rect.height), window.innerHeight - 16));
-  // 第一百八十七次：面板必须按 **自身宽高** 夹取。旧版用 clampPosToViewport（48px 球的
-  //   夹取口径，maxT=视口高-48），380×760 的面板 top 稍大就被压到视口底边只剩一条，
+  // 面板必须按 **自身宽高** 夹取：clampPosToViewport 是 48px 球的
+  //   夹取口径（maxT=视口高-48），380×760 的面板 top 稍大就被压到视口底边只剩一条，
   //   视觉上等于"侧栏跑了"。
   const p = clampRectToViewport(Math.round(rect.left), Math.round(rect.top), w, h);
   _root.classList.add('dragged');
@@ -634,14 +614,14 @@ function applyPanelRect(rect) {
 }
 
 export function expand(anchor) {
-  // 第二百四十三次：温和 prime 内置翻译（不清冷却）——本次展开点击即 user activation，
+  // 温和 prime 内置翻译（不清冷却）——本次展开点击即 user activation，
   //   同步链上发起 create；后续扫描回填的 translate 复用实例。冷却期内快速跳过。
   primeTranslator();
-  // 第一百二十一次：统一侧栏路由——页面存在视频侧栏且有 <video> 时，点球直接展开视频形态；
+  // 统一侧栏路由——页面存在视频侧栏且有 <video> 时，点球直接展开视频形态；
   // 文本形态改由视频侧栏头部 📄 按钮进入（或无视频时默认）。
-  // 278次：用户手动展开=兜底已达成——置 sticky（_absentConcluded），同一 URL 上看门狗
-  //   不再重进 12s 宽限把刚展开的文本侧栏藏回去。旧版只清零计时器，下一次 700ms tick
-  //   重新进入宽限 → 展开面板被整体 display:none（"搜索框一点刚换成文本侧栏就消失"）
+  // 用户手动展开=兜底已达成——置 sticky（_absentConcluded），同一 URL 上看门狗
+  //   不再重进 12s 宽限把刚展开的文本侧栏藏回去（若只清零计时器，下一次 700ms tick
+  //   重新进入宽限 → 展开面板被整体 display:none，即"搜索框一点刚换成文本侧栏就消失"）。
   _absentSince = 0;
   _absentConcluded = true;
   try {
@@ -652,17 +632,17 @@ export function expand(anchor) {
       return;
     }
   } catch (e) { /* ignore */ }
-  // 反思（2026-08-13）：用户要求"悬浮球向右下方展开为文本侧栏，悬浮球在右上角"。
-  //   展开态 CSS 已设 right:16px top:20px（与悬浮球一致），从右上角向下展开。
+  // 用户要求"悬浮球向右下方展开为文本侧栏，悬浮球在右上角"——
+  //   展开态 CSS 已设 right:16px top:20px（与悬浮球一致），从右上角向下展开；
   //   拖动后 .dragged 态由 JS 设 left/top 自由定位，展开时保持 dragged 位置。
   const ballRect = _root.getBoundingClientRect();
   set_preExpandPos({ left: ballRect.left, top: ballRect.top });
 
   _root.classList.remove('collapsed');
   _root.classList.add('expanded');
-  // 第一百七十一次：开启展开保护窗——双击悬浮球时第二击会落在刚出现的顶行 ◀/✕ 上
+  // 开启展开保护窗——双击悬浮球时第二击会落在刚出现的顶行 ◀/✕ 上
   markExpandGuard();
-  // 第二百三十九次：重开侧栏时恢复网页提示——✕ 关闭曾 stopForPage（本页会话停用），
+  // 重开侧栏时恢复网页提示——✕ 关闭曾 stopForPage（本页会话停用），
   //   按 Annotation 按钮当前态复活（active 才调 start：清 _sessionStop + startOrReport，
   //   诊断窗同款幂等入口）；按钮 inactive（全局关提示）则不碰。否则按钮亮着网页却无提示。
   if (_hintStoppedForPage) {
@@ -672,19 +652,19 @@ export function expand(anchor) {
       if (annBtn && annBtn.classList.contains('active')) window.__beaverHintCtl?.start?.();
     } catch (e) { /* ignore */ }
   }
-  // 第一百二十八次：防御性重注顶行样式（幂等）——用户反馈"球展开后无顶行"，
+  // 防御性重注顶行样式（幂等）——用户报障"球展开后无顶行"：
   //   若宿主页面清除了 <style id=beaver-topbar-css> 则顶行失去布局；展开时补一次。
   try { ensureTopbarCss(); } catch (e) { /* ignore */ }
 
-  // 第一百三十四次：矩形决策三优先级（见 savePanelRect 注释）。
-  // anchor=📄 形态切换：**整个矩形原样沿用视频侧栏现矩形**（用户裁定"切换外形不变"），
-  // 撤销第一百三十三次的"复用文本旧尺寸+锚点位置"折中——两形态共享同一矩形最直观。
+  // 矩形决策三优先级（见 savePanelRect 注释）。
+  // anchor=📄 形态切换：**整个矩形原样沿用视频侧栏现矩形**（用户裁定"切换外形不变"）
+  //   ——两形态共享同一矩形最直观。
   if (anchor && anchor.width && anchor.height) {
     applyPanelRect(anchor);
     set_panelRect(null); // 由 expand 尾部 savePanelRect 以实际渲染值重建
   }
   else if (_panelRect) {
-    // 第二百零七次（用户："悬浮球跟文本侧栏的位置无关了，应当一致"）：就地还原撤销——
+    // 用户裁定"悬浮球跟文本侧栏的位置无关了，应当一致"——
     //   展开位置一律取悬浮球当前位置（折叠态球在面板右上角是既定形态，与就地还原在
     //   会话内本就一致，跨会话两份存储不再各回各家）；尺寸沿用记忆值。
     const w = Math.max(280, Math.min(Math.round(_panelRect.width), window.innerWidth - 16));
@@ -712,7 +692,7 @@ export function expand(anchor) {
     _root.style.transform = '';
     } else {
       // 已拖动：保持拖动位置，侧栏从球位置展开（首次无历史矩形的兜底路径）
-      // 第一百三十七次（用户裁定）：默认身形 1:2（380×760 基准，视口钳制）
+      // 默认身形 1:2（用户裁定；380×760 基准，视口钳制）
       const p = clampPosToViewport(ballRect.left, ballRect.top);
       const panelW = Math.min(380, window.innerWidth - 24);
       const panelH = Math.max(300, Math.min(panelW * 2, window.innerHeight - 24));
@@ -727,7 +707,7 @@ export function expand(anchor) {
       if (panel) panel.style.width = panelW + 'px';
     }
 
-  // 第一百三十四次：以渲染结果为准确存面板矩形（第一百八十七次起为视口坐标）
+  // 以渲染结果为准确存面板矩形（视口坐标）
   requestAnimationFrame(() => { try { savePanelRect(); } catch (e) { /* ignore */ } });
   saveState(true);
   // 展开时立即扫描页面文本
@@ -735,19 +715,19 @@ export function expand(anchor) {
 }
 
 export function collapse() {
-  // 第一百四十三次（用户裁定"折叠前后位置变动"）：先记住面板矩形，再把球放到
-  // **面板原位右上角**——视觉上面板原地缩成球，展开时经 _panelRect 回到同一矩形，
-  // 实现"就地"闭环（旧版球回到自己上一次的位置＝与面板位置脱节，看起来乱跳）。
+  // 用户裁定"折叠前后位置变动"：先记住面板矩形，再把球放到 **面板原位右上角**——
+  // 视觉上面板原地缩成球，展开时经 _panelRect 回到同一矩形，实现"就地"闭环
+  // （球若回到自己上一次的位置＝与面板位置脱节，看起来乱跳）。
   savePanelRect();
   const wasDragged = _root.classList.contains('dragged');
   let ballTarget = _preExpandPos;
   if (wasDragged) {
     const r = _root.getBoundingClientRect();
-    // 272次：就地收拢锚点=把手宽（275次去三角后 104px 搜索栏）
+    // 就地收拢锚点=把手宽（104px 搜索栏）
     ballTarget = clampPosToViewport(Math.round(r.right) - 104, Math.round(r.top));
   }
-  // 反思（2026-08-13）：恢复 expand 前的球位置，不基于侧栏 rect 计算。
-  //   球位置固定（保存位置或默认右上角），不随侧栏移动。
+  // 恢复 expand 前的球位置，不基于侧栏 rect 计算——
+  //   球位置固定（保存位置或默认右上角），不随侧栏移动；
   //   未拖动时用 CSS 默认 right:16px top:20px，不需要内联样式。
   _root.classList.remove('expanded');
   _root.classList.add('collapsed');
@@ -759,7 +739,7 @@ export function collapse() {
   if (panel) panel.style.width = '';
 
   if (wasDragged && ballTarget) {
-    // 第一百四十三次：就地——球落在面板原位右上角（important 压过 collapsed 关键 CSS）
+    // 就地——球落在面板原位右上角（important 压过 collapsed 关键 CSS）
     _root.style.setProperty('left', ballTarget.left + 'px', 'important');
     _root.style.setProperty('top', ballTarget.top + 'px', 'important');
     _root.style.setProperty('right', 'auto', 'important');
@@ -784,11 +764,11 @@ export function collapse() {
   }
 
   // 保存悬浮球位置（供下次刷新恢复）
-  // 反思（2026-08-22 第九十四次）：保存前同样夹取到视口内，杜绝屏幕外残留位置
-  // 第一百三十七次（用户反馈"悬浮球默认位置应当在右上角而不是左上角"）：
+  // 保存前同样夹取到视口内，杜绝屏幕外残留位置。
+  // 用户报障"悬浮球默认位置应当在右上角而不是左上角"：
   //   YouTube 等正片页上球被"预判藏球"整体 display:none(important) 后，本函数
   //   若被调用，getBoundingClientRect 返回 {0,0,0,0}——把全零坐标写进 storage，
-  //   之后所有普通页面都从左上角恢复。修正：仅当球当前真实可见（宽高>0）才保存；
+  //   之后所有普通页面都从左上角恢复。仅当球当前真实可见（宽高>0）才保存；
   //   隐藏态跳过持久化，保住用户既有位置或 CSS 默认右上角。
   try {
     const rect = _root.getBoundingClientRect();
@@ -805,7 +785,7 @@ export function collapse() {
 }
 
 /**
- * 反思（2026-08-08）：用户要求"悬浮球、侧栏都应当可拖动"。
+ * 用户要求"悬浮球、侧栏都应当可拖动"。
  * 拖动悬浮球（折叠态）或标题栏（展开态）时，切换为自由定位模式。
  * 拖动位置保存到 chrome.storage.local，下次加载时恢复。
  */
@@ -823,21 +803,21 @@ function makeDraggable() {
   // 悬浮球（折叠态）拖动
   const collapseTab = _root.querySelector('#beaver-web-collapse-tab');
   // 标题栏（展开态）拖动
-  // 第一百二十四次：顶行统一后类名为共享的 .beaver-header（sidebar-topbar.js）
+  // 顶行统一后类名为共享的 .beaver-header（sidebar-topbar.js）
   const header = _root.querySelector('.beaver-header');
 
-  // 反思（2026-08-13 第四十九次）：用户反馈"几个浏览器文本侧栏悬浮球拖不动"。
-  //   根因：旧版为鼠标(mousedown/mousemove/mouseup) + 触摸(touchstart/touchmove/touchend)
+  // 用户报障"几个浏览器文本侧栏悬浮球拖不动"。
+  //   根因：此前为鼠标(mousedown/mousemove/mouseup) + 触摸(touchstart/touchmove/touchend)
   //   双套监听。火狐/Edge 某些版本对 mousedown 后原生拖拽、页面 CSS user-select、
   //   以及 touch-action 行为差异，导致拖动失效或指针丢失。
-  //   修正：改用统一 Pointer Events（pointerdown/move/up/cancel），
+  //   现用统一 Pointer Events（pointerdown/move/up/cancel），
   //   一套代码同时覆盖鼠标/触摸/笔；pointer capture 锁定目标防止指针逃逸。
   //   CSS 侧补 touch-action:none + user-select:none（在 web-sidebar.css 中）。
   const startDrag = (e) => {
     if (e.pointerType === 'mouse' && e.button !== 0) return; // 鼠标仅左键
     // 排除标题栏内的按钮点击
     if (e.target.closest('button')) return;
-    // 272次：折叠态=搜索栏——输入框上起手不拖拽（保留光标定位与文本选择）
+    // 折叠态=搜索栏——输入框上起手不拖拽（保留光标定位与文本选择）
     if (e.target.closest('input')) return;
     _dragging = true;
     _dragMoved = false;
@@ -855,9 +835,9 @@ function makeDraggable() {
     _dragMoved = true;
     let x = e.clientX - _dragOffsetX;
     let y = e.clientY - _dragOffsetY;
-    // 第二百四十六次（用户："侧栏不能拖动太低"；拍板"把手可见即可"）：边界从
+    // 用户报障"侧栏不能拖动太低"，拍板"把手可见即可"：边界从
     //   "整栏不出屏"放宽为"把手可见即可"——把手（展开态=标题栏，折叠态=悬浮球）
-    //   留 8px 在视口内可抓，主体允许探出屏沿。旧版 y 上限 innerHeight - 全高：
+    //   留 8px 在视口内可抓，主体允许探出屏沿。若 y 上限按 innerHeight - 全高：
     //   侧栏 75vh 时顶部最多拖到 25vh 处，"拖不低"即此。
     const w = _root.offsetWidth;
     const h = _root.offsetHeight;
@@ -865,15 +845,15 @@ function makeDraggable() {
     x = Math.max(8 - w, Math.min(x, window.innerWidth - 8));
     y = Math.max(8 - grab, Math.min(y, window.innerHeight - 8));
     _root.classList.add('dragged');
-    // 反思（2026-08-13 第五十二次）：折叠态 critical CSS 用 !important 钉死
-    //   right/top/left/bottom，普通内联样式被覆盖 → 悬浮球拖不动。
-    //   修正：内联也加 !important（inline important 优先级最高，可压过 author !important）。
+    // 折叠态 critical CSS 用 !important 钉死 right/top/left/bottom，
+    //   普通内联样式被覆盖 → 悬浮球拖不动——内联也加 !important
+    //   （inline important 优先级最高，可压过 author !important）。
     _root.style.setProperty('left', x + 'px', 'important');
     _root.style.setProperty('top', y + 'px', 'important');
     _root.style.setProperty('right', 'auto', 'important');
     _root.style.setProperty('bottom', 'auto', 'important');
     _root.style.transform = 'none';
-    // 反思（2026-08-09）：拖动后不再强制设置高度，保持用户自定义尺寸或默认 75vh
+    // 拖动后不强制设置高度，保持用户自定义尺寸或默认 75vh
     e.preventDefault();
   };
 
@@ -882,14 +862,13 @@ function makeDraggable() {
     _dragging = false;
     _activePointerId = null;
     if (_dragMoved) {
-      // 第一百三十六次：保存键位分离——旧版拖动一律写 webSidebarPos（球位键），
-      // 展开态拖面板也把面板坐标写进去 → 下次折叠球被放回面板位置 = "位置乱窜"实锤之一。
-      // 现在：展开态只存面板矩形（shellRectText）；折叠态才存球位（webSidebarPos，视口坐标）。
+      // 保存键位分离：展开态只存面板矩形（shellRectText）；折叠态才存球位
+      //   （webSidebarPos，视口坐标）。混写同一个键会导致折叠球被放回面板位置。
       try {
         if (_root.classList.contains('expanded')) {
           savePanelRect();
         } else {
-          // 第一百八十七次：球位同样只存视口坐标（position:fixed 与滚动无关）；
+          // 球位只存视口坐标（position:fixed 与滚动无关）；
           //   docX/docY 的"文档坐标"口径会在刷新后被当前滚动量污染 → 位置乱跑。
           const rect = _root.getBoundingClientRect();
           chrome.storage.local.set({
@@ -918,15 +897,7 @@ function makeDraggable() {
 }
 
 /**
- * 第一百八十七次：删除 restoreDraggedPosition() 与 applyDraggedPosition() 两个**死函数**。
- *   前者自 2026-08-10 起已无任何调用点（位置恢复搬到 web-sidebar-impl.js 启动流程），
- *   但它会无条件给 _root 加 .dragged 并把「球位」写成内联 left/top —— 留着只会误导排查
- *   「侧栏位置乱跑」；后者是个空壳（只有一个空 if 分支）。按"不留死代码"清除。
- */
-
-/**
- * 可调尺寸（2026-08-09 原版 / 第一百三十四次重写）
- * 反思：用户反馈"右下角调整反人类"——旧版仅 16px 角块+mousedown 双缺陷。
+ * 可调尺寸：用户反馈"右下角调整反人类"（此前仅 16px 角块+mousedown 双缺陷），
  *   重写为 Pointer Events + 三向命中（角 nwse / 右缘 ew / 下缘 ns，见模板与 CSS），
  *   setPointerCapture 防指针逃逸；约束 280×300 ~ 视口-16；
  *   结束后 savePanelRect() 持久化（文档坐标），就地展开折叠与形态切换共用此矩形。
@@ -945,7 +916,7 @@ function makeResizable() {
     e.stopPropagation();
     _resizing = true;
     const rect = _root.getBoundingClientRect();
-    // 切换自由定位模式（普通内联即可——CSS !important 已于本轮移除）
+    // 切换自由定位模式（普通内联即可）
     _root.classList.add('dragged');
     _root.style.left = rect.left + 'px';
     _root.style.top = rect.top + 'px';
@@ -975,7 +946,7 @@ function makeResizable() {
       window.removeEventListener('pointermove', onMove, true);
       window.removeEventListener('pointerup', endResize, true);
       window.removeEventListener('pointercancel', endResize, true);
-      // 尺寸持久化：面板矩形（文档坐标）+ 兼容旧键
+      // 尺寸持久化：面板矩形（文档坐标）+ webSidebarSize 旧键兼容
       try {
         savePanelRect();
         const r2 = _root.getBoundingClientRect();
@@ -997,9 +968,9 @@ function makeResizable() {
   restoreSidebarSize();
 
   // 窗口 resize 时保持侧栏可见——**只移回，不重置**。
-  // 第一百四十三次（用户反馈"浏览器窗口已有变化就变为初始状态"）：旧版部分超出
-  // 视口就把宽高缩到视口内、完全出视口还清空全部内联样式回默认＝用户尺寸/位置丢失。
-  // 新策略：完全出视口才回默认（防真丢）；部分超出仅把位置钳回视口（尺寸原样保留）。
+  // 用户反馈"浏览器窗口已有变化就变为初始状态"：部分超出视口就缩宽高、
+  //   完全出视口就清空全部内联样式，都会把用户尺寸/位置丢掉。
+  // 策略：完全出视口才回默认（防真丢）；部分超出仅把位置钳回视口（尺寸原样保留）。
   window.addEventListener('resize', () => {
     if (!_root || _root.classList.contains('closed')) return;
     const rect = _root.getBoundingClientRect();
@@ -1027,7 +998,7 @@ function makeResizable() {
 }
 
 /** 恢复保存的自定义尺寸（仅在展开态应用） */
-// 第一百三十三次：内存缓存——形态切换时 expand(anchor) 复用文本侧栏自己的尺寸
+// 内存缓存：形态切换时 expand(anchor) 复用文本侧栏自己的尺寸
 let _cachedWebSize = null;
 
 function restoreSidebarSize() {
@@ -1056,7 +1027,7 @@ function speakWord(word) {
   } catch (_) { /* ignore */ }
 }
 
-// 第二百三十九次：✕ 关闭是否停用过本页 text-hint（expand 重开时按此恢复网页提示，
+// ✕ 关闭是否停用过本页 text-hint（expand 重开时按此恢复网页提示，
 //   避免每次展开都对正常运行的 text-hint 多打一次 startHint）
 let _hintStoppedForPage = false;
 
@@ -1064,7 +1035,7 @@ function close() {
   _root.classList.remove('expanded', 'collapsed');
   _root.classList.add('closed');
   saveState(false);
-  // 2026-09-08（用户："扩展侧栏中关闭后，影响并未消失"）：✕ 关闭侧栏时连带撤掉
+  // 用户报障"扩展侧栏中关闭后，影响并未消失"：✕ 关闭侧栏时连带撤掉
   //   text-hint 在页面上的全部影响（高亮包裹/侧邻注释/hover 提示）——text-hint-impl
   //   的 stopHint+unwrapAll。只影响本页（不写 storage），刷新后随侧栏一并恢复；
   //   stopForPage 会拦住 reconcile 的 5s 自动复活路径。text-hint impl 尚未就绪时
@@ -1073,11 +1044,11 @@ function close() {
   _hintStoppedForPage = true;
 }
 
-// === 第一百二十三次：重置位置与尺寸（⋯ 设定菜单项）===
+// === 重置位置与尺寸（⋯ 设定菜单项）===
 // 清除拖动定位/自定义尺寸的内联样式与持久化，回落 CSS 默认（右上角）。
 function resetLayout() {
-  // 第一百八十七次：补上 shellRectText（展开态面板矩形）。旧版只清球位与尺寸，
-  //   面板矩形还留在 storage 里，下次展开又被搬回老位置 —— 用户点了"重置"却没真重置。
+  // 必须一并清 shellRectText（展开态面板矩形）：只清球位与尺寸的话，
+  //   面板矩形还留在 storage 里，下次展开又被搬回老位置——点了"重置"却没真重置。
   try { chrome.storage.local.remove(['webSidebarPos', 'webSidebarSize', 'shellRectText']); } catch (e) { /* ignore */ }
   _root.classList.add('dragged'); // 先保证内联可覆盖，再统一清空
   ['left', 'top', 'right', 'bottom', 'width', 'height', 'transform'].forEach((k) => {
@@ -1088,7 +1059,7 @@ function resetLayout() {
   const panel = _root.querySelector('.beaver-web-panel');
   if (panel) panel.style.width = '';
   set_preExpandPos(null);
-  set_panelRect(null);   // 第一百八十七次：内存权威也要清，否则展开仍走 _panelRect 分支
+  set_panelRect(null);   // 内存权威也要清，否则展开仍走 _panelRect 分支
   console.log('[VocabRadar][web-sidebar] 已重置位置与尺寸（默认右上角）');
 }
 
@@ -1101,8 +1072,7 @@ function switchTab(tab) {
   _root.querySelectorAll('.beaver-web-tab-panel').forEach((p) => {
     p.classList.toggle('hidden', p.dataset.tab !== tab);
   });
-  // 反思（2026-08-12 第四十六次）：标签页按钮分布——
-  //   句标签：注释/详情/字幕样式；词汇标签：词表按钮
+  // 标签页按钮分布：句标签=注释/详情/字幕样式；词汇标签=词表按钮
   _root.querySelectorAll('[data-tab-toolbar]').forEach((tb) => {
     tb.classList.toggle('hidden', tb.dataset.tabToolbar !== tab);
   });
@@ -1110,14 +1080,14 @@ function switchTab(tab) {
   if (_wordOnlyMode && tab !== 'words') {
     exitWordOnlyMode();
   }
-  // 272次：learn 标签已改 query（结果卡随查询即用即渲，无需懒加载钩子）
+  // learn 标签已改 query（结果卡随查询即用即渲，无需懒加载钩子）
   // 切到句标签时触发扫描
   if (tab === 'sentences') {
     schedulePageScan();
   }
 }
 
-// === 272次：query 标签——查询执行 ===
+// === query 标签——查询执行 ===
 // 结果卡复用右键搜索的唯一定义（th/panel.js：buildPanelCss/buildCardInnerHTML/
 // renderQueryCard/bindLemmaChipClick），承载在 Shadow DOM 内——卡片 CSS 不漏宿主页。
 // @param {string} text 查询文本（空则回空态提示）
@@ -1135,8 +1105,8 @@ async function runSidebarQuery(text) {
   const host = document.createElement('div');
   box.appendChild(host);
   const shadow = host.attachShadow({ mode: 'open' });
-  // 309次第六轮（用户"查询窗口只有 https://localhost:3001 字号才会偏大"）根因实锤：
-  //   第四轮把右键面板/tooltip 宿主定死 14px，但本内嵌卡漏了——嵌套 host 被
+  // 字号基准 14px（用户报障"查询窗口只有 https://localhost:3001 字号才会偏大"）：
+  //   右键面板/tooltip 宿主定死 14px，但本内嵌卡漏了——嵌套 host 被
   //   web-sidebar.css `#beaver-web-sidebar * { font-size: inherit !important }` 锁死
   //   继承侧栏宿主 16px，卡内 .word 1.15em≈18.4px＝其他站右键面板 16.1px 显得偏大；
   //   用户在本站（官网）用侧栏 query 标签测试，其他站用右键面板，观感"只有本站偏大"。
@@ -1154,7 +1124,7 @@ async function runSidebarQuery(text) {
   }
 }
 
-// === 272次：搜索栏输入完成/点三角 → 展开为文本侧栏并落到 query 标签（有词即查） ===
+// === 搜索栏输入完成/点三角 → 展开为文本侧栏并落到 query 标签（有词即查） ===
 function expandToQuery(text) {
   // expand(true)：跳过"视频侧栏在场即展开视频形态"的路由——搜索明确要文本形态
   expand(true);
@@ -1165,10 +1135,10 @@ function expandToQuery(text) {
   try { if (input) input.focus(); } catch (_) { /* ignore */ }
 }
 
-// === 272次：query bar 可用性——Query 全局开关 + 停用规则「query bar」项 ===
+// === query bar 可用性——Query 全局开关 + 停用规则「query bar」项 ===
 // 不可用时折叠条只剩品牌图标（.query-off，CSS 收回 48px 圆球形态），图标点击仍可展开侧栏。
 // 与网页提示解耦：提示关/停不影响 query bar；query bar 关/停也不影响提示。
-// 286次：Query 拆分为右键查询（contextLookupEnabled）与查询栏（queryBarEnabled），
+// Query 拆分为右键查询（contextLookupEnabled）与查询栏（queryBarEnabled），
 //   本处只消费查询栏；旧 queryEnabled 仅作未升级用户的回退（新键未设置时沿用旧值）。
 async function applyQueryAvailability() {
   if (!_root || !document.contains(_root)) return;
@@ -1190,12 +1160,12 @@ async function applyQueryAvailability() {
   log('query bar 可用性:', off ? '不可用（查询栏隐藏为图标）' : '可用');
 }
 
-// 272次：Query 可用性实时刷新（全局开关/停用规则变化；模块级只注册一次）
+// Query 可用性实时刷新（全局开关/停用规则变化；模块级只注册一次）
 let _queryAvailListenerInstalled = false;
 function ensureQueryAvailabilityWatcher() {
   if (_queryAvailListenerInstalled) return;
   _queryAvailListenerInstalled = true;
-  // 274次：初装即刷一次视频侧栏停用规则缓存（看门狗同步判定用）
+  // 初装即刷一次视频侧栏停用规则缓存（看门狗同步判定用）
   refreshVsRuleSup();
   try {
     chrome.storage.onChanged.addListener((changes, area) => {
@@ -1223,9 +1193,9 @@ function ensureQueryAvailabilityWatcher() {
   });
 }
 
-// === G3（2026-09-08）：learn 面板草稿导入（§6.2） ===
-// 272次：doImportDraft——组装+落缓存+三态提示（成功/无内容/失败，R1 不静默）；
-// 期间 learn 按钮禁用防重复点击，结束后恢复（原 learn 标签两按钮已并入底部 learn 按钮）
+// === learn 面板草稿导入（§6.2） ===
+// doImportDraft——组装+落缓存+三态提示（成功/无内容/失败，R1 不静默）；
+// 期间 learn 按钮禁用防重复点击，结束后恢复（learn 标签两按钮已并入底部 learn 按钮）
 async function doImportDraft() {
   const btn = _root.querySelector('#beaver-web-learn-btn');
   try {
@@ -1243,14 +1213,14 @@ async function doImportDraft() {
   }
 }
 
-// 272次：底部 learn 按钮——导入成功才打开网站「我的卷轴」（hash 路由）。
-// 274次：跳转规则=getSiteUrl()（本地构建跳本地、商店安装跳线上）；图标 📱→🎯
+// 底部 learn 按钮——导入成功才打开网站「我的卷轴」（hash 路由）。
+// 跳转规则=getSiteUrl()（本地构建跳本地、商店安装跳线上）；图标 🎯（用户裁定）
 async function onDraftImportAndOpenClick() {
   const r = await doImportDraft();
   if (r.ok) window.open(getSiteUrl() + '/#/my-scrolls', '_blank');
 }
 // === 工具栏 ===
-// 第二百三十九次：注释总开关（与视频侧栏 Annotation 按钮同语义，active=显示注释）。
+// 注释总开关（与视频侧栏 Annotation 按钮同语义，active=显示注释）。
 //   开：__beaverHintCtl.start() 复活网页提示（诊断窗同款入口：清 _sessionStop +
 //   startOrReport），_noAnnotation=false 恢复侧栏注释标记。
 //   取消：__beaverHintCtl.stopForPage() 撤掉网页提示（本页会话停用，不写 storage，
@@ -1289,7 +1259,7 @@ function onWordListToggle() {
   set_wordOnlyMode(!_wordOnlyMode);
   const btn = _root.querySelector('#beaver-web-export');
   const wordPanel = _root.querySelector('#beaver-web-word-panel');
-  // 反思（2026-08-09）：用户要求"词单都用深色表示选中了，就不要再 √ 了"。
+  // 用户要求"词单都用深色表示选中了，就不要再 √ 了"：
   //   .active 类已通过 --beaver-primary 深色背景表示选中状态，无需再在文字后加 ✓。
   if (_wordOnlyMode) {
     btn.classList.add('active');
@@ -1315,9 +1285,9 @@ function exitWordOnlyMode() {
 }
 
 // === MutationObserver：防止 SPA 框架移除悬浮球 ===
-// 反思（2026-08-12 第四十六次）：Bing 等 SPA 会替换 document.body 或清除其子节点，
-//   导致 appendChild 到 body 的悬浮球被移除。注入到 documentElement 后仍可能被移除。
-//   新增 MutationObserver 监听 _root.parentNode，若 _root 被移除则自动重新注入。
+// Bing 等 SPA 会替换 document.body 或清除其子节点，导致 appendChild 到 body
+//   的悬浮球被移除；注入到 documentElement 后仍可能被移除。
+// 监听 _root.parentNode，若 _root 被移除则自动重新注入。
 let _reinjectObserver = null;
 
 export function setupReinjectObserver() {
@@ -1338,8 +1308,8 @@ export function setupReinjectObserver() {
 }
 
 // === 关闭所有浮层（菜单失焦退回）===
-// 反思（2026-08-13 第四十八次）：用户要求"展开的菜单若有别处点击，表示失去焦点，应当退回去"。
-// 第一百二十三次：新增 ⋯ 设定浮层，一并纳入统一关闭。
+// 用户要求"展开的菜单若有别处点击，表示失去焦点，应当退回去"；
+//   ⋯ 设定浮层一并纳入统一关闭。
 function closeAllPopups() {
   if (!_root) return;
   const langPanel = _root.querySelector('#beaver-web-lang-panel');
@@ -1352,15 +1322,13 @@ function closeAllPopups() {
   if (setBtn) setBtn.classList.remove('active');
 }
 
-// 反思（2026-08-13 第五十次）：文本侧栏与视频侧栏共用同一 overlay 样式。
-//   与 sidebar.js setSubtitleOverlayStyle 同逻辑（清除 11 种 class + 加当前 class）。
-// 反思（2026-08-15 第六十四次）：类名列表由 SUBTITLE_STYLES 动态生成，不再硬编码。
-// 反思（2026-08-15 第六十五次）：样式校验——storage 中已被移除的样式 id（旧版曾删
-//   right-vertical/center-vertical）不再挂死类（挂死类 → 无对应 CSS → 回落黑底），
-//   未知 id 优雅回退默认样式并清理 storage。
-// 反思（2026-08-16 第六十九次）：字幕样式改为"文字样式×位置样式"两维；overlay 元素由
-//   subtitle-overlay.js 管理（位置按 subtitlePosition 内联计算），本函数只同步文字样式类。
-// 318次：'none' 哨兵非法已全清——缺省/未知 id 一律回落 SUB_DEFAULT_STYLE 常量
+// 文本侧栏与视频侧栏共用同一 overlay 样式：与 sidebar.js setSubtitleOverlayStyle
+//   同逻辑（清除 11 种 class + 加当前 class），类名列表由 SUBTITLE_STYLES 动态生成。
+// 样式校验：storage 中已被移除的样式 id（曾删 right-vertical/center-vertical）
+//   不再挂死类（挂死类 → 无对应 CSS → 回落黑底），未知 id 优雅回退默认样式并清理 storage。
+// 字幕样式为"文字样式×位置样式"两维；overlay 元素由 subtitle-overlay.js 管理
+//   （位置按 subtitlePosition 内联计算），本函数只同步文字样式类。
+// 'none' 哨兵非法已全清——缺省/未知 id 一律回落 SUB_DEFAULT_STYLE 常量
 //   （styles.js 唯一真源）；未知 id 回落时写盘完成存量迁移。
 function applyOverlayStyleClass(style) {
   const overlay = document.getElementById('beaver-subtitle-overlay');
@@ -1380,9 +1348,8 @@ function applyOverlayStyleClass(style) {
 
 /**
  * 复制当前标签页的全部句子文本到剪切板
- * 反思（2026-08-08）：用户反馈"没有复制按钮"。
- *   文本侧栏缺少复制功能，视频侧栏（sidebar.js）已有 #beaver-copy。
- * 反思（2026-08-13 第五十三次）：ASR/OCR 已迁移引导页，仅剩页面句子标签。
+ * （用户反馈"没有复制按钮"——文本侧栏此前缺少复制功能；ASR/OCR 已迁移引导页，
+ *   仅剩页面句子标签。）
  */
 async function onCopyClick() {
   const built = buildSidebarText();
@@ -1415,7 +1382,7 @@ async function onCopyClick() {
 }
 
 /**
- * 第一百七十一次：拼装当前侧栏文本（复制与导出共用，避免两处格式分叉）
+ * 拼装当前侧栏文本（复制与导出共用，避免两处格式分叉）
  * @returns {{text: string, sentences: Array}} text 为空表示无内容
  */
 function buildSidebarText() {
@@ -1432,21 +1399,21 @@ function buildSidebarText() {
   return { text: lines.join('\n'), sentences };
 }
 
-/* 272次：onExportFileClick（导出为 .txt 文件）已删除——底部「导出文件」按钮
+/* onExportFileClick（导出为 .txt 文件）已删除——底部「导出文件」按钮
  * 改为 learn（导入卷轴草稿并跳转网站）；buildSidebarText 仍服务复制按钮与
  * getAiMainText 兜底，保留。如需恢复导出功能参考 git 历史。 */
 
 /**
- * 第一百七十一次：文本侧栏底部对话按钮 —— 就当前页面正文发起对话
- * 第一百七十四次：按用户要求"没有内容也能唤起"——取不到正文不再 toast 拦截，
- *   直接打开空面板由用户自由提问（openChatPanel 内部对空文本隐藏引用区）。
- * 第一百八十四次：传 kind='sidebar' —— 用 chatSidebarPrompt（"总结上文"），
- *   正文（视口 TreeWalker 自提的网页正文）由面板顶部「The context is」上下文区承载。
- * 第一百八十五次（用户："回装 Readability，仅仅用在给AI提取正文"）：
- *   给 AI 的正文改由 lib/main-text.js 的 getAiMainText() 产出（Readability 优先，
- *   失败或正文过短自动回退整页直接解析）。旧的 buildSidebarText()（侧栏可视句子拼接）
- *   只是"当前视口扫到的句子"，既不完整又混入导航碎片，正是"上下文内容胡来"的来源；
- *   它仍服务于复制/导出，故保留，并在 getAiMainText 也拿不到文本时作为最后兜底。
+ * 文本侧栏底部对话按钮——就当前页面正文发起对话。
+ * 用户要求"没有内容也能唤起"——取不到正文不 toast 拦截，直接打开空面板
+ *   （openChatPanel 内部对空文本隐藏引用区）。
+ * 传 kind='sidebar'：用 chatSidebarPrompt（"总结上文"），正文（视口 TreeWalker
+ *   自提的网页正文）由面板顶部「The context is」上下文区承载。
+ * 用户裁定"回装 Readability，仅仅用在给AI提取正文"：给 AI 的正文由
+ *   lib/main-text.js 的 getAiMainText() 产出（Readability 优先，失败或正文过短
+ *   自动回退整页直接解析）。buildSidebarText()（侧栏可视句子拼接）只是"当前视口
+ *   扫到的句子"，既不完整又混入导航碎片，正是"上下文内容胡来"的来源；它仍服务于
+ *   复制/导出，故保留，并在 getAiMainText 也拿不到文本时作为最后兜底。
  */
 async function onChatClick() {
   let text = '';
@@ -1465,33 +1432,33 @@ async function onChatClick() {
   openChatPanel(text, 'sidebar');
 }
 
-// 第一百二十三次（用户裁定）：悬浮球、文本侧栏、视频侧栏不同时出现。
+// 悬浮球、文本侧栏、视频侧栏不同时出现（用户裁定）。
 // 轻量轮询（700ms）覆盖 SPA 动态插拔/✕关闭/样式切换；expand/collapse/close 时即时同步。
-// 第一百三十二次（用户状态机裁定"只有一个侧栏→选文本或视频→折叠态是否展开"）重构：
-//   视频侧栏元素在 DOM 即互斥——不看 display（折叠/展开都算在场），文本展开态不再豁免
-//   （豁免导致"文本面板与视频侧栏同屏"）。两个出口：
+// 用户状态机裁定"只有一个侧栏→选文本或视频→折叠态是否展开"：视频侧栏元素在 DOM
+//   即互斥——不看 display（折叠/展开都算在场），文本展开态不豁免（豁免导致
+//   "文本面板与视频侧栏同屏"）。两个出口：
 //   1) ✕ 显式关闭：video-sidebar ✕ 处打 dataset.userClosed='1'，悬浮球回归作为唯一入口；
 //   2) 📄 切到文本形态：视频侧栏 display:none + 内部 _hiddenByFormSwitch 标记，
 //      此时文本面板（同一根元素）在场，球保持隐藏即可。
-// 隐藏必须用 setProperty('display','none','important')！根因反思：injectCriticalCSS 有
+// 隐藏必须用 setProperty('display','none','important')！根因：injectCriticalCSS 有
 //   #beaver-web-sidebar.collapsed{display:flex !important}，author !important 声明
-//   优先级高于普通内联 style.display='none'——旧版"隐藏悬浮球"从未真正生效过
+//   优先级高于普通内联 style.display='none'——普通内联从未真正生效过
 //   （用户反复反馈"视频侧栏仍然出现了文本悬浮球"的本根因）。
 let _ballSyncTimer = null;
 
-// 第一百三十五次：正片页空窗期起始时刻（0=不处于空窗），供 12s 兜底闸门判定
+// 正片页空窗期起始时刻（0=不处于空窗），供 12s 兜底闸门判定
 let _absentSince = 0;
-// 278次：空窗兜底 sticky——本 URL 上 12s 宽限到期完成过一次兜底（或用户手动展开）后置位。
-//   旧版 expand() 只清零 _absentSince，下一次 700ms tick 重新进入 12s 宽限 → shouldHideRoot
+// 空窗兜底 sticky——本 URL 上 12s 宽限到期完成过一次兜底（或用户手动展开）后置位。
+//   expand() 只清零 _absentSince 的话，下一次 700ms tick 重新进入 12s 宽限 → shouldHideRoot
 //   再次为 true → 刚展开的文本侧栏被整体 display:none（用户报"搜索框一点刚换成文本侧栏
 //   就消失"的直接根因）。置位后同一 URL 不再重进宽限；URL 变化或侧栏重新在场时复位。
 let _absentConcluded = false;
 let _syncLastUrl = '';
-// 274次：告警限频——正片页缺席超过 12s 后旧版每个同步周期都 warn（用户实测刷屏）
+// 告警限频——正片页缺席超过 12s 后若每个同步周期都 warn 会刷屏（用户实测）
 let _lastAbsentWarn = 0;
-// 274次：「视频侧栏」停用规则缓存——true 时正片页无侧栏=规则停用的预期行为，
-// 看门狗不得兜底恢复（对抗规则）也不得刷日志。276次：不再完全静默——压住时按
-// 60s 限频打一条带规则地址的说明（用户报"视频侧栏不可见"时日志直接给出原因）。
+// 「视频侧栏」停用规则缓存——true 时正片页无侧栏=规则停用的预期行为，
+// 看门狗不得兜底恢复（对抗规则）也不得刷日志；压住时按 60s 限频打一条带规则
+// 地址的说明（用户报"视频侧栏不可见"时日志直接给出原因）。
 // 值由 refreshVsRuleSup 异步刷新（初装+deactivateRules 变化，见 ensureQueryAvailabilityWatcher）。
 let _vsRuleSup = false;
 let _vsRuleSupPats = [];
@@ -1503,8 +1470,8 @@ async function refreshVsRuleSup() {
   } catch (_) { _vsRuleSup = false; _vsRuleSupPats = []; }
 }
 
-// 第一百三十四次（用户反馈"目前在视频网站中显示的是悬浮球"）：视频正片页在侧栏
-// 注入完成前存在空窗期，球会先闪出来——按 URL 预判：B站/watch/shorts 正片页，
+// 视频正片页在侧栏注入完成前存在空窗期，球会先闪出来（用户反馈
+// "目前在视频网站中显示的是悬浮球"）——按 URL 预判：B站/watch/shorts 正片页，
 // 视频侧栏缺席且未被 ✕ 关闭时同样藏球（注入后 presence 变 active 自然衔接）。
 function isVideoWatchPage() {
   const path = location.pathname;
@@ -1527,12 +1494,13 @@ function getVideoSidebarPresence() {
 
 export function syncBallWithVideoSidebar() {
   if (!_root) return;
-  // 286次（用户"引导页中查询栏闪现一下就没了"）：引导页 ASR 栏为演示内联挂载了真实
+  // 扩展自身页面（引导页等）双侧栏故意共存，不做互斥仲裁，直接返回
+  //   （此前别处的隐藏写法也从不对扩展页生效）。
+  // 用户报"引导页中查询栏闪现一下就没了"：引导页 ASR 栏为演示内联挂载了真实
   //   视频侧栏（guide-common.js startGuideVideoSidebar），getVideoSidebarPresence 恒为
-  //   active → 700ms 轮询把 query bar 置 display:none。扩展自身页面双侧栏故意共存，
-  //   不做互斥仲裁，直接返回（此前别处的隐藏写法也从不对扩展页生效）。
+  //   active → 700ms 轮询把 query bar 置 display:none。
   if (location.protocol === 'chrome-extension:' || location.protocol === 'moz-extension:') return;
-  // 278次：URL 变化=新页面——复位空窗计时与 sticky，重新走正常 12s 宽限
+  // URL 变化=新页面——复位空窗计时与 sticky，重新走正常 12s 宽限
   if (location.href !== _syncLastUrl) {
     _syncLastUrl = location.href;
     _absentSince = 0;
@@ -1541,13 +1509,13 @@ export function syncBallWithVideoSidebar() {
   const presence = getVideoSidebarPresence();
   // active=视频侧栏在场；absent 且正片页=侧栏即将注入的空窗期——两者都藏球。
   // closed（✕ 显式关闭）是唯一放行球的出口；formSwitched 时文本面板在场不额外处理。
-  // 第一百三十五次：空窗期藏球加 **12s 兜底闸门**——侧栏因任何原因注入失败时，
+  // 空窗期藏球加 **12s 兜底闸门**——侧栏因任何原因注入失败时，
   // 球自动恢复（宁可多显示也不能"啥都没有"），并打告警引导用户贴日志归因。
   const ABSENT_GRACE_MS = 12000;
   let shouldHideRoot = (presence === 'active');
   let hideReason = (presence === 'active') ? '视频侧栏在场' : '';
-  // 274次：规则停用优先——「视频侧栏」被停时正片页无侧栏是预期，不进空窗判定
-  // （放行搜索栏、复位计时）；276次：不再完全静默，60s 限频打一条带规则地址的说明，
+  // 规则停用优先——「视频侧栏」被停时正片页无侧栏是预期，不进空窗判定
+  // （放行搜索栏、复位计时）；60s 限频打一条带规则地址的说明，
   // 用户报"视频侧栏不可见"时日志直接给出原因与修改入口。
   if (!shouldHideRoot && presence === 'absent' && isVideoWatchPage()) {
     if (_vsRuleSup) {
@@ -1560,7 +1528,7 @@ export function syncBallWithVideoSidebar() {
       }
     } else {
       if (!_absentSince) _absentSince = Date.now();
-      // 278次：sticky 兜底——本 URL 已兜底恢复过（_absentConcluded）就不再重进宽限，
+      // sticky 兜底——本 URL 已兜底恢复过（_absentConcluded）就不再重进宽限，
       //   球保持可见（宁可多显示也不把用户刚展开的面板藏回去）
       if (!_absentConcluded && Date.now() - _absentSince < ABSENT_GRACE_MS) {
         shouldHideRoot = true;
@@ -1576,7 +1544,7 @@ export function syncBallWithVideoSidebar() {
     }
   } else {
     _absentSince = 0;
-    // 278次：侧栏重新在场/被✕显式关闭 → sticky 复位（下次真缺席重新走完整宽限）
+    // 侧栏重新在场/被✕显式关闭 → sticky 复位（下次真缺席重新走完整宽限）
     if (presence === 'active' || presence === 'closed') _absentConcluded = false;
   }
   if (shouldHideRoot && _root.classList.contains('expanded')) {

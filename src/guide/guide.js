@@ -496,14 +496,14 @@ async function loadSettings() {
   const defaults = Object.assign({    uiLanguage: 'zh',
     learnLanguage: 'en',
     meaningLanguage: 'zh',
-    rankThreshold: 4000,
+    rankThreshold: 5000,   // 2026-09-29（用户："改回原来的5000-∞"）：撤销 4000-5000 词频带
     annotateOov: false,
     uiLanguage: 'zh',
     learnLanguage: 'en',
     meaningLanguage: 'zh',
-    rankThreshold: 4000,
+    rankThreshold: 5000,
     annotateOov: false,
-    rankThresholdMax: 5000,   // 词频范围上界（0=不限制）
+    rankThresholdMax: 0,   // 词频范围上界（0=不限制），出厂未设上界
     annotateRepeat: false,
     // 327次：引导页新增复选框回填默认（与 popup.hintLaterEnabled 同键，默认空即仅首次高亮）
     hintLaterEnabled: false,
@@ -1016,7 +1016,7 @@ async function init() {
   });
   $('rankThreshold').addEventListener('change', (e) => {
     const v = parseInt(e.target.value, 10);
-    chrome.storage.local.set({ rankThreshold: isFinite(v) ? v : 4000 }, () => log('词频阈值=', v));
+    chrome.storage.local.set({ rankThreshold: isFinite(v) ? v : 5000 }, () => log('词频阈值=', v));
     updateRankMaxMin(); // 下界变了 → 上界 spinner 起步值随动
   });
   // 词频上界（0/空=未设上界=空集，全部词都值得注释；正数上界须大于下界）

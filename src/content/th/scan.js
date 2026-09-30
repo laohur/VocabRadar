@@ -1,9 +1,5 @@
 // 文本提示 - 扫描/注释/生命周期模块（ES module）
 //
-// === 拆分说明（2026-08-28）===
-// 本文件由 src/content/text-hint-impl.js（原 2390 行）机械拆分而来，
-// 逻辑与行为与拆分前完全一致，仅把变量 _xxx 改为共享状态 thState.xxx。
-//
 // 职责：
 //   1. 生命周期：startHint / stopHint / rescanNow / clearHighlights
 //   2. 设置变更入口：setRankThreshold / setAnnotateOov / setAnnotateRepeat
@@ -22,11 +18,9 @@
 //   - startHint 中的 window scroll 监听（thState.scrollHandler 幂等守卫）
 //
 // 跨模块调用：tooltip.js 提供浮层处理器；panel.js 提供查词面板；core.js 提供共享状态/常量/工具。
-// 第一百八十七次：新增 prefetchFull —— processBatch 每批开跑前一次性批量预取本批词，
-//   消除 lookupFull 逐词 SW 往返（实测串行查词 1069 次）。
 import { lookupFull, prefetchFull, getDiagState as getDictDiagState, ensureReady, ensureRanksReady, setQuietBatch, isLoaded as isDictLoaded } from '../../lib/dictionary.js';
-// 第368次：流水日志接 debugLog 阀门（引导页「调试日志」开关）——本模块 console.log
-//   直出的启动/停止/清扫/去重/挂载成功等流水默认静默；warn/error 异常信号不受阀门影响
+// 流水日志接 debugLog 阀门（引导页「调试日志」开关）：console.log 直出的
+//   启动/停止/清扫/去重/挂载成功等流水默认静默；warn/error 异常信号不受阀门影响
 //   （30s 门闸 console.error 保留，不可讳疾忌医）。
 import { isDebugLog } from '../../lib/log-flag.js';
 import { getDiagState as getLemmatizerDiagState } from '../../lib/lemmatizer.js';
@@ -35,9 +29,8 @@ import { initLang } from '../../lib/i18n.js';
 import { isBalancedParens, pickCleanShortTrans } from '../../lib/dict-clean.js';
 import { beginBatch, countChars, countTokens, countUnique, incField, incScalar, getBatches, logBatch } from '../../lib/dict-stats.js';
 import { emitBlock, resetScan } from '../page-scan-bus.js';
-import { lookupWord, getRankMax, setRankMax, setMyWords, myWordsHit } from '../../lib/annotator.js';
-// === 2026-09-09（w4，ESM 模块图装载 1986ms 优化，用户拍板"拆分懒加载"）===
-// tooltip.js / panel.js 及其重依赖（chat.js、main-text.js、phonetics.js、
+import { lookupWord, getRankMax, setRankMax, setMyWords, myWordsHit, isSameForm } from '../../lib/annotator.js';
+// 用户拍板"拆分懒加载"：tooltip.js / panel.js 及其重依赖（chat.js、main-text.js、phonetics.js、
 //   diverse-lemmas/languages 词形表等）只服务 hover 悬浮 / 右键面板 / OCR 面板等
 //   **交互**场景——启动路径（startHint→扫描）不再静态加载它们：本模块只绑惰性
 //   转发壳，首次交互才动态 import 真实现（模块缓存后近零开销）。两个 ensure 均
@@ -64,34 +57,32 @@ import {
   waitForBody, isContextValid, injectStyles, applyColorVars, pickColors,
   thMark, thAdd, getHintTiming
 } from './core.js';
-// 280次：annBrackets 布尔退役改 annTemplate 模板——渲染走 renderAnnText
+// 注释模板 annTemplate（annBrackets 布尔键已由启动迁移取代）——渲染走 renderAnnText
 import { renderAnnText, DEFAULT_ANN_TEMPLATE } from '../../lib/styles.js';
 
-// 模块级：扫描门闸看门狗定时器（见 scheduleScan#run 的 release）
-// 反思（2026-08-30 第一百八十三次）：scanRunning 只靠 onDone 复位，异常路径会永久卡死全部扫描
-//   且无任何日志（本次「生词提示消失」形态）。用一个模块级定时器做兜底解闸，只能有一份。
+// 模块级：扫描门闸看门狗定时器（见 scheduleScan#run 的 release）。
+// scanRunning 只靠 onDone 复位，异常路径会永久卡死全部扫描且无任何日志
+//   （「生词提示消失」形态）。模块级定时器做兜底解闸，只能有一份。
 let _scanWatchdog = null;
 
 export async function startHint(settings) {
-  // 反思（2026-08-14 第五十六次修正）：诊断实证 effective.enabled=false 但存储要求启动。
-  //   旧版任一早期语句（如 initLang）同步抛错会让 startHint 在 _enabled=true 之前 reject，
-  //   调用方 await 中断 → 监听器永不注册 → 后续改设置全部失效（"网页无提示"）。
-  //   修正：整个启动过程包 try/catch 永不 reject，_enabled 尽快置 true，
-  //   出错记 _lastStartError 供诊断窗展示，并依赖 text-hint.js 的 3s 自愈重试。
+  // 启动契约：整个启动过程包 try/catch 永不 reject——任一早期语句同步抛错会让
+  //   startHint 在 _enabled=true 之前 reject，调用方 await 中断 → 监听器永不注册
+  //   → 后续改设置全部失效（诊断实证 effective.enabled=false 但存储要求启动，
+  //   即"网页无提示"形态）。_enabled 尽快置 true；出错记 _lastStartError 供诊断窗
+  //   展示，并依赖 text-hint.js 的 3s 自愈重试。
   thState.startedEver = true;
   thState.lastStartError = null;
-  // 第一百八十六次埋点：全链路计时起点（用户症状「体感好几秒才出现网页提示」）
+  // 全链路计时起点（用户症状「解析至多一秒，但体感好几秒才出现网页提示」）
   thMark('hint:start');
   try {
-    // 反思（2026-08-12 第四十一次）：初始化 i18n，使 t() 返回界面语言对应文案
+    // 初始化 i18n，使 t() 返回界面语言对应文案
     initLang().catch(() => { /* ignore */ });
-    // 反思（2026-08-06）：NaN 防御 — rankThreshold 非有限数字时回退默认值
-    //   settings.rankThreshold 若为 NaN，旧版 `?? 0` 不触发（NaN 非 null/undefined），
-    //   导致 _rankThreshold=NaN → lookupWord 中 `rank > NaN` 恒 false → 所有词按表外处理。
-    //   虽不直接产生"NaN阶"显示，但影响高亮判定，且 console.log 会打印 NaN。
-    //   2026-09-29（用户："默认提示4000-5000词频"）：回退默认改 4000（全仓同批同步）
+    // NaN 防御：rankThreshold 非有限数字时回退默认值——`?? 0` 不触发（NaN 非
+    //   null/undefined），_rankThreshold=NaN 会使 `rank > NaN` 恒 false，所有词按表外处理。
+    //   用户裁定（"改回原来的5000-∞"）：默认词频阈值 5000（与 core.js 全仓同批同步）。
     thState.rankThreshold = (typeof settings.rankThreshold === 'number' && isFinite(settings.rankThreshold))
-      ? settings.rankThreshold : 4000;
+      ? settings.rankThreshold : 5000;
     // 词频范围上界（storage.rankThresholdMax，0/缺省=不限制）
     setRankMax(settings.rankThresholdMax);
     // My Words（用户生词/熟词表，优先级高于词频范围；storage.myWords={new:[],known:[]}）
@@ -99,23 +90,20 @@ export async function startHint(settings) {
     setMyWords(_mwInit.new, _mwInit.known);
     thState.annotateOov = settings.annotateOov === true;  // 默认 false（注释表外词默认不选）
     thState.annotateRepeat = settings.annotateRepeat === true;  // 默认 false（不注释重复生词）
-    // 280次：侧邻注释模板（annBrackets 布尔退役，默认 {word}({meaning})）
+    // 侧邻注释模板（旧布尔键 annBrackets 由启动迁移取代），缺省用 DEFAULT_ANN_TEMPLATE
     thState.annTemplate = (typeof settings.annTemplate === 'string' && settings.annTemplate.trim())
       ? settings.annTemplate : DEFAULT_ANN_TEMPLATE;
     thState.colors = pickColors(settings);
     thState.enabled = true;
-    // 321次（用户"网页提示同样单词重复，识别了哪些单词难道你记不住吗"）：启动时清扫
-    //   旧版残留注释——扩展重载（chrome://extensions 刷新）不刷新页面，旧 content script
-    //   挂的 .beaver-side-ann 残留在页上；320 版起注释节点才带 data-word，旧版节点无该
-    //   属性，页级 [data-word] 兜底查不到 → 新脚本账本为空 → 同词再挂 → 重复。无
-    //   data-word 的节点已无法反查词名（模板渲染只有释义），留着只能作恶（重复/劫持），
-    //   直接删除；320+ 版节点带 data-word 不受影响，由页级兜底拦截。
+    // 启动时清扫残留注释（用户质问"网页提示同样单词重复，识别了哪些单词难道你记不住吗"）：
+    //   扩展重载（chrome://extensions 刷新）不刷新页面，旧 content script 挂的
+    //   .beaver-side-ann 残留在页上且可能无 data-word 属性，页级 [data-word] 兜底查不到
+    //   → 新脚本账本为空 → 同词再挂 → 重复。无 data-word 的节点无法反查词名（模板渲染
+    //   只有释义），留着只会作恶（重复/劫持），直接删除；带 data-word 的由页级兜底拦截。
     purgeLegacySideAnnotations();
-    // 第一百八十七次：panelHideDelay 的 config.json 读取**改为非阻塞**。
-    //   实测（learn.microsoft.com）：startHint 入口 4021ms，而这段 await fetch 位于
-    //   ensureReady() 词典调度之前，把「词典开始装载」硬性推后一个网络/磁盘往返；
-    //   而它只影响"悬浮提示失焦后停留多久"，首屏根本用不到。改 fire-and-forget，
-    //   取到就覆盖 thState.panelHideDelay（默认 5000ms 期间行为不变）。
+    // panelHideDelay 的 config.json 读取保持非阻塞（fire-and-forget）：该配置只影响
+    //   "悬浮提示失焦后停留多久"，首屏用不到；若阻塞 await 会把「词典开始装载」
+    //   硬性推后一个网络/磁盘往返。取到即覆盖 thState.panelHideDelay（默认 5000ms）。
     (async () => {
       try {
         const url = chrome.runtime.getURL('src/data/config.json');
@@ -124,17 +112,14 @@ export async function startHint(settings) {
         if (typeof cfg.panelHideDelay === 'number') thState.panelHideDelay = cfg.panelHideDelay;
       } catch (_) { /* ignore，用默认 5000ms */ }
     })();
-    // 反思（2026-08-05 修正）：startHint 中词典装载异常必须 try/catch，不得中断启动。
-    // 反思（2026-08-18 第七十三次修正）：先 await ensureReady() 再扫描。
-    // 第一百一十四次：曾恢复阻塞——当时"非阻塞+就绪重扫"链路不可靠导致网页无提示。
-    // 第一百三十九次（用户裁定"网页先异步装载词典"）：改为**异步装载**——不阻塞
-    // 首屏扫描启动；就绪后 rescanNow() 重扫补齐 rank/tags（重扫前所有词按表外处理，
-    // annotateOov=false 时不高亮＝短暂无提示属预期，装完即出）。跨页 IDB 投影命中时
-    // ensureReady 毫秒级返回，重扫代价可忽略；真正冷构建（首次/损坏自愈）不再卡首屏。
-    // 可靠性保障：rescanNow 是既有的对账/诊断共路函数（text-hint.js:41 亦在用），
-    // 且完成回调只跑一次（_dictRescanArmed 幂等），失败静默由 3s 自愈兜底。
+    // 词典装载调度（用户裁定"网页先异步装载词典"）：不阻塞首屏扫描启动；装载异常
+    //   必须捕获，不得中断启动。就绪后 rescanNow() 重扫补齐 rank/tags（重扫前所有词
+    //   按表外处理，annotateOov=false 时不高亮＝短暂无提示属预期，装完即出）。
+    //   跨页 IDB 投影命中时 ensureReady 毫秒级返回，重扫代价可忽略；真正冷构建
+    //   （首次/损坏自愈）不卡首屏。可靠性保障：rescanNow 是对账/诊断共路函数，
+    //   完成回调只跑一次（_dictRescanArmed 幂等），失败静默由 3s 自愈兜底。
     let _dictRescanArmed = false;
-    // 分阶段投影（2026-09-04）：ranks 先行——首屏高亮只认 rank，ranks 到即重扫出高亮
+    // 分阶段投影：ranks 先行——首屏高亮只认 rank，ranks 到即重扫出高亮
     //   （tags/lemma 为空，悬浮细节随后补）；整投影就绪的既有重扫补全细节。两扫各跑一次，
     //   均走同一 rescanNow（清 wordCache/seenWords/processed 后全量重扫），语义不变。
     let _ranksRescanArmed = false;
@@ -162,35 +147,31 @@ export async function startHint(settings) {
     }
     injectStyles();
     applyColorVars();
-    // w4：tooltip/panel 惰性化——启动时不再同步建容器，首次交互动态加载时 _uiLoad
+    // tooltip/panel 惰性化：启动时不再同步建容器，首次交互动态加载时 _uiLoad
     //   内自动 ensure；此处仅预热（不 await，不阻塞扫描），失败静默（下次交互重试）。
     _uiLoad().catch(() => {});
-    // 第一百一十二次：委托兜底（幂等）——覆盖 Firefox 直绑监听器失效场景
+    // 委托兜底（幂等）——覆盖 Firefox 直绑监听器失效场景
     installDelegationGuard();
-    // 反思（2026-08-12 第四十四次）：等待 body 就绪后再扫描和观察，
-    //   避免 document.body 为 null 时 scheduleScan/startObserver 无效。
-    //   大部分情况下 body 已就绪，waitForBody 立即返回，不影响性能。
+    // 等待 body 就绪后再扫描和观察，避免 document.body 为 null 时
+    //   scheduleScan/startObserver 无效。多数情况 body 已就绪，立即返回。
     const scanRoot = await waitForBody();
     thMark('hint:bodyReady');
-    // 反思（2026-08-16 第七十一次）：重启即代表注释语义可能变化（设置变了），
-    //   清空总线历史并通知侧栏清去重，侧栏等新一批 emit 重建列表。
+    // 重启即代表注释语义可能变化（设置变了）：清空总线历史并通知侧栏清去重，
+    //   侧栏等新一批 emit 重建列表。
     resetScan();
     scheduleScan(scanRoot);
     startObserver();
-    // 反思（2026-07-14 #98 → 2026-07-26 修正）：
-    //   旧版误解"飘窗固定不动"约束，加了 onScrollReposition 让飘窗跟随内容滚动，
-    //   反而导致飘窗随页面滚动（违反"右键查询的飘窗固定不动"硬约束）。
-    //   用户明确："滚动说明失去注意力了"——scroll 触发时立即隐藏 tooltip 和 panel。
-    //   tooltip/panel 均为 position:fixed 本就视口固定，无需重定位。
-    // 反思（2026-08-06）：用户要求"只翻译可见正文区域"，scroll 时需重新扫描
-    //   新进入视口的文本节点。节流 500ms，避免滚动频繁触发。
-    // 反思（2026-08-18 第七十五次修正）：scroll 监听幂等注册——
-    //   startHint 可被 3s 自愈 / 5s 对账 / 诊断按钮 / storage 事件重复调用，
-    //   旧版每次都 addEventListener 叠加监听器，多次启动导致重复扫描（网页重复提示）。
+    // 硬约束："右键查询的飘窗固定不动"。用户明确："滚动说明失去注意力了"——
+    //   scroll 触发时立即隐藏 tooltip 和 panel（两者均 position:fixed 本就视口固定，
+    //   无需重定位，跟随滚动反而违反约束）。
+    // 用户要求"只翻译可见正文区域"：scroll 时重新扫描新进入视口的文本节点，
+    //   节流 500ms，避免滚动频繁触发。
+    // scroll 监听幂等注册：startHint 可被 3s 自愈 / 5s 对账 / 诊断按钮 / storage
+    //   事件重复调用，叠加监听器会导致多次启动重复扫描（网页重复提示）。
     let _scrollScanTimer = null;
     if (!thState.scrollHandler) {
       thState.scrollHandler = () => {
-        // w4：未加载 = 无浮层/面板可藏，跳过；已加载才转发隐藏
+        // 未加载 = 无浮层/面板可藏，跳过；已加载才转发隐藏
         if (_uiMods) _uiMods.then((m) => m.tt.onScrollHide()).catch(() => {});
         // 节流重新扫描可见区域
         if (_scrollScanTimer) clearTimeout(_scrollScanTimer);
@@ -213,44 +194,37 @@ export function stopHint() {
   if (thState.observer) { thState.observer.disconnect(); thState.observer = null; }
   if (thState.scrollHandler) { window.removeEventListener('scroll', thState.scrollHandler, { capture: true }); thState.scrollHandler = null; }
   thState.scanScheduled = false;
-  // 反思（2026-08-28 第一百六十九次）：停止时一并复位扫描门闸，
-  //   否则若停在扫描中途，scanRunning 残留 true 会让重启后的 scheduleScan 永久静默。
+  // 停止时一并复位扫描门闸：若停在扫描中途，scanRunning 残留 true 会让
+  //   重启后的 scheduleScan 永久静默。
   thState.scanRunning = false;
   thState.scanPendingRoot = null;
-  // 第一百八十三次：一并清掉看门狗定时器，避免停用后仍打出"强制解闸"错误日志。
+  // 一并清掉看门狗定时器，避免停用后仍打出"强制解闸"错误日志。
   if (_scanWatchdog) { clearTimeout(_scanWatchdog); _scanWatchdog = null; }
-  // 第二百六十九次（用户报"扩展关闭侧栏后，网页依旧提示"）：补拆高亮——
-  //   文档字符串一直承诺"清除所有高亮"，实现却漏了 unwrapAll：本函数只断观察器、
-  //   停扫描门闸，已注入的 .beaver-word 高亮全部残留（✕ 关侧栏 / 注释开关关 /
-  //   对账停用三条路径全部中招）。与 clearHighlights 同款 unwrapAll + resetScan
-  //   （总线清空，侧栏同步清列表）；重启路径 startHint 会整页重扫重新包裹，无残留风险。
+  // 补拆高亮（用户报"扩展关闭侧栏后，网页依旧提示"）：只断观察器、停扫描门闸
+  //   会让已注入的 .beaver-word 高亮全部残留（关侧栏 / 注释开关关 / 对账停用三条
+  //   路径全部中招）。与 clearHighlights 同款 unwrapAll + resetScan（总线清空，
+  //   侧栏同步清列表）；重启路径 startHint 会整页重扫重新包裹，无残留风险。
   unwrapAll();
   resetScan();
-  // 318次：停止＝269 次补拆高亮（注释宿主已不在）；不清账本会让重启后这些词
-  //   永远无法重挂注释。与 clearHighlights 同款清零。
+  // 停止后注释宿主已不在；不清账本会让重启后这些词永远无法重挂注释。
   thState.annSeenWords.clear();
-  // w4：UI 模块未加载 = 无浮层/面板可藏，跳过；已加载才转发隐藏
+  // UI 模块未加载 = 无浮层/面板可藏，跳过；已加载才转发隐藏
   if (_uiMods) _uiMods.then((m) => m.tt.hideTooltip()).catch(() => {});
   if (_uiMods) _uiMods.then((m) => m.pp.hidePanel()).catch(() => {});
   if (isDebugLog()) console.log('[VocabRadar][text-hint] 已停止');
 }
 
 /**
- * 强制重新扫描整页正文（诊断悬浮窗"重扫"按钮 / 自愈路径用）
- * 反思（2026-08-14 第五十六次）：scheduleScan 原为模块内部函数，
- *   诊断悬浮窗需要"看网页是否变化"的操作按钮，故导出。
- * 反思（2026-08-14 第五十八次）：重扫前必须清空 _seenWords。
- *   根因：clearProcessedAttr 后 TreeWalker 会重新包裹所有出现，
- *   若 _seenWords 保留首扫记录，全部出现被判 isFirst=false → later 类，
- *   laterEnabled=false（默认）时 .beaver-hide-later 全透明 →"高亮全部消失"。
- * 反思（2026-08-28 第一百六十九次）：必须一并清空 thState.wordCache。
- *   根因（用户："生词很少，调整词频后正常"）：startHint 改为异步 ensureReady 后，
- *   首屏扫描发生在词典 dictMap 装载完成之前，lookupFull 直接 return null，
- *   processTextNode 把这批"假 null"写进 wordCache；词典就绪后 .then(rescanNow)
- *   重扫，但旧版 rescanNow 只清 seenWords 不清 wordCache，
- *   于是 `info === undefined` 判据失效，全部命中假 null → 无高亮/生词极少。
- *   而 setRankThreshold/setAnnotateOov/setAnnotateRepeat 三个 setter 都清了
- *   wordCache，故"调整词频后正常"——精确对上现象。
+ * 强制重新扫描整页正文（诊断悬浮窗"重扫"按钮 / 自愈路径用；scheduleScan 因诊断
+ * 需要"看网页是否变化"而导出）。
+ * 重扫前必须清空 seenWords 与 wordCache：
+ *   - seenWords：clearProcessedAttr 后 TreeWalker 会重新包裹所有出现，若保留首扫
+ *     记录，全部出现被判 isFirst=false → later 类，laterEnabled=false（默认）时
+ *     .beaver-hide-later 全透明 →"高亮全部消失"。
+ *   - wordCache（用户："生词很少，调整词频后正常"）：startHint 异步装载词典后，
+ *     首屏扫描可能早于 dictMap 就绪，lookupFull 直接 return null，这批"假 null"
+ *     会写进 wordCache；不清缓存则 `info === undefined` 判据失效，全部命中假 null
+ *     → 无高亮/生词极少。setter 们都清 wordCache，故"调整词频后正常"。
  */
 export function rescanNow() {
   if (!thState.enabled) return;
@@ -262,33 +236,29 @@ export function rescanNow() {
 }
 
 /**
- * 删除全部高亮包裹（诊断悬浮窗"删高亮"按钮用）：仅剥 span，不停止观察器
- * 反思（2026-08-14 第五十六次）：stopHint 会一并停观察器，删高亮只想去掉
- *   效果再看网页是否变化，保留后续扫描能力。
+ * 删除全部高亮包裹（诊断悬浮窗"删高亮"按钮用）：仅剥 span，不停止观察器——
+ *   只想去掉效果再看网页是否变化，保留后续扫描能力（stopHint 才会停观察器）。
  */
 export function clearHighlights() {
   unwrapAll();
   resetScan();
-  // 318次：高亮全拆＝注释宿主已不在，账本一并清零（重扫可重挂）
+  // 高亮全拆＝注释宿主已不在，账本一并清零（重扫可重挂）
   thState.annSeenWords.clear();
   if (isDebugLog()) console.log('[VocabRadar][text-hint] 已删除全部高亮');
 }
 
 /**
- * 修改阈值：CSS class 切换可见性（不 unwrapAll，避免搅乱网页）
- * 反思（2026-08-11 第三十三次）：用户反馈"调整词频后页面破坏，正文消失，白屏"。
- *   根因：旧版 setRankThreshold 调 unwrapAll() 移除所有 span + scheduleScan 重扫整个 body，
- *   139+ span 移除 + 800+ 文本节点重扫 + 139+ 新 span 创建 = 大量 DOM 修改，
- *   触发网站脚本 MutationObserver 响应 → 页面重新渲染 → 白屏。
- *   修正：新增 HIDE_WORD_CLASS，setRankThreshold 不再 unwrapAll，
- *   改用 CSS class 切换可见性（不改变 DOM 结构）。
+ * 修改阈值：CSS class 切换可见性（不 unwrapAll）。
+ * 用户反馈"调整词频后页面破坏，正文消失，白屏"：unwrapAll 移除全部 span 再重扫
+ *   整个 body 属大量 DOM 修改，会触发网站脚本 MutationObserver 响应 → 页面重新
+ *   渲染 → 白屏。故只切换 HIDE_WORD_CLASS，不改变 DOM 结构：
  *   - 阈值升高（更少词显示）：给高频词 span 加 .beaver-word-hidden
  *   - 阈值降低（更多词显示）：清除 PROCESSED_ATTR 重新扫描包裹新增词
  * @param {number} v
  */
 export function setRankThreshold(v) {
   const oldThreshold = thState.rankThreshold;
-  thState.rankThreshold = (typeof v === 'number' && isFinite(v)) ? v : 4000;
+  thState.rankThreshold = (typeof v === 'number' && isFinite(v)) ? v : 5000;
   thState.wordCache.clear();
   thState.seenWords.clear();
   if (thState.enabled) {
@@ -323,7 +293,7 @@ export function setRankThresholdMax(v) {
 }
 
 /**
- * My Words setter（storage.myWords 变化时调用，2026-09-18）
+ * My Words setter（storage.myWords 变化时调用）
  * 生词/熟词变化双向影响可见性（熟词要隐藏、生词要显示），updateWordVisibility
  * 只认 dataset.rank 无法覆盖 → 一律清标记全量重扫（与 setRankThreshold 缩小同策略）。
  * @param {string[]} [newList] 生词表（小写单词数组）
@@ -340,17 +310,14 @@ export function setMyWordsLists(newList, knownList) {
 }
 
 /**
- * 修改"注释表外词"开关：CSS class 切换可见性（不 unwrapAll）
- * 反思（2026-08-11 第三十三次）：与 setRankThreshold 同理，用 CSS class 代替 unwrapAll
- * 反思（2026-08-14 第五十四次）：函数名与键名同步改名（localTranslateEnabled → annotateOov）
+ * 修改"注释表外词"开关：CSS class 切换可见性（不 unwrapAll，与 setRankThreshold 同理）
  * @param {boolean} v
  */
 export function setAnnotateOov(v) {
   thState.annotateOov = !!v;
   thState.wordCache.clear();
   thState.seenWords.clear();
-  // 反思（2026-08-16 第七十一次）：表外词开关决定注释集合，重扫前清总线，
-  //   侧栏随后收到新 emit 重建列表（避免旧词残留）。
+  // 表外词开关决定注释集合：重扫前清总线，侧栏随后收到新 emit 重建列表（避免旧词残留）。
   resetScan();
   if (thState.enabled) {
     updateWordVisibility();
@@ -358,7 +325,7 @@ export function setAnnotateOov(v) {
 }
 
 /**
- * 修改"注释重复生词"开关（2026-08-15 第六十二次）
+ * 修改"注释重复生词"开关
  * 变化后需重新扫描才能对已包裹节点生效（同一文本节点内去重逻辑在 processTextNode）
  * @param {boolean} v
  */
@@ -374,7 +341,7 @@ export function setAnnotateRepeat(v) {
 }
 
 /**
- * 修改"侧邻注释模板"（280次：annBrackets 布尔退役改 annTemplate 字符串模板）
+ * 修改"侧邻注释模板"（annTemplate 字符串模板，annBrackets 布尔键已由启动迁移取代）
  * 变化后需重新扫描才能对已包裹节点生效（模板拼在 processTextNode 追加时）
  * @param {string} v
  */
@@ -390,8 +357,7 @@ export function setAnnTemplate(v) {
 }
 
 /**
- * 遍历所有 .beaver-word span，有翻译的追加 .beaver-side-ann
- * 侧邻注释（2026-08-05）：开关从 false→true 时调用
+ * 遍历所有 .beaver-word span，有翻译的追加 .beaver-side-ann（开关从 false→true 时调用）
  *   - dataset.translations 非空 → 直接追加
  *   - dataset.translations 为空但 _wordCache 有缓存 → 回填并追加
  *   - 都没有 → 不追加（翻译完成后 backfillSideAnnotation 会自动追加）
@@ -427,26 +393,25 @@ export function applySideAnnotationToAll() {
 
 /**
  * 移除所有 .beaver-side-ann（非侧栏内）
- * 侧邻注释（2026-08-05）：开关从 true→false 时调用，高亮 span 保留
+ * 开关从 true→false 时调用，高亮 span 保留
  */
 export function removeAllSideAnnotations() {
   document.querySelectorAll('.' + SIDE_ANN_CLASS).forEach((el) => {
     if (el.closest && el.closest('#beaver-sidebar, #beaver-web-sidebar, #beaver-subtitle-overlay')) return;  // 跳过侧栏/overlay
     el.remove();
   });
-  // 318次：注释全移除＝账本清零（重挂不受历史拦截）
+  // 注释全移除＝账本清零（重挂不受历史拦截）
   thState.annSeenWords.clear();
 }
 
 // === 扫描 ===
 
 /** 调度扫描（requestIdleCallback / setTimeout）
- * 反思（2026-08-28 第一百六十九次）：旧版仅用 scanScheduled 防"调度重入"，
- *   而 run() 一进入就把它置回 false，随后 scanSubtree 的分批推进要持续很久，
- *   期间 scroll（500ms 节流）与 MutationObserver 可再次调度，形成多轮并发扫描
+ * 门闸双键：scanScheduled 防"调度重入"（run() 一进入就置回 false），
+ *   scanRunning 防执行期再入——否则 scanSubtree 分批推进期间（持续很久），
+ *   scroll（500ms 节流）与 MutationObserver 可再次调度，多轮并发扫描
  *   交错遍历同一棵树 → 重复查词、日志不断、扫描迟迟不完（用户："文本许久在扫"）。
- *   修正：新增 scanRunning 门闸；执行中的调度请求合并进 scanPendingRoot
- *   （不同 root 合并为整个 body），本轮结束后补跑一轮。
+ *   执行中的调度请求合并进 scanPendingRoot（不同 root 合并为整个 body），本轮结束后补跑一轮。
  */
 export function scheduleScan(root) {
   if (!root) return;  // 防御：root 为 null 时跳过（body 未就绪等）
@@ -464,9 +429,9 @@ export function scheduleScan(root) {
     thMark('hint:runStart');  // 埋点：真正开跑（与 hint:sched 之差＝空闲回调等待，最长 2000ms）
     if (!thState.enabled) return;
     thState.scanRunning = true;
-    // 反思（2026-08-30 第一百八十三次）：门闸只靠 onDone 复位，onDone 不来就是"整页永久停扫且无日志"
-    //   （本次「生词提示消失」即此形态）。加看门狗：本轮 30s 未回报即强制解闸并出声，
-    //   既不遮蔽问题（console.error 打出），又不至于让用户永远看不到高亮。
+    // 门闸只靠 onDone 复位，onDone 不来就是"整页永久停扫且无日志"（「生词提示消失」即此形态）。
+    //   看门狗：本轮 30s 未回报即强制解闸并出声，既不遮蔽问题（console.error 打出），
+    //   又不至于让用户永远看不到高亮。
     let settled = false;
     const release = (byWatchdog) => {
       if (settled) return;
@@ -500,14 +465,12 @@ export function scanSubtree(root, onDone) {
   const done = () => { if (typeof onDone === 'function') { try { onDone(); } catch (e) { /* 忽略 */ } } };
   // 扫描前清理失效高亮（框架更新 DOM 导致的 textContent 错位）
   if (root === document.body) cleanupStaleSpans();
-  // 反思（2026-08-06）：用户要求"翻译过多，只翻译可见正文区域"。
-  //   旧版扫描全部文本节点（包括视口外），导致大量不必要的翻译请求。
-  //   修正：仅处理视口内（含上下各1屏缓冲）的文本节点，减少翻译量。
-  //   滚动时通过 _scrollScanPending 触发重新扫描，补充新进入视口的节点。
-  // 反思（2026-08-30 第一百八十三次）：用户报障「视频网站中，网页的生词提示消失」（正文完全无高亮）。
-  //   旧版 vh 取 window.innerHeight||0，某些视频站在全屏/画中画切换瞬间 innerHeight 读到 0，
-  //   视口条件退化为 `rect.bottom<0 || rect.top>0`，几乎全部文本节点被 REJECT → 整页无高亮且无日志。
-  //   修正：退到 documentElement.clientHeight；仍拿不到高度时直接放弃视口过滤（宁多扫不漏扫）。
+  // 用户要求"翻译过多，只翻译可见正文区域"：仅处理视口内（含上下各1屏缓冲）的
+  //   文本节点，减少翻译量；滚动时通过 _scrollScanPending 触发重新扫描补新节点。
+  // 用户报障「视频网站中，网页的生词提示消失」（正文完全无高亮）：某些视频站在
+  //   全屏/画中画切换瞬间 window.innerHeight 读到 0，视口条件退化为
+  //   `rect.bottom<0 || rect.top>0`，几乎全部文本节点被 REJECT → 整页无高亮且无日志。
+  //   故退到 documentElement.clientHeight；仍拿不到高度时直接放弃视口过滤（宁多扫不漏扫）。
   const vh = window.innerHeight || (document.documentElement && document.documentElement.clientHeight) || 0;
   const skipViewportFilter = !(vh > 0);
   if (skipViewportFilter) {
@@ -518,13 +481,13 @@ export function scanSubtree(root, onDone) {
     acceptNode(node) {
       const parent = node.parentElement;
       if (!parent) return NodeFilter.FILTER_REJECT;
-      // 反思（2026-08-05 修正）：parent.dataset[PROCESSED_ATTR] 永远返回 undefined
-      //   （dataset 键为驼峰式 beaverDone，非 data-beaver-done），
-      //   导致已处理节点不被跳过、重复扫描。改用 hasAttribute 精确判断。
+      // 坑：parent.dataset[PROCESSED_ATTR] 永远返回 undefined（dataset 键为驼峰式
+      //   beaverDone，非 data-beaver-done），已处理节点不被跳过、重复扫描。
+      //   必须用 hasAttribute 精确判断。
       if (parent.hasAttribute && parent.hasAttribute(PROCESSED_ATTR)) return NodeFilter.FILTER_REJECT;
       const tag = parent.tagName;
       if (SKIP_TAGS.has(tag)) return NodeFilter.FILTER_REJECT;
-      // 非正文 ARIA 角色 + 可见性过滤（2026-08-06）
+      // 非正文 ARIA 角色 + 可见性过滤
       //   closest() 一次检查所有祖先：aria-hidden / contenteditable / 非正文 role
       //   参考 Readability.js 的内容区域识别 + 沙拉查词的选词范围限制
       if (parent.closest && parent.closest(NON_CONTENT_SELECTOR)) {
@@ -540,9 +503,9 @@ export function scanSubtree(root, onDone) {
       if (parent.classList && parent.classList.contains(HIGHLIGHT_CLASS)) {
         return NodeFilter.FILTER_REJECT;
       }
-      // 319次：本扩展插入页面的译文/注释节点也必须排除——否则 show in page 插入
-      //   含英文的译文瞬间经 observer 触发重扫，译文内英文被当正文再查词再高亮
-      //   再挂注释（"网页提示重复"的真正漏口，与 annSeenWords 账本无关的新路径；
+      // 本扩展插入页面的译文/注释节点必须排除——否则 show in page 插入含英文的
+      //   译文瞬间经 observer 触发重扫，译文内英文被当正文再查词再高亮再挂注释
+      //   （"网页提示重复"的真正漏口，与 annSeenWords 账本无关的新路径；
       //   kiss-translator 即把自身插入元素列入恒忽略清单 KISS_IGNORE_SELECTOR）。
       //   classList 直判挡"文本直接在插入节点内"，closest 挡"包在插入节点里的
       //   内层元素"（如译文里再嵌 span），双保险。
@@ -557,11 +520,9 @@ export function scanSubtree(root, onDone) {
       // 否则 TreeWalker 会扫描 sidebar 内的注释文本，对注释结果再次注释
       // OCR 面板（#beaver-ocr-panel）也跳过：由 showOcrResultPanel 手动调 scanSubtree 注释
       // 诊断面板（#beaver-debug-panel）也跳过：防止面板自身文本被高亮，干扰诊断
-      // 反思（2026-08-30 第一百八十三次）：本行是全文件唯一缺 `parent.closest &&` 守卫者
-      //   （对比上方 NON_CONTENT_SELECTOR 分支）。XML/SVG 等特殊节点的 parentElement 没有
-      //   closest 方法，此处会抛 TypeError；异常从 acceptNode 冒出会中断 walker.nextNode()
-      //   循环（该循环无 try/catch）→ scanSubtree 的 done() 永不执行 → scanRunning 永久为 true
-      //   → 之后所有 scheduleScan 静默 return，整页永久无高亮且无任何日志。补齐守卫。
+      // 坑：XML/SVG 等特殊节点的 parentElement 没有 closest 方法，调用会抛 TypeError；
+      //   异常从 acceptNode 冒出会中断 walker.nextNode() 循环 → scanSubtree 的 done()
+      //   永不执行 → scanRunning 永久为 true → 整页永久无高亮且无日志。closest 必须带存在性守卫。
       if (parent.closest && parent.closest('#beaver-sidebar, #beaver-web-sidebar, #beaver-subtitle-overlay, #beaver-hint-tooltip, #beaver-context-panel, #beaver-ocr-panel, #beaver-debug-panel')) {
         return NodeFilter.FILTER_REJECT;
       }
@@ -575,10 +536,9 @@ export function scanSubtree(root, onDone) {
       return NodeFilter.FILTER_ACCEPT;
     }
   });
-  // 反思（2026-08-30 第一百八十三次）：遍历阶段原先裸奔——acceptNode 内任何异常
-  //   都会从 walker.nextNode() 抛出，越过下方的分批 .catch，使 done() 永不执行，
-  //   scanRunning 永久卡 true（全页永久停扫）。这是"生词提示消失"的首号根因。
-  //   修正：遍历包 try/catch，异常不遮蔽（console.error 打出），已收集到的节点照常处理。
+  // 遍历必须包 try/catch——acceptNode 内任何异常都会从 walker.nextNode() 抛出，
+  //   越过下方的分批 .catch，使 done() 永不执行，scanRunning 永久卡 true（全页永久停扫），
+  //   这是"生词提示消失"的首号根因。异常不遮蔽（console.error 打出），已收集到的节点照常处理。
   const all = [];
   thMark('hint:walkStart');
   try {
@@ -599,8 +559,8 @@ export function scanSubtree(root, onDone) {
     thAdd('batches', 1);
     processBatch(batch).then(() => {
       if (i < all.length) {
-        // 第二百零七次（用户："你在分屏处理么…咋要处理这么多？"）：批间空闲超时 1000→250ms——
-        //   忙页（SPA 持续占主线程）会一路顶到超时，11 批白等 11s；250ms 取衡。
+        // 批间空闲超时 250ms：忙页（SPA 持续占主线程）会一路顶到超时，
+        //   11 批白等 11s（用户质问："你在分屏处理么…咋要处理这么多？"）
         if ('requestIdleCallback' in window) requestIdleCallback(next, { timeout: 250 });
       } else {
         thMark('hint:scanDone');
@@ -612,24 +572,21 @@ export function scanSubtree(root, onDone) {
 }
 
 /** 处理一批文本节点（每批 50 个，一次扫描屏）
- * 反思（2026-08-11 第三十三次）：添加 try/catch 防止 surroundContents 异常中断扫描。
- * 反思（2026-08-16 第七十二次）：批次级账本——processBatch 创建一个 stats，
- *   各 processTextNode 累计入同一 stats，批次结束调 logBatch 打印一次统计
- *   （不再每个文本节点都打印，避免日志刷屏）。
- * 反思（2026-08-19 第八十次）：扫描期间置词典静音（setQuietBatch(true)），
- *   使 dictionary 的 ①②③ 逐词日志不在批量扫描时刷屏，一屏只打印 logBatch 一条统计
- *   （用户："扫描出来一屏的单词没有打印统计，是统计，不是逐条打印"）。
+ * try/catch 防止 surroundContents 异常中断扫描。
+ * 批次级账本：processBatch 创建一个 stats，各 processTextNode 累计入同一 stats，
+ *   批次结束调 logBatch 打印一次统计（不逐文本节点打印，避免日志刷屏）。
+ * 扫描期间置词典静音（setQuietBatch(true)）：①②③ 逐词日志不在批量扫描时刷屏，
+ *   一屏只打印 logBatch 一条统计（用户："扫描出来一屏的单词没有打印统计，是统计，不是逐条打印"）。
  */
 export async function processBatch(textNodes) {
   const stats = beginBatch('text-hint', '分屏扫描（每批' + textNodes.length + '节点）');
   setQuietBatch(true);
   try {
-    // 第一百八十七次·性能修复（用户实测：串行查词 1069 次，扫描 4105ms 走完却无高亮）：
-    //   processTextNode 是 for + await 串行，每个首见词在 lookupFull 里要走一次
+    // processTextNode 是 for + await 串行，每个首见词在 lookupFull 里要走一次
     //   getWord 的 SW 消息往返；50 个节点一批就可能几百次往返串起来。
-    //   改为**每批开跑前一次性批量预取**（prefetchFull → WORD_DB_GET_BATCH，
+    //   故每批开跑前一次性批量预取（prefetchFull → WORD_DB_GET_BATCH，
     //   SW 侧单事务并发 get），把本批词的完整记录一次取回内存；随后逐词查词全部
-    //   命中内存，不再逐词往返。预取失败静默（退回原逐词路径，行为不变）。
+    //   命中内存，不再逐词往返。预取失败静默（退回逐词路径，行为不变）。
     const preWords = [];
     for (const tn of textNodes) {
       const t = tn && tn.nodeValue;
@@ -657,18 +614,19 @@ export async function processBatch(textNodes) {
 
 /**
  * 获取 block 原始文本（供 web-sidebar 同源读取）
- * 反思（2026-08-16 第六十八次）：单一来源架构——页面"先选出"原文本记录到块上，
- *   文本侧栏直接读取（不自行重扫）。记录时机在首个文本节点包裹前，此时块内其余文本节点
- *   仍是原文，因此需跳过已注入的 .beaver-side-ann 侧邻注释；拼接规则与 web-sidebar
- *   getBlockText 一致（相邻文本补空格、块级元素补换行、跳过隐藏元素）。
+ * 单一来源架构——页面"先选出"原文本记录到块上，文本侧栏直接读取（不自行重扫）。
+ *   记录时机在首个文本节点包裹前，此时块内其余文本节点仍是原文，因此需跳过
+ *   已注入的 .beaver-side-ann 侧邻注释；拼接规则与 web-sidebar getBlockText 一致
+ *   （相邻文本补空格、块级元素补换行、跳过隐藏元素）。
  * @param {Element} block 块级容器
  * @returns {string} 原文本（无侧邻注释）
  */
 export function getBlockOriginText(block) {
   const parts = [];
   const BLOCK_TAGS = new Set(['P','DIV','LI','TD','TH','H1','H2','H3','H4','H5','H6','BLOCKQUOTE','DD','DT','CAPTION','FIGCAPTION','ARTICLE','SECTION','MAIN','TR','UL','OL','TABLE','BR']);
-  // 2026-09-02 短行合并修复（与 ws/core.js#getBlockText 同步）：同一父容器下不同行内子元素
-  //   原仅对 BLOCK_TAGS 补换行，行内 span 之间只补空格，导致多短行→一长句。此处同口径补换行。
+  // 短行合并修复（与 ws/core.js#getBlockText 同步，改一处须同步另一处）：同一父容器下
+  //   不同行内子元素原仅对 BLOCK_TAGS 补换行，行内 span 之间只补空格，
+  //   导致多短行→一长句。此处对 INLINE_TAGS 同口径补换行。
   const INLINE_TAGS = new Set(['SPAN','B','I','EM','STRONG','A','FONT','U','S','SUP','SUB','CODE','MARK','SMALL','BIG','LABEL','Q','CITE','ABBR','TIME','VAR','SAMP','KBD']);
   const walker = document.createTreeWalker(block, NodeFilter.SHOW_TEXT, {
     acceptNode(node) {
@@ -742,12 +700,12 @@ export async function processTextNode(textNode, stats) {
   if (!parent || parent.hasAttribute(PROCESSED_ATTR)) return;
   parent.setAttribute(PROCESSED_ATTR, '1');
 
-  // 反思（2026-08-16 第六十八次）：单一来源——本块首个文本节点处理时，把块原始文本
-  //   记录到 data-beaver-orig，供文本侧栏直接读取（不自行重扫、不重复注释）。
-  //   幂等：首次记录后不再覆盖；此时块内其余文本节点仍是原文，仅需跳过已注入的侧邻注释。
-  // 反思（2026-08-16 第七十一次）：block 变量提升到函数级，供总线 emit 复用——
-  //   总线推全块原文本（data-beaver-orig）而非本文本节点片段，保证侧栏句子与旧 span
-  //   路径一致（完整句子而非碎片），片段会破坏拆句（"The quick brown " 与 "fox jumps"）。
+  // 单一来源——本块首个文本节点处理时，把块原始文本记录到 data-beaver-orig，
+  //   供文本侧栏直接读取（不自行重扫、不重复注释）。幂等：首次记录后不再覆盖；
+  //   此时块内其余文本节点仍是原文，仅需跳过已注入的侧邻注释。
+  // block 提升到函数级（scanBlock），供总线 emit 复用——总线推全块原文本
+  //   （data-beaver-orig）而非本文本节点片段，保证侧栏句子完整而非碎片
+  //   （片段会破坏拆句："The quick brown " 与 "fox jumps"）。
   let scanBlock = null;
   try {
     // 块选择器与 web-sidebar scanPageTextFromSpans 一致（同块 → 同源），避免记录在
@@ -763,8 +721,7 @@ export async function processTextNode(textNode, stats) {
   } catch (e) { /* 记录失败不影响高亮 */ }
 
   // 提取单词及位置
-  // 反思（2026-08-06）：过滤 JS 特殊值（NaN/undefined/Infinity），
-  //   这些是页面 JS 异常产生的文本，非真实单词，不应高亮
+  // 过滤 JS 特殊值（NaN/undefined/Infinity）：页面 JS 异常产生的文本，非真实单词，不应高亮
   const words = [];
   for (const m of text.matchAll(WORD_G_PATTERN)) {
     if (SELECT_PATTERN.test(m[0]) && !JS_SENTINELS.has(m[0].toLowerCase())) {
@@ -773,9 +730,8 @@ export async function processTextNode(textNode, stats) {
   }
   if (words.length === 0) return;
 
-  // 反思（2026-08-15 第六十二次）：注释重复生词默认不选——同一文本节点内
-  //   重复出现的词只注释首次（对应 2026-07-28"一行之中你注释了两次"的修复）；
-  //   勾选后每次出现都包裹高亮。
+  // 未勾选「注释重复生词」时，同一文本节点内重复出现的词只注释首次
+  //   （用户报障"一行之中你注释了两次"的修复）；勾选后每次出现都包裹高亮。
   if (!thState.annotateRepeat) {
     const seen = new Set();
     const dedup = [];
@@ -791,16 +747,15 @@ export async function processTextNode(textNode, stats) {
 
   // 查词：词典同步命中 + 表外 translator 异步
   const highlights = [];
-  // 反思（2026-08-16 第七十二次）：批次级账本——stats 由 processBatch 创建，
-  //   本函数累计 chars/tokens/unique + 各属性 dict/asm + 跳过计数，
-  //   不再每个文本节点都创建/打印。
+  // 批次级账本：stats 由 processBatch 创建，本函数累计 chars/tokens/unique +
+  //   各属性 dict/asm + 跳过计数，不逐文本节点创建/打印。
   countChars(stats, text.length);
   countTokens(stats, words.length);
   const batchUnique = new Set();
-  // 反思（2026-08-28 第一百六十九次）：词典未就绪时 lookupFull 直接 return null，
-  //   这种"假 null"绝不能写进 wordCache（否则词典就绪后重扫仍命中缓存 →"生词很少"）。
-  //   dictReady 在循环外取一次即可：同一批次内装载状态不会来回翻转，
-  //   即便中途就绪，本批漏缓存只是多查一次，不会产生错误结果。
+  // 词典未就绪时 lookupFull 直接 return null，这种"假 null"绝不能写进 wordCache
+  //   （否则词典就绪后重扫仍命中缓存 →"生词很少"）。dictReady 在循环外取一次即可：
+  //   同一批次内装载状态不会来回翻转，即便中途就绪，本批漏缓存只是多查一次，
+  //   不会产生错误结果。
   const dictReady = isDictLoaded();
   for (const w of words) {
     if (!batchUnique.has(w.word.toLowerCase())) { batchUnique.add(w.word.toLowerCase()); countUnique(stats, 1); }
@@ -835,19 +790,17 @@ export async function processTextNode(textNode, stats) {
     }
   }
 
-  // 反思（2026-08-16 第七十一次）：单次扫描总线——把块文本 + 注释结果推给
-  //   文本侧栏（text-hint 是唯一扫描器，侧栏不二次扫描）。词条带 rank/tags/
-  //   translations/lemma/isFirst，翻译异步完成前 translations 可能为空，
-  //   侧栏对 pending 词自行 translate 回填（与旧 span 路径行为一致）。
+  // 单次扫描总线——把块文本 + 注释结果推给文本侧栏（text-hint 是唯一扫描器，
+  //   侧栏不二次扫描）。词条带 rank/tags/translations/lemma/isFirst，翻译异步完成前
+  //   translations 可能为空，侧栏对 pending 词自行 translate 回填。
   //   文本取全块原文本（data-beaver-orig，无侧邻注释）而非本节点片段——侧栏拆句
   //   需完整句子；块内各文本节点都携带同一全块文本，侧栏按 _seenSentences 去重，
-  //   每个句子只在其词条所在节点推送时落入（与旧 span 路径"块原文+span词过滤"一致）。
+  //   每个句子只在其词条所在节点推送时落入。
   const emitText = (scanBlock && scanBlock.dataset && scanBlock.dataset.beaverOrig)
     ? scanBlock.dataset.beaverOrig
     : text;
-  // 第二百零七次（用户要求重申："网页提示依旧走全规则（整页 TreeWalker），
-  //   只有他保留了菜单"）：撤销 206 次的容器 emit 过滤——菜单/导航词必须进侧栏，
-  //   总线恢复全量 emit（词集对账"仅网页 21"即过滤误伤的实证）。
+  // 用户要求重申："网页提示依旧走全规则（整页 TreeWalker），只有他保留了菜单"
+  //   ——菜单/导航词必须进侧栏，总线保持全量 emit（词集对账"仅网页 21"即容器过滤误伤的实证）。
   try {
     emitBlock({
       text: emitText,
@@ -875,29 +828,24 @@ export async function processTextNode(textNode, stats) {
  *   - 词典命中且超阈值 → 返回 info（释义异步获取，不阻塞高亮）
  *   - 表外单词 → 返回 info（rank=null，释义异步获取）
  *
- * 反思（2026-07-07）：原注释称"右键查询也用此函数"，但右键查询不应受阈值限制
- * （用户主动查词有啥显示啥）。已新增 queryWordForPanel 专供右键面板，此函数
- * 保留阈值过滤供高亮使用。原实现与 annotator.getAnnotations 内部查词逻辑重复，
- * 曾因两边 tokenizer 不一致导致"同阈值不同结果"，现统一调用共享 lookupWord。
+ * 右键查询有独立的 queryWordForPanel（用户主动查词有啥显示啥，不受阈值限制）；
+ *   本函数保留阈值过滤专供高亮包裹。查词逻辑统一调用共享 lookupWord
+ *   （两侧 tokenizer 曾不一致导致"同阈值不同结果"）。
  *
- * 反思（2026-08-02 修正）：用户反馈"原先有个设计，词典查不到释义就跳过。
- *   现在取消词典了，是不是仍然沿用此逻辑？没有释义先标出来。"
- *   旧版 translate 返回 null 时 queryWord 也返回 null（不高亮），
- *   导致"注释生僻词"开关未开或翻译失败时所有词都不高亮。
- *   修正：先返回高亮信息（rank+tags），释义异步获取。
- *   translate 仍调用（用于缓存和后续 hover 显示释义），但不阻塞高亮。
+ * 用户反馈"原先有个设计，词典查不到释义就跳过。现在取消词典了，是不是仍然沿用
+ *   此逻辑？没有释义先标出来。"——翻译返回 null 时本函数仍返回 null 会导致
+ *   "注释生僻词"开关未开或翻译失败时所有词都不高亮。故先返回高亮信息（rank+tags），
+ *   释义异步获取：translate 仍调用（用于缓存和后续 hover 显示释义），但不阻塞高亮；
  *   翻译成功后通过 _wordCache 更新（下次该词出现时已有缓存）。
  *
- * 反思（2026-08-16 第七十次）：数据来源账本——rank/lemma/tags 的来源由
- *   lookupFull 在 needsMaps 决策点真实计数（本函数把 stats 透传过去）；
- *   释义的来源在本函数决策点计数（IDB 译文命中=dict，否则在线获取=asm）；
- *   高频/表外跳过也在本函数真实计数。
+ * 数据来源账本——rank/lemma/tags 的来源由 lookupFull 在 needsMaps 决策点真实计数
+ *   （本函数把 stats 透传过去）；释义的来源在本函数决策点计数（IDB 译文命中=dict，
+ *   否则在线获取=asm）；高频/表外跳过也在本函数真实计数。
  */
 export async function queryWord(lower, original, stats) {
-  // 反思（2026-08-13 第五十次）：统一词典——高亮路径优先从 IDB 读
-  //   rank/lemma/tags（lookupFull），词典内单词刷新页面/换网站后不再重建；
-  //   仅 IDB 未命中才走 lookupWord（Maps 组装，lookupFull 会写回 IDB）。
-  //   lookupWord 保留作回退（IDB 读取失败时降级）。
+  // 统一词典——高亮路径优先从 IDB 读 rank/lemma/tags（lookupFull），词典内单词
+  //   刷新页面/换网站后不再重建；仅 IDB 未命中才走 lookupWord（Maps 组装，
+  //   lookupFull 会写回 IDB）。lookupWord 保留作回退（IDB 读取失败时降级）。
   let full = null;
   try { full = await lookupFull(lower, stats); } catch (e) { /* IDB 失败降级到 lookupWord */ }
   let rank = null;
@@ -919,7 +867,7 @@ export async function queryWord(lower, original, stats) {
     tags = full.tags || [];
     lemma = full.lemma || null;
     // IDB 命中路径需手动做阈值范围过滤（lookupWord 内部已做，此处补上）
-    // My Words（2026-09-18）：生词（词形或原形）绕过词频范围强制标注
+    // My Words：生词（词形或原形）绕过词频范围强制标注
     const _fresh = myWordsHit(lower, lemma).fresh;
     if (rank !== null && typeof rank === 'number' && isFinite(rank)
         && !_fresh && (rank <= thState.rankThreshold || rank > getRankMax())) {
@@ -928,26 +876,33 @@ export async function queryWord(lower, original, stats) {
     }
   }
 
-  // My Words 熟词拦截（2026-09-18，优先级高于词频范围）：词形或原形命中熟词表一律不标注。
+  // My Words 熟词拦截（优先级高于词频范围）：词形或原形命中熟词表一律不标注。
   //   降级路径 lookupWord 内部已挡词形熟词，此处补原形熟词与 IDB 命中路径。
   if (myWordsHit(lower, lemma).known) {
     if (stats) incScalar(stats, 'highFreq');
     return null;
   }
 
-  // 反思（2026-08-07）：annotateOov=false 时跳过表外词（rank=null）
-  //   与 sidebar.js 行为一致：表外词不注释、不收集
-  //   右键查询不受此限（queryWordForPanel 不检查，用户主动查词有啥显示啥）
+  // annotateOov=false 时跳过表外词（rank=null），与 sidebar.js 行为一致：
+  //   表外词不注释、不收集。右键查询不受此限（queryWordForPanel 不检查，
+  //   用户主动查词有啥显示啥）
   if (rank === null && !thState.annotateOov) {
     if (stats) incScalar(stats, 'oov');
     return null;
   }
 
-  // 反思（2026-08-15 第六十四次）：翻译同一通道——
-  //   查询时若统一词典 IDB 已有目标语言译文（translationLang===_meaningLang），
-  //   直接同步返回该译文，不再异步 translate。否则首次出现的 span 无释义，
-  //   侧邻注释回填走的是 translate 的结果；两次走不同数据源会产生不同译文。
+  // 翻译同一通道——查询时若统一词典 IDB 已有目标语言译文
+  //   （translationLang===_meaningLang），直接同步返回该译文，不再异步 translate。
+  //   否则首次出现的 span 无释义，侧邻注释回填走的是 translate 的结果；
+  //   两次走不同数据源会产生不同译文。
   if (full && full.translation && full.translationLang === thState.meaningLang) {
+    // 同形回显拦截（IDB 直读路径）：源词=释义（LLM 裸回显/同字形语言对脏缓存）
+    //   → 不是生词，不高亮（与 annotator.processWord IDB 直读拦截同口径）。
+    //   跳过账复用 highFreq 通道，不新增统计键。
+    if (isSameForm(original, full.translation)) {
+      if (stats) incScalar(stats, 'highFreq');
+      return null;
+    }
     if (stats) incField(stats, 'trans', 'dict');
     return {
       isWord: true,
@@ -959,9 +914,8 @@ export async function queryWord(lower, original, stats) {
   }
 
   // 先返回高亮信息（rank + tags + lemma），不等待翻译
-  // 反思（2026-08-02）：用户要求"没有释义先标出来"，
-  //   不再因 translate 返回 null 而跳过高亮
-  // 反思（2026-08-02 修正）：传递 lemma（词形还原原形）供浮层显示
+  // 用户要求："没有释义先标出来"——不因 translate 返回 null 而跳过高亮；
+  //   同时传递 lemma（词形还原原形）供浮层显示
   const result = {
     isWord: true,
     rank,        // 词典命中为数字，表外为 null
@@ -975,13 +929,21 @@ export async function queryWord(lower, original, stats) {
   //   同时回填到已渲染的 .beaver-word span（侧邻注释异步回填）
   // - 失败/开关未开：translations 保持空数组，word 仍被高亮
   //   hover 浮层显示"暂无释义"（与右键面板一致）
-  // 反思（2026-08-06）：扩展更新后 chrome.runtime 上下文失效，跳过翻译避免刷屏
+  // 扩展更新后 chrome.runtime 上下文失效，跳过翻译避免刷屏
   if (!isContextValid()) return result;
   // 释义账：词典无目标语言译文 → 需在线翻译获取（结果写回 IDB，下次直读）
   if (stats) incField(stats, 'trans', 'asm');
-  // 第461次：网页正文高亮批量释义走档1（悬停/查词档3、视频侧栏档2在其前）
+  // 网页正文高亮批量释义走档1（悬停/查词档3、视频侧栏档2在其前）
   translate(original, PRIO_WEB).then((translated) => {
     if (translated) {
+      // 同形回显拦截（异步回填才发现）：源词=释义 → 不是生词。
+      //   拆掉该词已挂的全部高亮 span（unwrapSingle 内同步清 annSeenWords 账本）；
+      //   不写 _wordCache（防止同页后续出现被当作有释义生词再高亮）、不回填侧邻注释。
+      //   重扫时 queryWord 会因 IDB 同形缓存直判 null，不会再高亮。
+      if (isSameForm(original, translated)) {
+        unwrapWordSpans(lower);
+        return;
+      }
       // 更新缓存：下次该词出现时直接命中
       thState.wordCache.set(lower, {
         isWord: true,
@@ -990,9 +952,9 @@ export async function queryWord(lower, original, stats) {
         lemma,
         translations: [translated]
       });
-      // 侧邻注释异步回填（2026-08-05）：找到所有该词的 .beaver-word span，
-      //   更新 dataset.translations 并追加 .beaver-side-ann (释义)
-      //   反思：首次出现时 translations 为空未插入 .beaver-side-ann，
+      // 侧邻注释异步回填：找到所有该词的 .beaver-word span，
+      //   更新 dataset.translations 并追加 .beaver-side-ann (释义)。
+      //   首次出现时 translations 为空未插入 .beaver-side-ann，
       //   翻译完成后回填，用户无需 hover 即可看到释义
       if (thState.colors.sideAnnotation && thState.enabled) {
         backfillSideAnnotation(lower, [translated]);
@@ -1014,7 +976,7 @@ export async function queryWord(lower, original, stats) {
 
 /** 用 span 包裹文本节点内 [start, end) 区间；对应类别关闭则跳过 */
 export function wrapWordAt(textNode, h) {
-  // 反思（2026-08-06）：始终包裹所有出现（首次+后续），不再因 laterEnabled=false 跳过后续。
+  // 始终包裹所有出现（首次+后续），不因 laterEnabled=false 跳过后续。
   //   后续出现的可见性由 CSS .beaver-hide-later 控制（零重扫切换）。
   //   firstEnabled 恒为 true（首次出现总是高亮），保留判断以防未来变更。
   if (h.isFirst && !thState.colors.firstEnabled) return;
@@ -1032,40 +994,39 @@ export function wrapWordAt(textNode, h) {
   // 词形还原原形（仅词形还原后命中时非空，如 running→run；直接命中或表外为空）
   span.dataset.lemma = h.lemma || '';
   range.surroundContents(span);
-  thState.wrapCount++;  // 诊断计数（2026-08-14 第五十四次）
-  // 第一百八十七次·埋点缺失修补：上一轮（第一百八十六次）建链路计时时只写了
-  //   hint:firstAnn，漏了 hint:firstHighlight，导致诊断窗恒显示"★首个高亮 未发生"——
-  //   那不是真实症状而是埋点没打，属"看不见即误判"。此处补上（thMark 首次为准）。
+  thState.wrapCount++;  // 诊断计数
+  // 埋点：首次高亮时刻（thMark 首次为准）——诊断窗曾因漏打此埋点恒显示
+  //   "★首个高亮 未发生"，不是真实症状而是埋点没打，属"看不见即误判"。
   thMark('hint:firstHighlight');
 
-  // 侧邻注释（2026-08-05）：启用且有释义时，在 span 后插入 (释义) 兄弟节点
+  // 侧邻注释：启用且有释义时，在 span 后插入 (释义) 兄弟节点
   //   异步翻译完成时通过 appendSideAnnotation 回填（queryWord translate.then 调用）
   if (thState.colors.sideAnnotation && h.translations && h.translations.length > 0) {
     appendSideAnnotation(span, h.translations);
   }
 
-  // w4：tooltip.js 已改惰性动态加载，事件处理经 _uiLoad 转发（微任务延迟对交互无感）
+  // tooltip.js 惰性动态加载，事件处理经 _uiLoad 转发（微任务延迟对交互无感）
   span.addEventListener('mouseenter', (e) => _uiLoad().then((m) => m.tt.onWordHover(e)).catch(() => {}));
   span.addEventListener('mouseleave', (e) => _uiLoad().then((m) => m.tt.onWordLeave(e)).catch(() => {}));
   span.addEventListener('click', (e) => _uiLoad().then((m) => m.tt.onWordClick(e)).catch(() => {}));
-  // 第一百一十二次：标记"直绑监听器已挂"。Firefox 下部分动态 span 的直绑监听器
+  // 标记"直绑监听器已挂"。Firefox 下部分动态 span 的直绑监听器
   // 可能因未知机制失效（用户实测：前几个有悬浮提示、之后只有高亮无悬浮）——
   // 文档级委托兜底（installDelegationGuard）据此判定是否代为触发。
   span.__beaverDirect = true;
 }
 
 /**
- * 文档级事件委托兜底（第一百一十二次）：直绑监听器未生效的 .beaver-word span
+ * 文档级事件委托兜底：直绑监听器未生效的 .beaver-word span
  * 由 capture 阶段委托触发同样的 hover/leave/click 处理；直绑正常时按时间戳去重跳过。
  * 触发即打 warn 日志（诊断信号：证明存在监听器丢失现象）。
  */
 export function installDelegationGuard() {
   if (window.__beaverHintDelegation) return;
   window.__beaverHintDelegation = true;
-  // 反思（2026-08-30 第一百八十二次）：用户报障「视频侧栏的句子 高亮词鼠标滑过后会去掉底色」。
-  //   根因：本 hit() 是全文件唯一没有排除自家侧栏的函数（其余 8 处都跳过 #beaver-sidebar）。
-  //   视频侧栏的 .beaver-word 由 vs/subtitle-renderer.js 生成、无 dataset.word、无 __beaverDirect，
-  //   于是被这里的委托当成「直绑失效的正文 span」→ onWordHover → validateSpan 读不到 dataset 必失败
+  // 用户报障「视频侧栏的句子 高亮词鼠标滑过后会去掉底色」：本 hit() 是全文件唯一
+  //   没有排除自家侧栏的函数（其余 8 处都跳过 #beaver-sidebar）。视频侧栏的
+  //   .beaver-word 由 vs/subtitle-renderer.js 生成、无 dataset.word、无 __beaverDirect，
+  //   被委托当成「直绑失效的正文 span」→ onWordHover → validateSpan 读不到 dataset 必失败
   //   → unwrapSingle 把 span 拆掉 → 底色随类名一起消失（文字和括号注释还留着）。
   //   修正：命中后若落在两个侧栏内一律视为未命中，交由侧栏自身的事件处理。
   const hit = (e) => {
@@ -1082,7 +1043,7 @@ export function installDelegationGuard() {
     el.__beaverLastHover = now;
     if (el.__beaverDirect) return;
     console.warn('[VocabRadar][text-hint] hover 委托兜底触发（该 span 直接监听器未生效）word=', el.dataset.word);
-    // w4：经 _uiLoad 转发，确保 tooltip 模块已加载
+    // 经 _uiLoad 转发，确保 tooltip 模块已加载
     _uiLoad().then((m) => m.tt.onWordHover({ currentTarget: el, stopPropagation() {} })).catch(() => {});
   }, { capture: true });
   document.addEventListener('mouseout', (e) => {
@@ -1098,19 +1059,20 @@ export function installDelegationGuard() {
     if (now - (el.__beaverLastClick || 0) < 300) return;
     el.__beaverLastClick = now;
     if (el.__beaverDirect) return;
-    // w4：经 _uiLoad 转发，确保 tooltip/panel 模块已加载
+    // 经 _uiLoad 转发，确保 tooltip/panel 模块已加载
     _uiLoad().then((m) => m.tt.onWordClick({ currentTarget: el, stopPropagation() {} })).catch(() => {});
   }, { capture: true });
 }
 
 /**
- * 321次：清扫旧版残留的侧邻注释节点（无 data-word 属性的 .beaver-side-ann）
- * 322次：扩展同词多注释去重——320+ 版节点带 data-word，扩展重载后新账本为空、
- *   页面旧注释仍在，同词可再挂（用户"网页提示依旧重复提示"）。启动按文档序保留
- *   每词首个、其余移除；重复模式开启时逐处注释是设计行为，不去重（见函数内）。
- * 背景：data-word 是 320 版才挂的；扩展重载（不刷新页面）后旧版节点残留，
- *   页级 [data-word] 兜底查不到它们 → 同词重复挂注释（用户报障根因之一）。
- *   这类节点无法反查词名（模板渲染只有释义），保留只会作恶，直接删除。
+ * 清扫残留的侧邻注释节点（无 data-word 属性的 .beaver-side-ann）
+ * 背景两类：
+ * 1) data-word 是后版本才挂的属性，扩展重载（不刷新页面）后旧节点残留，
+ *    页级 [data-word] 兜底查不到它们 → 同词重复挂注释（用户报障"网页提示依旧重复提示"）。
+ *    这类节点无法反查词名（模板渲染只有释义），保留只会作恶，直接删除。
+ * 2) 同词多注释去重：带 data-word 的节点，扩展重载后新账本为空、页面旧注释仍在，
+ *    同词可再挂。启动按文档序保留每词首个、其余移除；重复模式开启时逐处注释
+ *    是设计行为，不去重（见函数内）。
  * 跳过侧栏/字幕 overlay/诊断面板容器（内部渲染另有体系）。
  */
 function purgeLegacySideAnnotations() {
@@ -1122,10 +1084,10 @@ function purgeLegacySideAnnotations() {
       el.remove();
       n++;
     });
-    if (n > 0 && isDebugLog()) console.log('[VocabRadar][text-hint] 清扫旧版残留注释 ' + n + ' 个（无 data-word）');
-    // 322次：同词多注释去重——按文档序保留每词首个，其余移除（容器内渲染不参与）；
+    if (n > 0 && isDebugLog()) console.log('[VocabRadar][text-hint] 清扫残留注释 ' + n + ' 个（无 data-word）');
+    // 同词多注释去重——按文档序保留每词首个，其余移除（容器内渲染不参与）；
     //   重复模式开启时逐处注释是设计行为，跳过。与挂载自愈（appendSideAnnotation
-    //   322 段）同口径：重复不再依赖定位漏口即被消除。
+    //   末段）同口径：重复不再依赖定位漏口即被消除。
     if (!thState.annotateRepeat) {
       const seen = new Set();
       let d = 0;
@@ -1140,45 +1102,42 @@ function purgeLegacySideAnnotations() {
       if (d > 0 && isDebugLog()) console.log('[VocabRadar][text-hint] 启动清扫同词重复注释 ' + d + ' 个');
     }
   } catch (e) {
-    console.warn('[VocabRadar][text-hint] 清扫旧版残留注释失败:', e);
+    console.warn('[VocabRadar][text-hint] 清扫残留注释失败:', e);
   }
 }
 
 /**
  * 在 .beaver-word span 后插入/更新侧邻注释 (释义) 兄弟节点
- * 侧邻注释（2026-08-05）：半角括号，释义用独立配色（--beaver-ann-bg/fg）
+ * 半角括号，释义用独立配色（--beaver-ann-bg/fg）
  *   - 若 span 后已存在 .beaver-side-ann 兄弟，更新其文本（避免重复插入）
  *   - 若无，创建 <span class="beaver-side-ann">(释义)</span> 插入到 span.nextSibling 前
  *   - 释义取第一条（短义项），多条用；分隔
  *
- * 反思（2026-08-30 第一百八十次，用户报障"依旧重复：Skip(跳) to main content /
- *   Skip(跳) to Ask Learn chat experience"）：processTextNode 的 annotateRepeat 去重
- *   只作用于**单个文本节点内部**，同一个词出现在不同块（如两个 skip-link）时各自都是
- *   该节点内的首次，于是都挂上了 (释义)，与「注释重复生词」开关的语义不符
- *   （用户预期是整页只注释首次）。页级"是否首次"信息其实已有：wrapWordAt 依据
- *   thState.seenWords 给后续出现的 span 打 LATER_CLASS。故此处消费该标记：
- *   未勾选「注释重复生词」时，LATER_CLASS 的 span 不挂侧邻注释。
- *   与侧栏句子 tab 第一百七十九次的判据（ws/scanner.js 按 isFirst 卡住）同语义、
- *   同受该开关控制。高亮本身不受影响（后续出现仍高亮，可见性由 .beaver-hide-later 管）。
+ * 用户报障"依旧重复：Skip(跳) to main content / Skip(跳) to Ask Learn chat experience"：
+ *   processTextNode 的 annotateRepeat 去重只作用于**单个文本节点内部**，同一个词出现在
+ *   不同块（如两个 skip-link）时各自都是该节点内的首次，于是都挂上了 (释义)，与
+ *   「注释重复生词」开关的语义不符（用户预期是整页只注释首次）。页级"是否首次"信息
+ *   其实已有：wrapWordAt 依据 thState.seenWords 给后续出现的 span 打 LATER_CLASS。
+ *   故此处消费该标记：未勾选「注释重复生词」时，LATER_CLASS 的 span 不挂侧邻注释。
+ *   与侧栏句子 tab 的判据（ws/scanner.js 按 isFirst 卡住）同语义、同受该开关控制。
+ *   高亮本身不受影响（后续出现仍高亮，可见性由 .beaver-hide-later 管）。
  * @param {HTMLElement} span .beaver-word span
  * @param {string[]} translations 释义数组
  */
 export function appendSideAnnotation(span, translations) {
   if (!span || !translations || translations.length === 0) return;
-  // 318次：页级注释账本——seenWords 会被 rescanNow/setRankThreshold/setAnnotateOov/
+  // 页级注释账本——seenWords 会被 rescanNow/setRankThreshold/setAnnotateOov/
   //   setAnnotateRepeat/setAnnTemplate 清空（高亮语义需要），清空后同词新 span 误判
   //   isFirst=true → FIRST 类绕过 LATER 拦截 → 同词挂第二处注释（用户报"网页提示
   //   重复了"根因）。annSeenWords 只记"已挂注释的词"，不随上述清空翻转，仅注释
   //   全移除时清空（removeAllSideAnnotations/clearHighlights/stopHint）。
   const annWord = (span.dataset && span.dataset.word) ? String(span.dataset.word).toLowerCase() : '';
-  // 第一百八十次：页级去重——非首次出现的词，未开开关时不注释
+  // 页级去重——非首次出现的词，未开开关时不注释
   if (!thState.annotateRepeat && span.classList && span.classList.contains(LATER_CLASS)) return;
-  // 318次：账本已记该词＝页面上已有它的注释——除非本 span 自带注释（更新路径：
-  //   模板变更/回填经兄弟复用重渲染），否则不再挂第二处
-  // 319次：return 前补取证埋点——若用户再报"提示重复"，console 可判别是账本拦截
-  //   失效（此处应打印）还是别的新路径，不再盲改
-  // 321次：豁免判据收紧——紧邻注释须 data-word 与本词一致才算"本 span 自带注释"。
-  //   旧判据只看 class，紧邻是别的词的注释时也放行，下方复用分支会把别人注释的
+  // 账本已记该词＝页面上已有它的注释——除非本 span 自带注释（更新路径：
+  //   模板变更/回填经兄弟复用重渲染），否则不挂第二处。
+  // 豁免判据收紧——紧邻注释须 data-word 与本词一致才算"本 span 自带注释"。
+  //   宽松判据只看 class，紧邻是别的词的注释时也放行，下方复用分支会把别人注释的
   //   data-word/释义改写成本词（注释劫持：原词注释丢失且账本仍记，原词此后永久
   //   无法重挂）。
   const sibAnn = span.nextElementSibling;
@@ -1188,13 +1147,13 @@ export function appendSideAnnotation(span, translations) {
     if (isDebugLog()) console.log('[VocabRadar][text-hint] 注释去重拦截（annSeenWords 已记该词）：', annWord);
     return;
   }
-  // 320次：页级 DOM 存在性兜底——annSeenWords 未记该词但页面上已有同词注释时
+  // 页级 DOM 存在性兜底——annSeenWords 未记该词但页面上已有同词注释时
   //   （账本被部分清理/历史节点无账本记录等），同样拦截。与上一条同口径：本 span
   //   自带注释（兄弟复用更新路径）不拦，否则模板变更/回填会被误杀。
   //   判据用 annSpan 的 data-word（下方挂载时写入；历史节点无该属性查不到，
   //   但那些节点本就已被账本覆盖，无回归风险）。
   if (!thState.annotateRepeat && annWord && !ownAnn) {
-    // 322次：查询排除容器——侧栏/字幕 overlay 等容器内部渲染的同词节点不该拦住
+    // 查询排除容器——侧栏/字幕 overlay 等容器内部渲染的同词节点不该拦住
     //   主文档挂载（容器渲染另有体系，与 purge/自愈同口径）
     const dup = Array.from(document.querySelectorAll('.'
       + SIDE_ANN_CLASS + '[data-word="' + CSS.escape(annWord) + '"]'))
@@ -1205,12 +1164,12 @@ export function appendSideAnnotation(span, translations) {
       return;
     }
   }
-  // 302次（用户"侧邻注释都用短释"）：全量 join 改短释单项（detail 卡片不受影响）
+  // 用户裁定"侧邻注释都用短释"：全量 join 改短释单项（detail 卡片不受影响）
   const transText = pickCleanShortTrans(translations);
   if (!transText) return;
   // 检查是否已有侧邻注释兄弟节点（避免重复插入）
-  // 321次：复用须 data-word 与本词一致——紧邻是别的词的注释时新建节点插入本词后
-  //   （旧版直接复用＝改写别人注释，见上方劫持说明）。
+  // 复用须 data-word 与本词一致——紧邻是别的词的注释时新建节点插入本词后
+  //   （直接复用＝改写别人注释，见上方劫持说明）。
   let annSpan = span.nextElementSibling;
   if (!annSpan || !annSpan.classList || !annSpan.classList.contains(SIDE_ANN_CLASS)
     || (annWord && annSpan.dataset.word !== annWord)) {
@@ -1218,16 +1177,16 @@ export function appendSideAnnotation(span, translations) {
     annSpan.className = SIDE_ANN_CLASS;
     span.parentNode.insertBefore(annSpan, span.nextSibling);
   }
-  // 320次：注释节点挂词名——页级 [data-word] 去重判据（含新建与兄弟复用两路，
+  // 注释节点挂词名——页级 [data-word] 去重判据（含新建与兄弟复用两路，
   //   复用旧节点缺属性时补挂）
   if (annWord) annSpan.dataset.word = annWord;
-  // 280次：注释文本由 annTemplate 模板渲染（{meaning} 前后字面量拼释义，
+  // 注释文本由 annTemplate 模板渲染（{meaning} 前后字面量拼释义，
   //   {word} token 丢弃——生词 span 已独立存在，不重复输出）
   annSpan.textContent = renderAnnText(thState.annTemplate, transText);
-  // 318次：挂载/更新成功即记账（仅非重复模式——重复模式下注释本就逐处挂）
+  // 挂载/更新成功即记账（仅非重复模式——重复模式下注释本就逐处挂）
   if (annWord && !thState.annotateRepeat) thState.annSeenWords.add(annWord);
-  // 322次：注释自愈兜底——LATER 拦截/账本拦截/页级兜底三道静态防线仍拦不住某条
-  //   未知路径的重复挂载（用户 322 次反馈"网页提示依旧重复提示"）。无论漏口在哪，
+  // 注释自愈兜底——LATER 拦截/账本拦截/页级兜底三道静态防线仍拦不住某条
+  //   未知路径的重复挂载（用户反馈"网页提示依旧重复提示"）。无论漏口在哪，
   //   挂载成功后物理清扫页面上同词的多余注释：保留本 span 这份，其余（排除侧栏/
   //   字幕/诊断容器内的渲染）移除并留取证——重复不再依赖定位漏口即被消除。
   if (annWord && !thState.annotateRepeat) {
@@ -1240,13 +1199,13 @@ export function appendSideAnnotation(span, translations) {
       if (isDebugLog()) console.log('[VocabRadar][text-hint] 注释自愈：移除同词多余注释（' + annWord + '）');
     });
   }
-  // 324次：无条件取证日志——用户 324 次反馈"网页提示依旧重复提示，是最新版"，
-  //   但其 console 中零防线输出（LATER 拦截/账本拦截/页级 DOM 拦截/自愈均无一条日志），
-  //   与"annotateRepeat=false＋防线全在本函数"矛盾：重复注入在逻辑上不可能经 appendSideAnnotation。
-  //   挂载成功留痕后，下次复现 console 四路对账（挂载/账本拦截/DOM 拦截/自愈）即可定位漏口；
-  //   同时打印是否落在排除容器内（侧栏/字幕/诊断容器内的重复属设计性无视，页级自愈不清扫）。
-  // 第368次：改接 debugLog 阀门——每词一条属流水日志，默认静默；取证时在引导页
-  //   打开「调试日志」开关即可恢复四路对账能力（对账口径不变）。
+  // 无条件取证日志——用户反馈"网页提示依旧重复提示，是最新版"，但其 console 中
+  //   零防线输出（LATER 拦截/账本拦截/页级 DOM 拦截/自愈均无一条日志），与
+  //   "annotateRepeat=false＋防线全在本函数"矛盾：重复注入在逻辑上不可能经本函数。
+  //   挂载成功留痕后，下次复现 console 四路对账（挂载/账本拦截/DOM 拦截/自愈）
+  //   即可定位漏口；同时打印是否落在排除容器内（容器内的重复属设计性无视）。
+  //   走 debugLog 阀门：每词一条属流水日志，默认静默；取证时在引导页打开
+  //   「调试日志」开关即可恢复四路对账能力（对账口径不变）。
   if (annWord && isDebugLog()) {
     const exContainer = span.closest && span.closest(
       '#beaver-sidebar, #beaver-web-sidebar, #beaver-subtitle-overlay, #beaver-debug-panel');
@@ -1258,7 +1217,7 @@ export function appendSideAnnotation(span, translations) {
 
 /**
  * 异步回填侧邻注释到所有该词的 .beaver-word span
- * 侧邻注释（2026-08-05）：翻译完成后调用，回填到已渲染但未含释义的 span
+ * 翻译完成后调用，回填到已渲染但未含释义的 span
  *   - 跳过视频提示内的 span（侧栏有独立渲染逻辑）
  *   - 跳过失效 span（textContent 与 dataset.word 不符，框架已改动 DOM）
  *   - 更新 dataset.translations 并追加 .beaver-side-ann
@@ -1278,7 +1237,7 @@ export function backfillSideAnnotation(lower, translations) {
     // 校验 span 仍有效（框架可能改动 textContent）
     if (!validateSpan(span)) return;
     // 更新 dataset.translations
-    // 第一百二十三次：过滤括号不配对的截断残片（历史缓存中的半截释义）
+    // 过滤括号不配对的截断残片（历史缓存中的半截释义）
     const okTrans = translations.filter((s) => Boolean(s) && isBalancedParens(s));
     span.dataset.translations = okTrans.join('；');
     // 追加侧邻注释（appendSideAnnotation 内部已处理去重）
@@ -1289,7 +1248,7 @@ export function backfillSideAnnotation(lower, translations) {
 /**
  * 遍历所有 .beaver-word span，根据当前 _rankThreshold 和 _annotateOov
  * 切换 .beaver-word-hidden class（不改变 DOM 结构，仅切换 class）
- * 反思（2026-08-11 第三十三次）：用 CSS class 代替 unwrapAll，避免 DOM 修改触发白屏
+ * 用 CSS class 代替 unwrapAll，避免 DOM 修改触发白屏
  */
 export function updateWordVisibility() {
   document.querySelectorAll('.' + HIGHLIGHT_CLASS).forEach((span) => {
@@ -1321,12 +1280,12 @@ export function clearProcessedAttr() {
 export function unwrapSingle(el) {
   const parent = el.parentNode;
   if (!parent) return;
-  // 侧邻注释（2026-08-05）：同步移除 span 后紧跟的 .beaver-side-ann 兄弟
+  // 同步移除 span 后紧跟的 .beaver-side-ann 兄弟
   const annSibling = el.nextElementSibling;
   if (annSibling && annSibling.classList && annSibling.classList.contains(SIDE_ANN_CLASS)) {
     annSibling.remove();
-    // 319次：删注释须同步清账本——annSeenWords 记"页面已有该词注释"，注释随
-    //   span 失效被拆后若不清，该词在页面上永久无法再挂注释（318 账本反向缺口）。
+    // 删注释须同步清账本——annSeenWords 记"页面已有该词注释"，注释随 span 失效
+    //   被拆后若不清，该词在页面上永久无法再挂注释（账本反向缺口）。
     //   cleanupStaleSpans / observer characterData 分支均经 unwrapSingle 调用，
     //   此处一并覆盖。
     const w = el.dataset && el.dataset.word;
@@ -1334,7 +1293,7 @@ export function unwrapSingle(el) {
   }
   while (el.firstChild) parent.insertBefore(el.firstChild, el);
   parent.removeChild(el);
-  // 反思（2026-08-11）：不调 parent.normalize()，避免触发网站脚本 DOM 响应
+  // 不调 parent.normalize()，避免触发网站脚本 DOM 响应
 }
 
 /**
@@ -1348,6 +1307,25 @@ export function validateSpan(el) {
   return el.textContent.trim().toLowerCase() === word.toLowerCase();
 }
 
+/**
+ * 同形回显兜底：拆掉页面上该词的全部高亮 span（含侧邻注释）。
+ * 「先高亮后异步翻译」哲学的回收半程——翻译回填时才发现源词=释义（LLM 裸回显/
+ *   同字形语言对脏缓存），该词不是生词，把已经包上的 span 拆回去。
+ * 边界与 backfillSideAnnotation 一致：跳过侧栏/字幕 overlay 内的 span；
+ * unwrapSingle 内部同步清 annSeenWords 账本，注释随 span 拆除不留反向缺口。
+ * @param {string} lower 小写单词
+ */
+function unwrapWordSpans(lower) {
+  if (!lower) return;
+  document.querySelectorAll('.' + HIGHLIGHT_CLASS).forEach((span) => {
+    if (span.closest && span.closest('#beaver-sidebar, #beaver-web-sidebar, #beaver-subtitle-overlay')) return;
+    const word = span.dataset.word;
+    if (!word || word.toLowerCase() !== lower) return;
+    if (!validateSpan(span)) return;
+    unwrapSingle(span);
+  });
+}
+
 /** 清理全文档所有失效的 beaver-word span（扫描前/SPA 切换时调用） */
 export function cleanupStaleSpans() {
   const stale = [];
@@ -1358,9 +1336,9 @@ export function cleanupStaleSpans() {
     if (!validateSpan(el)) stale.push(el);
   });
   for (const el of stale) unwrapSingle(el);
-  // 诊断（2026-08-30 第一百八十二次）：用户报障「视频网站中，网页的生词先会高亮又消失」。
-  //   剥离动作此前完全无痕，无法区分是本函数、unwrapAll 还是 observer 干的。
-  //   此处按"失效原因"分类留痕（无 dataset / 文本不符），下次可一眼定位剥离者。
+  // 诊断：用户报障「视频网站中，网页的生词先会高亮又消失」——剥离动作此前完全无痕，
+  //   无法区分是本函数、unwrapAll 还是 observer 干的。按"失效原因"分类留痕
+  //   （无 dataset / 文本不符），下次可一眼定位剥离者。
   if (stale.length > 0) {
     const noData = stale.filter((el) => !el.dataset.word).length;
     console.warn('[VocabRadar][text-hint] 清理失效高亮 ' + stale.length +
@@ -1371,23 +1349,21 @@ export function cleanupStaleSpans() {
 // === 移除所有高亮 ===
 
 export function unwrapAll() {
-  // 反思（2026-07-28 #bug1）：侧边栏(#beaver-sidebar)有独立的生词注释渲染，
-  //   unwrapAll 不应移除侧栏内的 .beaver-word 元素。否则切换词频阈值时
-  //   text-hint 侧的 unwrapAll 会剥掉侧栏生词的高亮包裹，导致注释颜色丢失。
-  // 反思（2026-08-11 第二十九次）：移除所有 normalize() 调用。
-  //   用户诊断确认 normalize() 是破坏正文的元凶：document.body.normalize()
-  //   递归合并所有后代文本节点，触发网站脚本 DOM 变化响应，导致正文被重新渲染或丢失。
-  // 反思（2026-08-30 第一百八十二次）：补上 #beaver-subtitle-overlay。
-  //   视频页上 text-hint 与 subtitle-overlay 必然同页共存（manifest 中 text-hint.js
-  //   对 <all_urls> 无 exclude），overlay 的 .beaver-word 由 subtitle-overlay.js 独立渲染，
-  //   原先会被这里一并剥掉；同时加剥离计数留痕，供"高亮又消失"追溯。
+  // 侧边栏(#beaver-sidebar)有独立的生词注释渲染，unwrapAll 不应移除侧栏内的
+  //   .beaver-word 元素。否则切换词频阈值时这里的 unwrapAll 会剥掉侧栏生词的
+  //   高亮包裹，导致注释颜色丢失。
+  // 全函数禁止 normalize()：document.body.normalize() 递归合并所有后代文本节点，
+  //   触发网站脚本 DOM 变化响应，导致正文被重新渲染或丢失（用户诊断确认的元凶）。
+  // 补上 #beaver-subtitle-overlay：视频页上 text-hint 与 subtitle-overlay 必然同页共存
+  //   （manifest 中 text-hint.js 对 <all_urls> 无 exclude），overlay 的 .beaver-word
+  //   由 subtitle-overlay.js 独立渲染，原先会被这里一并剥掉；同时加剥离计数留痕。
   let _unwrapped = 0;
   document.querySelectorAll('.' + HIGHLIGHT_CLASS).forEach((el) => {
     if (el.closest && el.closest('#beaver-sidebar, #beaver-web-sidebar, #beaver-subtitle-overlay')) return;  // 跳过侧栏/字幕 overlay 元素
     const parent = el.parentNode;
     if (!parent) return;
-    // 侧邻注释（2026-08-05）：移除 span 后紧跟的 .beaver-side-ann 兄弟节点
-    //   先移除兄弟再 unwrap，避免 .beaver-side-ann 残留显示释义而无生词
+    // 移除 span 后紧跟的 .beaver-side-ann 兄弟节点——先移除兄弟再 unwrap，
+    //   避免 .beaver-side-ann 残留显示释义而无生词
     const annSibling = el.nextElementSibling;
     if (annSibling && annSibling.classList && annSibling.classList.contains(SIDE_ANN_CLASS)) {
       annSibling.remove();
@@ -1395,9 +1371,8 @@ export function unwrapAll() {
     while (el.firstChild) parent.insertBefore(el.firstChild, el);
     parent.removeChild(el);
     _unwrapped++;
-    // 反思（2026-08-11）：不调 parent.normalize()，避免触发网站脚本 DOM 响应
   });
-  // 侧邻注释（2026-08-05）：清理孤立的 .beaver-side-ann（span 已被框架移除但 ann 残留）
+  // 清理孤立的 .beaver-side-ann（span 已被框架移除但 ann 残留）
   document.querySelectorAll('.' + SIDE_ANN_CLASS).forEach((el) => {
     if (el.closest && el.closest('#beaver-sidebar, #beaver-web-sidebar, #beaver-subtitle-overlay')) return;  // 跳过侧栏/字幕 overlay 元素
     el.remove();
@@ -1406,8 +1381,8 @@ export function unwrapAll() {
     if (el.closest && el.closest('#beaver-sidebar, #beaver-web-sidebar, #beaver-subtitle-overlay')) return;  // 跳过侧栏/字幕 overlay
     el.removeAttribute(PROCESSED_ATTR);
   });
-  // 诊断（2026-08-30 第一百八十二次）：剥离全部高亮是"高亮又消失"最猛的一条路径，
-  //   此前无痕。打印剥离数量，便于与 stopHint/clearHighlights 的日志对齐定位调用者。
+  // 诊断：剥离全部高亮是"高亮又消失"最猛的一条路径，此前无痕。
+  //   打印剥离数量，便于与 stopHint/clearHighlights 的日志对齐定位调用者。
   if (_unwrapped > 0) {
     console.warn('[VocabRadar][text-hint] 已剥离全部正文高亮 ' + _unwrapped + ' 个');
   }
@@ -1427,22 +1402,21 @@ export function startObserver() {
         if (n.id === TOOLTIP_ID || n.id === PANEL_ID || n.id === STYLE_ID) continue;
         if (n.closest && n.closest('#' + TOOLTIP_ID + ', #' + PANEL_ID)) continue;
         // 跳过侧边栏（#beaver-sidebar）：侧边栏有独立的生词注释渲染逻辑，
-        //   文本提示 MutationObserver 不应扫描/包裹侧栏内的生词，避免与侧栏 .beaver-word 样式冲突
-        //   （2026-07-28 #bug1：切换词频阈值后，text-hint 重新包裹侧栏内容导致注释颜色丢失）
+        //   文本提示 MutationObserver 不应扫描/包裹侧栏内的生词，避免与侧栏
+        //   .beaver-word 样式冲突（切换词频阈值后 text-hint 重新包裹侧栏内容
+        //   导致注释颜色丢失的实证）
         if (n.id === 'beaver-sidebar' || (n.closest && n.closest('#beaver-sidebar, #beaver-web-sidebar'))) continue;
-        // 反思（2026-08-11 第三十三次）：跳过 web-sidebar 和诊断面板，
-        //   防止面板日志 div 触发 scheduleScan 造成无谓扫描
+        // 跳过 web-sidebar 和诊断面板，防止面板日志 div 触发 scheduleScan 造成无谓扫描
         if (n.id === 'beaver-web-sidebar' || (n.closest && n.closest('#beaver-web-sidebar, #beaver-debug-panel'))) continue;
-        // 反思（2026-08-30 第一百八十二次）：跳过视频内字幕 overlay。
-        //   subtitle-overlay.js 每次字幕换行都整体替换 innerHTML，新节点里的 .beaver-word
-        //   无 dataset.word；若被这里调度扫描，text-hint 会把它当正文重新包裹/清理。
+        // 跳过视频内字幕 overlay：subtitle-overlay.js 每次字幕换行都整体替换
+        //   innerHTML，新节点里的 .beaver-word 无 dataset.word；若被这里调度扫描，
+        //   text-hint 会把它当正文重新包裹/清理。
         if (n.id === 'beaver-subtitle-overlay' || (n.closest && n.closest('#beaver-subtitle-overlay'))) continue;
         // 跳过 beaver-word 和 beaver-side-ann 自身（防止重复扫描已包裹的内容）
         if (n.classList && (n.classList.contains(HIGHLIGHT_CLASS) || n.classList.contains(SIDE_ANN_CLASS))) continue;
-        // 319次：跳过本扩展插入页面的译文节点（.beaver-page-insert）——插入含英文
-        //   译文会经此处 scheduleScan 触发重扫，译文内英文被再高亮再注释（"网页
-        //   提示重复"漏口之二，walker acceptNode 已同步排除）。classList 直判＋
-        //   closest 双保险。
+        // 跳过本扩展插入页面的译文节点（.beaver-page-insert）——插入含英文译文会
+        //   经此处 scheduleScan 触发重扫，译文内英文被再高亮再注释（"网页提示重复"
+        //   漏口之二，walker acceptNode 已同步排除）。classList 直判＋closest 双保险。
         if (n.classList && n.classList.contains('beaver-page-insert')) continue;
         if (n.closest && n.closest('.beaver-page-insert')) continue;
         scheduleScan(n);
@@ -1452,28 +1426,26 @@ export function startObserver() {
       if (m.type === 'characterData') {
         const parent = m.target.parentElement;
         if (parent && parent.classList && parent.classList.contains(HIGHLIGHT_CLASS)) {
-          // 反思（2026-08-30 第一百八十二次）：用户报障「视频网站中，网页的生词先会高亮又消失」。
-          //   本分支原先没有任何容器跳过，是全文件唯一的遗漏点。视频页上 text-hint 与
-          //   video-sidebar / subtitle-overlay 必然同页共存（manifest 中 text-hint.js
-          //   对 <all_urls> 无 exclude），侧栏与 overlay 的 .beaver-word 由
+          // 用户报障「视频网站中，网页的生词先会高亮又消失」：本分支原先没有任何
+          //   容器跳过，是全文件唯一的遗漏点。视频页上 text-hint 与 video-sidebar /
+          //   subtitle-overlay 必然同页共存，侧栏与 overlay 的 .beaver-word 由
           //   vs/subtitle-renderer.js、subtitle-overlay.js 生成且不带 dataset.word，
           //   字幕滚动时的文本变更会命中这里 → validateSpan 读不到 dataset 必失败
-          //   → unwrapSingle 把 span 拆掉。修正：与其余清理函数取齐，跳过自家容器。
+          //   → unwrapSingle 把 span 拆掉。与其余清理函数取齐，跳过自家容器。
           if (parent.closest && parent.closest('#beaver-sidebar, #beaver-web-sidebar, #beaver-subtitle-overlay, #beaver-debug-panel')) continue;
           if (!validateSpan(parent)) unwrapSingle(parent);
         }
       }
     }
   });
-  // 反思（2026-08-12 第四十四次）：body 可能未就绪（Bing 等特殊页面），
-  //   waitForBody 已确保 body 存在，但仍做防御性检查
+  // body 可能未就绪（Bing 等特殊页面），waitForBody 已确保 body 存在，但仍做防御性检查
   const observeTarget = document.body || document.documentElement;
   if (!observeTarget) return;
   thState.observer.observe(observeTarget, { childList: true, subtree: true, characterData: true });
 }
 
 /**
- * 诊断信息（2026-08-14 第五十四次）：供诊断悬浮窗展示文本提示运行状态。
+ * 诊断信息：供诊断悬浮窗展示文本提示运行状态。
  * 返回当前生效的实值（设置、词典、词形、扫描计数、浮层状态），便于定位
  * "网页无提示"等问题的真实根因。
  */
@@ -1482,7 +1454,7 @@ export async function getDiagState() {
     try {
       chrome.storage.local.get({
         textHintEnabled: true, sidebarEnabled: true, webSidebarEnabled: true,
-        learnLanguage: 'en', meaningLanguage: 'zh', rankThreshold: 4000,
+        learnLanguage: 'en', meaningLanguage: 'zh', rankThreshold: 5000,
         annotateOov: false, hintFirstEnabled: true, hintSideAnnotation: false,
         hintLaterEnabled: false,
         uiLanguage: 'en'
@@ -1492,15 +1464,14 @@ export async function getDiagState() {
   const dict = getDictDiagState();
   const lem = getLemmatizerDiagState();
   const sample = {};
-  // 反思（2026-08-28 第一百六十九次）：诊断样本查词也会触发 query.js 的
-  //   ①②③ 逐词日志，诊断窗每次刷新都刷屏。用 quiet 括起来（引用计数安全）。
+  // 诊断样本查词也会触发 query.js 的 ①②③ 逐词日志，诊断窗每次刷新都刷屏。
+  //   用 quiet 括起来（引用计数安全）。
   setQuietBatch(true);
   try {
     for (const w of ['hello', 'computer', 'running', 'bilibili']) {
       try {
-        // 反思（2026-08-14 第五十六次修正）：lookupFull 是 async，旧版未 await
-        //   → r 是 Promise 对象，isWord/rank/lemma 全部 undefined，样本永远显示
-        //   {tags:null, trans:null}，误导"词典没实现"。补 await。
+        // lookupFull 是 async，不 await 会拿到 Promise 对象，isWord/rank/lemma
+        //   全部 undefined，样本永远显示 {tags:null, trans:null}，误导"词典没实现"。
         const r = await lookupFull(w);
         if (!r) { sample[w] = { error: '词典未就绪' }; continue; }
         sample[w] = {
@@ -1537,20 +1508,20 @@ export async function getDiagState() {
     },
     dict,
     lemmatizer: lem,
-    // 第一百八十六次：全链路分段计时进诊断——用户症状「解析至多一秒，但体感好几秒才出现提示」，
+    // 全链路分段计时进诊断——用户症状「解析至多一秒，但体感好几秒才出现提示」，
     //   解析之外的耗时（空闲回调等待、词典装载、逐词串行查词、批间等待）必须能被看见。
     timing: getHintTiming(),
     counts: {
       wrappedWords: thState.wrapCount, seenWords: thState.seenWords.size, queryCache: thState.wordCache.size
     },
-    // 第一百八十三次：扫描门闸进诊断字段——scanRunning 卡 true 是"整页无高亮"的隐形根因，
-    //   不进快照就永远看不见（本次报障即此形态）。
+    // 扫描门闸进诊断字段——scanRunning 卡 true 是"整页无高亮"的隐形根因，
+    //   不进快照就永远看不见。
     scan: {
       scanRunning: thState.scanRunning, scanScheduled: thState.scanScheduled,
       scanPendingRoot: thState.scanPendingRoot ? (thState.scanPendingRoot.nodeName || 'node') : null
     },
-    // 反思（2026-08-16 第七十次）：词典层数据来源账本——最近几批"整句/逐块"处理的
-    //   文本字符/分词/去重单词 与 各属性(rank/lemma/tags/释义) 词典直读 vs 组装 的真实计数。
+    // 词典层数据来源账本——最近几批"整句/逐块"处理的文本字符/分词/去重单词 与
+    //   各属性(rank/lemma/tags/释义) 词典直读 vs 组装 的真实计数。
     //   页内各处理模块（annotator 整句 / text-hint 逐块）共用同一账本，此处统一展示。
     stats: getBatches(),
     ui: {

@@ -5,7 +5,6 @@
 //       诊断菜单）、同步滚动开关、重置布局、底部按钮（复制/OCR/评论/learn/聊天）、
 //       query 标签、语言浮层三语下拉、✕ 关闭、折叠、形态切换、视频叠加字幕开关、
 //       ASR 开关、轨道选择、点击捕获诊断、喇叭/生词折叠事件委托。
-// 来源：拆分自 src/content/video-sidebar.js（2026-09-27 拆分第四刀，机械搬移）。
 // 状态接驳：_activeTab/_syncEnabled/_overlayRuleSup/_overlayEnabled 仍属门面，
 //       经 setActiveTab/setSyncEnabled/getOverlayRuleSup/setOverlayEnabled 读写；
 //       _asrActive 经 isASRActive() 读。
@@ -53,9 +52,9 @@ export function bindEvents(options = {}) {
       setActiveTab(tab.dataset.tab);
       _root.querySelector('#beaver-subtitle-panel').classList.toggle('hidden', getActiveTab() !== 'subtitle');
       _root.querySelector('#beaver-word-panel').classList.toggle('hidden', getActiveTab() !== 'words');
-      // 274次：mp 练习页改 query 标签（同文本侧栏：右键搜索卡片）
+      // mp 练习页改 query 标签（同文本侧栏：右键搜索卡片）
       _root.querySelector('#beaver-query-panel').classList.toggle('hidden', getActiveTab() !== 'query');
-      // 反思（2026-08-13 第四十七次）：标签页按钮分组——
+      // 标签页按钮分组：
       //   字母页(subtitle)：注释/详情/字幕样式；词汇页(words)：词表按钮；query 页：无工具栏
       _root.querySelectorAll('[data-tab-toolbar]').forEach((tb) => {
         tb.classList.toggle('hidden', tb.dataset.tabToolbar !== getActiveTab());
@@ -64,9 +63,9 @@ export function bindEvents(options = {}) {
   });
 
   // Annotation 按钮（原 notes）：背景色表示选中（active=显示注释，非 active=不显示注释）
-  // 反思（2026-07-07）：用户要求"复选按钮用背景色改变表示选中而不是复选框"，
+  // 用户要求"复选按钮用背景色改变表示选中而不是复选框"，
   //   "无注释改为注释，默认选中"。逻辑反转：按钮 active = 显示注释 = _noAnnotation=false。
-  // 反思（2026-07-22）：用户要求「notes 改称 Annotation」。仅改名，逻辑不变。
+  // 用户要求「notes 改称 Annotation」。仅改名，逻辑不变。
   const annotationBtn = _root.querySelector('#beaver-annotation');
   annotationBtn.addEventListener('click', () => {
     const isActive = annotationBtn.classList.toggle('active');
@@ -77,20 +76,20 @@ export function bindEvents(options = {}) {
 
   // Detail 按钮：详略切换。默认非 active=简略模式（注释跟在生词后不另起一行），
   //   active=详细模式（注释另起一行，老版本格式）。
-  // 反思（2026-07-22）：用户要求「之右是详略切换按钮，默认简略模式」。
+  // 用户要求「之右是详略切换按钮，默认简略模式」。
   //   简略模式：注释直接跟在字幕正文中的生词后（高亮 span 之后），不另起一行。
   //   详细模式：注释独立成行（老版本格式）。
-  // 反思（2026-07-22 二次修复）：用户反馈「点击 detail 并没有切换」。
-  //   根因：旧版 detail 点击调 rerenderPanelOnly，该函数清 _annotationsCache 后调 highlightCurrent，
+  // 用户反馈「点击 detail 并没有切换」。
+  //   根因：此前 detail 点击调 rerenderPanelOnly，该函数清 _annotationsCache 后调 highlightCurrent，
   //   但 highlightCurrent 不重绘注释，rerenderSlotsFromCache 从已清的缓存取不到 anns，无重绘。
-  //   修正：detail 切换不需要清缓存（注释数据不变，仅渲染方式变），直接调 rerenderSlotsFromCache
+  //   detail 切换不需要清缓存（注释数据不变，仅渲染方式变），直接调 rerenderSlotsFromCache
   //   从现有缓存取 anns 重绘，立即应用新 _detailMode。
   const detailBtn = _root.querySelector('#beaver-detail');
   detailBtn.addEventListener('click', () => {
     setDetailMode(detailBtn.classList.toggle('active'));
     log('详略模式:', getDetailMode() ? '详细' : '简略');
     // 同步到 storage，视频内字幕（subtitle-overlay.js）监听并同步切换注释模式
-    // 反思（2026-08-05）：视频提示与视频内字幕共用 subtitleDetailMode
+    // 视频提示与视频内字幕共用 subtitleDetailMode
     //   false=侧邻注释（简略），true=详细注释
     try {
       chrome.storage.local.set({
@@ -107,8 +106,8 @@ export function bindEvents(options = {}) {
   exportBtn.addEventListener('click', onWordListToggle);
 
   // 设定浮层
-  // 第二百零四次（用户："⋯改为下拉，点击选项后再跳转而不是点击...就跳转"）：
-  //   171 次的"点 ⋯ 直接跳引导页"撤销——⋯ 恢复下拉展开（先关其他浮层再 toggle 自身），
+  // 用户："⋯改为下拉，点击选项后再跳转而不是点击...就跳转"——
+  //   ⋯ 恢复下拉展开（先关其他浮层再 toggle 自身），
   //   引导页/诊断窗口降级为菜单项，点击选项才执行（诊断窗经 lib/main-text 懒加载，不影响首屏）。
   const settingsBtn = _root.querySelector('.beaver-settings-btn');
   const settingsPop = _root.querySelector('#beaver-settings-pop');
@@ -129,7 +128,7 @@ export function bindEvents(options = {}) {
       log('⋯菜单 打开引导页失败：' + String(err && err.message || err));
     }
   });
-  // 菜单项：停用本站（第二百七十次；第二百七十二次默认改单停「网页提示」——用户裁定
+  // 菜单项：停用本站（默认单停「网页提示」——用户裁定
   //   "设定抑制默认是抑制网页提示，不是所有"）：写当前域 hint 停用规则，规则写入即经
   //   storage.onChanged 撤本页高亮/侧注（视频页上 text-hint 同样在跑）；视频侧栏自身
   //   与其余三项不受影响，随后跳引导页停用栏（地址=当前域名）供改范围与勾选四项。
@@ -150,8 +149,7 @@ export function bindEvents(options = {}) {
       log('⋯菜单 打开引导页失败：' + String((err && err.message) || err));
     }
   });
-  // 菜单项：诊断中心路由窗（第364次改名「诊断中心」，原「正文提取诊断」）
-  // 第398次：下载音频退役——openDiagCenter 不再注入 audioDownload 动作。
+  // 菜单项：诊断中心路由窗（由「正文提取诊断」改名而来）
   _root.querySelector('#beaver-diag-item').addEventListener('click', (e) => {
     e.stopPropagation();
     closeAllPopups();
@@ -163,7 +161,7 @@ export function bindEvents(options = {}) {
   _root.querySelector('#beaver-sync').addEventListener('change', (e) => {
     setSyncEnabled(e.target.checked);
   });
-  // 第一百三十二次：↺ 重置位置与尺寸（见 buildSidebar 模板注释）
+  // ↺ 重置位置与尺寸（见 buildSidebar 模板注释）
   const resetLayoutBtn = _root.querySelector('#beaver-reset-layout');
   if (resetLayoutBtn) resetLayoutBtn.addEventListener('click', (e) => {
     e.stopPropagation();
@@ -172,12 +170,10 @@ export function bindEvents(options = {}) {
   });
 
   // 底部按钮：点击即触发
-  // 第九十六次：弹幕按钮移除。第398次：下载音频连同录音工作流一并退役。
   const btnCopy = _root.querySelector('#beaver-copy');
   const btnOcr = _root.querySelector('#beaver-ocr');
   const btnComment = _root.querySelector('#beaver-comment');
-  // 274次：底部 learn 按钮（🎯）——导入视频草稿并跳转网站「我的卷轴」，
-  //   替换原「导出文件」（onExportFile 移除，参照文本侧栏 272 次同语义改造）
+  // 底部 learn 按钮（🎯）——导入视频草稿并跳转网站「我的卷轴」
   const btnLearn = _root.querySelector('#beaver-learn-btn');
   const btnChat = _root.querySelector('#beaver-chat');
   btnCopy.addEventListener('click', onCopy);
@@ -186,7 +182,7 @@ export function bindEvents(options = {}) {
   if (btnLearn) btnLearn.addEventListener('click', onLearnClickVs);
   if (btnChat) btnChat.addEventListener('click', onChatClickVs);
 
-  // 274次：query 标签——查询按钮与 Enter（与文本侧栏 query 标签同构）
+  // query 标签——查询按钮与 Enter（与文本侧栏 query 标签同构）
   const _vsQRun = _root.querySelector('#beaver-vs-query-run');
   const _vsQInput = _root.querySelector('#beaver-vs-query-input');
   if (_vsQRun) _vsQRun.addEventListener('click', () => {
@@ -198,10 +194,9 @@ export function bindEvents(options = {}) {
   });
 
   // 语言设置浮层：🌐按钮展开/收起三种语言下拉菜单
-  // 反思（2026-08-02 修正）：用户要求"视频提示应该用符号，展开三种选择"
-  //   旧版为 select#beaver-ui-lang 直接显示在 header
-  //   新版为 button#beaver-lang-btn 点击展开面板，含界面/目标/释义三种语言
-  // 反思（2026-08-02 二次）：参照项目约定"右键查询菜单点击别处自动消失"，
+  // 用户要求"视频提示应该用符号，展开三种选择"：button#beaver-lang-btn 点击展开面板，
+  //   含界面/目标/释义三种语言（此前为 select#beaver-ui-lang 直接显示在 header）。
+  // 参照项目约定"右键查询菜单点击别处自动消失"，
   //   语言浮层同样点击外部自动关闭，并同步按钮 .active 状态。
   const langBtn = _root.querySelector('#beaver-lang-btn');
   const langPanel = _root.querySelector('#beaver-lang-panel');
@@ -228,7 +223,7 @@ export function bindEvents(options = {}) {
     uiLangSel.appendChild(opt);
   }
   // 填充目标/释义语言选项（42种）
-  // 第二百二十八次（用户："释义语言统一英文名称"）：释义下拉用英文名，学习下拉仍本地化名
+  // 用户："释义语言统一英文名称"：释义下拉用英文名，学习下拉仍本地化名
   for (const lang of TRANSLATE_LANGS) {
     const opt1 = document.createElement('option');
     opt1.value = lang;
@@ -272,34 +267,33 @@ export function bindEvents(options = {}) {
   });
 
   // 关闭视频提示按钮（仅本次会话生效，刷新页面恢复）
-  // 反思（2026-07-06）：用户反馈会员专属视频无作者，视频提示挤不进去。
+  // 用户反馈会员专属视频无作者，视频提示挤不进去。
   // 解决办法之一：设置弹出有关闭选项，仅单次生效。
   // 关闭按钮隐藏视频提示 DOM，不修改 storage（仅本次会话，不持久化），
   // 刷新页面后视频提示重新出现。
   _root.querySelector('#beaver-close').addEventListener('click', (e) => {
     e.stopPropagation();
-    // 2026-09-08（用户："扩展侧栏中关闭后，影响并未消失"）：✕ 关闭时若 ASR 仍在转录
-    //   必须一并停掉——旧版只藏 DOM，拾音/网络请求继续跑（影响残留）。
+    // 用户："扩展侧栏中关闭后，影响并未消失"：✕ 关闭时若 ASR 仍在转录
+    //   必须一并停掉——此前只藏 DOM，拾音/网络请求继续跑（影响残留）。
     //   与 destroySidebar 同口径（isASRActive() 判定后才停）。
     if (isASRActive()) { try { stopASRInternal(true); } catch (err) { /* ignore */ } }
     _root.style.display = 'none';
-    // 第一百三十二次（用户状态机）：✕ 是显式关闭——打标记后文本悬浮球恢复为唯一入口
+    // 用户状态机：✕ 是显式关闭——打标记后文本悬浮球恢复为唯一入口
     // （syncBallWithVideoSidebar 靠该标记区分"关闭"与"📄切走"，前者放行球、后者不放）。
     try { _root.dataset.userClosed = '1'; } catch (err) { /* ignore */ }
     log('用户关闭视频提示（仅本次会话，刷新恢复；悬浮球已恢复）');
   });
 
-  // 反思（2026-08-12 第四十六次）：折叠/展开按钮，状态持久化
+  // 折叠/展开按钮，状态持久化
   const collapseBtn = _root.querySelector('#beaver-sidebar-collapse');
   collapseBtn.addEventListener('click', (e) => {
     e.stopPropagation();
     toggleSidebarCollapse();
   });
-  // 第一百三十三次（用户裁定"侧栏先折叠，有内容了再展开，而不是先展开空着"）：
-  // 启动一律折叠——不再恢复 storage.sidebarCollapsed（旧版"先展开 loading/空面板"
-  // 即源于此）。首批真实内容到达时由 updateSubtitles/appendASRSubtitle 自动展开一次。
+  // 用户裁定"侧栏先折叠，有内容了再展开，而不是先展开空着"：启动一律折叠，
+  // 不恢复 storage.sidebarCollapsed（此前"先展开 loading/空面板"即源于此）。
+  // 首批真实内容到达时由 updateSubtitles/appendASRSubtitle 自动展开一次。
   // 引导页 mount 模式例外：预览容器需要直接可见内容。
-  // 第二百二十五次：连带删除 sidebarCollapsed 的两处只写不读写入（《命名清查》裁定）。
   if (!options.mount) {
     setSidebarCollapsedFlag(true);
     _root.classList.add('beaver-collapsed');
@@ -310,8 +304,8 @@ export function bindEvents(options = {}) {
     armAutoExpand();
   }
 
-  // 第一百二十二次：📄 切换形态按钮——视频侧栏 → 文本侧栏（统称"侧栏"，内容照旧）。
-  // 第一百二十四次（用户裁定"文本侧栏与视频侧栏选其一"）：切换后自身 **display:none
+  // 📄 切换形态按钮——视频侧栏 → 文本侧栏（统称"侧栏"，内容照旧）。
+  // 用户裁定"文本侧栏与视频侧栏选其一"：切换后自身 **display:none
   // 整体隐藏**（不是折叠成顶条——顶条与文本侧栏同屏仍算"同时出现"）。
   // 派发 window 事件给 web-sidebar-impl 在本位置附近展开文本形态；
   // 回程经 beaver-unified-open（球/🎬）恢复显示。
@@ -329,7 +323,7 @@ export function bindEvents(options = {}) {
     });
   }
 
-  // 反思（2026-08-13 第五十二次）：视频叠加字幕开关。
+  // 视频叠加字幕开关。
   //   用户要求"视频侧栏的『字幕样式』改为『视频叠加字幕』切换按钮"。
   //   点击切换 overlay 文字层显隐（写 storage.overlayEnabled，全标签同步），
   //   按钮 active class 表示"视频叠加字幕已开启"。
@@ -340,12 +334,11 @@ export function bindEvents(options = {}) {
   };
   overlayToggleBtn.addEventListener('click', (e) => {
     e.stopPropagation();
-    // 反思（2026-08-21 第九十次）：默认不选——277次（用户"视频叠加字幕默认选中"）改默认开；
-    //   308次（用户"视频叠加字幕默认关"）改回默认关：未设置视为关闭（=== true）
+    // 默认关（用户裁定"视频叠加字幕默认关"，此前曾默认开）：未设置视为关闭（=== true）
     chrome.storage.local.get({ overlayEnabled: false }, (res) => {
       const next = res.overlayEnabled === true;
       const toggled = !next;
-      // 第二百七十次：停用规则否决——全局偏好照写 storage，但本页生效值被
+      // 停用规则否决——全局偏好照写 storage，但本页生效值被
       //   「视频叠加字幕」停用规则压制（按钮态按生效值显示，忠实反映现状）
       const effective = toggled && !getOverlayRuleSup();
       setOverlayEnabled(effective);
@@ -356,9 +349,9 @@ export function bindEvents(options = {}) {
         getOverlayRuleSup() ? '（被停用规则压制，本页不生效）' : '');
     });
   });
-  // 恢复上次叠加字幕开关（第二百七十次：生效值 AND 停用规则否决位）
-  // 309次第四轮（用户"默认视频叠加字幕关着，但播放时候发现依旧开启"）根因实锤：
-  //   308 次默认关口径（未设置视为关闭 === true）只改了 toggle/停用规则监听两处，
+  // 恢复上次叠加字幕开关（生效值 AND 停用规则否决位）
+  // 用户"默认视频叠加字幕关着，但播放时候发现依旧开启"根因实锤：
+  //   默认关口径（未设置视为关闭 === true）只改了 toggle/停用规则监听两处，
   //   本处恢复上次开关仍是旧口径 res.overlayEnabled !== false——chrome.storage.local.get
   //   不带默认值对象时，storage 无键返回 undefined，undefined !== false === true → 默认开。
   //   修为 === true（与 guide.js:461 / video-sidebar.js:804/908 同口径）。
@@ -387,16 +380,15 @@ export function bindEvents(options = {}) {
   });
 
   // 点击诊断：capture 阶段记录点击是否到达按钮，排查"点不动"
-  // （第二百七十一次：btnDlAudio 随下载按钮挪入诊断窗，数组同步移除）
   [_root, btnCopy, btnOcr, btnComment].forEach((el, i) => {
     el.addEventListener('click', (e) => {
       log('click 捕获到:', el.id || el.className, 'target=', e.target.id || e.target.className, 'isTrusted=', e.isTrusted);
     }, true);
   });
 
-  // 反思（2026-08-08）：喇叭按钮朗读（Web Speech API）。
+  // 喇叭按钮朗读（Web Speech API）。
   //   事件委托：所有 .beaver-w-speak 和 .beaver-ann-speak 按钮统一处理。
-  // 反思（2026-09-04）：生词表原形折叠按钮（.beaver-w-lemma-toggle）同委托处理，
+  // 生词表原形折叠按钮（.beaver-w-lemma-toggle）同委托处理，
   //   归组查询在展开瞬间发生（toggleLemmaGroup 内部读 _allAnnotations 现场值）。
   _root.addEventListener('click', (e) => {
     const tgl = e.target.closest('.beaver-w-lemma-toggle');

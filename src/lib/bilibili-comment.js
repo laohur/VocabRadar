@@ -1,14 +1,12 @@
 // B站评论助手（填入评论框，不自动发送）
 //
-// 设计变更（2026-06-30）：
-//   原实现通过 reply/add API 直接发送评论，绕过用户确认，存在误发风险。
-//   现改为"填入评论框 + 手动发送"模式：
+// 流程："填入评论框 + 手动发送"模式，不通过 reply/add API 直接发送
+//   （绕过用户确认有误发风险）：
 //   1. 获取字幕，提取目标词（词典命中且 rank>阈值）。
 //   2. 组装表格文本（word | 释义 | 阶）。
 //   3. 填入 B站主评论框（优先富文本 ql-editor，回退 textarea）。
 //   4. 用户检查后手动点发送。
-//
-// 取消自动发送后不再需要 csrf token 与 API 调用，仅做 DOM 填充。
+// 仅做 DOM 填充，无 csrf token 与 API 调用。
 
 import { lookup } from './dictionary.js';
 import { extractEnglishWords } from './tokenizer.js';
@@ -26,7 +24,7 @@ function rankToStage(rank) {
  * @returns {string}
  */
 function buildCommentText(annotations) {
-  // 第一百七十七次：前缀去掉 🦫（Win10 旧版 Segoe UI Emoji 无字形，显示为豆腐块）与"提示"二字
+  // 前缀 "VocabRadar：" 不含 emoji：部分系统的 Segoe UI Emoji 无 🦫 字形，显示为豆腐块
   const lines = ['VocabRadar：'];
   for (const a of annotations) {
     const trans = a.translations.join('；');
@@ -40,7 +38,7 @@ function buildCommentText(annotations) {
  *
  * B站评论区输入框选择器（多选尝试）：
  *   .reply-box .ql-editor[contenteditable=true]  —— 新版富文本
- *   .reply-box textarea.reply-textarea            —— 旧版
+ *   .reply-box textarea.reply-textarea            —— 纯文本输入框
  *   .comment-box .ql-editor                       —— 备选
  *   .comment-box textarea                         —— 备选
  *

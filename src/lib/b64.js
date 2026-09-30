@@ -1,6 +1,6 @@
 // ============================================================
 // 文件职责：base64 → 二进制解码工具（src/lib/b64.js）
-// 背景（2026-09-08 第二百四十次）：Chrome 扩展消息（chrome.runtime.sendMessage）
+// 背景：Chrome 扩展消息（chrome.runtime.sendMessage）
 //   默认使用 JSON 序列化——官方博客《Unlock Structured Clone for Chrome Extension
 //   Messaging》（2026-04-22）：结构化克隆为 Chrome 148 起经 manifest
 //   message_serialization="structured_clone" 的可选项，省略/低版本一律 JSON。

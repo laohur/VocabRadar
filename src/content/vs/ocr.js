@@ -4,7 +4,6 @@
 // 职责：OCR 按钮点击处理（canvas 截取当前视频帧 → OCR_RECOGNIZE 消息经 SW 转发到
 //       offscreen Tesseract.js → 结果以 'beaver-ocr-result' 自定义事件发给
 //       text-hint.js 显示）。
-// 来源：拆分自 src/content/video-sidebar.js（2026-08-28 拆分第二刀，纯机械搬移）。
 // 关系：依赖 ./dom-utils.js（flashButton）；因需使用门面的 toast/getActiveVideo/
 //       getRoot/getVideoLearnLang（读写 _cfg/_video/_root/_videoLearnLang），
 //       对门面构成受控循环 import——本模块顶层仅初始化自身 let 状态与函数声明，
@@ -15,16 +14,16 @@
 
 import { toast, getActiveVideo, getRoot, getVideoLearnLang } from '../video-sidebar.js';
 import { flashButton } from './dom-utils.js';
-// 第二百三十九次：OCR 用户可见提示走 i18n（用户："英文哪来的中文提示？"）
+// OCR 用户可见提示走 i18n（用户："英文哪来的中文提示？"）
 import { t } from '../../lib/i18n.js';
 
 let _ocrRunning = false;     // OCR 进行中
 
 // === OCR 按钮：点击识别当前视频帧 ===
-// 反思（2026-08-05 修正）：用户要求"ocr改为之前，点击识别当前帧，受文本提示影响"。
-//   旧版改为上传图片识别，但很多视频无法右键识别，且用户要求回归点击截帧。
-//   修正：改回截取当前视频帧（canvas.drawImage(video)），结果通过自定义事件
-//   发送到 text-hint.js 显示在 OCR 结果面板（不自动消失，生词受文本提示注释）。
+// 用户要求"ocr改为之前，点击识别当前帧，受文本提示影响"：上传图片识别在很多
+//   视频上无法右键使用，回归点击截取当前视频帧（canvas.drawImage(video)），
+//   结果通过自定义事件发送到 text-hint.js 显示在 OCR 结果面板（不自动消失，
+//   生词受文本提示注释）。
 //   流程：canvas 截帧 → dataURL → OCR_RECOGNIZE → SW → offscreen Tesseract.js → 返回
 //   结果通过 window.dispatchEvent 发送 'beaver-ocr-result' 事件，text-hint.js 监听
 //   并调用 showOcrResultPanel 显示（light DOM 面板，生词被 processTextNode 注释）。
@@ -59,12 +58,12 @@ export async function onOcrClick() {
     const dataUrl = canvas.toDataURL('image/png');
     console.log('[VocabRadar][video-sidebar] OCR 截帧完成: dataUrl 长度=' + dataUrl.length + ' (' + ((dataUrl.length / 1024).toFixed(0)) + 'KB)');
 
-    // 经 SW 转发给 OCR 引擎（LLM 视觉识别；本地 Tesseract 已随第394次裁定移除）
+    // 经 SW 转发给 OCR 引擎（LLM 视觉识别）
     console.log('[VocabRadar][video-sidebar] OCR 发送 OCR_RECOGNIZE 消息到 SW');
     const resp = await chrome.runtime.sendMessage({
       type: 'OCR_RECOGNIZE',
       imageDataUrl: dataUrl,
-      // 反思（2026-08-16 第六十六次）：OCR 语言随 learnLanguage（zh→chi_sim，其余→eng）
+      // OCR 语言随 learnLanguage（zh→chi_sim，其余→eng）
       lang: getVideoLearnLang() || 'en'
     });
     const _ocrCost = ((Date.now() - _ocrStart) / 1000).toFixed(2);
@@ -97,7 +96,7 @@ export async function onOcrClick() {
     if (errMsg.includes('Extension context invalidated')) {
       toast(t('ocr.extUpdated'), { error: true, duration: 8000 });
     } else {
-      // 第一百七十八次：同上——OCR 失败改 error 样式 + 8 秒，让用户看到
+      // OCR 失败改 error 样式 + 8 秒，让用户看到
       toast(t('ocr.failPrefix') + errMsg, { error: true, duration: 8000 });
     }
   } finally {
