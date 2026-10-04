@@ -36,6 +36,9 @@
 import { getAnnotations, setRankMax, setMyWords } from '../lib/annotator.js';
 // 视频内字幕注释的翻译优先级档（2=视频侧栏，先于网页正文批量）
 import { PRIO_VIDEO } from '../lib/translator.js';
+// 第514次双语字幕：整句译文取数与会话缓存唯一实现（lib/bilingual-trans.js，
+// 与视频侧栏字幕面板共用同一缓存与语言对监听）
+import { fetchBilingualTrans } from '../lib/bilingual-trans.js';
 // 侧邻注释统一用短释（与各侧邻路径同源）
 import { pickCleanShortTrans } from '../lib/dict-clean.js';
 // 词典就绪态（缓存守卫/时间线上报）+ 诊断记录器
@@ -72,6 +75,12 @@ let _fullscreenHandler = null;   // fullscreenchange 监听器（全屏时移动
 let _userStyleSheet = null;      // 用户样式动态 <style> 元素（style-user-* 规则重建用）
 let _userStylesCache = [];       // 最近一次同步的用户样式列表（激活样式被删时回落判定）
 
+// 第514次双语字幕（用户："视频叠加字幕的按钮后面增加双语标签按钮，目标语言在上，
+// 释义语言在下。有了双语字幕，自然就不用注释了"）：开启时注释管线整体旁路，
+// 原文纯文本在上、整句译文在下（.beaver-overlay-trans）。译文取数与语言对
+// 监听在 lib/bilingual-trans.js（与侧栏字幕面板共用）。
+let _bilingual = false;          // 双语开关（storage.overlayBilingual，默认关）
+
 // 词典后台重建完成——清注释缓存并强制重绘。
 //   首建/假就绪期算出的注释（全表外/翻译排队）可能被 _annotationsCache 钉死，
 //   重建完成事件到达时字幕若在屏上不换 key 永不重算；清缓存 + 置 _lastKey=''
@@ -93,8 +102,8 @@ if (typeof window !== 'undefined') {
 function createOverlay() {
   const el = document.createElement('div');
   el.id = 'beaver-subtitle-overlay';
-  // 结构：字幕正文容器 + 注释列表容器（详细模式才填充注释列表）
-  el.innerHTML = '<div class="beaver-overlay-subtitle"></div><div class="beaver-overlay-annotations"></div>';
+  // 结构：字幕正文容器 + 双语译文容器（第514次，双语开关开启才填充）+ 注释列表容器（详细模式才填充）
+  el.innerHTML = '<div class="beaver-overlay-subtitle"></div><div class="beaver-overlay-trans"></div><div class="beaver-overlay-annotations"></div>';
   return el;
 }
 
@@ -203,6 +212,16 @@ function injectOverlayStyles() {
   color: #ffffff;
   padding: 0 2px;
   border-radius: 2px;
+  word-break: break-word;
+}
+/* 双语译文行（第514次）：原文在上、译文在下，同享样式类底条（背景挂在 overlay 根）。
+ * 0.8em 弱于正文一档（释义是辅助信息），配色继承根（白字）、底色透明。 */
+#beaver-subtitle-overlay .beaver-overlay-trans {
+  margin-top: 2px;
+  font-size: 0.8em;
+  line-height: 1.45;
+  opacity: 0.92;
+  text-align: center;
   word-break: break-word;
 }
 /* === 字幕样式预设 ===
@@ -569,7 +588,29 @@ async function renderSubtitle(subtitle) {
 
   const subtitleEl = _overlay.querySelector('.beaver-overlay-subtitle');
   const annEl = _overlay.querySelector('.beaver-overlay-annotations');
-  // 注释布局只由详略开关(_mode)决定——正文字样式的 annMode 不得压过用户切换的详细注释
+  const transEl = _overlay.querySelector('.beaver-overlay-trans');
+  if (transEl) transEl.innerHTML = '';   // 默认清残留译文行（双语命中路径再填充）
+  // 双语模式：注释管线整体旁路（用户裁定"有了双语字幕，自然就不用注释了"）——
+  // 原文纯文本上屏（无高亮无注释，生词翻译队列零触发），整句译文经 _transCache
+  // 异步取回填下方；无译文/失败/同文时不渲染译文行（只展示原文，降级不出声）。
+  if (_bilingual) {
+    subtitleEl.textContent = subtitle.text;
+    annEl.innerHTML = '';
+    reportSubtitle({ phase: 'show', start: subtitle.start, text: String(subtitle.text).slice(0, 40), dictReady: isLoaded(), cached: true });
+    if (!_enabled) return;
+    _overlay.style.display = 'block';
+    updateOverlayPosition();
+    const key = subtitle.start + ':' + subtitle.text;
+    const trans = await fetchBilingualTrans(subtitle.text);
+    // 等待期间已换字幕/已关叠加/双语已关 → 丢弃（防旧译文画上新字幕）
+    if (!_enabled || !_bilingual || _lastKey !== key) return;
+    if (trans && transEl) {
+      transEl.textContent = trans;
+      updateOverlayPosition();   // 译文行撑高后重定位（渲染末尾同口径）
+    }
+    return;
+  }
+  // 注释布局只由详略开关(_mode)决定——正文字样的 annMode 不得压过用户切换的详细注释
   const annMode = _mode === 'detail' ? 'detail' : 'side';
 
   // 字幕显示与注释计算解耦：若 await getAnnotations 完才设 innerHTML/display:block，
@@ -691,16 +732,30 @@ export function startOverlay(video, subtitles, options = {}) {
   // 视频内字幕的注释模式与视频提示的详略模式共用一个 storage key：
   //   sidebar.js 切换详略时写入 subtitleDetailMode，本模块监听变化自动切换
   if (chrome.storage?.local) {
-    // 初始读取注释模板（与详略模式同批读取）
-    chrome.storage.local.get({ subtitleDetailMode: false, videoOverlayAnnMode: 'side', videoOverlayAnnTemplate: DEFAULT_ANN_TEMPLATE }, (res) => {
+    // 初始读取注释模板（与详略模式同批读取）；第514次同批补双语开关
+    // （语言对由 lib/bilingual-trans.js 自持监听，此处不再读）
+    chrome.storage.local.get({ subtitleDetailMode: false, videoOverlayAnnMode: 'side', videoOverlayAnnTemplate: DEFAULT_ANN_TEMPLATE, overlayBilingual: false }, (res) => {
       // 优先使用独立的 videoOverlayAnnMode，向后兼容 subtitleDetailMode
       const mode = res.videoOverlayAnnMode || (res.subtitleDetailMode ? 'detail' : 'side');
       _mode = mode;
       if (typeof res.videoOverlayAnnTemplate === 'string' && res.videoOverlayAnnTemplate.trim()) _annTemplate = res.videoOverlayAnnTemplate;
+      // 双语字幕初始态
+      _bilingual = res.overlayBilingual === true;
     });
     // 监听 storage 变化，实时同步模式
     _storageListener = (changes, area) => {
       if (area !== 'local') return;
+      // 双语开关与语言对热更新（第514次）：均强制重渲染（当前句换渲染分支/
+      // 换语言对后译文作废重取，缓存清理由 lib/bilingual-trans.js 自持监听负责）。
+      if (changes.overlayBilingual) {
+        _bilingual = changes.overlayBilingual.newValue === true;
+        _lastKey = '';
+        if (_video && _enabled) onTimeUpdate();
+      }
+      if (changes.learnLanguage || changes.meaningLanguage) {
+        _lastKey = '';
+        if (_video && _enabled) onTimeUpdate();
+      }
       if (changes.videoOverlayAnnMode) {
         _mode = changes.videoOverlayAnnMode.newValue || 'side';
         _lastKey = ''; // 强制重新渲染
@@ -860,6 +915,18 @@ export function setOverlayEnabled(enabled) {
     _overlay.style.display = '';
     if (_video) onTimeUpdate();
   }
+}
+
+/**
+ * 设置双语字幕开关（第514次，storage.overlayBilingual，默认关）。
+ * 开启：注释管线旁路，原文在上、整句译文在下；关闭：回到注释渲染。
+ * 即时生效须清 _lastKey 强制重渲染（同 setOverlayEnabled 口径）。
+ * @param {boolean} on
+ */
+export function setOverlayBilingual(on) {
+  _bilingual = on === true;
+  _lastKey = '';
+  if (_video && _enabled) onTimeUpdate();
 }
 
 /** 设置词频阈值 */

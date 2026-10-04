@@ -20,6 +20,9 @@
 //      接续（结果缓存落盘固定键，重提命中即接续；已收段按 start|end|text 去重
 //      防重复上屏）；重提失败或任务 failed → stopASR + onError；
 //      提交失败 → stopASR + 抛错（如实报错引导启动 backend）
+//   第512次：重提/刷新后重按 ASR 不再产生重复任务——backend 对同 key+language
+//      的进行中任务直接复用返回（单飞），首轮轮询（after=0）即取回已转写增量段；
+//      已收段表由已加载缓存预填（_segKey 0.1s 粒度），全量重发不与回放段重复上屏。
 // 第399次（用户裁定）：captureStream 实时识别回退（asr-fallback-capture.js）删除——
 //   backend 是唯一路径，不再静默兜底。
 //
@@ -125,6 +128,18 @@ export async function startASR(opts) {
   _recogFrontier = -1;
   _recogDoneAll = false;
   _jobSeenSegs = new Set();        // 新会话重建已收段表（防跨会话误去重）
+  // 第512次：已有缓存（本会话回放或面板预载）→ 预填已收段表——backend 复用
+  //   进行中任务/缓存命中后从 after=0 全量重发已转写段，不去重会与已回放的
+  //   缓存段重复上屏（appendASRSubtitle 按时间二分插入，无同段判重）。
+  if (_cache && _cache.segments.length > 0) {
+    for (const cs of _cache.segments) {
+      const chs = (cs.chunks && cs.chunks.length > 0) ? cs.chunks
+        : (cs.text ? [{ start: cs.speechStart, end: cs.speechEnd, text: cs.text }] : []);
+      for (const ch of chs) {
+        if (ch.text) _jobSeenSegs.add(_segKey(ch.start, ch.end, ch.text));
+      }
+    }
+  }
 
   // job 提交（SW 代理 POST /api/asr/jobs，提交页面 URL——backend yt-dlp 自取音频）。
   // 第399次用户裁定：回退路径删除，提交失败如实报错（引导启动 backend），不再静默兜底。
@@ -147,6 +162,14 @@ export async function startASR(opts) {
 }
 
 // === backend job 轮询（路径 A 主循环）===
+
+/** 段去重键（第512次）：start/end 取 0.1s 粒度——缓存 chunk 时间戳由
+ *  listenStart+(段起点-窗口起点) 浮点和重构，与 backend 原始段可能差浮点
+ *  尾数，精确字符串比对会漏配；0.1s 粒度两侧一致即视为同段。 */
+function _segKey(start, end, text) {
+  return Math.round((start || 0) * 10) / 10 + '|'
+    + Math.round((end || 0) * 10) / 10 + '|' + text;
+}
 
 /** 启动定时轮询：立即首轮（缓存命中时首轮即拿全量段）+ 每 JOB_POLL_MS 一次 */
 function startJobPolling(jobId) {
@@ -224,9 +247,9 @@ async function pollJobOnceInner() {
     for (const s of segs) {
       const text = (s.text || '').trim();
       const end = (typeof s.end === 'number') ? s.end : 0;
-      // 段去重：404 重提后 backend 从头重发已收段（缓存命中全量/重转写复现），
+      // 段去重：backend 全量重发已收段（复用进行中任务/缓存命中/404 重提），
       //   按 start|end|text 过滤，防止重复上屏与重复入缓存
-      const segKey = (s.start || 0) + '|' + end + '|' + text;
+      const segKey = _segKey(s.start, end, text);
       if (_jobSeenSegs.has(segKey)) continue;
       _jobSeenSegs.add(segKey);
       if (text && end > batchEnd) batchEnd = end;

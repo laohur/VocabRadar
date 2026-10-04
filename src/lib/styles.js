@@ -52,9 +52,11 @@ export const ANN_DEFAULT_STYLE = 'green-background';
 //   出厂组合即 yellow-yellow × white-glow。
 // 第509次（用户"默认字幕样式改为White Shadow"）：出厂默认 white-glow → white-shadow
 //   （白字黑色 text-shadow 阴影；条目 pos:'b15' 与 _subPosId 默认一致，位置无迁移）。
-//   仅改默认代指——存量 storage 已存样式值（含出厂期写入的 white-glow）一律不动，
-//   用户需要时在设置页点选，避免重蹈第508次"擅自更改"。
-export const SUB_DEFAULT_STYLE = 'white-shadow';
+// 第514次（用户"字幕默认改为White Glow，可能要遮挡原来字幕"）：出厂默认回
+//   white-glow——其黑半透明底条罩在视频原字幕位置，White Shadow 无底条罩不住。
+//   仍仅改默认代指——存量 storage 已存样式值（含出厂期写入的 white-glow/
+//   white-shadow）一律不动，用户需要时在设置页点选，避免重蹈第508次"擅自更改"。
+export const SUB_DEFAULT_STYLE = 'white-glow';
 // 第503次（用户"视频叠加字幕的注释默认样式为新建样式，Yellow Yellow"）：视频叠加
 //   字幕栏（videoOverlayAnnStyle）独立默认代指——出厂指向新建 yellow-yellow 池条目；
 //   回落/清洗/再点取消的语义与 ANN_DEFAULT_STYLE 完全同口径，仅代指内容不同。
@@ -610,7 +612,12 @@ export const SUBTITLE_TEXT_STYLES = [
   //   大模糊黑雾罩在字周（预览小字号下尤甚），与描边叠加出"字形被侵蚀"观感——
   //   收紧为近影 0 1px 2px 紧贴 + 外圈 0 0 4px 半强度（可读性不减、不再糊）。
   //   侵蚀主因（text-stroke 盖填充）双端 paint-order:stroke fill 修复，见两端输出点。
-  { id: 'white-shadow', label: { en: 'White Shadow', zh: '白字描边' }, pos: 'b15', font: 'sans', fg: '#ffffff', bg: null, fontSizePct: 5, edge: '#000000', bold: false, italic: false, shadow: '0 1px 2px rgba(0,0,0,.9),0 0 4px rgba(0,0,0,.55)', annMode: 'side', sample: 'He passed the quiz.' },
+  // 第513次（用户"White Shadow 的阴影再明显一些，白屏几乎看不到"）：近影偏移/模糊
+  //   过小（1-2px 相对 1080p 下 54px 字号比例可忽略）+ 0 0 4px 居中淡晕在纯白底上
+  //   不可辨——改三层下坠投影（近影 0 1px 2px 收紧定形 + 中层 0 2px 6px 主可见 +
+  //   外层 0 4px 12px 软拖尾），全部带向下偏移不做居中大模糊（避 510 次"侵蚀"回潮：
+  //   偏移阴影落在字形下方而非罩在字周），白底下层次分明。
+  { id: 'white-shadow', label: { en: 'White Shadow', zh: '白字描边' }, pos: 'b15', font: 'sans', fg: '#ffffff', bg: null, fontSizePct: 5, edge: '#000000', bold: false, italic: false, shadow: '0 1px 2px rgba(0,0,0,.95),0 2px 6px rgba(0,0,0,.8),0 4px 12px rgba(0,0,0,.55)', annMode: 'side', sample: 'He passed the quiz.' },
   // 第504次（问题4，用户"增加默认样式White Glow"）：白字 + 黑半透明底条 + 黑色半透明
   //   外发光——glow 字段（字幕盒 box-shadow）本次新增，buildSubBoxCss（guide 预览）与
   //   buildSubtitleStyleCss（overlay 真实端）双端输出；文字端白字贴底条已可读不再叠加投影。

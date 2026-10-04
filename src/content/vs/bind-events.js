@@ -17,10 +17,10 @@
 //       附着于该根的元素，根销毁即随元素卸载，事件不可再达，读取时点等价）。
 // =============================================================================
 
-import { getLang, setLang, UI_LANGS, TRANSLATE_LANGS, LANG_NAMES, LANG_NAMES_EN } from '../../lib/i18n.js';
+import { getLang, setLang, UI_LANGS, TRANSLATE_LANGS, LANG_NAMES } from '../../lib/i18n.js';
 import { upsertDeactivateRule } from '../../lib/deactivate.js';
 import { openDiagCenter } from '../diag-window.js';
-import { setOverlayEnabled as overlaySetEnabled } from '../subtitle-overlay.js';
+import { setOverlayEnabled as overlaySetEnabled, setOverlayBilingual } from '../subtitle-overlay.js';
 import { log } from './logger.js';
 import { closeAllPopups } from './build.js';
 import {
@@ -214,25 +214,27 @@ export function bindEvents(options = {}) {
   const uiLangSel = _root.querySelector('#beaver-ui-lang');
   const srcLangSel = _root.querySelector('#beaver-learn-lang');
   const tgtLangSel = _root.querySelector('#beaver-meaning-lang');
-
-  // 填充界面语言选项（10种）
+  // 第514次（用户"侧栏的语言列表的语言名称参照引导页的"）：三组标签统一
+  //   「两位代码 + 空格 + 语言自称」（LANG_NAMES），与引导页 renderLangSelect 同口径；
+  //   释义下拉"统一英文名称"（LANG_NAMES_EN）旧决策撤销。展示序保持 i18n.js 原序
+  //   （20260930 裁定：仅引导页按代码字典序排，其余端展示序不动）。
+  const langLabel = (lang) => (LANG_NAMES[lang] ? `${lang} ${LANG_NAMES[lang]}` : lang);
   for (const lang of UI_LANGS) {
     const opt = document.createElement('option');
     opt.value = lang;
-    opt.textContent = LANG_NAMES[lang] || lang;
+    opt.textContent = langLabel(lang);
     uiLangSel.appendChild(opt);
   }
   // 填充目标/释义语言选项（42种）
-  // 用户："释义语言统一英文名称"：释义下拉用英文名，学习下拉仍本地化名
   for (const lang of TRANSLATE_LANGS) {
     const opt1 = document.createElement('option');
     opt1.value = lang;
-    opt1.textContent = LANG_NAMES[lang] || lang;
+    opt1.textContent = langLabel(lang);
     srcLangSel.appendChild(opt1);
 
     const opt2 = document.createElement('option');
     opt2.value = lang;
-    opt2.textContent = LANG_NAMES_EN[lang] || lang;
+    opt2.textContent = langLabel(lang);
     tgtLangSel.appendChild(opt2);
   }
 
@@ -360,6 +362,32 @@ export function bindEvents(options = {}) {
     setOverlayEnabled(on);
     overlaySetEnabled(on);
     applyOverlayToggleBtn(on);
+  });
+
+  // 双语字幕开关（叠加字幕子开关，storage.overlayBilingual 默认关）。
+  //   第514次（用户"视频叠加字幕的按钮后面增加双语标签按钮，目标语言在上，
+  //   释义语言在下。有了双语字幕，自然就不用注释了"）：按钮态持久于 storage；
+  //   渲染归 subtitle-overlay.js——直接调用（即时生效）+ 其 storage 监听
+  //   （跨标签同步）双通道，与叠加开关同口径。
+  const bilingualBtn = _root.querySelector('#beaver-bilingual-toggle');
+  const applyBilingualBtn = (on) => {
+    if (bilingualBtn) bilingualBtn.classList.toggle('active', !!on);
+  };
+  if (bilingualBtn) bilingualBtn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    chrome.storage.local.get({ overlayBilingual: false }, (res) => {
+      const toggled = !(res.overlayBilingual === true);
+      try { chrome.storage.local.set({ overlayBilingual: toggled }); } catch (_) { /* ignore */ }
+      setOverlayBilingual(toggled);
+      applyBilingualBtn(toggled);
+      log('双语字幕:', toggled ? '开启' : '关闭');
+    });
+  });
+  // 恢复上次双语开关（未设置视为关闭 === true）
+  chrome.storage.local.get('overlayBilingual', (res) => {
+    const on = res.overlayBilingual === true;
+    setOverlayBilingual(on);
+    applyBilingualBtn(on);
   });
   // 统一注册：点击任意非浮层区域关闭所有浮层（菜单失焦退回）
   document.addEventListener('click', closeAllPopups);

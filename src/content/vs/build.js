@@ -55,6 +55,11 @@ export function buildSidebar() {
            此前为字幕样式样例卡选择器，现改为视频内叠加字幕（overlay）开/关切换按钮，
            样式选择保留在引导页（subtitleStyle 全局 key 仍有效）。 -->
       <button class="beaver-tool-btn active" id="beaver-overlay-toggle" data-i18n="tool.overlayToggle">${t('tool.overlayToggle')}</button>
+      <!-- 第514次（用户"视频叠加字幕的按钮后面增加双语标签按钮，目标语言在上，
+           释义语言在下。有了双语字幕，自然就不用注释了"）：叠加字幕双语子开关——
+           开启后 overlay 原文在上、整句译文在下，注释管线整体旁路。
+           独立 storage key overlayBilingual（默认关），渲染归 subtitle-overlay.js。 -->
+      <button class="beaver-tool-btn" id="beaver-bilingual-toggle" data-i18n="tool.bilingual">${t('tool.bilingual')}</button>
     </div>
     <div class="beaver-toolbar hidden" data-tab-toolbar="words">
       <button class="beaver-tool-btn" id="beaver-export" data-i18n="tool.export">Export</button>

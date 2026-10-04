@@ -47,6 +47,9 @@ import {
 } from '../video-sidebar.js';
 // 注释模板拆分（{word} 丢弃，取前后字面量包释义）
 import { splitAnnTemplate } from '../../lib/styles.js';
+// 第514次双语字幕：整句译文取数与会话缓存唯一实现（lib/bilingual-trans.js，
+// 与视频内叠加字幕共用同一缓存与语言对监听）
+import { fetchBilingualTrans } from '../../lib/bilingual-trans.js';
 
 // === 渲染状态 ===
 let _subEntries = [];         // 当前窗口内的字幕条目 [{sub, annotations, el, subIdx}]
@@ -99,6 +102,29 @@ let _annotationsCache = new Map();  // sub对象 -> annotations Promise 缓存�
 //   又调 getAnnotations。两者共享 _seenWords，后完成的用 [] 覆盖缓存 → 内联注释消失。
 //   改 Promise 后两者复用同一 Promise，杜绝重复查词与覆盖。
 let _collectedSubs = new WeakSet();  // 已收集进 _allAnnotations 的 sub 对象（避免重复 push）
+
+// === 双语字幕（第514次，storage.overlayBilingual 默认关）===
+// 用户裁定"应当影响视频侧栏的字幕、视频叠加字幕、取消侧栏字幕注释"：
+//   开启时字幕面板正文纯文本（同 Annotation 关闭口径，无高亮无注释），
+//   整句译文填在 annContainer（.beaver-sub-trans），注释收集（含生词表
+//   数据侧）一并停——关闭双语后 rerenderPanelOnly 清缓存重算恢复。
+//   译文语言对与其会话缓存由 lib/bilingual-trans.js 自持监听。
+let _bilingual = false;
+try {
+  chrome.storage.local.get({ overlayBilingual: false }, (r) => {
+    _bilingual = r.overlayBilingual === true;
+  });
+  chrome.storage.onChanged.addListener((ch, area) => {
+    if (area !== 'local') return;
+    if (ch.overlayBilingual) {
+      _bilingual = ch.overlayBilingual.newValue === true;
+      try { rerenderPanelOnly(); } catch (e) { /* ignore */ }
+    } else if (_bilingual && (ch.learnLanguage || ch.meaningLanguage)) {
+      // 语言对变化：lib 已清译文缓存，这里重渲染取新语言译文
+      try { rerenderPanelOnly(); } catch (e) { /* ignore */ }
+    }
+  });
+} catch (e) { /* 非扩展上下文容错 */ }
 
 // === 渲染字幕标签页（全量渲染模式）===
 // 全量渲染所有字幕，面板区域 overflow-y:auto 支持滚动查看全部内容。
@@ -975,6 +1001,9 @@ function updateSlotContent(slot, subIdx) {
 
 // === 填充槽位的正文高亮 + 注释行 ===
 function fillSlotAnnotations(slot, sub, anns) {
+  // 双语字幕（第514次）：异步注释 resolve 到达（onAsyncTranslate/
+  // rerenderSlotsFromCache 等路径）一律忽略，槽位保持纯文本+译文渲染
+  if (_bilingual) { fillBilingualSlot(slot, sub); return; }
   const contentSpan = slot.querySelector('.beaver-sub-content');
   const annContainer = slot.querySelector('.beaver-ann-container');
   // 用户"无论有没有释义，提示都应当有"：正文高亮不过滤无译文词
@@ -1151,6 +1180,10 @@ function ensureAnnotations(sub) {
 //   根因：getAnnotations 返回所有注释（含表外词），collectAnnotations 未过滤直接 push。
 //   当 getAnnotateOov()=false 时，过滤掉 rank=null 的表外词，只收集词典内单词。
 async function collectAnnotations(sub) {
+  // 双语字幕（第514次）：注释管线整体旁路——渲染与生词表数据侧收集一并停
+  //   （appendASRSubtitle 结尾的直调也经此处拦截）；关闭双语后
+  //   rerenderPanelOnly 清缓存重算恢复。
+  if (_bilingual) return [];
   const anns = await ensureAnnotations(sub);
   const subIdx = getSubtitlesRef().indexOf(sub);
   if (subIdx === -1) return anns;  // sub 已被换集移除，不收集
@@ -1188,9 +1221,34 @@ async function collectAnnotations(sub) {
 }
 
 // 槽位注释获取+回填（替换原 fetchAnnotationsForSlot，统一走 collectAnnotations）
+// === 双语字幕槽位（第514次）===
+// 正文纯文本（无高亮无注释，同 Annotation 关闭口径），整句译文填在
+// annContainer（.beaver-sub-trans，与注释行同 grid 对齐）；译文经
+// lib/bilingual-trans 会话缓存异步取，失败/超时静默无译文行。
+function fillBilingualSlot(slot, sub) {
+  const contentSpan = slot.querySelector('.beaver-sub-content');
+  if (contentSpan) contentSpan.textContent = sub.text || '';
+  const container = slot.querySelector('.beaver-ann-container');
+  if (container) container.innerHTML = '';
+  fetchBilingualTrans(sub.text || '').then((trans) => {
+    if (!_bilingual || !trans) return;
+    // 槽位已换字幕/已脱离面板 → 丢弃（同 collectAnnotationsForSlot 回填守卫口径：
+    // ASR 前段插行使 idx 位移，按对象身份判定）
+    const cur = _windowSlots.indexOf(slot);
+    if (cur < 0 || !_subEntries[cur] || _subEntries[cur].sub !== sub) return;
+    if (container) {
+      container.innerHTML = '<div class="beaver-sub-trans"><div class="beaver-sub-trans-content"></div></div>';
+      const line = container.querySelector('.beaver-sub-trans-content');
+      if (line) line.textContent = trans;
+    }
+  }).catch(() => { /* 译文失败静默：原文完整展示 */ });
+}
+
 async function collectAnnotationsForSlot(slot, subIdx) {
   const sub = getSubtitlesRef()[subIdx];
   if (!sub) return;
+  // 双语字幕（第514次）：注释管线旁路——纯文本正文 + 整句译文
+  if (_bilingual) { fillBilingualSlot(slot, sub); return; }
   const anns = await collectAnnotations(sub);
   // 首批诊断：打印首条字幕文本+阈值+命中生词数
   if (subIdx === 0) {

@@ -6,7 +6,7 @@
 //   （占位符经 ::placeholder transparent 隐藏），:focus-within 展开后显示占位符。
 //       跨模块共享状态一律来自 ./core.js，写入走 core 导出的 set_xxx 接缝，绝不另存副本。
 
-import { LANG_NAMES, LANG_NAMES_EN, TRANSLATE_LANGS, UI_LANGS, setLang, t } from '../../lib/i18n.js';
+import { LANG_NAMES, TRANSLATE_LANGS, UI_LANGS, setLang, t } from '../../lib/i18n.js';
 // expand 是侧栏扫描回填翻译（ws/scanner.js schedulePendingTranslate）的手势源头：
 //   展开点击（click 手势）同步链上 prime 内置翻译，扫描回填的 translate 即可复用实例。
 import { primeTranslator } from '../../lib/translator.js';
@@ -398,24 +398,28 @@ function bindLanguagePanel() {
   const tgtLangSel = _root.querySelector('#beaver-web-meaning-lang');
 
   // 填充界面语言选项（10大语言）
+  // 第514次（用户"侧栏的语言列表的语言名称参照引导页的"）：三组标签统一
+  //   「两位代码 + 空格 + 语言自称」（LANG_NAMES），与引导页 renderLangSelect 同口径；
+  //   释义下拉"统一英文名称"（LANG_NAMES_EN）旧决策撤销。展示序保持 i18n.js 原序
+  //   （20260930 裁定：仅引导页按代码字典序排，其余端展示序不动）。
+  const langLabel = (lang) => (LANG_NAMES[lang] ? `${lang} ${LANG_NAMES[lang]}` : lang);
   for (const lang of UI_LANGS) {
     const opt = document.createElement('option');
     opt.value = lang;
-    opt.textContent = LANG_NAMES[lang] || lang;
+    opt.textContent = langLabel(lang);
     uiLangSel.appendChild(opt);
   }
 
   // 填充目标/释义语言选项（42种）
-  // 用户裁定"释义语言统一英文名称"：释义下拉用英文名，学习下拉仍本地化名
   for (const lang of TRANSLATE_LANGS) {
     const opt1 = document.createElement('option');
     opt1.value = lang;
-    opt1.textContent = LANG_NAMES[lang] || lang;
+    opt1.textContent = langLabel(lang);
     srcLangSel.appendChild(opt1);
 
     const opt2 = document.createElement('option');
     opt2.value = lang;
-    opt2.textContent = LANG_NAMES_EN[lang] || lang;
+    opt2.textContent = langLabel(lang);
     tgtLangSel.appendChild(opt2);
   }
 
@@ -617,21 +621,14 @@ export function expand(anchor) {
   // 温和 prime 内置翻译（不清冷却）——本次展开点击即 user activation，
   //   同步链上发起 create；后续扫描回填的 translate 复用实例。冷却期内快速跳过。
   primeTranslator();
-  // 统一侧栏路由——页面存在视频侧栏且有 <video> 时，点球直接展开视频形态；
-  // 文本形态改由视频侧栏头部 📄 按钮进入（或无视频时默认）。
+  // 第514次（用户"搜索栏点击好像变不成文本侧栏了"）：撤销"视频侧栏在场且有
+  //   <video> 时点球路由到视频形态"的统一侧栏路由——搜索栏是文本侧栏的折叠态，
+  //   点击一律展开文本形态；视频形态入口不变（顶行 🎬 按钮 / 搜索栏图标右键召唤）。
   // 用户手动展开=兜底已达成——置 sticky（_absentConcluded），同一 URL 上看门狗
   //   不再重进 12s 宽限把刚展开的文本侧栏藏回去（若只清零计时器，下一次 700ms tick
   //   重新进入宽限 → 展开面板被整体 display:none，即"搜索框一点刚换成文本侧栏就消失"）。
   _absentSince = 0;
   _absentConcluded = true;
-  try {
-    const vsb = document.querySelector('#beaver-sidebar');
-    const hasVideo = !!document.querySelector('video');
-    if (vsb && hasVideo && !anchor) {
-      window.dispatchEvent(new CustomEvent('beaver-unified-open', { detail: { form: 'video' } }));
-      return;
-    }
-  } catch (e) { /* ignore */ }
   // 用户要求"悬浮球向右下方展开为文本侧栏，悬浮球在右上角"——
   //   展开态 CSS 已设 right:16px top:20px（与悬浮球一致），从右上角向下展开；
   //   拖动后 .dragged 态由 JS 设 left/top 自由定位，展开时保持 dragged 位置。
@@ -1126,8 +1123,7 @@ async function runSidebarQuery(text) {
 
 // === 搜索栏输入完成/点三角 → 展开为文本侧栏并落到 query 标签（有词即查） ===
 function expandToQuery(text) {
-  // expand(true)：跳过"视频侧栏在场即展开视频形态"的路由——搜索明确要文本形态
-  expand(true);
+  expand();
   switchTab('query');
   const input = _root.querySelector('#beaver-web-query-input');
   if (input && text) input.value = text;

@@ -31,5 +31,7 @@
 export {
   translate, getLastTranslateChannel, getMeaningLang, getAvailability, primeTranslator, targetScriptOk,
   // 翻译优先级档常量（调用方按来源传档：2=视频侧栏，1=网页正文；true/3=交互）
-  PRIO_INTERACT, PRIO_VIDEO, PRIO_WEB, PRIO_LOW
+  PRIO_INTERACT, PRIO_VIDEO, PRIO_WEB, PRIO_LOW,
+  // 渠道勾选整表（第514次：绕过 translate() 直发 TRANSLATE_TEXT 的调用方同口径传参）
+  curTransChannels as getTransChannels
 } from './translator/index.js';

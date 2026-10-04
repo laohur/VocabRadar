@@ -339,6 +339,28 @@
   word-break: break-word;
 }
 
+/* 双语字幕译文行（subtitle-renderer.js fillBilingualSlot，第514次）：
+ * 双语开关开启时注释行不再渲染，整句译文填在注释容器本位——
+ * 与注释行同 grid 口径（3em 时间列留空、译文对齐正文列，小时级 5em），
+ * 弱化一档（--beaver-text-soft），无背景无边框。 */
+.beaver-sub-trans {
+  display: grid;
+  grid-template-columns: 3em 1fr;
+  color: var(--beaver-text-soft);
+  line-height: 1.5;
+  margin-top: 2px;
+}
+
+.beaver-sub-trans-content {
+  grid-column: 2;
+  min-width: 0;
+  word-break: break-word;
+}
+
+.beaver-hourly .beaver-sub-trans {
+  grid-template-columns: 5em 1fr;
+}
+
 /* 字幕正文生词：跟随用户设置的首次/后续配色（句中对比度浅），保持整行文字可读。
  * 用户要求「字幕行内的生词当然要有自己底色」——句中生词用浅底色
  * （--beaver-first-bg/--beaver-later-bg 用户设置），注释词头用深底色

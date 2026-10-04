@@ -438,6 +438,8 @@ const DICT = {
     'popup.textHint': 'Text Hints (site-wide word highlight + hover definition + right-click translate)',
     'tool.subtitleStyle': 'Sub Style',
     'tool.overlayToggle': 'Overlay Subs',
+    // 第514次：叠加字幕双语开关（目标语言在上，释义语言在下；开启时不渲染注释）
+    'tool.bilingual': 'Bilingual',
     'popup.hintFirst': 'Word',
     'popup.hintLater': 'Repeated words',
     'popup.hintSideAnnotation': 'Side hint',
@@ -493,6 +495,7 @@ const DICT = {
     'tool.export': '词单',
     'tool.subtitleStyle': '字幕样式',
     'tool.overlayToggle': '视频叠加字幕',
+    'tool.bilingual': '双语',
     'btn.copy': '📋 复制',
     'btn.danmaku': '🎯 弹幕',
     // 第398次：btn.downloadAudio 随下载音频按钮退役删除

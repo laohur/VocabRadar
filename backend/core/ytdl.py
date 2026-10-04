@@ -7,8 +7,8 @@ yt-dlp Python API（plan-backend §2.7，ytdl-server 已废弃）：resolve 同�
 音频 fmt（m4a/bestaudio，ASR 用途，PyAV 直接解码）只选原生流；视频
 fmt（mp4/bestvideo，MPV 本地播放方向 plan §2.7）为 bestvideo+bestaudio
 ffmpeg 合流——remux 封装不重编码。ffmpeg 系统 PATH 优先，缺失时补挂
-imageio-ffmpeg 包内执行器（可选依赖：系统无 ffmpeg 时 install.py 才装，
-wheel 自带 exe 零网络；包未装则保持缺失由 yt-dlp 报错）。
+static-ffmpeg 静态执行器（第514次替代 imageio-ffmpeg；requirements 常装，
+首调才下载平台二进制并缓存，下载失败保持缺失由 yt-dlp 报错）。
 
 客户端信息：全局兜底 http_headers（UA + Accept-Language，提取器自带各站
 专属头优先）；cookie 携带（YouTube 机器人墙等登录墙场景需要，配置即读
@@ -131,19 +131,22 @@ def _pick_format(fmt, height=None, abr=None):
 
 
 def _ensure_ffmpeg():
-    """ffmpeg 就绪：系统 PATH 优先；缺失时补挂 imageio-ffmpeg 包内执行器。
+    """ffmpeg 就绪：系统 PATH 优先；缺失时补挂 static-ffmpeg 包内静态执行器。
 
-    就绪返回 True。补挂仅在本进程 PATH 生效（子进程继承），幂等——补挂后
+    就绪返回 True。static-ffmpeg 首调才下载平台二进制并缓存（含 ffprobe，
+    yt-dlp 探测流元数据同用）；下载失败仅告警保持缺失状态（HLS 等场景由
+    yt-dlp 报错）。补挂仅在本进程 PATH 生效（子进程继承），幂等——补挂后
     which 短路不会重复插入。
     """
     if shutil.which("ffmpeg"):
         return True
     try:
-        import imageio_ffmpeg
+        from static_ffmpeg import run
+        exe, _ffprobe = run.get_or_fetch_platform_executables_else_raise()
         os.environ["PATH"] = os.pathsep.join(
-            [os.path.dirname(imageio_ffmpeg.get_ffmpeg_exe()), os.environ["PATH"]])
-    except (ImportError, RuntimeError):
-        pass  # 包未装或 exe 异常：保持缺失状态（HLS 等场景由 yt-dlp 报错）
+            [os.path.dirname(exe), os.environ["PATH"]])
+    except Exception as e:
+        log.warning("static-ffmpeg 执行器就绪失败（保持缺失状态）：%s", str(e)[:200])
     return shutil.which("ffmpeg") is not None
 
 
@@ -657,10 +660,10 @@ def _parallel_media(info, task):
 
 def _merge_av(video, audio, dest):
     """ffmpeg -c copy 合并视频/音频两路（remux 不重编码，同 yt-dlp 合流语义）。
-    ffmpeg 就绪走 _ensure_ffmpeg（系统 PATH/imageio-ffmpeg）；失败清残骸返回
+    ffmpeg 就绪走 _ensure_ffmpeg（系统 PATH/static-ffmpeg）；失败清残骸返回
     False 由调用方回退原生下载（yt-dlp 自行合流）。"""
     if not _ensure_ffmpeg():
-        log.warning("合流失败：ffmpeg 缺失（系统 PATH 与 imageio-ffmpeg 均无）")
+        log.warning("合流失败：ffmpeg 缺失（系统 PATH 与 static-ffmpeg 均无）")
         return False
     r = subprocess.run(["ffmpeg", "-y", "-nostdin", "-v", "error",
                         "-i", video, "-i", audio, "-c", "copy", dest],

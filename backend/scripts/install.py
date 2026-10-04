@@ -1,11 +1,12 @@
 """VocabRadar backend 安装器（幂等；首次部署手动运行一次，日常启动无需再跑）。
 
 流程（plan-backend §5.3）：
-0. 状态检查：backend/.installed.json 存在且解释器未变 → 跳过安装流程直接退出
-   （第401次；第443次：老用户重跑亦不再补跑任何注册）
+0. 状态检查：读 backend/.installed.json 打印上次安装信息供参考（第514次撤销
+   第401次"已装即退出"——跳过会让 requirements 更新后的增量依赖永远装不上；
+   本脚本各步幂等，依赖已满足时 pip 秒过、llama.cpp 已就位时跳过下载）
 1. 检查 Python >= 3.10（不内置 Python；脚本能跑即有解释器，环境用户自备不代管）
-2. 用当前 Python 环境装依赖（已满足时 pip 自动跳过）；imageio-ffmpeg 按需
-   装——系统 PATH 已有 ffmpeg 则跳过，缺失才补装（yt-dlp 执行器兜底）
+2. 用当前 Python 环境装依赖（已满足时 pip 自动跳过）；ffmpeg 执行器由
+   static-ffmpeg 提供（第514次替代 imageio-ffmpeg，系统 PATH 缺失时运行时按需下载）
 3. 按 backend/scripts/manifest.json 下载 llama.cpp 预编译包到 backend/bin/
    （已存在跳过 → 支持离线手动放置）
 4. 健康自检（llama-server --version），写安装状态到 backend/.installed.json
@@ -125,20 +126,22 @@ def load_state():
 
 
 def step0_check_state():
-    """已装且解释器未变 → 跳过安装流程直接退出（第401次：二次启动秒过；
-    第443次：NM 注册撤销后不再补跑任何步骤）；解释器变了（用户换环境）→
-    打印提示后照常重装依赖。强制重装：删除 backend/.installed.json。"""
+    """读安装状态打印上次安装信息（仅参考，不再跳过流程——第514次撤销第401次
+    "已装且解释器未变→直接退出"：重跑安装器多半是依赖/资产有更新，整体跳过
+    会让 requirements 的增量依赖永远装不上；各步幂等，已满足时开销可忽略）。
+    解释器变了（用户换环境）→ 打印提示后按当前环境重装依赖。"""
     st = load_state()
     if not st:
         return
     if st.get("python") == sys.executable:
-        info(f"已安装（{st.get('installed_at', '?')}，解释器一致），跳过安装流程。")
-        sys.exit(0)
-    info(f"检测到解释器变更（{st.get('python')} → {sys.executable}），重新执行安装。")
+        info(f"上次安装：{st.get('installed_at', '?')}（Python {st.get('python_version', '?')}），"
+             f"继续幂等检查（依赖已满足时 pip 秒过）。")
+    else:
+        info(f"检测到解释器变更（{st.get('python')} → {sys.executable}），按当前环境重新安装依赖。")
 
 
 def record_state():
-    """写安装状态：环境（解释器/版本）+ 完成时间，供二次启动直接跳过。"""
+    """写安装状态：环境（解释器/版本）+ 完成时间，供下次运行的 step0 展示参考。"""
     try:
         with open(STATE_PATH, "w", encoding="utf-8") as f:
             json.dump({
@@ -161,21 +164,14 @@ def step1_check_python():
 def step2_prepare_env():
     """用当前 Python 环境装依赖（已满足时 pip 自动跳过）。
     不检测不提示 venv——本脚本能跑即有解释器，环境由用户全权作主。
-    imageio-ffmpeg 按需装（第404次）：系统 PATH 已有 ffmpeg 则跳过（用户
-    环境全权作主，不重复提供执行器）；缺失才补装——yt-dlp 的 HLS/分段流与
-    视频合流需要 ffmpeg 执行器，运行时 core/ytdl._ensure_ffmpeg 兜底补挂。"""
+    ffmpeg 执行器不再单独按需装（第514次：imageio-ffmpeg 废弃）——
+    static-ffmpeg 已在 requirements（wheel 仅数 KB），系统 PATH 已有 ffmpeg
+    则运行时不会触发其平台二进制下载（core/ytdl._ensure_ffmpeg 补挂）。"""
     info("安装依赖（已满足时 pip 自动跳过）...")
     r = subprocess.run([sys.executable, "-m", "pip", "install",
                         "-r", str(BACKEND / "requirements.txt")])
     if r.returncode != 0:
         fail("依赖安装失败，请检查网络后重试。")
-    if shutil.which("ffmpeg"):
-        info("系统已有 ffmpeg，跳过 imageio-ffmpeg。")
-        return
-    info("未检测到系统 ffmpeg，安装 imageio-ffmpeg（yt-dlp 执行器兜底）...")
-    r = subprocess.run([sys.executable, "-m", "pip", "install", "imageio-ffmpeg>=0.5"])
-    if r.returncode != 0:
-        warn("imageio-ffmpeg 安装失败：HLS/视频合流场景请自行安装 ffmpeg。")
 
 
 def load_manifest():
@@ -392,13 +388,13 @@ def step5_selfcheck():
 
 def main():
     print("=== VocabRadar backend 安装器 ===")
-    step0_check_state()  # 第401次：已装且解释器未变 → 直接退出（二次启动秒过）
+    step0_check_state()  # 第514次：仅打印上次安装信息，不再跳过流程（幂等重查）
     step1_check_python()
     step2_prepare_env()
     manifest = load_manifest()
     step3_install_llamacpp(manifest)
     step5_selfcheck()  # 第443次：NM 注册步骤撤销（用户裁定），仅保留健康自检
-    record_state()  # 第401次：记录环境与安装状态，供下次启动跳过
+    record_state()  # 记录环境与安装状态，供下次运行的 step0 展示参考
 
 
 if __name__ == "__main__":

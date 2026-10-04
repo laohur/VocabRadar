@@ -93,7 +93,9 @@ const DEFAULT_TRANS_CHANNELS = { llm: false, backend: false, builtin: true, baid
 //   （直接拿旧表判 `!== false` 会让未升级用户默认全开）。
 // 第447次·修正历史瑕疵：原形回退 translateWithLemma 此前不传 channels——SW 的 chGate
 //   缺省全开，用户取消勾选的渠道在回退路径照样被调，本次补传，backend 缺省不选同受其约束。
-function curTransChannels() {
+// 第514次：对外导出——OCR 整段翻译等绕过 translate() 直发 TRANSLATE_TEXT 的调用方
+//   （vs/ocr.js）须同口径传渠道勾选表（缺省表合并后 backend/llm/mymemory 缺省不选）。
+export function curTransChannels() {
   const st = Object.assign({}, DEFAULT_TRANS_CHANNELS, _transChannels || {});
   const out = {};
   for (const k of Object.keys(st)) out[k] = st[k] !== false;

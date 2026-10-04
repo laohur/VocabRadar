@@ -63,6 +63,20 @@
   一条，不再用定时，减轻复杂度」）：第441次的 10s 定时器作废，转写循环内
   以段计数驱动——每累计 100 段打一条，行带 phase/覆盖秒数/进度百分比/
   最近外联动作与 URL（last_net）。
+- 第512次进行中任务复用（单飞）：create/create_file 在磁盘缓存未命中时先查
+  任务表，同 cache_key+language 且未终态（queued/downloading/transcribing）
+  的任务直接复用返回——页面刷新/停止后重提/轮询 404 重提都不再另起新任务
+  排队重转写（旧行为：重提各建一个新 job，在单路信号量后串行整段重来）。
+  客户端拿到既有 job id 后首轮轮询（after=0）即取到已转写的全部增量段。
+  只复用未终态：failed 允许重提重试，completed 走磁盘缓存命中路径。
+- 第513次活跃度调度与抢占（取代第398次起的 Semaphore(1) FIFO）：转写仍单路
+  （CPU 满载），但放行与让位按「前台活跃度」裁决——job["last_poll"] 由
+  status() 每次轮询刷新，谁被前台读谁就是活跃任务。槽位空出时优先放行
+  _POLL_FRESH_SEC 内被轮询过的等待者（全不活跃回退 FIFO）；运行中任务连续
+  _ABANDON_SEC 无人轮询（页面已关/跳走——用户报障：旧视频任务占死转写路，
+  新视频排队 30 分钟+）且有活跃等待者 → 置 job["cancel"]，管线在下一响应点
+  （阶段边界/逐转写段）中止让位；下载等无逐段响应点的长阶段到下一检查点才
+  生效。被抛弃任务若无人等待则继续跑完（结果照常落缓存，用户回来即命中）。
 """
 
 import hashlib
@@ -98,18 +112,63 @@ _NO_SPEECH_PROB = 0.6
 _jobs = {}  # 任务表：模块级内存态（同 core/ytdl）
 _lock = threading.Lock()
 
-# CPU 转写单路饱和：同刻只放行一个任务在跑，其余排队（状态停在 queued）
-_run_sem = threading.Semaphore(1)
+# 第513次：转写单路调度（取代 Semaphore(1) FIFO，语义见模块头第513次条目）
+_slot_cond = threading.Condition()
+_active_job = None   # 当前占用转写路的任务（_slot_cond 保护）
+_waiters = []        # 等待槽位的任务 FIFO（_slot_cond 保护）
+_POLL_FRESH_SEC = 30   # 等待者最近轮询在此窗口内视为活跃（轮询间隔 5s）
+_ABANDON_SEC = 180     # 运行中任务无人轮询超过此值视为被抛弃（可抢占；后台
+                       #   标签页定时器最稀约 1 次/分，3 分钟宽限不误伤存活页）
+
+# 第512次：进行中任务的终态判定——只复用未终态任务（failed 可重提重试，
+#   completed 由磁盘缓存命中路径承接，不入此列）
+_LIVE_STATUSES = ("queued", "downloading", "transcribing")
+
+
+class _JobCancelled(Exception):
+    """第513次：任务被取消（抢占让位）——管线在各响应点抛出，统一收场 failed。"""
+
+    def __init__(self):
+        super().__init__("cancelled: 长时间无人读取，让位给活跃任务")
+
+
+def _check_cancel(job):
+    if job.get("cancel"):
+        raise _JobCancelled()
+
+
+def _find_live_job(key, language):
+    """第512次：按 cache_key+language 找进行中任务（单飞复用）。
+
+    重提场景（页面刷新后重按 ASR/停止后重按/轮询 404 重提）此前一律另建
+    新 job，在单路信号量后排到进行中任务之后整段重下重转——前台干等且
+    backend 白烧 CPU。现在直接复用既有 job：客户端首轮轮询（after=0）
+    即取到已转写的全部增量段，接续而不重来。
+    """
+    with _lock:
+        for job in _jobs.values():
+            if (job.get("cache_key") == key
+                    and job.get("language") == language
+                    and job.get("status") in _LIVE_STATUSES):
+                return job
+    return None
 
 
 def create(url, language, asr_engine):
     """提交 URL 任务 → job dict。asr_engine 为请求上下文内取到的 AsrEngine 实例
     （后台线程无 app context，入口一次传入）。缓存命中时建即完成的任务，
-    客户端首轮轮询即拿到全量段。"""
+    客户端首轮轮询即拿到全量段；已有同 key+language 的进行中任务时复用返回
+    （第512次，不另起新任务）。"""
     if not url or not url.startswith(("http://", "https://")):
         raise ValueError("url 必须为 http(s) 链接")
     key = _cache_key(url)  # 第440次：create 算一次（b23.tv 短链在此展开），全程复用
     hit = _cache_get_key(key, language)
+    if not hit:
+        live = _find_live_job(key, language)
+        if live is not None:
+            log.info("ASR 任务复用进行中 %s：key=%s lang=%s status=%s（重提不另起新任务）",
+                     live["id"], key, language, live["status"])
+            return live
     job = _new_job(language, asr_engine, hit)
     job["url"] = url
     job["cache_key"] = key
@@ -127,9 +186,17 @@ def create_file(filepath, filename, language, asr_engine, cache_key=None):
     """提交上传文件任务（第409次流式转写）：跳过下载，直接逐段转写。
 
     filepath 为 api 层落盘的临时文件（任务结束自删）；cache_key 为内容
-    SHA-256 前 16 位（复用 ASR 缓存，重复上传同文件命中免转写）。
+    SHA-256 前 16 位（复用 ASR 缓存，重复上传同文件命中免转写；同内容任务
+    进行中时复用返回，第512次同 create）。
     """
     hit = _cache_get_key(cache_key, language) if cache_key else None
+    if not hit and cache_key:
+        live = _find_live_job(cache_key, language)
+        if live is not None:
+            os.remove(filepath)  # 复用进行中任务：新上传的临时文件不参与转写，即刻回收
+            log.info("ASR 文件任务复用进行中 %s：key=%s lang=%s status=%s（重提不另起新任务）",
+                     live["id"], cache_key, language, live["status"])
+            return live
     job = _new_job(language, asr_engine, hit)
     job["source"] = "file"
     job["title"] = filename
@@ -173,6 +240,9 @@ def _new_job(language, asr_engine, hit):
         #   _net 打点整体替换，进度日志与管理页快照共用）。
         "phase": "queued",
         "last_net": None,
+        # 第513次：调度活跃度——最后轮询时间（status() 刷新，创建时刻起算）
+        "last_poll": time.time(),
+        "cancel": False,
     }
     if hit:
         job["status"] = "completed"
@@ -182,11 +252,13 @@ def _new_job(language, asr_engine, hit):
 
 def status(job_id, after=0):
     """单任务增量快照：segments 只回 after 游标之后的段（轮询增量协议）；
-    另带 segments_total 供客户端对齐游标。找不到返回 None。"""
+    另带 segments_total 供客户端对齐游标。找不到返回 None。
+    第513次：每次轮询刷新 last_poll——调度活跃度的依据（谁被前台读谁优先）。"""
     with _lock:
         job = _jobs.get(job_id)
         if not job:
             return None
+        job["last_poll"] = time.time()
         segs = job["segments"]
         snap = {k: v for k, v in job.items() if k != "segments"}
     after = after if isinstance(after, int) and after >= 0 else 0
@@ -206,14 +278,70 @@ def _net(job, action, url=None):
                        "url": (url or "")[:150]}
 
 
+def _acquire_slot(job):
+    """占用转写路（阻塞直到放行）。第513次活跃度调度：等待期间每 5s 醒来
+    评估一次抢占（见模块头）；槽位空出且自己被遴选（活跃优先）即占用。
+    须在任务线程内调用，与 _release_slot 配对。"""
+    global _active_job
+    with _slot_cond:
+        _waiters.append(job)
+        while _active_job is not None or _pick_waiter_locked() is not job:
+            _maybe_preempt_locked()
+            _slot_cond.wait(timeout=5)
+        _active_job = job
+        _waiters.remove(job)
+
+
+def _release_slot(job):
+    """让出转写路并唤醒全部等待者重新遴选。"""
+    global _active_job
+    with _slot_cond:
+        if _active_job is job:
+            _active_job = None
+        _slot_cond.notify_all()
+
+
+def _pick_waiter_locked():
+    """槽位空闲时的等待者遴选：活跃优先（_POLL_FRESH_SEC 内被轮询过），
+    全不活跃回退 FIFO 队首。须持 _slot_cond。"""
+    now = time.time()
+    for w in _waiters:
+        if now - (w.get("last_poll") or 0) <= _POLL_FRESH_SEC:
+            return w
+    return _waiters[0] if _waiters else None
+
+
+def _maybe_preempt_locked():
+    """第513次抢占评估：运行中任务无人轮询超 _ABANDON_SEC（页面已关/跳走）
+    且存在活跃等待者 → 置其 cancel 位，管线在下一响应点中止让位。
+    被抛弃任务若无人等待则不动（跑完落缓存）。须持 _slot_cond。"""
+    if _active_job is None or _active_job.get("cancel"):
+        return
+    now = time.time()
+    if now - (_active_job.get("last_poll") or 0) <= _ABANDON_SEC:
+        return
+    for w in _waiters:
+        if now - (w.get("last_poll") or 0) <= _POLL_FRESH_SEC:
+            _active_job["cancel"] = True
+            log.info("ASR 任务 %s 已 %ds 无人读取，取消让位给等待任务 %s",
+                     _active_job["id"], _ABANDON_SEC, w["id"])
+            return
+
+
 def _run_url(job, asr_engine):
-    with _run_sem:  # 排队：前面的任务跑完才进入下载
+    _acquire_slot(job)
+    try:
         _pipeline_url(job, asr_engine)
+    finally:
+        _release_slot(job)
 
 
 def _run_file(job, asr_engine):
-    with _run_sem:  # 文件任务与 URL 任务共用单路信号量
+    _acquire_slot(job)
+    try:
         _pipeline_file(job, asr_engine)
+    finally:
+        _release_slot(job)
 
 
 def _pipeline_url(job, asr_engine):
@@ -223,11 +351,13 @@ def _pipeline_url(job, asr_engine):
              job["id"], job["url"], job["cache_key"])
     tmpdir = tempfile.mkdtemp(prefix="asrjob_")
     try:
+        _check_cancel(job)  # 第513次：排队期间被取消即收场（下同，各阶段边界）
         # 第437次方案A：官方字幕秒级直出（命中则跳过下载+转写，异常不阻塞主线）
         _phase(job, "subtitles")  # 第441次：阶段打点（快照）
         _net(job, "yt-dlp 字幕探测", job["url"])
         if _try_official_subtitles(job):
             return
+        _check_cancel(job)
         _ensure_ffmpeg()  # 就绪保障：HLS/分段流站点需要（缺失不阻塞原生流下载）
         job["status"] = "downloading"
         _phase(job, "downloading")
@@ -243,6 +373,7 @@ def _pipeline_url(job, asr_engine):
                 job["duration"] = binfo["duration"]
                 video_id = binfo["video_id"]
                 audio_path = binfo["audio_path"]
+        _check_cancel(job)  # B 站 API 失败回落 yt-dlp 前的响应点（下载中取消到此后生效）
         if audio_path is None:
             # 第438次原链路：先提取（不下载）拿选中格式直链走并行分块下载；
             #   不合适或失败回退 yt-dlp 原生下载老路。opts 构造含 cookiefile
@@ -262,7 +393,13 @@ def _pipeline_url(job, asr_engine):
             if audio_path is None:  # 回退 yt-dlp 原生下载，语义与第438次前一致
                 info, audio_path = _ytdlp_download(job, tmpdir)
             video_id = info.get("id")
+        _check_cancel(job)  # 下载完成 → 转写前的响应点（下载中取消到此后生效）
         _transcribe(job, asr_engine, audio_path, video_id=video_id)
+    except _JobCancelled as e:  # 第513次：抢占让位，info 级日志（非故障）
+        job["status"] = "failed"
+        job["error"] = str(e)
+        log.info("ASR 任务 %s（URL 源 %s）取消让位：%s",
+                 job["id"], job["url"], job["error"])
     except Exception as e:  # yt-dlp/模型/解码异常类型庞杂，统一兜底记任务
         job["status"] = "failed"
         job["error"] = str(e)[:300]
@@ -390,7 +527,13 @@ def _pipeline_file(job, asr_engine):
     log.info("ASR 文件任务 %s 开始执行：file=%s lang=%s",
              job["id"], job.get("title"), job["language"])  # 第441次
     try:
+        _check_cancel(job)  # 第513次：排队期间被取消即收场
         _transcribe(job, asr_engine, job["file_path"])
+    except _JobCancelled as e:  # 第513次：抢占让位，info 级日志（非故障）
+        job["status"] = "failed"
+        job["error"] = str(e)
+        log.info("ASR 任务 %s（文件源 %s）取消让位：%s",
+                 job["id"], job.get("title", "?"), job["error"])
     except Exception as e:  # 模型/解码异常统一兜底记任务
         job["status"] = "failed"
         job["error"] = str(e)[:300]
@@ -414,13 +557,16 @@ def _transcribe(job, asr_engine, audio_path, video_id=None):
     """
     job["status"] = "transcribing"
     _phase(job, "transcribing")  # 第441次：阶段打点（快照）
+    _check_cancel(job)  # 第513次：模型加载前响应点（避免为已取消任务加载模型）
     model, _ = asr_engine.ensure_loaded("faster-whisper")
     # 一次解码供 VAD 与转写共用（transcribe 传 numpy 跳过二次解码）；
     #   16kHz float32 单声道，1h 音频约 230MB，与模型开销同量级可接受。
     audio = decode_audio(audio_path, sampling_rate=16000)
+    _check_cancel(job)
     # 第439次：独立 VAD 取覆盖真值（与 vad_filter=True 同为 silero 默认参数，
     #   但区间可记录可下发）。VAD 判定无人声的区间不在覆盖内，主转写跳过。
     speeches = get_speech_timestamps(audio, sampling_rate=16000)
+    _check_cancel(job)
     coverage = [[round(sp["start"] / 16000, 3), round(sp["end"] / 16000, 3)]
                 for sp in speeches]
     job["coverage"] = coverage  # 整体赋值；后续更新一律整体替换（快照并发安全）
@@ -442,6 +588,8 @@ def _transcribe(job, asr_engine, audio_path, video_id=None):
         job["detected_language"] = tinfo.language
         ci, done = 0, 0.0
         for s in segs_iter:  # 生成器：识别一段、追加一段，轮询端即刻可见
+            if job.get("cancel"):  # 第513次：逐段响应点（抢占让位的最快出口）
+                raise _JobCancelled()
             seg = {"start": round(s.start, 3), "end": round(s.end, 3),
                    "text": s.text.strip()}
             job["segments"].append(seg)
@@ -508,10 +656,13 @@ def _fill_holes(job, model, audio, coverage, language=None):
              ", ".join(f"{a:.0f}-{b:.0f}s" for a, b in holes))
     added = 0
     for a, b in holes:
+        _check_cancel(job)  # 第513次：逐空洞响应点
         segs_iter, _ = model.transcribe(audio, language=language,
                                         clip_timestamps=f"{a:.3f},{b:.3f}",
                                         vad_filter=False)
         for s in segs_iter:
+            if job.get("cancel"):  # 第513次：逐段响应点
+                raise _JobCancelled()
             if s.no_speech_prob > _NO_SPEECH_PROB or not s.text.strip():
                 continue  # 静音段幻觉过滤：no_speech 概率高或空文本不收
             job["segments"].append({"start": round(s.start, 3),
