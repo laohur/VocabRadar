@@ -41,10 +41,12 @@ const ZH = {
   'No default model selected. Open the LLM page and pick a model — it auto-downloads on first use.':
     '尚未选择默认模型。请打开 LLM 页选择模型——首次使用时自动下载。',
   'mode={m} · internal port {p}': 'mode={m} · 内部端口 {p}',
-  '· model {m}': '· 模型 {m}',
+  'Model / Engine': '模型 / 引擎',
   '· loaded {e}': '· 已加载 {e}',
   'llama-server running': 'llama-server 运行中',
   'llama-server starting': 'llama-server 启动中',
+  'Translate LLM': '翻译 LLM',
+  'serves the llama.cpp translation model selected on the Translate page': '承载翻译页所选的 llama.cpp 翻译模型（与对话 LLM 分开启停）',
   'not running': '未运行',
   'default format {f}': '默认格式 {f}',
   '· cookie configured': '· 已配 cookie',
@@ -93,8 +95,12 @@ const ZH = {
 
   // ---- 翻译页 ----
   'Playground': '试用',
-  'Engine: NLLB-200-distilled-600M (local CT2 int8; no API key; start/stop on the Overview page)':
-    '引擎：NLLB-200-distilled-600M（本地 CT2 int8；免 Key；在总览页启动/关停）',
+  // ---- 翻译页模型选择 ----
+  'Translation model': '翻译模型',
+  'nllb = built-in NLLB-200-distilled-600M (in-process CT2, fast). Any other entry is a llama.cpp card served by the dedicated Translate LLM engine (independent start/stop on the Overview page; first request may cold-start it).':
+    'nllb = 内置 NLLB-200-distilled-600M（进程内 CT2，快）。其余条目为 llama.cpp 模型卡，由翻译专用的「翻译 LLM」引擎承载（与对话 LLM 分开、在总览页独立启停；首次请求可能触发冷启动下载/加载）。',
+  'Model follows the Settings card; start/stop the serving engine on the Overview page.':
+    '模型跟随上方设定卡；承载引擎的启停在总览页。',
   'Source language': '源语言',
   'Target language': '目标语言',
   'Auto detect': '自动检测',

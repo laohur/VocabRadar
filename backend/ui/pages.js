@@ -246,6 +246,26 @@ PAGES.translate = async function (main) {
   main.append(el('h1', {}, t('Translate')));
   const wrap = el('div', { class: 'cols' });
 
+  // ---- 设定（下拉元素=模型，标签=模型名；数据源 /api/translate/models）----
+  const cfg = (await api('/api/config')).config || {};
+  const data = await api('/api/translate/models').catch(() => ({ models: [] }));
+  const models = data.models || [];
+  const chosen = cfg.translate?.model ?? 'nllb';
+  const modelSel = select(models.map((m) => [m.name,
+    m.name + (m.name === 'nllb' ? '' : (m.installed ? '' : ` (${t('Not downloaded')})`))]),
+    models.some((m) => m.name === chosen) ? chosen : 'nllb');
+  wrap.append(settingsCard(t('Settings'), [
+    [t('Translation model'), modelSel,
+     t('nllb = built-in NLLB-200-distilled-600M (in-process CT2, fast). Any other entry is a llama.cpp card served by the dedicated Translate LLM engine (independent start/stop on the Overview page; first request may cold-start it).')],
+  ], (_i, hint) => {
+    const v = modelSel.value;
+    // 联动写入：translate.model=路由选择；选 llama.cpp 卡时同步 translate_llm.model
+    // （实例按卡启动）；切回 nllb 不动 translate_llm 选卡（保留，随时切回）
+    const patch = { translate: { model: v } };
+    if (v !== 'nllb') patch.translate_llm = { model: v };
+    return saveCfg(null, patch, hint);
+  }));
+
   // ---- 试用 ----
   const from = select([['auto', t('Auto detect')], ...LANGS], 'auto');
   const to = select(LANGS, 'zh');
@@ -253,7 +273,7 @@ PAGES.translate = async function (main) {
   const out = el('div', { class: 'result' });
   wrap.append(el('div', { class: 'card' },
     el('h2', {}, t('Playground')),
-    el('div', { class: 'hint' }, t('Engine: NLLB-200-distilled-600M (local CT2 int8; no API key; start/stop on the Overview page)')),
+    el('div', { class: 'hint' }, t('Model follows the Settings card; start/stop the serving engine on the Overview page.')),
     el('div', { class: 'chatbar' }, field(t('Source language'), from), field(t('Target language'), to)),
     text,
     el('button', {

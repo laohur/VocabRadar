@@ -102,7 +102,7 @@ async function engineToggle(name, action, btn, errEl) {
 }
 
 function statusRow(name, st, engine, running, detail, toggle) {
-  const ops = el('td');
+  const ops = el('td', { class: 'ops' });
   if (toggle) {
     const loading = Boolean(st && st.loading);
     const on = Boolean(running);
@@ -115,14 +115,14 @@ function statusRow(name, st, engine, running, detail, toggle) {
       class: 'btn btn-sm', disabled: !on || loading ? '' : null,
       onclick: (e) => engineToggle(toggle, 'stop', e.target, errEl),
     }, t('Stop'));
-    ops.append(start, ' ', stop, ' ', errEl);
+    ops.append(start, stop, errEl);
     if (loading) ops.append(' ', t('loading…'));
   }
   return el('tr', {},
     el('td', {}, t(name)),
     el('td', {}, engine),
     el('td', {}, badge(Boolean(running))),
-    el('td', { class: 'hint' }, detail || st.detail || ''),
+    el('td', {}, detail || st.detail || ''),
     ops);
 }
 
@@ -147,19 +147,26 @@ async function renderOverview(main) {
       t('No default model selected. Open the LLM page and pick a model — it auto-downloads on first use.')));
   }
 
+  // Engine 列显示模型（最重要信息，缺省回落引擎名），实现名/模式等沉入详情
   const rows = [
-    ['LLM', eng.llm, eng.llm && eng.llm.engine, eng.llm && (eng.llm.running ?? eng.llm.loaded),
+    ['LLM', eng.llm, eng.llm && (eng.llm.model || eng.llm.engine),
+      eng.llm && (eng.llm.running ?? eng.llm.loaded),
       eng.llm && (t('mode={m} · internal port {p}', { m: eng.llm.mode, p: eng.llm.port })
-        + (eng.llm.model ? ' ' + t('· model {m}', { m: eng.llm.model }) : '')
         // 启动中（进程活但 /health 未 200）detail 提示；badge 仍按 running
         + (eng.llm.starting ? ' · ' + t('llama-server starting') : '')), 'llm'],
-    ['ASR', eng.asr, eng.asr && eng.asr.engine, eng.asr && (eng.asr.loaded || eng.asr.loading),
+    ['Translate LLM', eng.translate_llm,
+      eng.translate_llm && (eng.translate_llm.model || eng.translate_llm.engine),
+      eng.translate_llm && (eng.translate_llm.running ?? eng.translate_llm.loaded),
+      eng.translate_llm && (t('mode={m} · internal port {p}', { m: eng.translate_llm.mode, p: eng.translate_llm.port })
+        + ' · ' + t('serves the llama.cpp translation model selected on the Translate page')
+        + (eng.translate_llm.starting ? ' · ' + t('llama-server starting') : '')), 'translate_llm'],
+    ['ASR', eng.asr, eng.asr && (eng.asr.model || eng.asr.engine),
+      eng.asr && (eng.asr.loaded || eng.asr.loading),
       eng.asr && (t('mode={m}', { m: eng.asr.mode })
-        + (eng.asr.loaded ? ' ' + t('· loaded {e}', { e: eng.asr.loaded_engine || '' }) : '')
-        + (eng.asr.model ? ' · ' + eng.asr.model : '')), 'asr'],
+        + (eng.asr.loaded ? ' ' + t('· loaded {e}', { e: eng.asr.loaded_engine || '' }) : '')), 'asr'],
     ['OCR', eng.ocr, eng.ocr && eng.ocr.engine, eng.ocr && (eng.ocr.loaded || eng.ocr.loading),
       eng.ocr && t('mode={m}', { m: eng.ocr.mode }) + (eng.ocr.loaded ? ' · loaded' : ''), 'ocr'],
-    ['Translate', eng.translate, eng.translate && eng.translate.engine,
+    ['Translate', eng.translate, eng.translate && eng.translate.model,
       eng.translate && (eng.translate.loaded || eng.translate.loading),
       eng.translate && (t('mode={m}', { m: eng.translate.mode })
         + (eng.translate.loaded ? ' · loaded' : '')), 'translate'],
@@ -167,8 +174,15 @@ async function renderOverview(main) {
       eng.ytdl && (t('default format {f}', { f: eng.ytdl.format })
         + (eng.ytdl.cookiefile ? ' ' + t('· cookie configured') : ''))],
   ];
-  main.append(el('table', {},
-    el('tr', {}, el('th', {}, t('Feature')), el('th', {}, t('Engine')), el('th', {}, t('Status')),
+  // 固定列宽分配吃满页面宽：模型/引擎列与详情列拿大头，动作列定宽防按钮挤靠误触
+  main.append(el('table', { class: 'ovtable' },
+    el('colgroup', {},
+      el('col', { style: 'width:11%' }),    // Feature
+      el('col', { style: 'width:27%' }),    // Model / Engine
+      el('col', { style: 'width:9%' }),     // Status
+      el('col', {}),                        // Details（吃剩余宽度）
+      el('col', { style: 'width:14%' })),   // Action
+    el('tr', {}, el('th', {}, t('Feature')), el('th', {}, t('Model / Engine')), el('th', {}, t('Status')),
       el('th', {}, t('Details')), el('th', {}, t('Action'))),
     ...rows.map((r) => statusRow(...r))));
 

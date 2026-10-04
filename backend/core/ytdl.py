@@ -18,12 +18,10 @@ static-ffmpeg 静态执行器（第514次替代 imageio-ffmpeg；requirements �
 改旧缓存优先——backend/cache/ytdl-cookies.txt 存在先用，yt-dlp 报错则删
 jar 现取重试一次（_extract_info 统一入口），失败如实上抛不静默）。
 
-并行直链下载（第438次，ASR 音频提速）：yt-dlp 原生下载器对单文件直链
-（B 站 DASH m4s 等）是单连接顺序下载，且 B 站分配的 upos CDN 节点质量
-不稳（慢节点几十 KB/s）、backup_url 又被提取器丢弃——ASR 音频下载慢的
-主因。parallel_download 对策与 downkyi（Aria2 多线程）/BBDown（默认
-多线程 + upos host 替换）同源：upos 镜像 host 并发探测择优 + 多线程
-Range 分块，纯标准库零新依赖；任何失败返回 False 由调用方回退 yt-dlp
+并行直链下载（第438次引入，第515次引擎迁出）：parallel_download 引擎
+（upos 镜像探测择优 + 多线程 Range 分块 + 控制文件断点续传，与 downkyi/
+BBDown 同源、纯标准库）独立为 core/dl_engine.py，本模块 re-export 保持
+asr_job/bili_api 既有导入不变；任何失败返回 False 由调用方回退 yt-dlp
 原生下载（asr_job 调用侧回退，保证不比老路更差）。
 
 管理页下载主路（第448次）：download 任务先 extract_info(download=False)
@@ -31,9 +29,6 @@ Range 分块，纯标准库零新依赖；任何失败返回 False 由调用方�
 视频+音频两路分块，ffmpeg -c copy 合并；半成品 cache/dl-<id>/ 原子进
 media/），失败回退 yt-dlp 原生下载——_base_opts 同次起带
 concurrent_fragment_downloads=4（yt-dlp -N，HLS/DASH 分片并发，官方建议 4+）。
-调研裁定不引入 aria2c 外部下载器：直链多连接价值 parallel_download 已覆盖，
-aria2c 进度回调仅完成一次（管理页进度条跳变）且部分流反而变慢（yt-dlp#7962），
-非 Windows 官方无预编译包（业界统一 brew/apt 自装）。
 """
 
 import glob
@@ -44,11 +39,14 @@ import shutil
 import subprocess
 import threading
 import time
-import urllib.parse
 import urllib.request
 import uuid
 
 import config
+
+# 第515次：直链并行分块引擎迁 core/dl_engine.py（断点续传），re-export
+# 保持 asr_job/bili_api 既有 `from core.ytdl import parallel_download` 不变
+from core.dl_engine import parallel_download
 
 log = logging.getLogger(__name__)
 
@@ -708,212 +706,3 @@ def find_media(file_id):
     return None
 
 
-# ---- 直链并行分块下载（第438次：ASR 音频提速，调用方失败回退 yt-dlp） ----
-
-# B 站 CDN host 域（playurl v3 起分配 cn-* 等新 host，不再只有 upos-*），
-# 命中即扩展镜像候选：CDN 签名与 host 无关，同 path+query 换 host 即换
-# CDN 池；谁快用谁（探测实测，不主观排序，坏候选 403/断连自动淘汰）。
-_BILI_CDN_SUFFIX = ("bilivideo.com", "akamaized.net")
-
-_UPOS_MIRRORS = (
-    "upos-sz-mirror08c.bilivideo.com",
-    "upos-sz-mirrorcoso1.bilivideo.com",
-    "upos-sz-mirrorcoso2.bilivideo.com",
-    "upos-sz-mirrorali.bilivideo.com",
-    "upos-sz-mirroraliov.bilivideo.com",
-    "upos-hz-mirrorakam.akamaized.net",
-)
-
-# 分块下限：块太小请求开销占比高；块数=ceil(total/chunk) 动态领块快者多劳。
-# 取 1MB：5MB 级小文件也有 5+ 块可并行（2MB 下限只切 3 块，16 线程用不满）
-_CHUNK_MIN = 1 * 1024 * 1024
-
-
-def parallel_download(url, dest_path, headers, progress_cb=None):
-    """直链并行分块下载：CDN 测速择优 + 多线程 Range 分块落盘。
-
-    url 必须是 http(s) 直链；headers 请求头（调用方合并 yt-dlp format 专属
-    头与全局兜底）；progress_cb(pct) 可选（0-100 int）。B 站 upos 链接自动
-    扩展镜像候选并发探测选最快节点，其余站点仅探测原链。返回 True 完整落
-    盘；False 不适合直链或下载失败（含清理半成品），调用方回退 yt-dlp。
-    """
-    try:
-        parsed = urllib.parse.urlparse(url)
-        if parsed.scheme not in ("http", "https"):
-            return False
-        candidates = [url]
-        host = (parsed.hostname or "").lower()
-        if host.endswith(_BILI_CDN_SUFFIX):  # B 站 CDN：镜像池换 host 测速
-            candidates += [urllib.parse.urlunparse(parsed._replace(netloc=h))
-                           for h in _UPOS_MIRRORS
-                           if h != parsed.netloc.lower()]
-        head = dict(headers or {})
-        best = _probe_fastest(candidates, head)
-        if best is None:
-            return False
-        best_url, total = best
-        if not total:  # 拿不到全长（无 Content-Range）：单线程流式兜底
-            return _stream_download(best_url, dest_path, head, progress_cb)
-        _download_chunks(best_url, total, dest_path, head, progress_cb)
-        return True
-    except Exception as e:  # 网络/块重试耗尽等：如实记录后回退
-        log.warning("parallel_download 失败（%s），调用方回退 yt-dlp", str(e)[:200])
-        try:
-            os.remove(dest_path)  # 半成品必须清掉，防回退路 yt-dlp 误判已完成
-        except OSError:
-            pass
-        return False
-
-
-def _probe_fastest(candidates, headers, probe_bytes=1024 * 1024, timeout=3.0):
-    """并发小段 Range 探测：按「字节/耗时」选最快候选。
-
-    探测段取 1MB：B 站烂节点有「短段快、持续烂」的 QoS 特征（实测 256KB
-    短段测不出，2MB 持续拉速仅 40KB/s 的节点短段可到 170KB/s），段太短
-    会误选原链。返回 (url, total)；total 取 Content-Range 尾数（206）或
-    Content-Length（200，服务端不支持 Range），拿不到为 None。全部候选
-    零数据返回 None。
-
-    多候选（B 站）时镜像优先：candidates[0] 是原链，实测 bcache 原链
-    短段测速虚高且持续烂（探测 0.32MB/s、并行仅 0.11MB/s，而镜像并行
-    1.4-1.9MB/s），故只要任一镜像可达就选可达镜像中的最快者，镜像全灭
-    才用原链。
-    """
-    results, lock = [], threading.Lock()
-
-    def probe(u):
-        req = urllib.request.Request(u, headers={
-            **headers, "Range": "bytes=0-%d" % (probe_bytes - 1)})
-        t0 = time.time()
-        try:
-            with urllib.request.urlopen(req, timeout=timeout) as r:
-                got = 0
-                while got < probe_bytes and time.time() - t0 < timeout:
-                    part = r.read(1 << 16)
-                    if not part:
-                        break
-                    got += len(part)
-                if not got:
-                    return
-                speed = got / max(time.time() - t0, 0.05)
-                total = None
-                cr = r.headers.get("Content-Range") or ""
-                if "/" in cr:
-                    try:
-                        total = int(cr.rsplit("/", 1)[1])
-                    except ValueError:
-                        total = None
-                if total is None and r.status == 200:
-                    total = int(r.headers.get("Content-Length") or 0) or None
-                with lock:
-                    results.append((speed, u, total))
-        except OSError:
-            pass  # 该候选不通（403/超时/DNS）：淘汰
-
-    ts = [threading.Thread(target=probe, args=(u,), daemon=True)
-          for u in candidates]
-    for t in ts:
-        t.start()
-    for t in ts:
-        t.join(timeout + 2)
-    if not results:
-        return None
-    results.sort(key=lambda x: x[0], reverse=True)
-    for speed, u, _t in results:
-        log.info("probe %s: %.2f MB/s", urllib.parse.urlparse(u).hostname,
-                 speed / 1e6)
-    if len(candidates) > 1 and len(results) > 1:
-        origin_host = urllib.parse.urlparse(candidates[0]).hostname or ""
-        alts = [r for r in results
-                if (urllib.parse.urlparse(r[1]).hostname or "") != origin_host]
-        if alts:
-            return alts[0][1], alts[0][2]
-    return results[0][1], results[0][2]
-
-
-def _download_chunks(url, total, dest_path, headers, progress_cb,
-                     workers=16, retries=3):
-    """多线程 Range 分块下载：预分配文件，线程池动态领块（首个异常全局收工）。
-
-    每线程独立文件句柄 seek 写各自偏移（Windows 无 os.pwrite）；块读取字节
-    不精确即失败重试，重试耗尽上抛由 parallel_download 清理并回退。
-    """
-    chunk = max(_CHUNK_MIN, -(-total // (workers * 4)))
-    ranges = [(off, min(off + chunk, total) - 1)
-              for off in range(0, total, chunk)]
-    with open(dest_path, "wb") as f:
-        f.truncate(total)
-    state = {"idx": 0, "done": 0, "err": None}
-    lock = threading.Lock()
-
-    def worker():
-        try:
-            with open(dest_path, "r+b") as f:
-                while True:
-                    with lock:
-                        if state["err"] or state["idx"] >= len(ranges):
-                            return
-                        a, b = ranges[state["idx"]]
-                        state["idx"] += 1
-                    data = _fetch_range(url, headers, a, b, retries)
-                    f.seek(a)
-                    f.write(data)
-                    with lock:
-                        state["done"] += len(data)  # 累加实绩：块完成无序，防进度跳动
-                        if progress_cb:
-                            progress_cb(state["done"] * 100 // total)
-        except Exception as e:
-            with lock:
-                state["err"] = state["err"] or e
-
-    ts = [threading.Thread(target=worker, daemon=True)
-          for _ in range(min(workers, len(ranges)))]
-    for t in ts:
-        t.start()
-    for t in ts:
-        t.join()
-    if state["err"]:
-        raise state["err"]
-
-
-def _fetch_range(url, headers, a, b, retries):
-    """单块 Range 抓取（字节精确）：读不满即失败，退避后整块重试。"""
-    want = b - a + 1
-    last = None
-    for i in range(retries):
-        if i:
-            time.sleep(0.5 * i)
-        try:
-            req = urllib.request.Request(url, headers={
-                **headers, "Range": "bytes=%d-%d" % (a, b)})
-            with urllib.request.urlopen(req, timeout=30) as r:
-                buf = bytearray()
-                while len(buf) < want:
-                    part = r.read(min(1 << 20, want - len(buf)))
-                    if not part:
-                        break
-                    buf += part
-                if len(buf) == want:
-                    return bytes(buf)
-                last = RuntimeError("Range 响应不足 %d/%d" % (len(buf), want))
-        except OSError as e:
-            last = e
-    raise last if last else RuntimeError("Range 下载未知失败")
-
-
-def _stream_download(url, dest_path, headers, progress_cb):
-    """服务端不支持 Range（无全长）时的单线程流式兜底，罕见路径。"""
-    req = urllib.request.Request(url, headers=headers)
-    with urllib.request.urlopen(req, timeout=30) as r, \
-            open(dest_path, "wb") as f:
-        total = int(r.headers.get("Content-Length") or 0) or None
-        got = 0
-        while True:
-            part = r.read(1 << 20)
-            if not part:
-                break
-            f.write(part)
-            got += len(part)
-            if progress_cb and total:
-                progress_cb(got * 100 // total)
-    return True

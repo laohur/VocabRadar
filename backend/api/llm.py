@@ -118,7 +118,7 @@ def _save_cards(cards, model=None):
     merged = config.load()     # 运行时全量视图 = DEFAULTS + 用户层覆盖
     current_app.config["CFG"] = merged
     engines = current_app.extensions["engines"]
-    for name in ("llm", "asr", "ocr", "translate"):
+    for name in ("llm", "translate_llm", "asr", "ocr", "translate"):
         engines[name].cfg = merged.get(name, {})
 
 

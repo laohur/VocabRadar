@@ -79,12 +79,13 @@ OCR：
 | POST | /api/ocr | 双入参：multipart `file` 或 JSON `{image: "data:image/...;base64,..."}`；`engine` 可选（llm / rapidocr）→ `{ok, ...识别结果}` |
 | GET | /api/ocr/status | 引擎状态 |
 
-翻译：
+翻译（多模型并存，按模型名选择，管理页翻译段下拉）：
 
 | 方法 | 路径 | 说明 |
 |---|---|---|
-| POST | /api/translate | `{text, from?, to, engine?}`（engine 仅 llm；from 缺省 auto）→ `{ok, text}` |
-| GET | /api/translate/status | 引擎状态 |
+| POST | /api/translate | `{text, from?, to}` → `{ok, text, model}`；路由取配置 `translate.model`（"nllb"=内置 NLLB-600M 快路径；卡片名=翻译专用 llama-server 实例，总览页「翻译 LLM」，端口 7789，与对话 LLM 分开启停） |
+| GET | /api/translate/status | 状态（model=当前模型选择；loaded/loading/manual_stop 均指 NLLB 侧） |
+| GET | /api/translate/models | 翻译模型清单（nllb + translate_llm 卡片，含 installed/is_default，管理页下拉数据源） |
 
 媒体下载（yt-dlp）：
 

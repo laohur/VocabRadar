@@ -16,7 +16,10 @@ import { makeKey, splitKey } from './key-utils.js';
 const DB_NAME = 'beaver-dict';
 // 第一百一十九次（用户裁定）：统一词典改分拆词典--每类属性一张小表，天然可整体
 // 序列化/按需装载；words 旧表保留只读（一次性迁移数据到分表后不再写入）。
-const DB_VERSION = 3;
+// 第515次：DB_VERSION 4（用户裁定"词频表中的装入内存，找不到的找索引"方案）--新增
+//   d_lform 词形还原行存储——词频表命中的词形驻内存热集，未命中走本表索引，
+//   不再整表进内存（diverse-lemmas 约 13.9 万词级，fi/pl 达 350 万词级）。
+const DB_VERSION = 4;
 const STORE_NAME = 'words'; // 旧统一表：仅迁移读取用
 // 分拆存储：k=`${lang}|${word_lower}`，均带 by-lang 索引
 const S_RANK = 'd_rank';
@@ -26,6 +29,11 @@ const S_TRANS = 'd_trans';
 const S_PHON = 'd_phon';
 const S_META = 'meta'; // keyPath 'lang'：{lang, built:true} 构建完成标记
 const SPLIT_STORES = [S_RANK, S_TAGS, S_LEMMA, S_TRANS, S_PHON];
+// 词形还原行存储（DB_VERSION 4 新增）：{k:`${lang}|${form_lower}`, lang, v:lemma小写}
+//   - by-lang：分语言计数/清库；
+//   - by-lang-v 复合索引 ['lang','v']：同族反查（有哪些词形还原到该 lemma）。
+//   注意：与 d_lemma（词典词条的 lemma 字段，投影用）是两回事，绝不合并。
+const S_LFORM = 'd_lform';
 
 // 词典整表缓存 store：key=lang，值={lang, version, words:[按频率降序], time}
 // 反思（2026-08-13 第五十一次）：用户要求"刷新页面后应从词典加载，只有词典之外的单词才需要重新构建"。
@@ -68,6 +76,12 @@ function getDB() {
         }
         if (!db.objectStoreNames.contains(S_META)) {
           db.createObjectStore(S_META, { keyPath: 'lang' });
+        }
+        // DB_VERSION 4：词形还原行存储 d_lform（旧库升级时创建）
+        if (!db.objectStoreNames.contains(S_LFORM)) {
+          const lf = db.createObjectStore(S_LFORM, { keyPath: 'k' });
+          lf.createIndex('by-lang', 'lang', { unique: false });
+          lf.createIndex('by-lang-v', ['lang', 'v'], { unique: false });
         }
       };
     });
@@ -213,7 +227,10 @@ export async function idbClearAll() {
   //      vendor storage.js 的独立 'diverse-lemmas' 库在扩展中从未使用，清这里即彻底）；
   //   2. STORE_NAME（旧 words 统一表）：第119次拆表后只读迁移残留，一并清空。
   //   均为可复取缓存（版本变更后重拉重建）；用户数据（My Words/设定）在 storage.local，不受影响。
-  for (const s of [...SPLIT_STORES, S_META, DICT_CACHE_STORE, STORE_NAME]) {
+  //   d_lform（词形行，DB_VERSION 4）一并纳入：同样是可复取缓存。
+  //   反向注意：idbClearByLang 不清 d_lform——词形数据属词典源数据，词典按语言重建后
+  //   仍需保留（与 dictCache.lemmas 今日行为一致）。
+  for (const s of [...SPLIT_STORES, S_META, DICT_CACHE_STORE, STORE_NAME, S_LFORM]) {
     await new Promise((resolve, reject) => {
       const tx = db.transaction(s, 'readwrite');
       const rq = tx.objectStore(s).clear();
@@ -500,4 +517,143 @@ export async function idbDictMerge(lang, patch) {
       putReq.onsuccess = () => resolve(merged);
     };
   });
+}
+
+// === 词形还原行存储（d_lform，DB_VERSION 4） ===
+// 设计（用户裁定「词频表中的装入内存，找不到的找索引」）：
+//   词形数据常驻形态 = 行（IDB），内存只保留词频表命中的热集与冷词晋升缓存；
+//   diverse-lemmas 整表 blob 仅作下载/迁移期续传凭据与后台分行写入的窗口期服务源，
+//   行写完即清 blob。行是权威，热集是纯缓存（陈旧只影响命中率不影响正确性）。
+
+/**
+ * 分块批量写词形行（后台迁移/首次下载落行用，幂等——重复 put 同 k 覆盖）
+ * 单事务上限保护：每块 5000 条（与 sw-channel 批量事务同量级），顺序执行。
+ * @param {string} lang
+ * @param {Array<{word:string,lemma:string}>} entries lemma 由调用方定稿
+ * @returns {Promise<number>} 实际写入条数
+ */
+export async function idbLformPutBatch(lang, entries) {
+  const db = await getDB();
+  const CH = 5000;
+  let written = 0;
+  for (let i = 0; i < entries.length; i += CH) {
+    const slice = entries.slice(i, i + CH);
+    await new Promise((resolve, reject) => {
+      const tx = db.transaction(S_LFORM, 'readwrite');
+      const st = tx.objectStore(S_LFORM);
+      for (const e of slice) {
+        if (!e || !e.word) continue;
+        const v = String(e.lemma == null ? '' : e.lemma).toLowerCase();
+        st.put({ k: makeKey(lang, e.word), lang, v });
+      }
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error);
+      tx.onabort = () => reject(tx.error);
+    });
+    written += slice.length;
+  }
+  return written;
+}
+
+/**
+ * 单条词形还原查询（热集未命中的冷路径）
+ * @param {string} lang
+ * @param {string} form 原始词形（key 构造内部自行小写）
+ * @returns {Promise<string|null>} lemma 或 null
+ */
+export async function idbLformGet(lang, form) {
+  const db = await getDB();
+  const k = makeKey(lang, form);
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(S_LFORM, 'readonly');
+    const rq = tx.objectStore(S_LFORM).get(k);
+    rq.onsuccess = () => resolve(rq.result ? rq.result.v : null);
+    rq.onerror = () => reject(rq.error);
+  });
+}
+
+/**
+ * 分语言词形行计数（引导页就绪行分项统计的取数源之一）
+ * @param {string} lang
+ * @returns {Promise<number>}
+ */
+export async function idbLformCount(lang) {
+  const db = await getDB();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(S_LFORM, 'readonly');
+    const rq = tx.objectStore(S_LFORM).index('by-lang').count(IDBKeyRange.only(lang));
+    rq.onsuccess = () => resolve(rq.result || 0);
+    rq.onerror = () => reject(rq.error);
+  });
+}
+
+/**
+ * 同族反查：还原到指定 lemma 的全部词形（复合索引 ['lang','v'] 精确匹配）
+ * 行 = 词形全集（热集是行子集），索引查询天然完整，无需扫内存。
+ * @param {string} lang
+ * @param {string} lemma 目标 lemma（内部小写后匹配，与旧 toLowerCase 比较语义一致）
+ * @returns {Promise<Array<string>>} 命中的词形（form）列表
+ */
+export async function idbLformFamily(lang, lemma) {
+  const db = await getDB();
+  const target = String(lemma == null ? '' : lemma).toLowerCase();
+  const rows = await new Promise((resolve, reject) => {
+    const tx = db.transaction(S_LFORM, 'readonly');
+    const rq = tx.objectStore(S_LFORM).index('by-lang-v')
+      .getAll(IDBKeyRange.only([lang, target]));
+    rq.onsuccess = () => resolve(rq.result || []);
+    rq.onerror = () => reject(rq.error);
+  });
+  const out = [];
+  for (const r of rows) {
+    const p = splitKey(r.k);
+    if (p && p.word) out.push(p.word);
+  }
+  return out;
+}
+
+/**
+ * 读取某语言全部词形行键（d_rank keys-only 扫描，供热集构建取候选词单）
+ * @param {string} lang
+ * @returns {Promise<string[]>} key 列表（`lang|word`）
+ */
+export async function idbRankKeys(lang) {
+  const db = await getDB();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(S_RANK, 'readonly');
+    const rq = tx.objectStore(S_RANK).index('by-lang').getAllKeys(IDBKeyRange.only(lang));
+    rq.onsuccess = () => resolve(rq.result || []);
+    rq.onerror = () => reject(rq.error);
+  });
+}
+
+/**
+ * 按键批量取词形行（热集构建用：词频表键 ∩ 词形行）。单事务多 get
+ * 参照 idbGetBatch；按 4000 键/事务分片，限制单事务内存占用。
+ * @param {string[]} keys
+ * @returns {Promise<Array<{k:string,v:string}>>} 仅命中的行（未命中不占位）
+ */
+export async function idbLformGetByKeys(keys) {
+  const db = await getDB();
+  const hits = [];
+  const CH = 4000;
+  for (let i = 0; i < keys.length; i += CH) {
+    const slice = keys.slice(i, i + CH);
+    if (slice.length === 0) continue;
+    await new Promise((resolve, reject) => {
+      const tx = db.transaction(S_LFORM, 'readonly');
+      const st = tx.objectStore(S_LFORM);
+      let pending = slice.length;
+      slice.forEach((k) => {
+        const rq = st.get(k);
+        rq.onsuccess = () => {
+          if (rq.result) hits.push({ k: rq.result.k, v: rq.result.v });
+          if (--pending === 0) resolve();
+        };
+        rq.onerror = () => reject(rq.error);
+      });
+      tx.onerror = () => reject(tx.error);
+    });
+  }
+  return hits;
 }

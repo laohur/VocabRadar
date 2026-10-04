@@ -6,13 +6,17 @@
   可达源仅启动一次，失败如实上抛不换源（试错启动会在 hub 缓存制造
   *.downloadInProgress 残骸）
 - 生命周期：resident（Flask 启动即后台拉起）/ on-demand（首请求拉起 + 空闲 idle_timeout 退出）
-- backend 对外反代其 /v1/*；7788 仅内部使用
+- backend 对外反代其 /v1/*；llm 实例 7788、translate_llm 实例 7789（翻译
+  专用，与对话 LLM 分开启停，互不牵连）
+- 多实例隔离：pid 文件按内部端口命名（.llama-server-<port>.pid），孤儿清场
+  按监听端口定位占用者并核验进程名——各实例只清自己端口的残留，互不误伤
 - b10964+ 包结构：llama-server.exe 为薄启动器，实现在 llama-server-impl.dll
 """
 
 import collections
 import logging
 import os
+import re
 import shlex
 import subprocess
 import threading
@@ -24,8 +28,8 @@ import config
 log = logging.getLogger(__name__)
 
 # pid 文件治理：后端退出走 atexit 自动停机；被强杀/断电等未及清理时，
-# 下次 start() 读 pid 文件先行终止残留 llama-server，防 7788 双占。
-_PID_FILE = os.path.join(config.BASE_DIR, ".llama-server.pid")
+# 下次 start() 读 pid 文件先行终止残留 llama-server，防端口双占。
+# 文件名含内部端口（_pid_file），llm/translate_llm 两实例各管各的。
 
 # 卡片 command 中「带值旗标」白名单——用于 --flag=value 预拆与带值消费；
 # --host/--port/-c 强制覆盖为配置值（后端反代依赖），其余（含 -m/--mmproj/
@@ -58,6 +62,12 @@ def _probe_http_ok(url, timeout=6):
 
 # -hf 的等价长形式（_swap_hf_to_url 识别用；llama.cpp -hf/-hfr/--hf-repo 同义）
 _HF_REPO_FLAGS = {"-hf", "-hfr", "--hf-repo"}
+
+
+def _pid_file(cfg):
+    """pid 文件路径：按内部端口命名（.llama-server-<port>.pid），llm 与
+    translate_llm 两实例各写各读，互不误伤。"""
+    return os.path.join(config.BASE_DIR, f".llama-server-{cfg.get('port', 7788)}.pid")
 
 
 def _hub_cache_dir():
@@ -134,10 +144,12 @@ def _pid_alive_is_llama(pid):
         return False
 
 
-def _kill_stale_pid():
-    """拉起前清场：读 pid 文件，进程名核验通过则终止残留 llama-server，随后删 pid 文件。"""
+def _kill_stale_pid(self):
+    """拉起前清场：读本实例 pid 文件，进程名核验通过则终止残留 llama-server，
+    随后删 pid 文件。文件按内部端口命名，多实例互不误读。"""
+    pid_file = _pid_file(self.cfg)
     try:
-        with open(_PID_FILE, "r", encoding="utf-8") as f:
+        with open(pid_file, "r", encoding="utf-8") as f:
             pid = int((f.read() or "").strip())
     except (OSError, ValueError):
         return
@@ -148,41 +160,47 @@ def _kill_stale_pid():
         except OSError as e:
             log.warning(f"终止残留进程 pid={pid} 失败：{e}")
     try:
-        os.remove(_PID_FILE)
+        os.remove(pid_file)
     except OSError:
         pass
 
 
-def _kill_orphan_llama():
-    """pid 文件丢失兜底：pid 文件可能与活进程脱钩（正常停机清除后进程未死、
-    强杀后未及写入），孤儿 llama-server 占 7788 后新实例 bind 不上端口。
-    backend 是本机 llama-server 唯一属主，拉起前按映像名全量清场，不依赖 pid 文件。"""
+def _kill_port_occupants(self):
+    """端口兜底清场：pid 文件可能与活进程脱钩（正常停机清除后进程未死、
+    强杀后未及写入），孤儿 llama-server 占住本实例端口后新实例 bind 不上。
+    按监听端口定位占用者并核验进程名后终止——只清自己端口的，多实例
+    （llm 7788 / translate_llm 7789）互不误伤。无 netstat/lsof/ss 可用时
+    跳过（端口冲突会在启动时报错，不遮蔽）。"""
+    port = str(self.cfg.get("port", 7788))
+    pids = []
     try:
         if os.name == "nt":
-            out = subprocess.run(
-                ["tasklist", "/FI", "IMAGENAME eq llama-server.exe", "/FO", "CSV", "/NH"],
-                capture_output=True, text=True, timeout=10,
-                creationflags=subprocess.CREATE_NO_WINDOW).stdout or ""
-            pids = [int(cols[1]) for cols in
-                    (line.split('","') for line in out.splitlines())
-                    if len(cols) > 1 and cols[1].isdigit()]
+            out = subprocess.run(["netstat", "-ano", "-p", "tcp"],
+                                 capture_output=True, text=True, timeout=10,
+                                 creationflags=subprocess.CREATE_NO_WINDOW).stdout or ""
+            for line in out.splitlines():
+                cols = line.split()
+                # TCP  127.0.0.1:7788  0.0.0.0:0  LISTENING  <pid>（[::]:7788 同列）
+                if (len(cols) >= 5 and cols[3].upper() == "LISTENING"
+                        and cols[1].rsplit(":", 1)[-1] == port
+                        and cols[4].isdigit()):
+                    pids.append(int(cols[4]))
         else:
-            pids = []
-            for name in os.listdir("/proc"):
-                if not name.isdigit():
-                    continue
-                try:
-                    with open(f"/proc/{name}/comm", "r", encoding="utf-8",
-                              errors="replace") as f:
-                        if "llama-server" in (f.read() or ""):
-                            pids.append(int(name))
-                except OSError:
-                    continue
+            out = subprocess.run(["lsof", "-ti", f"tcp:{port}", "-sTCP:LISTEN"],
+                                 capture_output=True, text=True, timeout=10).stdout or ""
+            pids = [int(p) for p in out.split() if p.strip().isdigit()]
+            if not pids:  # lsof 缺席再试 ss（-p 需同进程权限才可见 pid）
+                out = subprocess.run(["ss", "-ltnpH", f"sport = :{port}"],
+                                     capture_output=True, text=True,
+                                     timeout=10).stdout or ""
+                pids = [int(m) for m in re.findall(r"pid=(\d+)", out)]
     except Exception as e:
-        log.warning(f"扫描 llama-server 进程失败：{e}")
+        log.warning(f"扫描端口 {port} 占用进程失败：{e}")
         return
     for pid in pids:
-        log.info(f"发现 llama-server 进程（pid={pid}），先行终止")
+        if not _pid_alive_is_llama(pid):
+            continue
+        log.info(f"发现 llama-server 占用端口 {port}（pid={pid}），先行终止")
         try:
             os.kill(pid, 9)  # Windows 上映射 TerminateProcess
         except OSError as e:
@@ -237,16 +255,18 @@ class LlmEngine:
 
     def status(self):
         # running 以 /health 200 为准（进程存活不等于能服务：下载/加载模型期
-        # 活着但未监听/503）；活着未就绪=starting 三态。
+        # 活着但未监听/503）；活着未就绪=starting 三态。model=当前生效卡名
+        # （llm.model 未选时回落首卡，与 start() 实际拉起的模型一致）。
         alive = self.proc is not None and self.proc.poll() is None
         running = alive and self._health_ok()
+        card = self._current_card()
         return {
             "running": running,
             "starting": alive and not running,  # 启动中（进程活但 /health 未 200）
             "engine": self.cfg.get("engine", "llamacpp"),
             "mode": self.cfg.get("mode", "resident"),
             "port": self.cfg.get("port", 7788),
-            "model": self.cfg.get("model", ""),   # 当前卡片名（llm.model）
+            "model": str((card or {}).get("name") or ""),  # 生效卡名（总览页模型列）
             "cards": self.list_cards(),            # 卡片只读清单（管理页展示）
             "manual_stop": self._manual_stop,      # 手动停机中（惰性拉起被抑制）
         }
@@ -439,8 +459,8 @@ class LlmEngine:
             if args is None:
                 raise RuntimeError(
                     f"卡片 {card.get('name')!r} 的 command 未配置或解析失败，无法拉起 llama-server")
-            _kill_stale_pid()  # 拉起前终止残留旧进程
-            _kill_orphan_llama()  # 按映像名兜底清场：pid 文件丢失的孤儿占口
+            _kill_stale_pid(self)  # 拉起前终止本实例残留旧进程
+            _kill_port_occupants(self)  # 按端口兜底清场：pid 文件丢失的孤儿占口
             _clean_download_stale()  # 清 .downloadInProgress 残骸（Windows rename 冲突）
             self._starting = True  # 置位，idle_watch 在健康等待期避让
         try:
@@ -463,7 +483,7 @@ class LlmEngine:
         with self.lock:  # 短持锁赋值，防与并发 stop() 竞态
             self.proc = p
         try:  # 记录 pid，供后端异常退出后下次启动清场
-            with open(_PID_FILE, "w", encoding="utf-8") as f:
+            with open(_pid_file(self.cfg), "w", encoding="utf-8") as f:
                 f.write(str(p.pid))
         except OSError as e:
             log.warning(f"写 pid 文件失败：{e}")
@@ -551,7 +571,7 @@ class LlmEngine:
                 self.proc.wait(timeout=5)
         self.proc = None
         try:  # pid 文件随停机清除（进程已自行退出也清，保持无残留）
-            os.remove(_PID_FILE)
+            os.remove(_pid_file(self.cfg))
         except OSError:
             pass
 

@@ -38,11 +38,18 @@ import { decode as msgpackDecode } from '../vendor/msgpack-lite.js';
  *   {ok,b64(base64 字符串，页面端 b64ToU8 解码),sha256,bytes,kept(远程 meta.json 词数
  *   基准 languages[lang].kept，SW 端 sha256 校验后顺手取得；meta 不可得时缺省)}，失败返回 null
  */
-// HF 数据源 URL（与 SW 端 WF_BASE 对齐，仅用于日志报错指路；实际 fetch 在 SW 端双源回退）
+// HF 数据源 URL（仅日志指路：值恒为 HF 主源，**不代表本次实际请求地址**——实际
+//   fetch 在 SW 端双源回退（huggingface.co → hf-mirror.com，wf.js WF_SOURCES），
+//   页面端无从得知 SW 选了哪个源，故日志中一律标注"指路 URL"）
 const WF_HF_URL = 'https://huggingface.co/datasets/vocabradar/wordfreq/resolve/main/';
 
 function fetchWfViaBackground(file) {
   const url = WF_HF_URL + file;
+  // 日志口径（名实相符）：本函数只发消息，不直接发 HTTP 请求。失败分两类，日志必须区分：
+  //   1) 消息通道失败（lastError）——SW 未回话，本次零网络请求，SW 端双源回退
+  //      （huggingface.co → hf-mirror.com）未启动；
+  //   2) SW 端回话失败（response.ok=false）——双源回退已在 SW 内执行完，error 内含各源原因。
+  //   页面无从得知 SW 实际选了哪个源，故 URL 一律标"指路"（写死的 HF 主源常量）。
   return new Promise((resolve) => {
     let attempts = 0;
     const send = () => {
@@ -51,24 +58,30 @@ function fetchWfViaBackground(file) {
         chrome.runtime.sendMessage({ type: 'WF_FETCH', file }, (response) => {
           if (chrome.runtime.lastError) {
             const msg = String(chrome.runtime.lastError.message || '');
-            // SW 冷启动窗口（监听器未注册）：延迟重试；其余错误（扩展上下文失效等）不重试
-            if (attempts < 3 && /Receiving end does not exist|message port closed/i.test(msg)) {
-              setTimeout(send, 500);
+            // 消息通道错误（SW 监听器未就绪 / 通道被关）：延迟重试；其余错误（扩展上下文失效等）不重试
+            if (/Receiving end does not exist|message port closed/i.test(msg)) {
+              if (attempts < 3) {
+                console.warn(`[VocabRadar][dictionary] wordfreq 消息通道错误（第 ${attempts}/3 次发送）: ${msg}——未获 SW 响应，本次无网络请求，500ms 后重试`);
+                setTimeout(send, 500);
+                return;
+              }
+              console.warn(`[VocabRadar][dictionary] wordfreq 消息通道错误（第 ${attempts}/3 次发送，重试用尽）: ${msg}——始终未获 SW 响应，未发出任何网络请求，SW 端双源回退未启动；指路 URL（页面常量，非本次实际请求地址）: ${url}`);
+              resolve(null);
               return;
             }
-            console.warn(`[VocabRadar][dictionary] wordfreq 后台拉取消息错误（第 ${attempts} 次发送）: ${msg}；目标 URL: ${url}`);
+            console.warn(`[VocabRadar][dictionary] wordfreq 后台拉取消息错误（第 ${attempts} 次发送）: ${msg}；指路 URL（非实际请求地址）: ${url}`);
             resolve(null);
             return;
           }
           if (response && response.ok && response.b64) {
             resolve(response);
           } else {
-            console.warn(`[VocabRadar][dictionary] wordfreq 后台拉取失败: ${(response && response.error) || '空响应'}；目标 URL: ${url}`);
+            console.warn(`[VocabRadar][dictionary] wordfreq 后台拉取失败（SW 已回话，双源回退已在 SW 端执行完）: ${(response && response.error) || '空响应'}；指路 URL（HF 主源，实际源由 SW 选择）: ${url}`);
             resolve(null);
           }
         });
       } catch (e) {
-        console.warn(`[VocabRadar][dictionary] wordfreq 后台拉取消息发送失败: ${e}；目标 URL: ${url}`);
+        console.warn(`[VocabRadar][dictionary] wordfreq 后台拉取消息发送失败: ${e}；指路 URL（非实际请求地址）: ${url}`);
         resolve(null);
       }
     };
@@ -94,14 +107,16 @@ export async function loadWordfreq(lang) {
   //   下载地址（WF_HF_URL+file，与失败日志同口径——网络失败要说明白是啥链接连不上；
   //   本次为启动日志同样指路）。实际 fetch 在 SW 端双源回退（huggingface.co/hf-mirror.com），
   //   此处链接为 HF 主源。
-  console.log(`[VocabRadar][dictionary][${_ts()}] 词典缺少 ${lang} 数据，经后台拉取词频源文件: ${file}（${WF_HF_URL + file}）`);
+  console.log(`[VocabRadar][dictionary][${_ts()}] 词典缺少 ${lang} 数据，经后台拉取词频源文件: ${file}（指路 URL：${WF_HF_URL + file}，实际源由 SW 端双源回退 huggingface.co/hf-mirror.com 选择）`);
   // 反思（2026-08-05 修正）：拉取可能抛异常（扩展更新后页面未刷新、网络失败等），
   //   未包 try/catch 会导致 loadDictionary reject -> text-hint startHint 中断 -> 文本提示不出现。
   //   修正：失败返回空 Map（所有词按表外处理，不阻塞功能）——fetchWfViaBackground
   //   内部已兜底为 resolve(null)，永不 reject。
   const r = await fetchWfViaBackground(file);
   if (!r) {
-    console.warn(`[VocabRadar][dictionary][${_ts()}] wordfreq 拉取失败（${file}，URL: ${WF_HF_URL + file}；网络失败原因见上方后台拉取日志），返回空 Map`);
+    // 失败原因分两类，以上方 fetchWfViaBackground 日志为准：消息通道错误=零网络请求
+    //   （未到换源环节）；SW 回话 ok:false=双源回退已跑完（error 内含各源链接原因）。
+    console.warn(`[VocabRadar][dictionary][${_ts()}] wordfreq 拉取失败（${file}，失败类型与原因见上方后台拉取日志；指路 URL：${WF_HF_URL + file}），返回空 Map`);
     return new Map();
   }
 

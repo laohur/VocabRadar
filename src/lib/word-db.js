@@ -8,8 +8,10 @@
 //   - 装载函数（loadWordfreq/loadWordlists 等，在 dictionary.js）不是词典，仅在
 //     初始化或词典缺失/不全时启用，装载完成经 bulkWriteDictionary 送入本词典。
 //   - 业务只从词典调用（dictionary.js lookup/lookupFull 经 getLangProjection 读词典投影）。
-//   - dictCache store = 词形还原源数据（diverse-lemmas 整表，首次 CDN 下载后存扩展数据域，
-//     仅作词形引擎数据源，非跟随单词的属性）；单个单词的词形结果写回 words.lemma 字段。
+//   - 词形还原数据（第515次，用户裁定"词频表中的装入内存，找不到的找索引"）：
+//     权威=d_lform 行（IDB，DB_VERSION 4）；内存只留词频表命中的热集+冷词晋升缓存；
+//     dictCache store 的 lemmas 字段仅作首次下载/迁移窗口期续传凭据（行写完即清）。
+//     单个单词的词形结果写回 words.lemma 字段。
 //
 // ===记录结构（沿用）===
 //   {
@@ -31,7 +33,7 @@
 //   phonetic：null=未注音，非 null=已注音
 export {
   getWord, getWordsBatch, putWord, updateFields, clearByLang, clearAll,
-  getLangProjection, getRanksProjection, bulkWriteDictionary, bulkWriteTranslations, getDictCache, setDictCache,
+  getLangProjection, getRanksProjection, bulkWriteDictionary, bulkWriteTranslations,
   handleWordDbMessage, warmupDictProjection,
   countTranslationEntries, // d_trans 按语言计数（引导页就绪行分项统计用）
   lemmasSize // 词形数据仅读缓存计数（不触发下载，分项统计用）

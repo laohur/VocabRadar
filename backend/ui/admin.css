@@ -30,6 +30,15 @@ th { color: #6b7280; font-weight: 600; }
 
 .notice { padding: 12px 16px; border-radius: 8px; background: #fef3c7; color: #92400e; margin: 12px 0; font-size: 14px; }
 .error { padding: 12px 16px; border-radius: 8px; background: #fee2e2; color: #991b1b; margin: 12px 0; font-size: 14px; }
+/* 总览页行内错误 span 无条件插入 DOM，空态也带粉底块挤占按钮空间——空即隐藏 */
+.engine-err:empty { display: none; }
+
+/* ---- 总览页状态表：固定列宽吃满页宽，动作列按钮拉开间距防误触 ---- */
+.ovtable { table-layout: fixed; }
+.ovtable td { word-break: break-word; }
+.ovtable td.ops { white-space: nowrap; }
+.ovtable td.ops .btn { margin-right: 12px; }
+.ovtable td.ops .engine-err { margin: 0; padding: 2px 10px; }
 
 .placeholder { color: #6b7280; font-size: 14px; padding: 24px 0; }
 

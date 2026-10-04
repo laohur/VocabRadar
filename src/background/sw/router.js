@@ -189,6 +189,9 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       //   word-loader.js loadWordfreq 经本消息请求，SW 代理 fetch 并做
       //   files.json SHA-256 校验，直传 ArrayBuffer 回传（wfFetchMemoized 在途
       //   去重 + 30s 结果缓存）。白名单/校验见 handleWfFetch。
+      // 收到即打日志（诊断口径）：页面端报"消息通道错误"时，SW console 有此行=消息
+      //   已到达但未回话，无此行=消息根本没送到 SW——一条日志即可分流定位。
+      log('[VocabRadar][sw][' + _ts() + '] 收到 WF_FETCH: ' + msg.file);
       wfFetchMemoized(msg.file)
         .then((r) => sendResponse(r))
         .catch((e) => sendResponse({ ok: false, error: String(e.message || e) }));

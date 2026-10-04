@@ -12,7 +12,7 @@ bp = Blueprint("admin", __name__)
 
 log = logging.getLogger(__name__)
 
-_ENGINE_NAMES = ("llm", "asr", "ocr", "translate")  # 可加载/关停的模型服务
+_ENGINE_NAMES = ("llm", "translate_llm", "asr", "ocr", "translate")  # 可加载/关停的模型服务
 
 
 @bp.post("/api/engine/<name>/start")
@@ -26,8 +26,8 @@ def engine_start(name):
     engine = current_app.extensions["engines"][name]
     log.info(f"引擎启动请求：{name}（管理页）")
     try:
-        if name == "llm":
-            engine.start()  # start() 内部解除手动停机抑制
+        if name in ("llm", "translate_llm"):
+            engine.start()  # llama-server 系（对话/翻译 LLM）：start() 内部解除手动停机抑制
         else:
             engine.ensure_loaded(force=True)  # 显式启动解除手动停机
     except ValueError as e:
@@ -88,31 +88,32 @@ def put_config():
     # config.load() 生成新 dict，引擎仍持旧 cfg 引用——同步各引擎 cfg
     # 指向新配置，改动（模型、engine、mode 等）才能生效。
     engines = current_app.extensions["engines"]
-    for name in ("llm", "asr", "ocr", "translate"):
+    for name in ("llm", "translate_llm", "asr", "ocr", "translate"):
         engines[name].cfg = merged.get(name, {})
-    # LLM 主模型/上下文变更且 llama-server 运行中：自动重启加载新模型，
-    # 无需用户再手动点关停+启动。
+    # llama-server 系实例（llm / translate_llm）主模型或上下文变更且运行中：
+    # 自动重启加载新模型，无需用户再手动点关停+启动。
     # ?no_reload=1 旁路（不进 body 不污染配置）——「设为默认」
     # 只落配置不热重启，下次启动生效。
     llm_reloading = False
-    llm = engines["llm"]
     no_reload = request.args.get("no_reload") == "1"
-    if (old["llm"].get("model") != merged["llm"].get("model")
-            or old["llm"].get("ctx") != merged["llm"].get("ctx")):
-        chosen = (merged["llm"].get("model") or "").strip()
-        if no_reload:
-            log.info(f"LLM 配置变更（model={chosen!r}），按 no_reload 请求"
-                     f"不切换运行中的 llama-server（下次启动生效）")
-        elif llm.status()["running"]:
-            # 选中未装卡片无需在此按需下载——llm.start() 内三源
-            # 重试链（-hf → hf-mirror → fallback_url）自动补拉
-            log.info(f"LLM 配置变更（model={chosen!r}），"
-                     f"重启 llama-server 加载新模型...")
-            llm.stop(manual=False)  # 不置手动停机，随后自动拉起
-            threading.Thread(target=llm._safe_start, daemon=True).start()
-            llm_reloading = True
-        else:
-            log.info("LLM 配置变更（model=%r），下次启动生效", chosen)
+    for sec in ("llm", "translate_llm"):
+        eng = engines[sec]
+        if (old[sec].get("model") != merged[sec].get("model")
+                or old[sec].get("ctx") != merged[sec].get("ctx")):
+            chosen = (merged[sec].get("model") or "").strip()
+            if no_reload:
+                log.info(f"{sec} 配置变更（model={chosen!r}），按 no_reload 请求"
+                         f"不切换运行中的 llama-server（下次启动生效）")
+            elif eng.status()["running"]:
+                # 选中未装卡片无需在此按需下载——llm.start() 内三源
+                # 重试链（-hf → hf-mirror → fallback_url）自动补拉
+                log.info(f"{sec} 配置变更（model={chosen!r}），"
+                         f"重启 llama-server 加载新模型...")
+                eng.stop(manual=False)  # 不置手动停机，随后自动拉起
+                threading.Thread(target=eng._safe_start, daemon=True).start()
+                llm_reloading = True
+            else:
+                log.info("%s 配置变更（model=%r），下次启动生效", sec, chosen)
     restart = old["port"] != merged["port"] or old["host"] != merged["host"]
     return jsonify({"ok": True, "config": merged, "restart_required": restart,
                     "llm_reloading": llm_reloading})
@@ -128,6 +129,7 @@ def status():
         "needs_setup": config.needs_setup(),
         "engines": {
             "llm": engines["llm"].status(),
+            "translate_llm": engines["translate_llm"].status(),
             "asr": engines["asr"].status(),
             "ocr": engines["ocr"].status(),
             "translate": engines["translate"].status(),

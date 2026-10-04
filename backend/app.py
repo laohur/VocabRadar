@@ -47,11 +47,14 @@ def create_app(cfg=None):
     app.config["VERSION"] = VERSION
     # 引擎实例唯一属主挂在这里，蓝图经 current_app.extensions 取用
     llm = LlmEngine(cfg.get("llm", {}))
+    translate_llm = LlmEngine(cfg.get("translate_llm", {}))  # 翻译专用实例（7789），与对话 LLM 分开启停
     app.extensions["engines"] = {
         "llm": llm,
+        "translate_llm": translate_llm,
         "asr": AsrEngine(cfg.get("asr", {})),
         "ocr": OcrEngine(cfg.get("ocr", {}), llm),  # llm 引擎路径复用上方 LlmEngine
-        "translate": TranslateEngine(cfg.get("translate", {})),
+        # translate 的 engine=llm 路径复用 translate_llm 实例（core/translate.py）
+        "translate": TranslateEngine(cfg.get("translate", {}), translate_llm),
     }
 
     for bp in (admin_bp, llm_bp, asr_bp, asr_job_bp, ocr_bp, translate_bp,
@@ -163,6 +166,7 @@ def main():
     # 不置手动停机标志，下次启动照常惰性拉起；taskkill /F 强杀无法拦截，
     # 该场景由 pid 文件兜底（core/llm_engine.py 下次 start() 先清残留）。
     atexit.register(engines["llm"].stop, False)
+    atexit.register(engines["translate_llm"].stop, False)  # 翻译 LLM 实例同款退出清场
     # LLM 不随启动预拉——llama-server 加载重（显存紧张时启动即崩），
     # 对话/OCR(llm) 首请求时自动惰性拉起（api/llm.py、core/ocr.py），
     # 管理页可手动启停；进程内模型引擎（ASR/OCR/翻译）预加载照旧。
@@ -182,7 +186,9 @@ def main():
             threading.Thread(target=_preload, args=(ocr, "OCR"),
                              daemon=True).start()
     translate = engines["translate"]  # NLLB resident 后台预加载（快路径低时延）
-    if translate.mode == "resident":
+    # 选了 llama.cpp 翻译模型（model≠nllb）时翻译流量走 translate_llm 实例（自管
+    # 生命周期），NLLB 预加载纯属白占内存
+    if translate.mode == "resident" and translate.cfg.get("model", "nllb") == "nllb":
         if translate.status()["manual_stop"]:
             log.info("翻译引擎处于主动关停状态（translate.stopped=true），跳过自动预加载")
         else:

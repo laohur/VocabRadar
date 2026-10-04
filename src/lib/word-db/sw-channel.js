@@ -2,27 +2,27 @@
 // 文件职责：SW 消息通道与 DIRECT_IDB 路由（src/lib/word-db/sw-channel.js）
 // 来源：拆分自 src/lib/word-db.js（ES Modules 模块化拆分）
 // 拆分日期：2026-08-28
-// 原 word-db.js 的全部 11 个对外导出符号集中在本文件（门面 word-db.js 仅
+// 原 word-db.js 的对外导出符号集中在本文件（门面 word-db.js 仅
 //   re-export，符号名不变，所有引用方零改动）：
 //   getWord / getWordsBatch / putWord / updateFields / clearByLang / clearAll /
-//   getLangProjection / bulkWriteDictionary / getDictCache / setDictCache /
-//   handleWordDbMessage
+//   getLangProjection / bulkWriteDictionary / handleWordDbMessage
+// 第515次（用户裁定"死分支删除"）：DICT_CACHE_GET/SET 与 LEMMAS_GET 消息
+//   分支及 getDictCache/setDictCache 函数删除——全库无发送方（第225次删 DICT_CACHE_STAT 同源裁定）。
 // 路由规则（与拆分前完全一致）：DIRECT_IDB（现恒 false）直连优先 -> isSW 直接
 //   操作 IDB（db-ops.js）-> runtimeValid 时 chrome.runtime.sendMessage 经 SW
-//   代为操作。handleWordDbMessage 为 SW 侧 WORD_DB_*/DICT_CACHE_*/LEMMAS_*/
-//   LEMMATIZE_WORD 消息分发器（service-worker.js 注册调用），消息类型字符串
-//   逐字保留未动。
+//   代为操作。handleWordDbMessage 为 SW 侧 WORD_DB_*/LEMMATIZE_* 消息分发器
+//   （service-worker.js 注册调用），消息类型字符串逐字保留未动。
 // ============================================================
 
 import { isSW, DIRECT_IDB, runtimeValid } from './env.js';
 import { makeKey } from './key-utils.js';
 import {
   idbGet, idbGetBatch, idbPut, idbUpdate, idbClearByLang, idbClearAll,
-  idbBulkWrite, idbBulkTrans, idbCountTrans, idbGetLangProjection, idbGetRanksProjection, idbDictGet, idbDictMerge,
+  idbBulkWrite, idbBulkTrans, idbCountTrans, idbGetLangProjection, idbGetRanksProjection,
   idbReadMeta
 } from './db-ops.js';
 import { _projCache } from './projection-cache.js';
-import { lemmasLoad, lemmasSizeCached, swLemmatizeWord, swLemmaFamily } from './lemmas-engine.js';
+import { lemmasSizeCached, swLemmatizeWord, swLemmaFamily, scheduleHotRebuild } from './lemmas-engine.js';
 
 export async function getWord(lang, word) {
   if (!lang || !word) return null;
@@ -566,65 +566,6 @@ export async function bulkWriteTranslations(lang, transMap, translationLang) {
   return true;
 }
 
-// === 词典整表缓存（遗留） ===
-// 反思（2026-08-20 第八十六次）：getDictCache/setDictCache 及其消息分支（DICT_CACHE_GET/SET）
-//   是 v85 词典架构更正前的"整表缓存"遗留（wordfreq 源词表数组曾缓存于此）。
-//   v85 起 wordfreq/wordlists 改为经 bulkWriteDictionary 直接写入 words store（唯一词典），
-//   dictionary.js 已不再调用本组函数--保留导出仅为兼容旧消息/旧代码路径，无活跃调用方。
-/**
- * 读取词典整表缓存（跨上下文）
- * @param {string} lang
- * @returns {Promise<{version?:string,words?:string[],lemmas?:object,ambiguity?:object|null,time:number}|null>}
- */
-export async function getDictCache(lang) {
-  if (!lang) return null;
-  if (isSW) {
-    try { return await idbDictGet(lang); } catch (e) { return null; }
-  }
-  if (!runtimeValid()) return null;
-  try {
-    const resp = await chrome.runtime.sendMessage({ type: 'DICT_CACHE_GET', lang });
-    return resp && resp.ok ? resp.cache : null;
-  } catch (e) {
-    return null;
-  }
-}
-
-/**
- * 写入/合并词典整表缓存（跨上下文）
- * 反思（2026-08-13 第五十三次）：统一词典--调用方传 patch 对象（读-合并-写），
- *   兼容旧签名 (lang, version, words)。
- * @param {string} lang
- * @param {object|string} patchOrVersion
- *   - 新签名：{ version?, words?[], lemmas?{}, ambiguity?, time? }（words/lemmas 至少其一）
- *   - 旧签名：version 字符串 + words 数组（内部转为 patch）
- * @param {string[]} [maybeWords] 旧签名用：按频率降序的单词数组（rank=index+1）
- */
-export async function setDictCache(lang, patchOrVersion, maybeWords) {
-  if (!lang) return;
-  let patch;
-  if (typeof patchOrVersion === 'string') {
-    // 旧签名 (lang, version, words)
-    if (!Array.isArray(maybeWords) || maybeWords.length === 0) return;
-    patch = { version: patchOrVersion, words: maybeWords };
-  } else if (patchOrVersion && typeof patchOrVersion === 'object') {
-    patch = patchOrVersion;
-  } else {
-    return;
-  }
-  // 至少含 words 或 lemmas 才写入（空 patch 直接忽略）
-  if (!patch.words && !patch.lemmas) return;
-  const value = Object.assign({}, patch, { time: Date.now() });
-  if (isSW) {
-    try { await idbDictMerge(lang, value); } catch (e) { /* ignore */ }
-    return;
-  }
-  if (!runtimeValid()) return;
-  try {
-    await chrome.runtime.sendMessage({ type: 'DICT_CACHE_SET', lang, value });
-  } catch (e) { /* ignore */ }
-}
-
 /**
  * SW 消息处理器注册（仅 SW 调用）
  * 在 service-worker.js 的 onMessage 监听器中调用此函数处理 WORD_DB_* 消息。
@@ -721,6 +662,9 @@ export async function handleWordDbMessage(msg, sender, sendResponse) {
             } catch (e) {
               console.warn('[VocabRadar][word-db] 重建末块回填投影缓存失败（下次加载时扫描回填）:', e && e.message);
             }
+            // 第515次：词频表换代后重建词形热集（热集=词频表∩词形行）——
+            //   无状态/行未就绪为 no-op；fire-and-forget，不阻塞重建回执。
+            scheduleHotRebuild(msg.lang);
           }
           sendResponse({ ok: true, written: (msg.entries || []).length });
         } catch (e) {
@@ -779,30 +723,10 @@ export async function handleWordDbMessage(msg, sender, sendResponse) {
         projLocalClearAll();   // 第二百零六次：local 二级缓存同步整清
         sendResponse({ ok: true });
         return true;
-      case 'DICT_CACHE_GET': {
-        const cache = await idbDictGet(msg.lang);
-        sendResponse({ ok: true, cache });
-        return true;
-      }
-      case 'DICT_CACHE_SET':
-        // 反思（2026-08-13 第五十三次）：统一词典--写改为读-合并-写，
-        //   words 与 lemmas 由不同模块写，旧版整体覆盖会互相清空。
-        await idbDictMerge(msg.lang, msg.value);
-        sendResponse({ ok: true });
-        return true;
-      // 第二百二十五次：删除 DICT_CACHE_STAT 死分支（《命名清查》裁定——
-      //   dict-stats.js 已不发此消息，全库无发送方；同族 DICT_CACHE_GET/SET 保留）。
-      case 'LEMMAS_GET': {
-        // 反思（2026-08-14 第五十七次）：词形数据按需获取--SW 读扩展数据域 IDB，
-        //   未命中则直接下载并写回，content script 一次消息拿到词形数据（noData 时只回统计）。
-        const r = await lemmasLoad(msg.lang);
-        if (msg.noData) {
-          sendResponse({ ok: true, source: r.source, size: r.wordDict ? Object.keys(r.wordDict).length : 0 });
-        } else {
-          sendResponse({ ok: true, source: r.source, wordDict: r.wordDict, ambiguityMap: r.ambiguityMap });
-        }
-        return true;
-      }
+      // 第515次：DICT_CACHE_GET/SET 与 LEMMAS_GET 死分支删除（用户裁定）——
+      //   全库无发送方；词形数据权威存储已是 d_lform 行+热集（lemmas-engine.js），
+      //   整表 blob 仅作迁移/续传凭据，不再经消息对外暴露。
+      // 第225次：DICT_CACHE_STAT 死分支删除（同源裁定）。
       case 'LEMMATIZE_WORD':
         // 反思（2026-08-16 第六十七次）：逐词词形还原--页面不拉整表，
         //   每次只查一个词（首次构建 lemmatizer 可能读 IDB/首次下载，走 try/catch 兜底）。

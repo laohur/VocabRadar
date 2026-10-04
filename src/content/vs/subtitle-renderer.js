@@ -1451,7 +1451,7 @@ export async function onChatClickVs() {
 }
 
 // 工具：注释是否有有效译文（非空且非空白）
-// 用于评论/复制"必须有译文才填"，杜绝"只有前缀"或"单词无释义"
+// 用于评论"选有释义的"过滤与侧邻注释 validAnns 口径；复制仍含全部（无译文显示"-"）
 function hasTranslation(a) {
   return Array.isArray(a.translations) && a.translations.some((t) => t && String(t).trim());
 }
@@ -1460,9 +1460,10 @@ function hasTranslation(a) {
 // 用户要求"单词注释除了释义，还有标签、词阶属性，评论中也带上"。
 //   此前评论只有"单词 释义"，缺少标签和词阶。统一为完整四段格式。
 //   释义完整不简化（annotator.js 已移除 sim_translate 截断）。
-// 用户反馈"视频提示生词表明明一堆，复制或者评论按钮说没有单词"。
-//   根因：复制/评论用 hasTranslation 过滤掉无译文的词，导致词表有词但按钮报"无单词"。
-//   复制/评论不过滤无译文词，无译文时释义列显示"-"（与标签列空值处理一致）。
+// 沿革：曾因"生词表明明一堆，复制或者评论按钮说没有单词"改为不过滤
+//   （无译文词释义列显示"-"）；后用户裁定"评论选词的时候，选有释义的"——
+//   评论路径重新按 hasTranslation 过滤（无译文词填进评论只是"-"噪音），
+//   复制路径维持不过滤。过滤后为空时 toast.noTrans 如实提示（区别于表空）。
 function formatAnnotationLine(a, forComment, phon) {
   const transArr = a.translations || [];
   const trans = transArr.length > 0 ? transArr.join('；') : '-';
@@ -1501,22 +1502,25 @@ function formatAnnotationSide(a) {
 //   Spirakis 加权抽样→贪心加入直到再加超限→恢复原始字幕顺序（保证阅读连贯）。
 //   单行就超限的极端情况下，该行被跳过。
 export async function onCommentClick() {
-  // 用户反馈"视频提示生词表明明一堆，复制或者评论按钮说没有单词"。
-  //   此前用 hasTranslation 过滤无译文的词，导致词表有词但评论报"无单词"。
-  //   不过滤，所有生词均纳入评论（无译文词释义列显示"-"）；仅当生词表为空时才提示。
+  // 用户裁定"评论选词的时候，选有释义的"：评论只含有译文的生词（无译文词
+  //   释义列只能显示"-"，填进评论是噪音）。旧裁定"不过滤"（修"词表有词但
+  //   评论说没有单词"）由此收紧——当时根因是译文全 pending，如今过滤后为空
+  //   走 toast.noTrans 如实提示，不回退到填"-"行。
   // 用户"评论带上[注音]，{原形}若非原形"：组装前批量预取注音——
   //   getPhoneticsBatch 并行走 getPhonetic 内存/持久化缓存（不传 lang 随
   //   getPhonetic 内部回落学习语言；失败回空串不拼）。去重词表避免重复查。
   //   formatAnnotationLine(a, true, phon) 启用 [注音]/{原形} 增强格式（包裹 [x]）。
-  const words = [...new Set(_allAnnotations.map((a) => a.word).filter(Boolean))];
+  const validAnns = _allAnnotations.filter(hasTranslation);
+  const words = [...new Set(validAnns.map((a) => a.word).filter(Boolean))];
   const phons = await getPhoneticsBatch(words).catch(() => []);
   const phonMap = new Map(words.map((w, i) => [w, phons[i] || '']));
-  const lines = _allAnnotations.map((a) => formatAnnotationLine(a, true, phonMap.get(a.word) || ''));
+  const lines = validAnns.map((a) => formatAnnotationLine(a, true, phonMap.get(a.word) || ''));
   // 加权概率权重 = 单词 UTF-8 字节长（越长越优先），与 lines 一一对应
-  const weights = _allAnnotations.map((a) => new TextEncoder().encode(a.word || '').length);
+  const weights = validAnns.map((a) => new TextEncoder().encode(a.word || '').length);
   if (lines.length === 0) {
-    toast(t('toast.noContent'));
-    log('评论填入取消: 生词表为空, anns=', _allAnnotations.length);
+    // 生词表非空但译文全未就绪（或表本身就空）——如实区分提示
+    toast(t(_allAnnotations.length ? 'toast.noTrans' : 'toast.noContent'));
+    log('评论填入取消: 有译文的生词为 0, anns=', _allAnnotations.length);
     return;
   }
   const prefix = getCfg().prefixComment;

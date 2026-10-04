@@ -1,18 +1,22 @@
-"""翻译引擎：NLLB-200-distilled-600M（CTranslate2 int8 CPU，唯一引擎，纯本地免 Key）。
+"""翻译引擎：多模型并存，config <translate>.model 选模型（值 = 模型名）。
 
-设计：
-- 模型：JustFrederik/nllb-200-distilled-600M-ct2-int8（预转换 CT2 int8 仓库，
-  免 torch/transformers 转换依赖）。模型文件交 huggingface_hub 自动维护：
-  先 hub 本地缓存直取（local_files_only，就绪绝不联网），无缓存才联网
-  snapshot_download（断点续传，尊重 HF_ENDPOINT 镜像）。
-- 推理：ctranslate2.Translator（CPU int8）+ sentencepiece 分词。源序列 =
-  [源语言码] + sp 编码 + </s>，target_prefix=[目标语言码]，译文 = sp.decode
-  （去掉输出首部的目标语言 token）。
-- 语言码：调用方传 2 字码（zh/en/…，全集见 ui/pages.js LANGS），内部映射
-  FLORES-200；src="auto" 按 Unicode 脚本区间探测（NLLB 无自动识别）。
-- 生命周期同 ASR（进程内模型）：resident 随启动预加载 / on-demand 首请求
-  加载 + 空闲卸载 + _starting 互斥；手动停机持久化 config.json
-  <translate>.stopped，管理页可启停。
+- "nllb"（默认）：NLLB-200-distilled-600M（CTranslate2 int8 CPU），快，字幕/
+  高频场景；模型文件交 huggingface_hub 自动维护：先 hub 本地缓存直取
+  （local_files_only，就绪绝不联网），无缓存才联网 snapshot_download
+  （断点续传，尊重 HF_ENDPOINT 镜像）。推理 ctranslate2.Translator（CPU
+  int8）+ sentencepiece 分词；语言码 2 字 → FLORES-200，src="auto" 按
+  Unicode 脚本区间探测。
+- 其他值 = translate_llm.cards 的卡片名（如 IndexTeam/Index-Translate-2B-
+  GGUF:Q4_K_M）：走翻译专用 llama-server 实例（app 装配的 translate_llm
+  引擎，内部端口 7789，与对话 LLM 的 7788 实例分开启停、分开选卡），
+  OpenAI /v1/chat/completions；提示词对齐 IndexTeam 官方 translate.py
+  客户端（instTrans 规范的纯翻译形态），贪心解码 + enable_thinking=False，
+  <think> 块兜底剥离。质量高，速度慢于 NLLB 一个量级，且首请求可能触发
+  llama-server 冷启动。
+- 生命周期同 ASR（进程内 NLLB 模型）：resident 随启动预加载（model≠nllb
+  时不预加载，NLLB 挂着无用）/ on-demand 首请求加载 + 空闲卸载 +
+  _starting 互斥；手动停机持久化 config.json <translate>.stopped，管理页
+  可启停。translate_llm 实例的生命周期归该实例（总览页「翻译 LLM」行）。
 - 缓存不做：翻译输入千变万化命中率低。
 """
 
@@ -20,6 +24,8 @@ import gc
 import os
 import threading
 import time
+
+import requests
 
 import config
 
@@ -40,6 +46,22 @@ _FLORES = {
     "da": "dan_Latn", "fi": "fin_Latn", "nb": "nob_Latn", "sk": "slk_Latn",
     "ca": "cat_Latn", "lt": "lit_Latn", "sl": "slv_Latn", "mk": "mkd_Cyrl",
     "lv": "lvs_Latn", "is": "isl_Latn",
+}
+
+# 2 字语言码 → 中文名（LLM 提示词用；与官方 translate.py LANG_NAMES 对齐，
+# 缺的语种按通行中文名补齐；未知码回落原码——模型侧 150 语自识）
+_LANG_NAMES_ZH = {
+    "en": "英语", "zh": "中文", "hi": "印地语", "es": "西班牙语", "fr": "法语",
+    "ar": "阿拉伯语", "bn": "孟加拉语", "pt": "葡萄牙语", "ru": "俄语",
+    "ur": "乌尔都语", "id": "印尼语", "de": "德语", "ja": "日语",
+    "tr": "土耳其语", "fil": "菲律宾语", "vi": "越南语", "ta": "泰米尔语",
+    "ko": "韩语", "fa": "波斯语", "it": "意大利语", "ms": "马来语",
+    "pl": "波兰语", "uk": "乌克兰语", "nl": "荷兰语", "ro": "罗马尼亚语",
+    "sh": "塞尔维亚-克罗地亚语", "el": "希腊语", "hu": "匈牙利语",
+    "cs": "捷克语", "sv": "瑞典语", "he": "希伯来语", "bg": "保加利亚语",
+    "da": "丹麦语", "fi": "芬兰语", "nb": "书面挪威语", "sk": "斯洛伐克语",
+    "ca": "加泰罗尼亚语", "lt": "立陶宛语", "sl": "斯洛文尼亚语",
+    "mk": "马其顿语", "lv": "拉脱维亚语", "is": "冰岛语",
 }
 
 # Unicode 脚本区间 → 源语言（auto 探测用；假名/谚文先于汉字判定——日文
@@ -95,16 +117,27 @@ def ensure_local_model():
         return snapshot_download(repo_id=_MODEL_REPO)
 
 
-class TranslateEngine:
-    """进程内翻译引擎属主（挂 app.extensions["engines"]["translate"]）。
+def _strip_think(text):
+    """<think> 块兜底剥离（对齐官方 translate.py strip_think）：Qwen 系模板
+    在 chat_template_kwargs 未生效等边缘下可能漏思考块。"""
+    if "</think>" in text:
+        text = text.split("</think>", 1)[1]
+    return text.strip().removeprefix("<think>").strip()
 
-    唯一引擎 NLLB-200-distilled-600M（CT2 int8 CPU）；模型加载互斥，
-    on-demand 模式空闲超时自动卸载，手动停机持久化 config.json。
+
+class TranslateEngine:
+    """翻译引擎属主（挂 app.extensions["engines"]["translate"]）。
+
+    按模型名路由（config <translate>.model）："nllb"=进程内 CT2 模型（加载
+    互斥、on-demand 空闲卸载、手动停机持久化）；卡片名=转发翻译专用
+    llama-server 实例（translate_llm 引擎引用经 app 装配注入，与对话 LLM
+    的启停互不相干；生命周期归该实例，总览页「翻译 LLM」行启停）。
     """
 
-    def __init__(self, cfg):
+    def __init__(self, cfg, llm=None):
         self.cfg = cfg or {}
         self.mode = self.cfg.get("mode", "resident")
+        self._llm = llm  # LlmEngine 引用（engine=llm 路径用）
         self._model = None  # (Translator, SentencePieceProcessor)
         self._lock = threading.Lock()
         self._starting = False          # 加载互斥标志（同 llm_engine/asr）
@@ -117,11 +150,11 @@ class TranslateEngine:
     # ---- 生命周期 ----
 
     def ensure_loaded(self, force=False):
-        """确保模型就绪（懒加载），返回 (translator, sp)。线程安全。
+        """确保 NLLB 模型就绪（懒加载），返回 (translator, sp)。线程安全。
 
         force=True（管理页启动按钮）解除手动停机；普通调用在手动停机期间
-        拒绝加载（停了就是停了，不被业务请求悄悄拉回）。
-        """
+        拒绝加载（停了就是停了，不被业务请求悄悄拉回）。engine=llm 路径
+        不经此处（NLLB 不加载）。"""
         with self._lock:
             if force:
                 self._manual_stop = False
@@ -156,8 +189,9 @@ class TranslateEngine:
         gc.collect()
 
     def stop(self):
-        """手动卸载模型（管理界面关停按钮）。线程安全；置位手动停机并持久化，
-        业务请求不再自动重新加载。"""
+        """手动卸载 NLLB 模型（管理界面关停按钮）。线程安全；置位手动停机并
+        持久化，业务请求不再自动重新加载。engine=llm 时翻译不依赖 NLLB，
+        关停仅影响 nllb 路径（llm 生命周期在总览页「翻译 LLM」行）。"""
         with self._lock:
             if self._starting:
                 raise RuntimeError("翻译引擎正在加载中，请稍候再关停")
@@ -175,24 +209,32 @@ class TranslateEngine:
                     self._release()
 
     def status(self):
-        """/api/translate/status 与 /api/status 用。"""
+        """/api/translate/status 与 /api/status 用。model=当前模型选择
+        （"nllb" 或 translate_llm 卡片名）；loaded/loading/manual_stop 均 NLLB
+        侧状态；卡片模型路径的运行态看总览页「翻译 LLM」实例。"""
         return {
-            "engine": "nllb",
+            "model": self.cfg.get("model", "nllb"),
+            "nllb_model": _MODEL_REPO,
             "mode": self.mode,
             "loaded": self._model is not None,
             "loading": self._starting,
             "manual_stop": self._manual_stop,
-            "model": _MODEL_REPO,
         }
 
     # ---- 推理 ----
 
     def translate(self, text, src="auto", dst="zh"):
-        """翻译 → {text, engine}。src/dst 为 2 字语言码，src 支持 "auto"。
+        """翻译 → {text, model}。src/dst 为 2 字语言码，src 支持 "auto"。
 
+        模型路由取 config <translate>.model："nllb" → NLLB 快路径；卡片名 →
+        translate_llm 实例（该实例的选卡由 config <translate_llm>.model 决定，
+        管理页与翻译段下拉联动写入）。
         RuntimeError：引擎不可用 → api 层映射 503；
         ValueError：参数不支持 → 400。
         """
+        model = (self.cfg.get("model") or "nllb").strip()
+        if model != "nllb":
+            return self._translate_llm(text, src, dst, model)
         dst_flores = _flores(dst)
         if not dst_flores:
             raise ValueError(f"不支持的目标语言：{dst}")
@@ -203,4 +245,53 @@ class TranslateEngine:
             [tokens], target_prefix=[[dst_flores]], beam_size=4)
         out = results[0].hypotheses[0]
         # 首个 token 为目标语言码，decode 前去掉
-        return {"text": sp.decode(out[1:]).strip(), "engine": "nllb"}
+        return {"text": sp.decode(out[1:]).strip(), "model": "nllb"}
+
+    def _translate_llm(self, text, src, dst, model_name):
+        """翻译专用 llama-server 实例（translate_llm）：官方 translate.py 纯翻译
+        提示词 + 贪心解码。
+
+        惰性拉起语义对齐 api/llm.py 反代：手动停机不自动拉起（503 如实报），
+        未运行则 start() 等就绪。begin/end_request 包裹防推理中被空闲误杀。"""
+        if self._llm is None:
+            raise RuntimeError("翻译 LLM 引擎未装配，无法使用 llama.cpp 翻译模型")
+        llm = self._llm
+        if not llm.status()["running"]:
+            if not llm.auto_start_allowed():
+                raise RuntimeError(
+                    f"翻译模型 {model_name} 所在的 llama-server 已手动停机，"
+                    "请到管理页总览启动「翻译 LLM」")
+            llm.start()  # 冷启动（首次含模型下载）可达分钟级，调用方超时自行权衡
+        dst_name = _LANG_NAMES_ZH.get((dst or "").strip().lower(), dst)
+        src_name = _LANG_NAMES_ZH.get((src or "").strip().lower())
+        body_text = text.strip()
+        if src_name:
+            prompt = (f"请将以下{src_name}文本翻译为{dst_name}，直接输出翻译结果，"
+                      f"不要进行任何解释。\n\n{body_text}")
+        else:
+            prompt = (f"请将以下文本翻译为{dst_name}，直接输出翻译结果，"
+                      f"不要进行任何解释。\n\n{body_text}")
+        payload = {
+            # model 字段 llama-server 不校验，取当前卡片名便于日志对账
+            "model": llm.cfg.get("model") or "default",
+            "messages": [{"role": "user", "content": prompt}],
+            "temperature": 0,          # 官方默认贪心（translate.py temperature=0）
+            "max_tokens": 1024,        # 同官方默认；字幕/段落足够
+            "chat_template_kwargs": {"enable_thinking": False},
+        }
+        llm.begin_request()
+        try:
+            r = requests.post(llm.base_url() + "/v1/chat/completions",
+                              json=payload, timeout=(10, 120))
+        except requests.RequestException as e:
+            raise RuntimeError(f"llama-server 请求失败：{e}")
+        finally:
+            llm.end_request()
+        if r.status_code != 200:
+            raise RuntimeError(f"llama-server 返回 HTTP {r.status_code}：{r.text[:200]}")
+        try:
+            data = r.json()
+            content = data["choices"][0]["message"]["content"] or ""
+        except (ValueError, KeyError, IndexError) as e:
+            raise RuntimeError(f"llama-server 响应格式异常：{e}")
+        return {"text": _strip_think(content), "model": model_name}
