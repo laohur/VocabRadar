@@ -17,7 +17,7 @@
 
 import { getBilibiliSubtitles, fetchBilibiliTrack, getYouTubeSubtitles, fetchYouTubeTrack } from '../../lib/subtitle/index.js';
 import { startOverlay, stopOverlay, setOverlayEnabled, setRankThreshold, setRankThresholdMax, setMyWordsLists } from '../subtitle-overlay.js';
-import { startSidebar, updateSubtitles, showNoSubtitle, setTracks, destroySidebar, loadASRCacheIfAny, loadASRCacheWithCoverage, selectASRTrackAndContinue, currentVideoKey, isASRActive } from '../video-sidebar.js';
+import { startSidebar, updateSubtitles, showNoSubtitle, setTracks, destroySidebar, loadASRCacheIfAny, loadASRCacheWithCoverage, selectASRTrackAndContinue, currentVideoKey, isASRActive, setUserPickedTrack, setUserPickedASR } from '../video-sidebar.js';
 import { vcState } from './state.js';
 import { waitForVideo, waitForVideoReady, observeVideoChange } from './video-detect.js';
 // 停用规则（Deactivate）抑制表——匹配/存储唯一来源 lib/deactivate.js，
@@ -62,13 +62,71 @@ function getSettings() {
       rankThresholdMax: 0,   // 词频范围上界，0/缺省=不限制（默认全表频段）
       // 缺键会让 subtitle-overlay 真值守卫不清空但也从不 setMyWords（My Words 过滤失效）
       myWords: { new: [], known: [] },
-      learnLanguage: 'en',   // 所学语言（字幕默认首选界面语言，此为次选）
+      learnLanguage: 'en',   // 所学语言（默认选轨四层链第2层：原始→目标→界面→释义）
       meaningLanguage: 'zh',   // 释义语言
-      uiLanguage: 'en',      // 界面语言（字幕默认轨道首选）
+      uiLanguage: 'en',      // 界面语言（默认选轨四层链第3层）
       sidebarEnabled: true,  // 侧栏开关，默认显示
       annotateRepeat: false  // overlay-only 模式直启 overlay 时透传注释重复生词开关
     }, resolve);
   });
+}
+
+// 2026-10-05（用户："改了语言，并不生效，还是按照英语扫"）：学习语言切换 → 重拉字幕轨。
+//   根因：startVideoController 是一次性拉取，settings.learnLanguage 被本轮闭包固定，
+//   popup 改语言后侧栏仍显示旧语言轨道（词典/侧栏注释层已各自跟随，唯独字幕轨不换）。
+//   落点复用 ttHandler：侧栏 updateSubtitles / overlay-only startOverlay（自清场可重入）。
+//   第518次扩到 B站（此前仅 YouTube）：B站选轨链补齐 原始→目标→界面→释义 后，
+//   无原始 ai- 轨的视频里改学习语言才会换轨，重拉才有意义；有原始轨时按裁定
+//   （用户手选最高优 > 默认链原始优先）通常仍选原轨，重拉幂等无害。
+//   防抖/竞态：_langPullSeq 丢弃连续切换的过期拉取；_requestId 校验丢弃换集后旧拉取。
+let _langPullSeq = 0;
+async function rePullSubtitlesForLang() {
+  const seq = ++_langPullSeq;
+  const reqAtStart = _requestId;
+  try {
+    if (isASRActive()) return;
+    const settings = await getSettings();   // 闭包内 settings 已过期，重取新语言
+    const video = await waitForVideo();
+    let result = null;
+    if (vcState.currentPlatform === PLATFORM.YOUTUBE) {
+      result = await getYouTubeSubtitles(settings.learnLanguage, settings.meaningLanguage, settings.uiLanguage);
+    } else if (vcState.currentPlatform === PLATFORM.BILIBILI) {
+      result = await getBilibiliSubtitles(settings.uiLanguage, settings.learnLanguage, settings.meaningLanguage);
+    } else {
+      return;   // generic 无官方轨，语言切换只影响注释层（已由侧栏自身处理）
+    }
+    if (seq !== _langPullSeq || reqAtStart !== _requestId) return;   // 过期拉取丢弃
+    const subs = result ? (Array.isArray(result) ? result : (result.subtitles || [])) : [];
+    if (!subs.length) {
+      console.log('[VocabRadar][video-controller] 语言切换重拉无字幕，保留现状（ASR/无字幕兜底不变）');
+      return;
+    }
+    console.log('[VocabRadar][video-controller] 学习语言切换 → 重拉轨道成功: ' + subs.length + ' 条 (' + settings.learnLanguage + ')');
+    const sup = await suppressionFor(location);
+    if (!sup.videoSidebar) {
+      // 第421次：改语言=用户主动重置，旧手选轨道失效（新语言走四层链默认）；
+      //   且此前重拉只 updateSubtitles 不动下拉，下拉选中态 stale（仍显示旧轨）。
+      //   先 updateSubtitles（自动链看到字幕即空转）再 setTracks 刷新下拉。
+      setUserPickedTrack(null);
+      setUserPickedASR(false);  // 同理清 ASR 手选标记，防下拉保持 ASR 而内容已换官方轨
+      await updateSubtitles(subs);
+      if (result.tracks && result.tracks.length && Number.isInteger(result.pickedIndex)) {
+        const fetchFn = (vcState.currentPlatform === PLATFORM.BILIBILI) ? fetchBilibiliTrack : fetchYouTubeTrack;
+        setTracks(result.tracks, result.pickedIndex, fetchFn);
+      }
+    } else {
+      // overlay-only（侧栏被停）：startOverlay 自带清场重启，重复调用安全
+      startOverlay(video, subs, {
+        rankThreshold: settings.rankThreshold,
+        rankThresholdMax: settings.rankThresholdMax,
+        myWords: settings.myWords,
+        enabled: true,
+        annotateRepeat: settings.annotateRepeat === true
+      });
+    }
+  } catch (e) {
+    console.warn('[VocabRadar][video-controller] 语言切换重拉异常:', e);
+  }
 }
 
 /** 判断当前页面是否为本扩展支持的目标视频页
@@ -238,6 +296,10 @@ export async function startVideoController(platform) {
             });
           }).catch(() => { /* ignore */ });
         }
+        // 学习语言变化 → 重拉字幕轨（2026-10-05，见 rePullSubtitlesForLang 处说明）
+        if (changes.learnLanguage) {
+          rePullSubtitlesForLang();
+        }
       });
       console.log('[VocabRadar][video-controller] storage.onChanged 监听器已注册');
     }
@@ -340,9 +402,9 @@ export async function startVideoController(platform) {
 
     // waitForVideoReady 与字幕获取并行：字幕获取不依赖 video.duration
     // 超时降级：video 未就绪仍继续取字幕（overlay 跳转可能延迟，但 sidebar 字幕可显示）
-    // 默认轨道首选界面语言（YouTube 第三参 / B站 第一参）
+    // 默认选轨四层链（原始→目标→界面→释义，第421/518次裁定）：两平台同参对齐
     const subtitlesPromise = (platform === PLATFORM.BILIBILI)
-      ? getBilibiliSubtitles(settings.uiLanguage)
+      ? getBilibiliSubtitles(settings.uiLanguage, settings.learnLanguage, settings.meaningLanguage)
       : getYouTubeSubtitles(settings.learnLanguage, settings.meaningLanguage, settings.uiLanguage);
 
     try {
@@ -440,20 +502,10 @@ export async function startVideoController(platform) {
       pickedIndex = result.pickedIndex;
     }
 
-    // 用户要求"asr的结果要记住并且应当优先加载"：ASR 缓存 > learnLanguage 匹配轨道 >
-    // 其他字幕 > fetch 第一条 > 空。有 ASR 缓存时优先加载（不完整自动继续识别），
+    // 用户要求"asr的结果要记住并且应当优先加载"：ASR 缓存 > 四层链选轨字幕 >
+    // fetch 第一条 > 空。有 ASR 缓存时优先加载（不完整自动继续识别），
     // 无缓存才回退到普通字幕轨道。
     const fetchFn = (platform === PLATFORM.BILIBILI) ? fetchBilibiliTrack : fetchYouTubeTrack;
-    const learnLang = (settings.learnLanguage || 'en').toLowerCase();
-    let preferredIndex = -1;
-    if (tracks && tracks.length > 0) {
-      for (let i = 0; i < tracks.length; i++) {
-        if ((tracks[i].languageCode || '').toLowerCase().startsWith(learnLang)) {
-          preferredIndex = i;
-          break;
-        }
-      }
-    }
 
     try {
       // 1. 优先检查 ASR 缓存（用户要求"asr的结果要记住并且应当优先加载"）
@@ -465,27 +517,12 @@ export async function startVideoController(platform) {
         setTracks(tracks, tracks ? tracks.length : 0, fetchFn);
         selectASRTrackAndContinue(asrResult.coverage);
         _subOk = true;   // ASR 缓存已上屏，timedtext 重拉不再触发
-      } else if (preferredIndex >= 0) {
-        // 2. 无 ASR 缓存：有 learnLanguage 匹配轨道，优先使用
-        console.log('[VocabRadar][video-controller] 无 ASR 缓存, 首选语言', learnLang, '匹配轨道 index=', preferredIndex);
-        if (preferredIndex !== pickedIndex && fetchFn) {
-          try {
-            const newSubs = await fetchFn(tracks[preferredIndex]);
-            if (newSubs && newSubs.length > 0) subtitles = newSubs;
-          } catch (e) {
-            console.warn('[VocabRadar][video-controller] 首选轨道下载失败，用默认字幕:', e.message);
-          }
-        }
-        if (subtitles && subtitles.length > 0) {
-          await updateSubtitles(subtitles);
-          _subOk = true;   // 字幕已上屏，timedtext 重拉不再触发
-        } else {
-          showNoSubtitle();
-        }
-        setTracks(tracks, preferredIndex, fetchFn);
       } else if (subtitles && subtitles.length > 0) {
-        // 3. 无 ASR 缓存，无首选语言匹配，但有其他语言字幕
-        console.log('[VocabRadar][video-controller] 无 ASR 缓存, 使用其他语言字幕:', subtitles.length, '条');
+        // 2. 无 ASR 缓存：直接用 getYouTubeSubtitles 四层链选轨结果上屏。
+        //    第421次废除本地 learnLanguage 二次匹配（旧分支2）：它无视链里更高优先的
+        //    原始语言层，强行改选目标语言轨——用户裁定链序 原始→目标→界面→释义，
+        //    本地重匹配让目标层永远抢占原始层（"改了语言还是按英语扫"根因之一）。
+        console.log('[VocabRadar][video-controller] 使用默认选轨(四层链)字幕:', subtitles.length, '条, pickedIndex=', pickedIndex);
         await updateSubtitles(subtitles);
         _subOk = true;   // 字幕已上屏，timedtext 重拉不再触发
         setTracks(tracks, pickedIndex, fetchFn);

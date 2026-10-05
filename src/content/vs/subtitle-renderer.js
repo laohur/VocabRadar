@@ -21,10 +21,12 @@
 // ============================================================================
 
 import { log } from './logger.js';
-import { formatTime, setHourlyFormat, copyToClipboard, flashButton, escapeHtml, escapeReg, cssEscape } from './dom-utils.js';
+import { formatTime, setHourlyFormat, copyToClipboard, flashButton, escapeHtml, cssEscape } from './dom-utils.js';
 import { pickRandomLinesForComment, findMainCommentContainer, ensureYtCommentsLoaded, expandCommentBox, fillCommentInput, scrollMinIntoView } from './comment-fill.js';
 import { autoExpandOnce, requestSyncHeightOnce } from './sidebar-layout.js';
 import { getAnnotations, getRankMax, rankToStage, resetDiag } from '../../lib/annotator.js';
+// 渲染端词面定位（Unicode 词界/CJK 子串，修 ASCII \b 对重音/CJK 词失配——2026-10-05）
+import { findWordPositions } from '../../lib/tokenizer.js';
 // 视频侧栏字幕注释的翻译优先级档（2=视频侧栏，先于网页正文批量）
 import { PRIO_VIDEO } from '../../lib/translator.js';
 import { lemmaFamily } from '../../lib/lemmatizer.js';
@@ -222,7 +224,8 @@ async function renderSubtitlePanel(keepAnnotations = false) {
 
   const v = getActiveVideo();
   const curT = (v && isFinite(v.currentTime)) ? v.currentTime : 0;
-  highlightCurrent(curT);
+  // 开幕定位（十版）：瞬时居中
+  highlightCurrent(curT, 'center');
   // 面板渲染后补测一次高度（ASR 首批/轨道切换路径）
   requestSyncHeightOnce();
   log('字幕面板已全量渲染, 总字幕=', getSubtitlesRef().length);
@@ -329,7 +332,10 @@ function onPanelClick(e) {
     const v = getActiveVideo();
     if (v && getSyncEnabled()) v.currentTime = sub.start;
     log(getSyncEnabled() ? '跳转到' : '滚动到', sub.start, 's');
-    highlightCurrent(sub.start);
+    // 十版：sync 开→catchup（先保证可见，随后高亮逐段朝中央追赶）；
+    //   sync 关→nearest（仅保证可见，不触发播放跟随）。
+    //   第三参传 idx（权威下标）：点哪是哪，不按时间反猜，杜绝落邻居行
+    highlightCurrent(sub.start, getSyncEnabled() ? 'catchup' : 'nearest', idx);
   }
 }
 
@@ -358,14 +364,15 @@ function onAsyncTranslate(ann) {
     getRoot().querySelectorAll(`.beaver-word-item[data-word="${wordSel}"]`).forEach((item) => item.remove());
     const _dropIdx = _allAnnotations.findIndex((a) => wordDedupKey(a && a.word) === key);
     if (_dropIdx >= 0) _allAnnotations.splice(_dropIdx, 1);
-    const dropRe = new RegExp('\\b' + escapeReg(ann.word) + '\\b', 'i');
+    // 句文本含词判定改 findWordPositions（与 highlightWords 同口径；\b 对 CJK/重音词失配）
+    const hasWord = (t) => findWordPositions(String(t || ''), ann.word, false).length > 0;
     getRoot().querySelectorAll('.beaver-sub-item').forEach((slot) => {
       const idxAttr = slot.dataset.idx;
       if (idxAttr == null || idxAttr === '-1') return;
       const subIdx = parseInt(idxAttr, 10);
       if (isNaN(subIdx)) return;
       const sub = getSubtitlesRef()[subIdx];
-      if (!sub || !dropRe.test(String(sub.text || ''))) return;
+      if (!sub || !hasWord(sub.text)) return;
       const p = _annotationsCache.get(sub);
       if (!p) return;
       Promise.resolve(p).then((anns) => {
@@ -427,38 +434,51 @@ function onAsyncTranslate(ann) {
 //   详细模式是之前老版本（注释另起一行）」。
 function highlightWords(text, annotations, inlineAnnotations = false) {
   if (!annotations || annotations.length === 0) return escapeHtml(text);
-  // 按词长降序，避免短词先替换破坏长词
-  const sorted = [...annotations].sort((a, b) => b.word.length - a.word.length);
-  let result = escapeHtml(text);
-  // 用占位符避免嵌套替换
-  const placeholders = [];
-  for (const a of sorted) {
-    // 用户反馈"一行之中你注释了两次"。注释重复生词勾选后 'gi' 全局替换，每次出现都注释；
+  // 2026-10-05 重写：改为"原始文本定位 → 按位置切片拼 HTML"。旧实现先
+  //   escapeHtml(text) 再按词正则替换：①撇号被转义成 &#39;，don't/teacher's 类词
+  //   永远匹配不上（高亮整体消失）；②ASCII \b 对重音词（café）与 CJK 词失配；
+  //   ③替换进 span 的是小写 annotation.word，原文词面大小写被抹掉（"Muffin Man"
+  //   显示成小写）。findWordPositions 统一三处渲染口径（Unicode 词界/CJK 子串），
+  //   切片用原文词面，三个问题一次消除。占位符机制随之不需要（位置互不嵌套）。
+  const hits = [];
+  for (const a of annotations) {
+    // 用户反馈"一行之中你注释了两次"。注释重复生词勾选后每次出现都注释；
     // 与 ws/scanner.js highlightWords 同步对齐——重复开关关闭时，
     //   后续出现（isFirst===false）不包高亮 span 保持纯文本（页面 .beaver-hide-later
     //   默认透明语义的字幕侧对应实现），消除同一生词多处重复提示。
     if (!getAnnotateRepeat() && a.isFirst === false) continue;
-    const re = new RegExp(`\\b${escapeReg(a.word)}\\b`, getAnnotateRepeat() ? 'gi' : 'i');
-    const cls = a.isFirst === false ? 'beaver-word later' : 'beaver-word';
-    const ph = `\x00${placeholders.length}\x00`;
-    // 简略模式：生词后追加 (释义) inline span。无释义时仅高亮。
-    let replacement = `<span class="${cls}">${escapeHtml(a.word)}</span>`;
+    for (const pos of findWordPositions(text, a.word, getAnnotateRepeat())) {
+      hits.push({ start: pos.start, end: pos.end, ann: a });
+    }
+  }
+  if (hits.length === 0) return escapeHtml(text);
+  // 按起点排序（同起点长词优先），去重叠——长词不被短词拆散
+  hits.sort((x, y) => x.start - y.start || y.end - x.end);
+  const valid = [];
+  let lastEnd = 0;
+  for (const h of hits) {
+    if (h.start >= lastEnd) { valid.push(h); lastEnd = h.end; }
+  }
+  let html = '';
+  let pos = 0;
+  for (const h of valid) {
+    html += escapeHtml(text.slice(pos, h.start));
+    // 词面用原文切片（保大小写），不用小写 annotation.word
+    const cls = h.ann.isFirst === false ? 'beaver-word later' : 'beaver-word';
+    let replacement = `<span class="${cls}">${escapeHtml(text.slice(h.start, h.end))}</span>`;
     if (inlineAnnotations) {
-      const shortTrans = pickCleanShortTrans(a.translations);
+      const shortTrans = pickCleanShortTrans(h.ann.translations);
       if (shortTrans) {
         // 注释按模板拼装（{word} 变量丢弃——词已在高亮 span 中，取前后字面量包释义）
         const { pre, post } = splitAnnTemplate(getAnnTemplate());
         replacement += `<span class="beaver-ann-inline">${escapeHtml(pre)}${escapeHtml(shortTrans)}${escapeHtml(post)}</span>`;
       }
     }
-    placeholders.push(replacement);
-    result = result.replace(re, ph);
+    html += replacement;
+    pos = h.end;
   }
-  // 还原占位符
-  for (let i = 0; i < placeholders.length; i++) {
-    result = result.split(`\x00${i}\x00`).join(placeholders[i]);
-  }
-  return result;
+  html += escapeHtml(text.slice(pos));
+  return html;
 }
 
 // === 渲染生词表标签页 ===
@@ -491,9 +511,23 @@ try {
     });
     if (chrome.storage.onChanged) {
       chrome.storage.onChanged.addListener((changes, area) => {
-        if (area === 'local' && changes.learnLanguage && typeof changes.learnLanguage.newValue === 'string' && changes.learnLanguage.newValue) {
+        // 2026-10-05（用户："视频侧栏的生词并没有跟随设定语言"）：学习/释义语言切换都
+        //   清算——学习语言变：生词本与三条注释缓存全是旧语言数据，不清则词表继续显示
+        //   旧语言生词、新语言的词被旧 seen 集拦截；释义语言变：注释里已有译文是旧释义
+        //   语言产物，不清则换释义语言不生效（此前只听 learnLanguage，第518次补齐）。
+        //   setAllAnnotations([]) 唯一入口同步清词键集；rerenderPanelOnly 清缓存+懒重算；
+        //   renderWordPanel 立即清词表面板。
+        const langChanged = area === 'local' && (
+          (changes.learnLanguage && typeof changes.learnLanguage.newValue === 'string' && changes.learnLanguage.newValue) ||
+          (changes.meaningLanguage && typeof changes.meaningLanguage.newValue === 'string' && changes.meaningLanguage.newValue)
+        );
+        if (!langChanged) return;
+        if (changes.learnLanguage && typeof changes.learnLanguage.newValue === 'string' && changes.learnLanguage.newValue) {
           _renderLearnLang = changes.learnLanguage.newValue;
         }
+        try { setAllAnnotations([]); } catch (_) { /* ignore */ }
+        try { rerenderPanelOnly(); } catch (_) { /* ignore */ }
+        try { renderWordPanel(); } catch (_) { /* ignore */ }
       });
     }
   }
@@ -901,11 +935,11 @@ export function rerenderPanelOnly() {
   // 遍历所有 slot 重新触发注释获取+回填
   // 改走懒注释（全量 fire 会重演 5540 行堵队列，开关注换即卡死）
   armLazyAnnotation();
-  // 重新高亮当前行
+  // 重新高亮当前行（五版：跳转规则——当前行可见则不滚，避免开关切换引发无谓滚动）
   const v = getActiveVideo();
   const curT = (v && isFinite(v.currentTime)) ? v.currentTime : 0;
   _activeSubIdx = -1;
-  highlightCurrent(curT);
+  highlightCurrent(curT, 'center');
 }
 
 // 遍历所有 _windowSlots，从 _annotationsCache 取已 resolve 的 anns 重新调 fillSlotAnnotations。
@@ -927,20 +961,64 @@ export function rerenderSlotsFromCache() {
   });
 }
 
+// === 面板滚动（十版，2026-10-05）===
+// 用户裁定（十版）："点新的，当前段说完之后，高亮往上一段，内容也要同步，
+//   直到居中。最终状态都是居中。"并经请示裁决点旧行为："内容不动，高亮逐行
+//   下沉到中央后居中"；被点行"不一定贴底，若不是点到最底的话"——已可见即
+//   保持原位。九版 nearest 被否（高亮永远到不了中央）。
+// 四种模式（highlightCurrent 第二参）：
+//   'catchup'：点击且 sync 开——先 nearest 保证被点行可见（可见则不动），置
+//     追赶标记；随后每次跨行（timeupdate 的 'follow'）高亮朝面板中央移动
+//     "一段"（相邻行实测位置差）：下方（点新）内容瞬时上滚两段、高亮净上浮
+//     一段；上方（点旧）内容不动、高亮自然下沉一段；与换段同帧，无动画。
+//     落点越过/到达中央 → 该行直接居中，追赶结束。
+//   'nearest'：点击且 sync 关——仅保证可见，不追赶。
+//   'follow'：timeupdate——追赶中走上浮/下沉步进；否则瞬时居中（今天修改前行为）。
+//   'center'：seeked、开幕、重绘、ASR——瞬时居中；进入滚动分支即清追赶标记。
+// 点击引发的 seeked 与 click 同行（highlightCurrent 早退 `idx===_activeSubIdx`），
+//   不进滚动分支，故不会误清追赶；用户主动拖进度条跨行才会居中清追赶。
+let _catchup = false;
+
+// nearest：行不可见时最小滚动贴边（下方贴底/上方贴顶），完整可见则不动
+function scrollNearest(panel, slotRect, panelRect) {
+  if (slotRect.bottom > panelRect.bottom) {
+    panel.scrollTop += slotRect.bottom - panelRect.bottom;
+  } else if (slotRect.top < panelRect.top) {
+    panel.scrollTop -= panelRect.top - slotRect.top;
+  }
+}
+// center：瞬时滚动使行居中
+function scrollCenter(panel, slotRect, panelRect) {
+  panel.scrollTop = panel.scrollTop + (slotRect.top - panelRect.top)
+    - panelRect.height / 2 + slotRect.height / 2;
+}
+
 // === 高亮当前字幕（全量渲染模式）===
 // 全量渲染模式下，所有字幕已渲染到 DOM，highlightCurrent 仅负责高亮当前行并滚动到可视区。
 // 用户要求"字幕应当可以滚动查看全部"。
 //   此前滑动窗口固定槽位，改为全量渲染后，highlightCurrent 只处理高亮和滚动，
 //   不再更新槽位内容。
-export function highlightCurrent(time) {
+export function highlightCurrent(time, mode = 'follow', hintIdx = -1) {
   if (typeof time !== 'number' || !isFinite(time)) return;
   if (!_windowSlots || _windowSlots.length === 0) return;
 
-  let idx = -1;
-  for (let i = 0; i < getSubtitlesRef().length; i++) {
-    const s = getSubtitlesRef()[i];
-    if (!s || typeof s.start !== 'number' || typeof s.end !== 'number') continue;
-    if (time >= s.start && time <= s.end) { idx = i; break; }
+  // hintIdx：点击路径由 onPanelClick 传入被点槽位的精确下标（权威，点哪是哪），
+  //   不做时间反猜——闭区间反查在字幕首尾相接（被点行起点==前一行终点）或
+  //   ASR 段区间重叠时会命中前一行，表现为"选不中、高亮落邻居"。
+  let idx = (Number.isInteger(hintIdx) && hintIdx >= 0) ? hintIdx : -1;
+  if (idx === -1) {
+    // 半开区间 [start,end)：边界时刻归下一行（首尾相接不再落前行）；
+    //   tailIdx 兜底：time 恰落在某行末端点（其后是非连续空隙）时保留该行
+    let tailIdx = -1;
+    for (let i = 0; i < getSubtitlesRef().length; i++) {
+      const s = getSubtitlesRef()[i];
+      if (!s || typeof s.start !== 'number' || typeof s.end !== 'number') continue;
+      if (time >= s.start && time < s.end) { idx = i; break; }
+      if (time >= s.start) tailIdx = i;
+    }
+    if (idx === -1 && tailIdx >= 0 && time <= getSubtitlesRef()[tailIdx].end) {
+      idx = tailIdx;
+    }
   }
 
   if (idx === -1) {
@@ -956,18 +1034,53 @@ export function highlightCurrent(time) {
   _windowSlots.forEach((s) => s.classList.remove('active'));
   if (idx >= 0 && idx < _windowSlots.length) {
     _windowSlots[idx].classList.add('active');
-    // 用户反馈「视频提示滚动字幕时候，不要让网页跳动。我正在写字，视频播放，视频提示字幕同步的时候会让整个网页跳动」。
-    //   根因：scrollIntoView 不仅滚动目标容器（字幕面板），还会滚动所有可滚动的父级元素（包括整个网页），
-    //   导致用户正在输入时网页被意外滚动。
-    //   改为直接操作面板的 scrollTop，只滚动字幕面板本身，不影响父级网页。
+    // 曾用 scrollIntoView：它会连带滚动所有可滚动父级（包括整个网页），用户
+    //   输入时网页被意外滚动。改为直接操作面板 scrollTop，只滚面板本身。
+    // 十版四种模式见文件顶部滚动说明（catchup/nearest/follow/center）
     const panel = getRoot().querySelector('#beaver-subtitle-panel');
     if (panel) {
       const slot = _windowSlots[idx];
       const slotRect = slot.getBoundingClientRect();
       const panelRect = panel.getBoundingClientRect();
-      // 计算目标元素相对于面板的位置，滚动到面板中央
-      const targetScrollTop = panel.scrollTop + (slotRect.top - panelRect.top) - (panelRect.height / 2) + (slotRect.height / 2);
-      panel.scrollTo({ top: targetScrollTop, behavior: 'smooth' });
+      if (mode === 'catchup') {
+        // 点击（sync 开）：保证被点行可见（已可见则不动），置追赶标记
+        scrollNearest(panel, slotRect, panelRect);
+        _catchup = true;
+      } else if (mode === 'nearest') {
+        // 点击（sync 关）：仅保证可见
+        scrollNearest(panel, slotRect, panelRect);
+      } else if (mode === 'follow' && _catchup) {
+        // 追赶步进：高亮朝中央移动"一段"（相邻行实测位置差），瞬时、与换段同帧
+        const prevSlot = _windowSlots[_activeSubIdx];
+        const step = prevSlot
+          ? Math.abs(slotRect.top - prevSlot.getBoundingClientRect().top)
+          : 0;
+        if (step < 1) {
+          scrollCenter(panel, slotRect, panelRect);
+          _catchup = false;
+        } else {
+          const centerY = panelRect.top + panelRect.height / 2;
+          const below = slotRect.top + slotRect.height / 2 >= centerY;
+          // 新行在中央下方（点新）→ 内容上滚 2*step，高亮净上浮一段；
+          //   在上方（点旧）→ 内容不动，高亮自然下沉一段（上滚 0）。
+          //   越过中央：步进落位会跨过中线，则直接居中并结束追赶。
+          if (below) {
+            const newTop = slotRect.top - 2 * step;
+            const crossed = newTop + slotRect.height / 2 <= centerY;
+            if (crossed) { scrollCenter(panel, slotRect, panelRect); _catchup = false; }
+            else { panel.scrollTop += slotRect.top - newTop; }
+          } else {
+            const crossed = slotRect.top + slotRect.height / 2 >= centerY;
+            if (crossed) { scrollCenter(panel, slotRect, panelRect); _catchup = false; }
+            // 上方步进=不动（内容锁死）
+          }
+        }
+      } else {
+        // 默认瞬时居中（seeked/开幕/重绘/ASR/无追赶的自然播放）
+        scrollCenter(panel, slotRect, panelRect);
+        // 进入此分支即清追赶（仅跨行 seeked 能到达：点击引发的同行 seeked 已早退）
+        _catchup = false;
+      }
     }
   }
 
@@ -1695,8 +1808,9 @@ export async function appendASRSubtitle(seg) {
   }
   log('ASR 字幕已插入 idx=', insertIdx, 'text=', seg.text.slice(0, 40));
   // 插入字幕后主动调 highlightCurrent，让当前时间附近的字幕立即高亮
+  //   （十版：瞬时居中）
   if (getActiveVideo() && _windowSlots.length > 0) {
-    try { highlightCurrent(getActiveVideo().currentTime); } catch (e) { /* ignore */ }
+    try { highlightCurrent(getActiveVideo().currentTime, 'center'); } catch (e) { /* ignore */ }
   }
 
   // ==== 异步段：生词注释收集+诊断（纯数据侧，DOM 顺序已定，不再影响上屏顺序）====

@@ -176,7 +176,26 @@ export async function _loadDict(lang) {
       try { _full = await getLangProjection(meaningLang); } catch (e) { _full = null; }
       _seg.proj = Math.round(performance.now() - _t0);
       if (_full && _full.built) {
-        const _pt = _full.tags || {};
+        let _pt = _full.tags || {};
+        // 2026-10-05（用户："不是英语，为啥还初始化词典· word-list tags 18,056 ·?"）：
+        //   非 en 投影出现非空 tags = 历史脏数据——en 门控修复前 bulkWriteDictionary 把
+        //   英文词表写进了非 en 投影，而 dataVersion 恒写 0、版本比对永不触发重建，坏状态固化。
+        //   内存丢弃：非 en 本无词表源（word-loader 仅读 src/data/en/），这些 tags 必脏，
+        //   并入会让非 en 词条按英文词表打标（就绪行 tags 计数虚高同理）。
+        //   丢弃同时踢后台源重建自愈 IDB（重建路径自带 en 门控；_kickRebuildBackground
+        //   防重入 + 完成广播 vr-dict-rebuilt 触发页侧重渲染）。
+        if (meaningLang !== 'en') {
+          let _dirtyTags = false;
+          for (const _w in _pt) {
+            const _v = _pt[_w];
+            if (Array.isArray(_v) && _v.length > 0) { _dirtyTags = true; break; }
+          }
+          if (_dirtyTags) {
+            console.warn(`[VocabRadar][dictionary][${_ts()}] 非 en(${meaningLang}) 投影含非空 tags（历史英文词表脏数据）→ 内存丢弃 + 后台源重建自愈`);
+            _pt = {};
+            _kickRebuildBackground(meaningLang, `非 en 投影脏 tags（${meaningLang}）`);
+          }
+        }
         const _pl = _full.lemmas || {};
         // 第三百四十一次：合并值数组校验——`|| []` 只防 null/undefined，防不了非数组
         //   垃圾值（tags 字段系统契约恒为数组，统计侧 getDictFieldStats 即按 Array.isArray 计）。
@@ -314,7 +333,25 @@ export async function _loadDict(lang) {
       //   并在第一轮就把 tags/lemma 一并填入（tags/lemmas 基本是 ranks 的子集），
       //   后两轮只补 ranks 里没有的孤词。合并结果与语义完全不变。
       const projRanks = proj.ranks || {};
-      const projTags = proj.tags || {};
+      // 2026-10-05（用户："不是英语，为啥还初始化词典· word-list tags 18,056 ·?"）：
+      //   SLOW 路同 FAST 路非 en 脏 tags 修复——历史英文词表脏投影（dataVersion 恒 0
+      //   无版本比对，坏状态固化）。内存丢弃不合并；检测到脏即踢后台源重建自愈 IDB
+      //   （重建路径自带 en 门控；_kickRebuildBackground 防重入）。SLOW 完整放行分支
+      //   （ranks 足额）原本无重建触发，若不踢则脏 tags 固化进 dictMap——故检测+踢
+      //   放在取值处，两条放行路径（完整/不完整）都被覆盖。
+      let _projTags = proj.tags || {};
+      if (meaningLang !== 'en') {
+        for (const _w in _projTags) {
+          const _v = _projTags[_w];
+          if (Array.isArray(_v) && _v.length > 0) {
+            console.warn(`[VocabRadar][dictionary][${_ts()}] 非 en(${meaningLang}) SLOW 投影含非空 tags（历史英文词表脏数据）→ 内存丢弃 + 后台源重建自愈`);
+            _projTags = {};
+            _kickRebuildBackground(meaningLang, `非 en SLOW 投影脏 tags（${meaningLang}）`);
+            break;
+          }
+        }
+      }
+      const projTags = _projTags;
       const projLemmas = proj.lemmas || {};
       _t0 = performance.now();   // 第一百八十八次：Map 构建段计时
       dictState.dictMap = new Map();
@@ -439,9 +476,12 @@ async function _rebuildFromSources(lang) {
       }
     });
   }
+  // 用户报障"非英语哪来的词表标签"：wordlists.jsonl 仅收录英文词表
+  //   （IELTS/TOEFL/GRE/GMAT/SAT），此前无条件合并进任意语言——非英语词条被贴上
+  //   英文考试标签。此处按 lang 门控：仅 en 装载词表源，其余语言 wl 恒空 Map。
   const [wf, wl] = await Promise.all([
     loadWordfreq(lang),
-    loadWordlists()
+    lang === 'en' ? loadWordlists() : Promise.resolve(new Map())
   ]);
   // 第三百七十次：词频/词表装载结果上报（诊断窗：确认源文件拉取是否失败/空包）。
   reportDictEvent(wf.size > 0 ? 'wf-ok' : 'wf-empty', { wf: wf.size, wl: wl.size, lang });

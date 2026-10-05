@@ -54,6 +54,7 @@ export function ocrVideoFrame(clientX, clientY) {
 
 // 生命周期、设置入口与诊断（来源：th/scan.js）
 // setAnnTemplate——侧邻注释模板 setter（模板变化需清缓存重扫）
+// onLangChanged——学习/释义语言切换 setter（清缓存拆旧包裹，词典按新语言重建后重扫）
 export {
   startHint,
   stopHint,
@@ -65,5 +66,6 @@ export {
   setAnnotateOov,
   setAnnotateRepeat,
   setAnnTemplate,
+  onLangChanged,
   getDiagState
 } from './th/scan.js';

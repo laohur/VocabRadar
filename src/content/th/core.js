@@ -52,15 +52,9 @@ export const PANEL_ID = 'beaver-context-panel';
 export const OCR_PANEL_ID = 'beaver-ocr-panel';
 export const STYLE_ID = 'beaver-hint-styles';
 
-// 单词提取正则（带 g flag，用于 matchAll 得到位置）
-// 与 tokenizer.js 的 TOKENIZE_PATTERN 一致，仅加 'g' flag
-export const WORD_G_PATTERN = new RegExp(
-  '\\p{Script=Han}|[\\p{Script=Hiragana}\\p{Script=Katakana}\\p{Script=Hangul}]+|\\p{Extended_Pictographic}+|[^\\W_]+(?:[\'\\u2019\\-][^\\W_]+)*',
-  'gu'
-);
-export const SELECT_PATTERN = new RegExp(
-  "^(?!(?:[^'\\u2019]*['\\u2019]){2})[A-Za-z]+(?:[-'\\u2019]+[A-Za-z]+)*$"
-);
+// 2026-10-05：原 WORD_G_PATTERN/SELECT_PATTERN（页面扫描自有英文选词正则）已随
+//   "改语言不生效"修正删除——选词/分词统一收口 lib/tokenizer.js 按学习语言口径
+//   （extractWordMatches，Segmenter locale 分词），此处不再保留第二套正则防漂移。
 
 // 不扫描这些标签内的文本（代码/表单/媒体/脚本等）
 // 非正文语义标签 NAV/HEADER/FOOTER/ASIDE/FORM/MENU/DIALOG：
@@ -87,8 +81,8 @@ export const NON_CONTENT_SELECTOR = [
 ].join(', ');
 
 // JavaScript 特殊值过滤集：页面 JS 计算异常时会产生 "NaN"/"undefined"/"Infinity" 文本，
-//   不是真实单词，但会匹配 WORD_G_PATTERN 且 "nan" 在词频词典中有词频，
-//   会被高亮为生词（用户报障"文本提示出现了NaN"）。
+//   不是真实单词，但会匹配分词正则（现 tokenizer.extractWordMatches）且 "nan" 在
+//   词频词典中有词频，会被高亮为生词（用户报障"文本提示出现了NaN"）。
 export const JS_SENTINELS = new Set(['nan', 'undefined', 'infinity']);
 
 // === 状态（唯一属主）===

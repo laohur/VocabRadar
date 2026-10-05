@@ -111,23 +111,48 @@ async function fetchBilibiliSubtitle(url) {
 }
 
 /**
- * 选字幕轨道：界面语言优先（ai-<ui> → <ui>），无则回落 ai-en > en-* > ai-zh > zh-* > 第一条。
- * 无英文时回退到中文字幕（比无字幕好，用户可在轨道下拉框切换）。
+ * 选字幕轨道（第518次对齐 YouTube 421 裁定链序）：
+ *   用户手选轨道最高优（tracks.js 手选恢复，不在本链内）> 默认链：
+ *   原始语言 → 目标(learn) → 界面(ui) → 释义(meaning) → 历史回落(ai-en/en/ai-zh/zh) → 首条。
+ *   原始语言 = 首条 ai- 轨的语言（B站 ai- 轨由视频音频生成，其语言即视频原生语言，
+ *   与 YouTube "首条 ASR 轨" 同理；无 ai- 轨则无原始信号，跳过该层）。
+ *   每层先机器轨 ai-<lang> 再人工轨 <lang>（前缀匹配）。历史回落保留：
+ *   无英文回退中文字幕（比无字幕好，用户可在下拉手切）。
  * @param {Array} list
  * @param {string} [ui='en'] 界面语言主码（如 en/zh）
+ * @param {string} [learn=''] 学习语言（第2层）
+ * @param {string} [meaning=''] 释义语言（第4层）
  */
-function pickSubtitleTrack(list, ui = 'en') {
+function pickSubtitleTrack(list, ui = 'en', learn = '', meaning = '') {
   if (!list || list.length === 0) return null;
-  // 界面语言轨道优先——机器轨 ai-<ui> 先，再 <ui> 人工轨
-  const aiUi = list.find((s) => s.lan === `ai-${ui}`);
-  if (aiUi) {
-    console.log(`[VocabRadar][bilibili] 命中轨道: ai-${ui} (${aiUi.lan_doc})`);
-    return aiUi;
+  const pickLayer = (lang) => {
+    if (!lang) return null;
+    const ai = list.find((s) => s.lan === `ai-${lang}`) || list.find((s) => s.lan.startsWith(`ai-${lang}`));
+    if (ai) return ai;
+    return list.find((s) => !s.lan.startsWith('ai-') && s.lan.startsWith(lang)) || null;
+  };
+  // 原始语言层：首条 ai- 轨的语言
+  const orig = (list.find((s) => s.ai || s.lan.startsWith('ai-')) || {}).lan || '';
+  const origLang = orig.startsWith('ai-') ? orig.slice(3) : orig;
+  let track = pickLayer(origLang);
+  if (track) {
+    console.log(`[VocabRadar][bilibili] 命中轨道(原始): ${track.lan} (${track.lan_doc})`);
+    return track;
   }
-  const uiHit = list.find((s) => !s.lan.startsWith('ai-') && s.lan.startsWith(ui));
-  if (uiHit) {
-    console.log(`[VocabRadar][bilibili] 命中轨道: ${uiHit.lan} (${uiHit.lan_doc})`);
-    return uiHit;
+  track = pickLayer(learn);
+  if (track) {
+    console.log(`[VocabRadar][bilibili] 命中轨道(目标): ${track.lan} (${track.lan_doc})`);
+    return track;
+  }
+  track = pickLayer(ui);
+  if (track) {
+    console.log(`[VocabRadar][bilibili] 命中轨道(界面): ${track.lan} (${track.lan_doc})`);
+    return track;
+  }
+  track = pickLayer(meaning);
+  if (track) {
+    console.log(`[VocabRadar][bilibili] 命中轨道(释义): ${track.lan} (${track.lan_doc})`);
+    return track;
   }
   const aiEn = list.find((s) => s.lan === 'ai-en');
   if (aiEn) {
@@ -156,16 +181,18 @@ function pickSubtitleTrack(list, ui = 'en') {
 }
 
 /**
- * 获取 B站字幕（界面语言轨道优先，默认 en 时与 ai-en 优先行为一致）。
+ * 获取 B站字幕（第518次：默认选轨对齐 421 裁定链 原始→目标→界面→释义，见 pickSubtitleTrack）。
  * 返回 {tracks, subtitles, pickedIndex} 格式（与 YouTube 一致）：tracks 含
  *   languageCode(lan) + name(lan_doc) + subtitle_url，setTracks 据此填充下拉框
  *   显示字幕轨道名（如"中文（自动生成）"）——只返回字幕数组会使轨道下拉框
  *   只有 ASR 一项。
- * @param {string} [uiLanguage='en'] 界面语言（默认首选轨道；bilibili-comment 不传保持英文提词）
+ * @param {string} [uiLanguage='en'] 界面语言（默认链第3层；bilibili-comment 不传保持英文提词）
+ * @param {string} [learnLanguage=''] 学习语言（默认链第2层）
+ * @param {string} [meaningLanguage=''] 释义语言（默认链第4层）
  * @returns {Promise<{tracks:Array, subtitles:Array, pickedIndex:number}|null>}
  */
-export async function getBilibiliSubtitles(uiLanguage = 'en') {
-  console.log('[VocabRadar][bilibili] 开始获取字幕');
+export async function getBilibiliSubtitles(uiLanguage = 'en', learnLanguage = '', meaningLanguage = '') {
+  console.log('[VocabRadar][bilibili] 开始获取字幕, uiLanguage=' + uiLanguage + ' learnLanguage=' + learnLanguage + ' meaningLanguage=' + meaningLanguage);
   const ids = await getBilibiliIds();
   if (!ids) {
     console.warn('[VocabRadar][bilibili] 未取到 aid/cid');
@@ -180,7 +207,7 @@ export async function getBilibiliSubtitles(uiLanguage = 'en') {
   // 打印所有轨道便于排查
   console.log('[VocabRadar][bilibili] 所有字幕轨道:', list.map((s) => `${s.lan}=${s.lan_doc}${s.ai ? '(AI)' : ''}`).join(', '));
 
-  const track = pickSubtitleTrack(list, uiLanguage);
+  const track = pickSubtitleTrack(list, uiLanguage, learnLanguage, meaningLanguage);
   if (!track) return null;
 
   const subs = await fetchBilibiliSubtitle(track.subtitle_url);

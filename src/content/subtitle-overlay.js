@@ -34,6 +34,8 @@
 //      （预览=真实渲染），本地不再维护重复常量
 
 import { getAnnotations, setRankMax, setMyWords } from '../lib/annotator.js';
+// 渲染端词面定位（Unicode 词界/CJK 子串，修 ASCII \b 对重音/CJK 词失配——2026-10-05）
+import { findWordPositions } from '../lib/tokenizer.js';
 // 视频内字幕注释的翻译优先级档（2=视频侧栏，先于网页正文批量）
 import { PRIO_VIDEO } from '../lib/translator.js';
 // 第514次双语字幕：整句译文取数与会话缓存唯一实现（lib/bilingual-trans.js，
@@ -89,6 +91,7 @@ if (typeof window !== 'undefined') {
   window.addEventListener('vr-dict-rebuilt', () => {
     try {
       _annotationsCache.clear();
+      _seen.clear();   // 第518次：同语言切换口径——旧 seen 集压制新词典首现判定，一并清
       _lastKey = '';
       if (_video && _enabled) onTimeUpdate();
       console.log('[VocabRadar][subtitle-overlay] 词典后台重建完成：注释缓存已清，重绘字幕');
@@ -464,19 +467,16 @@ function escapeHtml(s) {
   }[c]));
 }
 
-/** 正则转义 */
-function escapeReg(s) {
-  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-}
-
 // 侧邻注释统一用共享 pickCleanShortTrans（宽分隔符，与各侧邻路径同源）。
 //   （detail 列表仍全量 join，"详细全列"口径不变）
 
 /**
  * 生词注释管线（side/detail 两模式共用）——叠加字幕与视频侧栏口径统一：
  * 全部生词全注释（用户裁定）。
- * 管线：过滤重复生词（isFirst）→ \bword\b 定位 → 排序去重叠。
- * token 提取正则：[A-Za-z][A-Za-z'’-]*（g 标志全局匹配；撇号/连字覆盖缩略与所有格，如 don't、teacher's）。
+ * 管线：过滤重复生词（isFirst）→ 词面定位 → 排序去重叠。
+ * 词面定位用 findWordPositions（2026-10-05：旧 \b 正则只认 ASCII 词界，
+ *   重音词 café/être 与 CJK 词永远失配——高亮整体消失，即"边界被吃"的报告源之一；
+ *   撇号/连字符/CJK 交由分词层同源口径处理）。
  * @param {string} text 字幕文本
  * @param {Array} anns 注解数组
  * @returns {Array<{start:number,end:number,word:string,ann:object}>} 全部生词匹配（去重叠后）
@@ -487,10 +487,10 @@ function collectAnnotateMatches(text, anns) {
     // 注释重复生词默认不选：后续出现（isFirst===false）不包裹不注释，
     //   与视频侧栏/文本侧栏一致。
     if (!_annotateRepeat && a.isFirst === false) continue;
-    const re = new RegExp('\\b' + escapeReg(a.word) + '\\b', 'i');
-    const m = text.match(re);
-    if (m) {
-      matches.push({ start: m.index, end: m.index + m[0].length, word: m[0], ann: a });
+    const positions = findWordPositions(text, a.word, false);
+    if (positions.length > 0) {
+      const pos = positions[0];
+      matches.push({ start: pos.start, end: pos.end, word: text.slice(pos.start, pos.end), ann: a });
     }
   }
   matches.sort((a, b) => a.start - b.start);
@@ -753,6 +753,13 @@ export function startOverlay(video, subtitles, options = {}) {
         if (_video && _enabled) onTimeUpdate();
       }
       if (changes.learnLanguage || changes.meaningLanguage) {
+        // 2026-10-05（用户："改了语言，并不生效，还是按照英语扫"）：语言切换必须清
+        //   注释缓存与跨句去重集——_annotationsCache 按字幕文本键，不清则 onTimeUpdate
+        //   重画时命中旧语言注释（英语注释一直挂到词典重建完）；_seen 不清则旧语言
+        //   已见词压制新语言的首现判定。与 setRankThreshold/setMyWordsLists 同口径
+        //   （阈值/词表变化都清，语言变化更是全变，唯此处漏了——第518次补齐）。
+        _annotationsCache.clear();
+        _seen.clear();
         _lastKey = '';
         if (_video && _enabled) onTimeUpdate();
       }

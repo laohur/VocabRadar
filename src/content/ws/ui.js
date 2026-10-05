@@ -12,7 +12,7 @@ import { LANG_NAMES, TRANSLATE_LANGS, UI_LANGS, setLang, t } from '../../lib/i18
 import { primeTranslator } from '../../lib/translator.js';
 // 顶行构建器同源的品牌小图标（搜索栏左端）
 import { brandIconSVG, buildTopbarHTML, ensureTopbarCss } from '../../lib/sidebar-topbar.js';
-import { SUBTITLE_TEXT_STYLES, findStyle, SUB_DEFAULT_STYLE } from '../../lib/styles.js';
+import { SUBTITLE_TEXT_STYLES, findStyle, SUB_DEFAULT_STYLE, BUILD_STAMP } from '../../lib/styles.js';
 // query 标签复用右键搜索卡片（唯一定义 th/panel.js：同 CSS/同结构/同渲染核心；
 // ES module 按 URL 单实例，与 text-hint bundle 共享同一 thState/模块状态）
 import { buildPanelCss, buildCardInnerHTML, renderQueryCard, bindLemmaChipClick } from '../th/panel.js';
@@ -400,10 +400,11 @@ function bindLanguagePanel() {
   // 填充界面语言选项（10大语言）
   // 第514次（用户"侧栏的语言列表的语言名称参照引导页的"）：三组标签统一
   //   「两位代码 + 空格 + 语言自称」（LANG_NAMES），与引导页 renderLangSelect 同口径；
-  //   释义下拉"统一英文名称"（LANG_NAMES_EN）旧决策撤销。展示序保持 i18n.js 原序
-  //   （20260930 裁定：仅引导页按代码字典序排，其余端展示序不动）。
+  //   释义下拉"统一英文名称"（LANG_NAMES_EN）旧决策撤销。
+  // 第517次（用户令"侧栏中的语言顺序改为代码顺序"）：展示序与引导页同口径，
+  //   按两位代码字典序排——[...].sort() 只排展示副本，i18n.js 原序与默认值不动。
   const langLabel = (lang) => (LANG_NAMES[lang] ? `${lang} ${LANG_NAMES[lang]}` : lang);
-  for (const lang of UI_LANGS) {
+  for (const lang of [...UI_LANGS].sort()) {
     const opt = document.createElement('option');
     opt.value = lang;
     opt.textContent = langLabel(lang);
@@ -411,7 +412,7 @@ function bindLanguagePanel() {
   }
 
   // 填充目标/释义语言选项（42种）
-  for (const lang of TRANSLATE_LANGS) {
+  for (const lang of [...TRANSLATE_LANGS].sort()) {
     const opt1 = document.createElement('option');
     opt1.value = lang;
     opt1.textContent = langLabel(lang);
@@ -428,6 +429,19 @@ function bindLanguagePanel() {
     uiLangSel.value = res.uiLanguage || 'en';
     srcLangSel.value = res.learnLanguage || 'en';
     tgtLangSel.value = res.meaningLanguage || 'zh';
+  });
+
+  // 用户报障"语言设定并不通用，引导页跟侧栏中的语言设定应当通用"：
+  //   此前三下拉只在绑定时读一次 storage，引导页改语言侧栏不跟随。
+  //   onChanged 同步回填三下拉（含界面语言——侧栏 setLang 自带 location.reload，
+  //   引导页改 uiLanguage 时侧栏整页刷新重建，此监听随旧 DOM 作废故不重复触发）。
+  //   侧栏自己 change 写 storage 的回声属幂等回填（同值），无需抑制。
+  chrome.storage.onChanged.addListener((changes, area) => {
+    if (area !== 'local') return;
+    if (!uiLangSel.isConnected) return;   // 侧栏重建后旧监听不写旧 DOM
+    if (changes.uiLanguage) uiLangSel.value = changes.uiLanguage.newValue || 'en';
+    if (changes.learnLanguage) srcLangSel.value = changes.learnLanguage.newValue || 'en';
+    if (changes.meaningLanguage) tgtLangSel.value = changes.meaningLanguage.newValue || 'zh';
   });
 
   // 🌐 按钮展开/收起
@@ -520,22 +534,27 @@ style.textContent = `
 
 // === 注入完整 CSS（异步 <link>）===
 export function injectCSS() {
+  // CSS 缓存克星：link href 带构建戳版本参数（与 video-sidebar.js 同策略）——
+  //   URL 恒定时扩展重载后浏览器沿用旧缓存，sidebar.css 的修改对用户无效。
+  //   查重必须兼容带参 href（endsWith 会漏匹配 '?v=' 后缀 → 重复注入）；
+  //   '/sidebar.css?' 前导 '/' 保证不误匹配 web-sidebar.css（其路径为 '-sidebar.css?'）。
+  const ver = `?v=${encodeURIComponent(BUILD_STAMP)}`;
   const links = document.querySelectorAll('link[rel="stylesheet"]');
   let hasSidebar = false, hasWebSidebar = false;
   links.forEach((l) => {
-    if (l.href.endsWith('/sidebar.css')) hasSidebar = true;
-    if (l.href.endsWith('/web-sidebar.css')) hasWebSidebar = true;
+    if (l.href.endsWith('/sidebar.css') || l.href.includes('/sidebar.css?')) hasSidebar = true;
+    if (l.href.endsWith('/web-sidebar.css') || l.href.includes('/web-sidebar.css?')) hasWebSidebar = true;
   });
   if (!hasSidebar) {
     const link = document.createElement('link');
     link.rel = 'stylesheet';
-    link.href = chrome.runtime.getURL('src/content/sidebar.css');
+    link.href = chrome.runtime.getURL('src/content/sidebar.css') + ver;
     (document.head || document.documentElement).appendChild(link);
   }
   if (!hasWebSidebar) {
     const link = document.createElement('link');
     link.rel = 'stylesheet';
-    link.href = chrome.runtime.getURL('src/content/web-sidebar.css');
+    link.href = chrome.runtime.getURL('src/content/web-sidebar.css') + ver;
     (document.head || document.documentElement).appendChild(link);
   }
 }

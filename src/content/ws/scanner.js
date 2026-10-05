@@ -5,6 +5,8 @@
 //       跨模块共享状态一律来自 ./core.js，写入走 core 导出的 set_xxx 接缝，绝不另存副本。
 
 import { getAnnotations, getRankMax, rankToStage } from '../../lib/annotator.js';
+// 渲染端词面定位（Unicode 词界/CJK 子串，修 ASCII \b 对重音/CJK 词失配——2026-10-05）
+import { findWordPositions } from '../../lib/tokenizer.js';
 // 兜底扫描前等待词典词频就绪（ensureRanksReady，防冷装载期间把词写入 _seenWords
 //   造成同会话 skip(seen) 永久无提示；web-sidebar-impl 已 ensureReady 预热）。
 import { ensureRanksReady } from '../../lib/dictionary.js';
@@ -19,7 +21,7 @@ import { getPhonetic } from '../../lib/phonetics.js';
 import { lemmaFamily } from '../../lib/lemmatizer.js';
 import { translate, PRIO_WEB } from '../../lib/translator.js';
 import { getBlocks, getLastEmitAt, subscribe } from '../page-scan-bus.js';
-import { _activeTab, _allAnnotations, _annotateOov, _annotateRepeat, _annTemplate, _annotationsCache, _cachedLearnLang, _collectedSubs, _detailMode, _firstSentMap, _noAnnotation, _pageSentenceEls, _pageSentences, _rankThreshold, _root, _scanScheduled, _seenSentences, _seenWords, addSentenceKey, addWordKey, cssEscape, escapeHtml, escapeReg, formatTime, getBlockText, hasSentenceKey, hasWordKey, log, normSentKey, set_allAnnotations, set_annotationsCache, set_collectedSubs, set_firstSentMap, set_pageSentenceEls, set_pageSentences, set_scanScheduled, set_seenSentences, set_seenWords, splitSentences } from './core.js';
+import { _activeTab, _allAnnotations, _annotateOov, _annotateRepeat, _annTemplate, _annotationsCache, _cachedLearnLang, _collectedSubs, _detailMode, _firstSentMap, _noAnnotation, _pageSentenceEls, _pageSentences, _rankThreshold, _root, _scanScheduled, _seenSentences, _seenWords, addSentenceKey, addWordKey, cssEscape, escapeHtml, formatTime, getBlockText, hasSentenceKey, hasWordKey, log, normSentKey, set_allAnnotations, set_annotationsCache, set_collectedSubs, set_firstSentMap, set_pageSentenceEls, set_pageSentences, set_scanScheduled, set_seenSentences, set_seenWords, splitSentences } from './core.js';
 // 渲染走 annTemplate 模板拆分（pre+释义+post）
 import { splitAnnTemplate } from '../../lib/styles.js';
 
@@ -285,11 +287,9 @@ function scanPageText() {
  */
 function sentHasWord(sentLower, wordLower) {
   if (!sentLower || !wordLower) return false;
-  try {
-    return new RegExp('\\b' + escapeReg(wordLower) + '\\b', 'i').test(sentLower);
-  } catch (e) {
-    return sentLower.includes(wordLower);   // 正则构造异常时退回子串判定
-  }
+  // 2026-10-05：改 findWordPositions（与 highlightWords 同口径）——\b 只认 ASCII 词界，
+  //   重音词（café）与 CJK 词永远失配，句归属判定失效。词界语义保持（不命中长词内部）。
+  return findWordPositions(sentLower, wordLower, false).length > 0;
 }
 
 /**
@@ -1021,13 +1021,14 @@ if (ann.rank === null && !_annotateOov) return;
 //   重绘包含该词的句子（重绘用已 splice 的缓存数组，高亮/注释自然消失）。
 //   必须在下方重试分支之前 return——否则 5s 重试拿到 IDB 同形缓存会"复活"该词。
 //   句重绘守卫不能用 anns.some(word===)（该词已 splice，恒 false）——
-//   改按句文本含该词正则判定（与 highlightWords 的 \b 口径一致）。
+//   改按句文本含该词判定（与 highlightWords 同口径，findWordPositions；\b 对
+//   CJK/重音词失配——2026-10-05）。
 if (ann.dropped) {
   const key = wordDedupKey(ann.word);
   set_allAnnotations(_allAnnotations.filter((a) => wordDedupKey(a && a.word) !== key));
   const wordSel = cssEscape(key);
   _root.querySelectorAll(`.beaver-web-word-item[data-word="${wordSel}"]`).forEach((item) => item.remove());
-  const dropRe = new RegExp('\\b' + escapeReg(ann.word) + '\\b', 'i');
+  const hasDroppedWord = (t) => findWordPositions(String(t || ''), ann.word, false).length > 0;
   _root.querySelectorAll('.beaver-web-sub-item').forEach((slot) => {
     const idxAttr = slot.dataset.idx;
     if (idxAttr == null) return;
@@ -1035,7 +1036,7 @@ if (ann.dropped) {
     const subIdx = parseInt(idxAttr, 10);
     if (isNaN(subIdx)) return;
     const sub = _pageSentences[subIdx];
-    if (!sub || !dropRe.test(sub.text || '')) return;
+    if (!sub || !hasDroppedWord(sub.text)) return;
     const p = _annotationsCache.get(sub);
     if (!p) return;
     Promise.resolve(p).then((anns) => {
@@ -1207,36 +1208,48 @@ function fillSlotAnnotations(slot, sub, anns) {
 //   （与 subtitle-overlay.js 同一判据，那里是整体跳过不高亮。）
 function highlightWords(text, annotations, inlineAnnotations = false) {
   if (!annotations || annotations.length === 0) return escapeHtml(text);
-  const sorted = [...annotations].sort((a, b) => b.word.length - a.word.length);
-  let result = escapeHtml(text);
-  const placeholders = [];
-  for (const a of sorted) {
-    // 注释重复生词 勾选后 'gi' 全局替换，每次出现都注释。
+  // 2026-10-05 重写：改为"原始文本定位 → 按位置切片拼 HTML"（与 vs/subtitle-renderer
+  //   同口径同步）。旧实现先 escapeHtml 再正则替换：撇号词（don't→&#39;）永不匹配、
+  //   ASCII \b 对重音/CJK 词失配、原文大小写被小写 annotation.word 抹掉，一并修复。
+  const hits = [];
+  for (const a of annotations) {
+    // 注释重复生词 勾选后每次出现都注释。
     // 重复开关关闭时，后续出现（isFirst===false）不包高亮 span，
     //   保持纯文本——对齐页面 .beaver-hide-later 默认透明语义（th/core.js 注入 CSS：
     //   后续出现 background:transparent 看起来像普通文本）。此前 later 词
     //   始终包 span 且回退色与首现相同，侧栏句子行中同词每次出现都是完整提示，
     //   即用户所见「重复提示」。开关开启时恢复全量高亮（later 类）。
     if (!_annotateRepeat && a.isFirst === false) continue;
-    const re = new RegExp(`\\b${escapeReg(a.word)}\\b`, _annotateRepeat ? 'gi' : 'i');
-    const cls = a.isFirst === false ? 'beaver-web-word later' : 'beaver-web-word';
-    const ph = `\x00${placeholders.length}\x00`;
-    let replacement = `<span class="${cls}">${escapeHtml(a.word)}</span>`;
-    if (inlineAnnotations && (_annotateRepeat || a.isFirst !== false)) {
-      const shortTrans = pickCleanShortTrans(a.translations);
+    for (const pos of findWordPositions(text, a.word, _annotateRepeat)) {
+      hits.push({ start: pos.start, end: pos.end, ann: a });
+    }
+  }
+  if (hits.length === 0) return escapeHtml(text);
+  hits.sort((x, y) => x.start - y.start || y.end - x.end);
+  const valid = [];
+  let lastEnd = 0;
+  for (const h of hits) {
+    if (h.start >= lastEnd) { valid.push(h); lastEnd = h.end; }
+  }
+  let html = '';
+  let pos = 0;
+  for (const h of valid) {
+    html += escapeHtml(text.slice(pos, h.start));
+    const cls = h.ann.isFirst === false ? 'beaver-web-word later' : 'beaver-web-word';
+    let replacement = `<span class="${cls}">${escapeHtml(text.slice(h.start, h.end))}</span>`;
+    if (inlineAnnotations && (_annotateRepeat || h.ann.isFirst !== false)) {
+      const shortTrans = pickCleanShortTrans(h.ann.translations);
       if (shortTrans) {
         // 注释文本由 _annTemplate 模板渲染（pre+释义+post，HTML 转义各段）
         const { pre, post } = splitAnnTemplate(_annTemplate);
         replacement += `<span class="beaver-web-ann-inline">${escapeHtml(pre)}${escapeHtml(shortTrans)}${escapeHtml(post)}</span>`;
       }
     }
-    placeholders.push(replacement);
-    result = result.replace(re, ph);
+    html += replacement;
+    pos = h.end;
   }
-  for (let i = 0; i < placeholders.length; i++) {
-    result = result.split(`\x00${i}\x00`).join(placeholders[i]);
-  }
-  return result;
+  html += escapeHtml(text.slice(pos));
+  return html;
 }
 
 // 异步填充详细注释行的注音 span

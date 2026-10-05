@@ -198,6 +198,8 @@ async function _hintBoot() {
       }
     };
 
+    // 语言切换重扫防抖定时器（下方 onChanged 的 learnLanguage/meaningLanguage 分支用）
+    let _langRescanTimer = null;
     // storage 监听器必须先于 startHint 注册：若启动抛错/挂起，监听器永不注册，
     //   后续在引导页/弹窗改设置全部失效。启动结果写窗口元数据供诊断悬浮窗展示。
     chrome.storage.onChanged.addListener((changes) => {
@@ -277,6 +279,21 @@ async function _hintBoot() {
       if ('annTemplate' in changes) {
         _impl.setAnnTemplate(changes.annTemplate.newValue);
       }
+      // 学习/释义语言切换 → 词典投影按语言键构建，旧高亮词面/释义全部过期：清缓存
+      //   拆旧包裹，等词典按新语言重建就绪后整页重扫（用户："改了语言，还是按照英语扫"）。
+      //   防抖 800ms 合并三处 UI（引导页/侧栏/弹窗）可能的连续多键写入，只拆扫一次；
+      //   同值回声写（newValue===oldValue）跳过，避免无谓的全页闪烁。
+      if ('learnLanguage' in changes || 'meaningLanguage' in changes) {
+        const _llEcho = !changes.learnLanguage || changes.learnLanguage.newValue === changes.learnLanguage.oldValue;
+        const _mlEcho = !changes.meaningLanguage || changes.meaningLanguage.newValue === changes.meaningLanguage.oldValue;
+        if (!_llEcho || !_mlEcho) {
+          if (_langRescanTimer) clearTimeout(_langRescanTimer);
+          _langRescanTimer = setTimeout(() => {
+            _langRescanTimer = null;
+            try { _impl.onLangChanged(); } catch (e) { console.warn('[VocabRadar][text-hint] 语言切换重扫失败:', e); }
+          }, 800);
+        }
+      }
       // 配色字段变化 → 热更新样式（无需重扫）
       const colorKeys = [
         'hintFirstEnabled', 'hintFirstBg', 'hintFirstFg',
@@ -290,6 +307,17 @@ async function _hintBoot() {
       if (colorKeys.some((k) => k in changes)) {
         _hintGetSettings().then((s) => _impl.updateColors(s));
       }
+    });
+
+    // 第518次（用户："改了语言，并不生效，还是按照英语扫"缺口补修）：词典后台重建
+    //   完成广播无人接——切到未构建过的新语言时，onLangChanged 的 ensureReady 会随
+    //   _loadDict 的"后台首建放行"提前 resolve（空词典），整页重扫 0 命中；等词频
+    //   从 HF 拉完写入词典后，页侧再无人重扫，页面高亮一直空白直到手动刷新。
+    //   此处监听 projection.js 的 vr-dict-rebuilt 补一轮重扫（rescanNow 自带
+    //   thState.enabled 守卫，未启用空转；重复触发幂等无害）。
+    window.addEventListener('vr-dict-rebuilt', () => {
+      if (!_impl) return;
+      try { _impl.rescanNow(); } catch (e) { console.warn('[VocabRadar][text-hint] 词典重建完成重扫失败:', e); }
     });
 
     // 启动文本提示（含自愈）：startHint 异常捕获并记录到 __beaverHintBoot，避免"静默不启动"。

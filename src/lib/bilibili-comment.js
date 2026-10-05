@@ -8,8 +8,8 @@
 //   4. 用户检查后手动点发送。
 // 仅做 DOM 填充，无 csrf token 与 API 调用。
 
-import { lookup } from './dictionary.js';
-import { extractEnglishWords } from './tokenizer.js';
+import { lookup, getLearnLang } from './dictionary.js';
+import { extractWords } from './tokenizer.js';
 import { getBilibiliSubtitles } from './subtitle/index.js';
 
 /** 阶显示：rank 每 1000 为一阶，表外词单独标识 */
@@ -93,11 +93,12 @@ export async function fillComment() {
     chrome.storage.local.get({ rankThreshold: 0 }, resolve);
   });
 
-  // 收集所有字幕中的英文单词，去重
+  // 收集所有字幕中学习语言的候选词，去重（2026-10-05 分词按语言，不再只扫英文）
+  const lang = getLearnLang();
   const seen = new Set();
   const annotations = [];
   for (const sub of subtitles) {
-    const words = extractEnglishWords(sub.text.toLowerCase());
+    const words = extractWords(sub.text.toLowerCase(), lang);
     for (const w of words) {
       if (seen.has(w)) continue;
       seen.add(w);

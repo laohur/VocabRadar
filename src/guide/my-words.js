@@ -27,6 +27,7 @@ const SAVE_DEBOUNCE_MS = 500;   // 逐键写 storage 防抖（与 subSampleText 
 let _taNew = null, _taKnown = null;
 let _cntNew = null, _cntKnown = null;
 let _presetSel = [];        // 勾选中的词表标签（storage.myWordsPresetSel）
+let _learnLang = 'en';      // 目标学习语言（wordlists 仅英文——非 en 不渲染词表 chips）
 let _saveTimer = 0;         // 文本框输入防抖定时器
 let _lastWriteAt = 0;       // 本模块最近一次写 storage 时刻（回声抑制）
 let _inited = false;
@@ -66,10 +67,13 @@ function updateCounts() {
 }
 
 // 词表 chips 渲染（幂等重建；active 按 _presetSel）
+// 用户报障"非英语哪来的词表标签"：wordlists.jsonl 仅英文词表（IELTS/TOEFL/GRE/
+//   GMAT/SAT），非英语目标语时整排 chips 不渲染（清空区容器）。
 function renderChips() {
   const box = $('mwNewPresets');
   if (!box) return;
   box.innerHTML = '';
+  if (_learnLang !== 'en') return;
   for (const tag of PRESET_TAGS) {
     const chip = document.createElement('button');
     chip.type = 'button';
@@ -78,6 +82,16 @@ function renderChips() {
     chip.addEventListener('click', () => onChipClick(tag, chip));
     box.appendChild(chip);
   }
+}
+
+// 目标语言变化入口（guide.js storage.onChanged 调用）：更新缓存并重渲染 chips。
+//   _presetSel 不清洗——切回 en 时原勾选态保留（勾选态仅影响 en 词典 tags 查询）。
+export function setMyWordsLearnLang(lang) {
+  const v = (typeof lang === 'string' && lang) ? lang : 'en';
+  if (v === _learnLang) return;
+  _learnLang = v;
+  renderChips();
+  log('My Words 词表 chips 随目标语言切换:', v);
 }
 
 // chip 点击（用户已确认交互语义）：
@@ -226,8 +240,10 @@ export function initMyWords() {
   bindBtn('mwNewExport', () => exportText(_taNew, 'my-words-new.txt'));
   bindBtn('mwKnownCopy', () => copyText(_taKnown, $('mwKnownCopy')));
   bindBtn('mwKnownExport', () => exportText(_taKnown, 'my-words-known.txt'));
-  renderChips();
-  chrome.storage.local.get({ myWords: { new: [], known: [] }, myWordsPresetSel: [] }, (res) => {
+  // learnLanguage 一并读出：非 en 首屏即不渲染词表 chips（wordlists 仅英文）
+  chrome.storage.local.get({ myWords: { new: [], known: [] }, myWordsPresetSel: [], learnLanguage: 'en' }, (res) => {
+    _learnLang = res.learnLanguage || 'en';
+    renderChips();
     fillFromStorage(res.myWords, res.myWordsPresetSel);
   });
   log('My Words 模块已初始化');

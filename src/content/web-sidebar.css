@@ -992,15 +992,18 @@
   margin-bottom: 0;
 }
 
+/* 生词表词头：与视频侧栏 sidebar.css .beaver-w-word 同口径（第518次对齐出血：
+ * 旧值 0 4px 上下贴字形、左右近贴字——用户"盒子贴字无出血"） */
 #beaver-web-sidebar .beaver-web-word-item .beaver-w-word {
   display: inline-block;
   max-width: 100%;
   background: var(--beaver-first-bg, transparent);
   color: var(--beaver-first-fg, #2e6b43);
-  padding: 0 4px;
-  border-radius: 3px;
+  padding: 3px 10px;
+  line-height: 1.45;
+  border-radius: 4px;
   font-weight: 500;
-  margin: 1px 4px 1px 0;
+  margin: 2px 6px 2px 0;
 }
 
 #beaver-web-sidebar .beaver-web-word-item .beaver-w-speak {

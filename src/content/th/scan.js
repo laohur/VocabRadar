@@ -18,7 +18,11 @@
 //   - startHint 中的 window scroll 监听（thState.scrollHandler 幂等守卫）
 //
 // 跨模块调用：tooltip.js 提供浮层处理器；panel.js 提供查词面板；core.js 提供共享状态/常量/工具。
-import { lookupFull, prefetchFull, getDiagState as getDictDiagState, ensureReady, ensureRanksReady, setQuietBatch, isLoaded as isDictLoaded } from '../../lib/dictionary.js';
+import { lookupFull, prefetchFull, getDiagState as getDictDiagState, ensureReady, ensureRanksReady, setQuietBatch, isLoaded as isDictLoaded, getLearnLang } from '../../lib/dictionary.js';
+// 分词+选词（带原文位置）：2026-10-05（用户："改了语言，并不生效，还是按照英语扫"）——
+//   页面扫描原自有 WORD_G_PATTERN+SELECT_PATTERN（纯 ASCII 英文）选词层，非英语 token
+//   在此整批滤光；收口到 tokenizer 按学习语言的同一口径（Segmenter locale 分词）。
+import { extractWordMatches } from '../../lib/tokenizer.js';
 // 流水日志接 debugLog 阀门（引导页「调试日志」开关）：console.log 直出的
 //   启动/停止/清扫/去重/挂载成功等流水默认静默；warn/error 异常信号不受阀门影响
 //   （30s 门闸 console.error 保留，不可讳疾忌医）。
@@ -52,7 +56,7 @@ function _uiLoad() {
 }
 import {
   thState, HIGHLIGHT_CLASS, FIRST_CLASS, LATER_CLASS, HIDE_WORD_CLASS, SIDE_ANN_CLASS,
-  PROCESSED_ATTR, TOOLTIP_ID, PANEL_ID, STYLE_ID, WORD_G_PATTERN, SELECT_PATTERN,
+  PROCESSED_ATTR, TOOLTIP_ID, PANEL_ID, STYLE_ID,
   SKIP_TAGS, NON_CONTENT_SELECTOR, JS_SENTINELS,
   waitForBody, isContextValid, injectStyles, applyColorVars, pickColors,
   thMark, thAdd, getHintTiming
@@ -245,6 +249,26 @@ export function clearHighlights() {
   // 高亮全拆＝注释宿主已不在，账本一并清零（重扫可重挂）
   thState.annSeenWords.clear();
   if (isDebugLog()) console.log('[VocabRadar][text-hint] 已删除全部高亮');
+}
+
+/**
+ * 学习/释义语言切换 setter（storage.learnLanguage / meaningLanguage 变化时调用）：
+ * 词典投影按语言键构建（dictionary/state.js 监听 learnLanguage 清就绪态触发懒重建），
+ * 切换后旧高亮的词面/释义全部过期——先拆全部包裹并清账本（clearHighlights 同款
+ * unwrapAll + resetScan），再等词典按新语言重建就绪后整页重扫（同 startHint 的
+ * 就绪重扫模式）。防抖在调用方（text-hint.js onChanged）侧：三处 UI 连续写多键时
+ * 合并为一次拆扫。meaningLanguage 变化同样重扫：已包裹 span 上的释义是旧语言的
+ * 产物，重扫后按新语言重取。重建失败按表外词重扫继续（同 startHint 失败语义）。
+ */
+export function onLangChanged() {
+  if (!thState.enabled) return;
+  clearHighlights();
+  ensureReady().then(() => {
+    rescanNow();
+  }).catch((e) => {
+    console.warn('[VocabRadar][text-hint] 语言切换后词典重建失败（按表外词重扫继续）:', e);
+    try { rescanNow(); } catch (_) { /* ignore */ }
+  });
 }
 
 /**
@@ -588,11 +612,13 @@ export async function processBatch(textNodes) {
     //   SW 侧单事务并发 get），把本批词的完整记录一次取回内存；随后逐词查词全部
     //   命中内存，不再逐词往返。预取失败静默（退回逐词路径，行为不变）。
     const preWords = [];
+    const preLang = getLearnLang();
     for (const tn of textNodes) {
       const t = tn && tn.nodeValue;
       if (!t || t.trim().length < 2) continue;
-      for (const m of t.matchAll(WORD_G_PATTERN)) {
-        if (SELECT_PATTERN.test(m[0]) && !JS_SENTINELS.has(m[0].toLowerCase())) preWords.push(m[0].toLowerCase());
+      // 2026-10-05：选词收口 tokenizer.extractWordMatches（按学习语言，原 SELECT_PATTERN 纯 ASCII）
+      for (const w of extractWordMatches(t, preLang)) {
+        if (!JS_SENTINELS.has(w.word.toLowerCase())) preWords.push(w.word.toLowerCase());
       }
     }
     try { await prefetchFull(preWords); } catch (e) { /* 预取失败不影响本批 */ }
@@ -720,14 +746,11 @@ export async function processTextNode(textNode, stats) {
     }
   } catch (e) { /* 记录失败不影响高亮 */ }
 
-  // 提取单词及位置
+  // 提取单词及位置（2026-10-05：按学习语言分词选词，原 WORD_G_PATTERN+SELECT_PATTERN
+  //   为英文专用口径，非英语页面 token 在此整批滤光——"改了语言还是按英语扫"网页端根因）
   // 过滤 JS 特殊值（NaN/undefined/Infinity）：页面 JS 异常产生的文本，非真实单词，不应高亮
-  const words = [];
-  for (const m of text.matchAll(WORD_G_PATTERN)) {
-    if (SELECT_PATTERN.test(m[0]) && !JS_SENTINELS.has(m[0].toLowerCase())) {
-      words.push({ word: m[0], start: m.index, end: m.index + m[0].length });
-    }
-  }
+  const words = extractWordMatches(text, getLearnLang())
+    .filter((w) => !JS_SENTINELS.has(w.word.toLowerCase()));
   if (words.length === 0) return;
 
   // 未勾选「注释重复生词」时，同一文本节点内重复出现的词只注释首次

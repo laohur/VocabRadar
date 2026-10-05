@@ -65,6 +65,11 @@ export function updateAnnStyle(styleId) {
 // 280次：注入统一池样式表（幂等；选择器同 web-sidebar.css 手写版：句子生词
 // .beaver-web-word、行内注释 .beaver-web-ann-inline、详细注释词头 .beaver-web-ann-word）
 // 301次：个性化/用户条目规则刷新（独立覆盖写 textContent；空即只剩内置池）。
+// 2026-10-05 回退：曾把词汇 tab 词条 .beaver-w-word 并入 word 选择器——误诊。
+//   用户澄清"生词高亮边界被吃"实为视频侧栏词条无上下出血（已在 sidebar.css 修），
+//   网页侧栏本无此问题；且池 word 规则全字段带 !important，并入会把徽章/边框/
+//   渐变/动画整套强加到词条（vs/ann-style.js 同问题已裁撤的"样式都换了"）。
+//   词条继续只消费 --beaver-first-bg/fg 变量，不并入。
 export function refreshAnnPoolCss(customObj, userList) {
   let el = document.getElementById('beaver-ann-pool-css-ws');
   const extra = [];

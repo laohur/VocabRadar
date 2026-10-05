@@ -26,6 +26,8 @@ import { warmYouTubeCaptionInnertube } from '../lib/subtitle/index.js';
 import { initAsrProgress } from './vs-asr-progress.js';
 // 顶行统一构建器——视频/文本侧栏共用同一代码文件（用户裁定）
 import { ensureTopbarCss } from '../lib/sidebar-topbar.js';
+// BUILD_STAMP：CSS 缓存克星版本参数（link href 带 ?v= 构建戳，防旧 sidebar.css 缓存）
+import { BUILD_STAMP } from '../lib/styles.js';
 import { initLang, onLangChange } from '../lib/i18n.js';
 // 词典就绪双钩子——字幕渲染可能抢在词典冷装载（1~17s）之前，就绪后需补渲染才能出注释
 //   （ensureRanksReady/ensureReady/isLoaded）
@@ -140,6 +142,10 @@ let _asrTrackIndex = -1;     // ASR 在轨道下拉框中的索引（-1=未添�
 //   其内部 sel.value 重置会覆盖用户已手动选择的 ASR 轨道；此标记为 true 时
 //   setTracks 保持 ASR 选中态不被覆盖。选常规轨道/停止 ASR/换集时重置 false。
 let _userPickedASR = false;
+// 用户手动选择的常规字幕轨道（第421次）：存轨道身份串（vss_id|languageCode|kind），
+//   setTracks 重建下拉时优先恢复选中（用户手动选轨最高优先，不被默认链覆盖）。
+//   仅本页会话内存有效（与 _userPickedASR 同口径）；换集/重建/改语言重拉时重置。
+let _userPickedTrack = null;
 
 // config 参数
 let _cfg = {
@@ -175,6 +181,8 @@ export function getAsrCacheLoaded() { return _asrCacheLoaded; }
 export function setAsrCacheLoaded(v) { _asrCacheLoaded = !!v; }
 export function getUserPickedASR() { return _userPickedASR; }
 export function setUserPickedASR(v) { _userPickedASR = !!v; }
+export function getUserPickedTrack() { return _userPickedTrack; }
+export function setUserPickedTrack(v) { _userPickedTrack = v || null; }
 export function getAsrTrackIndex() { return _asrTrackIndex; }
 export function setAsrTrackIndex(v) { _asrTrackIndex = v; }
 // 状态接驳（vs/bind-events.js 经门面 getter/setter 读写）
@@ -369,6 +377,7 @@ export async function startSidebar(video, options = {}) {
     resetRenderState();
     _asrCacheLoaded = false;
     _userPickedASR = false;  // 换集重置用户 ASR 选中标记（stopASRInternal 已清，此处双保险）
+    _userPickedTrack = null;  // 换集重置用户手选轨道（新集走四层链默认）
     setNoSubAutoCollapseDone(false);  // 换集重置自动折叠配额
     // 换集时立即清空生词表 DOM，与字幕区 showLoading 同步重置——否则若新字幕
     //   未到达（换集检测失败），旧生词条目残留面板，造成「字幕区是新的、生词表是旧的」错位。
@@ -405,6 +414,7 @@ export async function startSidebar(video, options = {}) {
     resetRenderState();
     _asrCacheLoaded = false;
     _userPickedASR = false;  // 重建重置用户 ASR 选中标记
+    _userPickedTrack = null;  // 重建重置用户手选轨道
   }
 
   _video = video;
@@ -441,10 +451,15 @@ export async function startSidebar(video, options = {}) {
     `;
     document.head.appendChild(criticalStyle);
   }
-  if (!document.querySelector('link[href*="sidebar.css"]')) {
+  // CSS 缓存克星：link href 带构建戳版本参数，扩展重载后 URL 必变，浏览器不会
+  //   沿用旧缓存——此前词头出血等 sidebar.css 修改多次对用户无效，根因即旧 link
+  //   URL 恒定吃缓存（JS 走 content script 不受影响，故版本号/JS 修复一直生效）。
+  //   查重选择器须精确到 /sidebar.css（href*="sidebar.css" 会误匹配 web-sidebar.css
+  //   ——文本侧栏先注入时视频侧将漏注入本文件）。
+  if (!document.querySelector('link[href$="/sidebar.css"], link[href*="/sidebar.css?"]')) {
     const link = document.createElement('link');
     link.rel = 'stylesheet';
-    link.href = chrome.runtime.getURL('src/content/sidebar.css');
+    link.href = chrome.runtime.getURL('src/content/sidebar.css') + `?v=${encodeURIComponent(BUILD_STAMP)}`;
     document.head.appendChild(link);
   }
   // 统一顶行样式（sidebar-topbar.js 唯一来源，幂等）
@@ -537,8 +552,11 @@ export async function startSidebar(video, options = {}) {
   // 监听 timeupdate + seeked 高亮当前字幕（字幕到达后生效）
   // 必须同时监听 seeked：timeupdate 在视频暂停时不触发，用户拖进度条暂停时 seek
   //   后高亮不会更新（"字幕没跟随"）。seeked 在 seek 完成时（无论是否暂停）立即触发。
-  _timeListener = () => { if (_syncEnabled) highlightCurrent(_video.currentTime); };
-  _seekedListener = () => { if (_syncEnabled) highlightCurrent(_video.currentTime); };
+  // 十版：timeupdate→follow（追赶中走上浮/下沉步进，否则瞬时居中）；
+  //   seeked→center（瞬时居中并清追赶；点击引发的同行 seeked 在 highlightCurrent
+  //   早退，不会误清追赶）
+  _timeListener = () => { if (_syncEnabled) highlightCurrent(_video.currentTime, 'follow'); };
+  _seekedListener = () => { if (_syncEnabled) highlightCurrent(_video.currentTime, 'center'); };
   _video.addEventListener('timeupdate', _timeListener);
   _video.addEventListener('seeked', _seekedListener);
 
@@ -616,6 +634,41 @@ export async function startSidebar(video, options = {}) {
 //   一次武装钩子跨视频存活：触发后 isLoaded 为真不再武装；若触发时字幕尚未渲染则
 //   空转一轮无害，后续 updateSubtitles 正常渲染即带注释。
 let _dictReadyArmed = false;
+
+/** 武装词典就绪重渲染钩子（ranks 先行 + 整词典两档，见 updateSubtitles 内注释）。
+ *  从 updateSubtitles 的内联块提出：语言切换路径要复位 _dictReadyArmed 后重入。 */
+function armDictReadyRerender() {
+  if (_dictReadyArmed || isLoaded()) return;
+  _dictReadyArmed = true;
+  try {
+    ensureRanksReady().then(() => {
+      try { rerenderPanelOnly(); } catch (e) { console.warn('[VocabRadar][video-sidebar] 词频就绪重渲染失败:', e); }
+    }).catch((e) => { console.warn('[VocabRadar][video-sidebar] 词频装载失败（等整词典就绪重渲染）:', e); });
+    ensureReady().then(() => {
+      try { rerenderPanelOnly(); } catch (e) { console.warn('[VocabRadar][video-sidebar] 词典就绪重渲染失败:', e); }
+    }).catch((e) => { console.warn('[VocabRadar][video-sidebar] 词典装载失败（按表外继续）:', e); });
+  } catch (e) {
+    console.warn('[VocabRadar][video-sidebar] 词典就绪钩子调度失败:', e);
+  }
+}
+
+// 2026-10-05（用户："视频侧栏的生词并没有跟随设定语言"）缺口补修：
+//   视频页不跑 text-hint，词典装载全靠上面这组一次性武装的就绪钩子。切换学习语言后
+//   dictionary/state.js 清就绪态触发懒重建，但 _dictReadyArmed 已置位 → 无人再调
+//   ensureReady → 新语言词频永不装载，新词全按表外被滤（词表空/不跟语言）。
+//   此处监听 learnLanguage 变化复位武装标志并重挂钩子（渲染端已有清缓存重渲染逻辑，
+//   这里只负责"词典按新语言重建好后补一轮重渲染"）。未就绪时才需要；已就绪空转无害。
+if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.onChanged) {
+  chrome.storage.onChanged.addListener((changes, area) => {
+    if (area !== 'local' || !changes.learnLanguage) return;
+    if (!getRoot()) return;   // 侧栏未注入时无需钩子（下次 startSidebar 正常武装）
+    if (!isLoaded()) {
+      _dictReadyArmed = false;
+      armDictReadyRerender();
+    }
+  });
+}
+
 // 词典后台重建完成补渲染——armed 钩子幂等一次，若被假就绪/首建放行提前消耗，
 //   真词典就绪后无人重渲染；监听 projection.js 的重建广播兜底（全局只挂一次）。
 if (typeof window !== 'undefined' && !window.__vrRebuildRelisten) {
@@ -669,19 +722,8 @@ export async function updateSubtitles(subtitles) {
   //   ranks 先行重渲染（补词频口径），整词典就绪再重渲染（补 lemma/tags/真表外）；
   //   rerenderPanelOnly 自带清注释缓存+清 seen+遍历全部 slot 重查，即可产出注释。
   //   词典已就绪则无需武装；装载失败 resolve null 时空转一轮无害（与现状一致）。
-  if (!_dictReadyArmed && !isLoaded()) {
-    _dictReadyArmed = true;
-    try {
-      ensureRanksReady().then(() => {
-        try { rerenderPanelOnly(); } catch (e) { console.warn('[VocabRadar][video-sidebar] 词频就绪重渲染失败:', e); }
-      }).catch((e) => { console.warn('[VocabRadar][video-sidebar] 词频装载失败（等整词典就绪重渲染）:', e); });
-      ensureReady().then(() => {
-        try { rerenderPanelOnly(); } catch (e) { console.warn('[VocabRadar][video-sidebar] 词典就绪重渲染失败:', e); }
-      }).catch((e) => { console.warn('[VocabRadar][video-sidebar] 词典装载失败（按表外继续）:', e); });
-    } catch (e) {
-      console.warn('[VocabRadar][video-sidebar] 词典就绪钩子调度失败:', e);
-    }
-  }
+  //   2026-10-05：武装块提出为 armDictReadyRerender（语言切换监听复用，见其定义处）。
+  armDictReadyRerender();
   // 字幕填充后补测一次高度（锚点可能晚于骨架就绪）
   requestSyncHeightOnce();
   // 首批真实字幕到达 → 自动展开一次（启动折叠态的解除）
@@ -730,6 +772,7 @@ export function destroySidebar() {
   _asrCacheLoaded = false;
   _asrActive = false;
   _userPickedASR = false;  // 同步重置用户 ASR 选中标记
+  _userPickedTrack = null;  // 同步重置用户手选轨道
 }
 
 // popup「视频侧栏」开关的隐藏标记——hideSidebar 置位、showSidebar 复位，

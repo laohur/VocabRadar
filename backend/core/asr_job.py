@@ -587,6 +587,9 @@ def _transcribe(job, asr_engine, audio_path, video_id=None):
                                             vad_filter=False)
         job["detected_language"] = tinfo.language
         ci, done = 0, 0.0
+        # 里程碑打印（用户裁定：由每 100 段改为每识别 5 分钟音频打一条）：
+        #   按识别产出的全局音频时间（段 end）驱动，next_log_mark 为下一阈值
+        next_log_mark = 300.0
         for s in segs_iter:  # 生成器：识别一段、追加一段，轮询端即刻可见
             if job.get("cancel"):  # 第513次：逐段响应点（抢占让位的最快出口）
                 raise _JobCancelled()
@@ -600,15 +603,17 @@ def _transcribe(job, asr_engine, audio_path, video_id=None):
                 ci += 1
             if covered_total:
                 job["progress"]["transcribe"] = round(done / covered_total * 100)
-            # 第444次里程碑（用户裁定「每100条输出一条，不再用定时」）：
-            #   段计数驱动，每累计 100 段打一条，行带外联轨迹。
-            if len(job["segments"]) % 100 == 0:
+            # 里程碑（每识别 5 分钟音频一条）：段 end 越过下一阈值即打印。
+            #   用 while 而非 if，防止单段跨越多个 5 分钟时漏打
+            while s.end >= next_log_mark:
                 net = job.get("last_net") or {}
-                log.info("ASR 任务 %s 转写进度：%.1fs/%.1fs 覆盖（%d%%）%d 段 外联=%s",
+                log.info("ASR 任务 %s 转写进度：%.1fs/%.1fs 覆盖（%d%%）%d 段 已识别%.0f分钟 外联=%s",
                          job["id"], done, covered_total,
                          job["progress"]["transcribe"], len(job["segments"]),
+                         next_log_mark / 60,
                          ("%s %s" % (net.get("action"), net.get("url", "")))
                          if net else "无")
+                next_log_mark += 300.0
     # 第439次空洞补转：VAD 误判无人声的长间隙（BGM 重人声轻的营销号视频
     #   常态）强制转写一遍，补转区间并入覆盖——先补转再写缓存，缓存条目
     #   的覆盖必为终值。

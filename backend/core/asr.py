@@ -5,9 +5,9 @@
   faster-whisper/huggingface_hub 自动维护（hub 默认缓存，不自建
   models 目录、不落标记文件、不指明路径）：
   ensure_local_model 先 hub 本地缓存直取（local_files_only，就绪绝不联网，
-  规避启动 etag 校验/镜像波动即重下），无缓存才联网
-  snapshot_download（断点续传，尊重 HF_ENDPOINT 镜像）。历史残留
-  qwen3-asr 值一律归一。
+  规避启动 etag 校验/镜像波动即重下），无缓存才联网补拉（第516次：
+  hf 官方 → hf-mirror 镜像源链，进程内记住直连坏源，后续调用不再重复
+  付直连超时）。历史残留 qwen3-asr 值一律归一。
 - 音频解码：faster-whisper 内部用 PyAV 解码，直接喂文件路径，无需预处理。
 - 生命周期：resident 启动即后台预加载；on-demand 首请求加载、
   空闲超时卸载（进程内模型，卸载即释放内存）。加载互斥与 LLM 同款 _starting 防护。
@@ -43,20 +43,48 @@ def normalize_tier(name):
     return _TIER_ALIASES.get(name) or name or _DEFAULT_TIER
 
 
+# 联网补拉镜像（第516次）：hf 官方直连在大陆网络常态不可达，换未缓存
+# 档位即炸 LocalEntryNotFoundError（4dc3c36f1a3e 实锤）；对齐 llm_engine
+# 三源思路的进程内版——官方失败转 hf-mirror。坏源结论进程内记住
+# （None=未试 / True=可用 / False=已判死），同源不重复付连接超时。
+_HF_MIRROR = "https://hf-mirror.com"
+_ENDPOINT_STATE = {"hf": None}
+
+
 def ensure_local_model(tier):
     """确保档位模型就绪，返回模型目录（faster-whisper/huggingface_hub
     自动维护：hub 默认缓存，断点续传/并发锁/完整性自管；本模块不自建
     目录、不落任何标记文件）。
 
     先 hub 本地缓存直取（local_files_only=True，就绪绝不联网，规避
-    启动 etag 校验/镜像波动即重下）；无缓存才联网
-    snapshot_download（尊重 HF_ENDPOINT 镜像环境变量）。"""
+    启动 etag 校验/镜像波动即重下）；无缓存才联网补拉：hf 官方 →
+    hf-mirror 镜像（0.36+ HfApi.snapshot_download 透传 endpoint，无需
+    环境变量）。全败抛 RuntimeError（文案带档位与 repo，可读化——不再
+    裸透 huggingface_hub 原文）。"""
     repo = _WHISPER_REPOS.get(tier, "Systran/faster-whisper-" + tier)
-    from huggingface_hub import snapshot_download
+    from huggingface_hub import HfApi, snapshot_download
     try:
         return snapshot_download(repo_id=repo, local_files_only=True)
     except Exception:
-        return snapshot_download(repo_id=repo)
+        pass  # 本地无缓存/缓存残缺：联网补拉
+    last = None
+    for name, endpoint in (("hf", None), ("hf-mirror", _HF_MIRROR)):
+        if name == "hf" and _ENDPOINT_STATE["hf"] is False:
+            continue  # 本进程已判死：跳过直连
+        try:
+            api = HfApi(endpoint=endpoint) if endpoint else HfApi()
+            out = api.snapshot_download(repo_id=repo)
+            if name == "hf":
+                _ENDPOINT_STATE["hf"] = True
+            return out
+        except Exception as e:
+            last = e
+            if name == "hf":
+                _ENDPOINT_STATE["hf"] = False
+    raise RuntimeError(
+        "ASR 模型 %s（%s）本地无缓存且联网补拉失败（hf 与 hf-mirror 均不可达，"
+        "请检查网络后重试，或到管理页换回已缓存档位）：%s"
+        % (tier, repo, str(last)[:200]))
 
 
 class AsrEngine:
@@ -88,6 +116,9 @@ class AsrEngine:
 
         唯一引擎 faster-whisper；engine 参数作签名兼容，残留
         qwen3-asr 值一律归一（不再分支加载）。
+        第517次（用户裁定重申既定规则）：服务中已加载的模型不随配置换档
+        ——已加载判定只比引擎名，whisper_model 改动下次启动/卸载后生效；
+        勿再改为「换档即刻重载」。
         force=True（管理页启动按钮）解除手动停机；普通调用在手动停机
         期间拒绝加载（停了就是停了，不被业务请求悄悄拉回）。
         """

@@ -27,7 +27,7 @@ import { initParser, disposeParser } from './parser.js';
 // Deactivate 停用栏（逐条规则行渲染/编辑/深链，见该文件头注释）
 import { initDeactivate, disposeDeactivate } from './deactivate.js';
 // My Words（生词/熟词两栏，设定栏 group-global 后）独立模块
-import { initMyWords, syncMyWordsFromStorage } from './my-words.js';
+import { initMyWords, syncMyWordsFromStorage, setMyWordsLearnLang } from './my-words.js';
 // 渠道状态行模块 ch-health.js（状态拉取/渲染独立成模块，控制本文件行数）
 import { initChHealth, refreshChHealth } from './ch-health.js';
 // 对话大模型来源预置表（与后台共用同一份，避免地址/模型名两处不一致）
@@ -1007,6 +1007,9 @@ async function init() {
   // 其他标签页改了设置（如字幕样式）→ 本页监听同步
   chrome.storage.onChanged.addListener((changes, area) => {
     if (area !== 'local') return;
+    // 目标语言变化 → My Words 词表 chips 门控重渲染（wordlists 仅英文，
+    //   非英语不显示词表标签；本页语言栏自写亦走此回声，renderChips 幂等无害）
+    if (changes.learnLanguage) setMyWordsLearnLang(changes.learnLanguage.newValue);
     if (changes.uiLanguage) {
       setLangState(changes.uiLanguage.newValue);
       chrome.storage.local.get(null, (res) => renderAll(res));

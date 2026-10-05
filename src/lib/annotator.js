@@ -9,7 +9,7 @@
 
 import { lookup, lookupWithLemmatizer, getLearnLang, setQuietBatch, isLoaded } from './dictionary.js';
 // 第一百九十九次：hasCachedLemma 守卫已删除（自败守卫，见 getAnnotationsInner 内注释）
-import { extractEnglishWords } from './tokenizer.js';
+import { extractWords } from './tokenizer.js';
 import { translate, getMeaningLang, targetScriptOk } from './translator.js';
 import { getWordsBatch, updateFields } from './word-db.js';
 // 反思（2026-08-16 第七十次）：词典层数据来源账本——getAnnotations 每次处理
@@ -150,7 +150,7 @@ export function isSameForm(word, translation) {
  * 对一条字幕文本提取注解
  *
  * 流程：
- *   1. extractEnglishWords(text.lower()) 分词+选词
+ *   1. extractWords(text.lower(), lang) 分词+选词（按学习语言）
  *   2. 对每个 word：
  *      - lookupWord 判定是否需要显示（高频词跳过）
  *      - 需要显示 → 通过 translator.translate(word) 异步获取释义
@@ -204,7 +204,10 @@ async function getAnnotationsInner(text, rankThreshold = 0, seen = new Set(), on
   // 第三百七十五次：垃圾 token 便宜守卫——单字母碎片与超长拼接串（频道 handle/URL 片，
   //   如诊断所见 crashcoursekids/youtubecrashcourse/bsky 类）不进 IDB 批量与翻译队列；
   //   英文实词长度恒在 2~24 区间，真词零影响（a/I 本就因高频被滤，此处只是提前止损）。
-  const words = extractEnglishWords(text.toLowerCase()).filter((w) => w.length >= 2 && w.length <= 24);
+  //   2026-10-05（用户："改了语言，并不生效，还是按照英语扫"）：分词按学习语言选词
+  //   （extractWords(text, lang)），下限移入分词层按语言放宽（CJK 单字词下限 1）。
+  const lang = getLearnLang();
+  const words = extractWords(text.toLowerCase(), lang).filter((w) => w.length <= 24);
   const annotations = [];
   // 反思（2026-08-16 第七十次）：每批处理的真实账本——文本字符数 / 分词数 / 去重单词数，
   //   以及各属性 词典直读 vs 临时组装 的数量（计数点在下方真实读取/翻译处）。
@@ -226,7 +229,6 @@ async function getAnnotationsInner(text, rankThreshold = 0, seen = new Set(), on
   //   仅词典之外的词才从 Maps 组装 rank/lemma/tags 并写回 IDB；
   //   翻译命中 IDB（translationLang 匹配）则不再调 translate。
   //   word-db 放在 SW 层（扩展源 IDB），跨页面/跨网站共享（详见 word-db.js）。
-  const lang = getLearnLang();
   let idbRecords = [];
   try {
     idbRecords = await getWordsBatch(lang, words);

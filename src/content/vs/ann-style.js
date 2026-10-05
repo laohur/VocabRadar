@@ -89,6 +89,10 @@ export function refreshAnnPoolCss(customObj, userList) {
   }
   const css = buildAnnPoolCss({
     root: '#beaver-sidebar',
+    // ⚠ 不要把 .beaver-word-item .beaver-w-word（词汇 tab 词条）并入 word 选择器：
+    //   池 word 规则输出全部字段且全带 !important，会把字幕词条的徽章/边框/描边/
+    //   渐变/动画整套强加到词汇词条（用户："样式都换了"），并压过词单模式
+    //   （beaver-word-only）的清样式。词汇词条只消费 --beaver-first-bg/fg 变量。
     word: '.beaver-sub-text .beaver-word',
     annInline: '.beaver-ann-inline',
     annWord: '.beaver-ann-line .beaver-ann-word',

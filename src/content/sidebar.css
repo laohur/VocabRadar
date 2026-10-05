@@ -590,19 +590,26 @@
 }
 
 /* 生词表词头：跟随用户设置的首次出现配色（强对比度突出）——
- * 用户要求词头背景色跟随用户设置，不再固定深绿。
  * inline-block 确保背景正确渲染（inline 背景不覆盖行高）。
- * 用户裁定单行紧凑：词头/词形/释义/标签/几阶同行排列，过长自然折行。 */
+ * 出血基准改判（2026-10-05）：用户报"左右边界出血不够、问题依旧在，
+ *   旁边的字幕都没这么极端，文本侧栏的词汇的出血量更足"，且已删除扩展
+ *   重装、多浏览器验证——缓存因素排除。文本侧栏词头（web-sidebar.css，
+ *   padding 3px 10px、无 width:max-content）是用户认可的基准，本条逐字段
+ *   对齐它。悖论机制：视频侧栏直接挂 document，视频站（YouTube/B站）
+ *   页面 CSS 可达侧栏元素，本条是 sidebar.css 里唯一没加 !important 的
+ *   词头关键视觉规则，声明值从未真正全量渲染（16px 反而"不够"即被页面
+ *   规则压缩的证据）。对齐基准的同时补齐 !important 防御，与字幕词规则
+ *   （本文件 .beaver-sub-text .beaver-word 全 !important）同级。 */
 .beaver-word-item .beaver-w-word {
-  display: inline-block;
-  width: max-content;
-  max-width: 100%;
-  background: var(--beaver-first-bg, transparent);
-  color: var(--beaver-first-fg, #2e6b43);
-  padding: 0 8px;
-  border-radius: 3px;
-  font-weight: 500;
-  margin: 2px 6px 2px 0;
+  display: inline-block !important;
+  max-width: 100% !important;
+  background: var(--beaver-first-bg, transparent) !important;
+  color: var(--beaver-first-fg, #2e6b43) !important;
+  padding: 3px 10px !important;
+  line-height: 1.45 !important;
+  border-radius: 4px !important;
+  font-weight: 500 !important;
+  margin: 2px 6px 2px 0 !important;
 }
 
 .beaver-word-item .beaver-w-trans {
@@ -1047,14 +1054,15 @@
   display: none !important;
 }
 
+/* 词单导出预览清样式：!important 必须与上方词头硬化规则同级
+ * （!important 跨特异性压制，不加会被压掉导致导出预览残留徽章底色）。 */
 #beaver-word-panel.beaver-word-only .beaver-w-word {
   font-size: 1em;
-  font-weight: 400;
-  background: transparent;
-  color: var(--beaver-text);
-  padding: 0;
-  margin: 0;
-  width: auto;
+  font-weight: 400 !important;
+  background: transparent !important;
+  color: var(--beaver-text) !important;
+  padding: 0 !important;
+  margin: 0 !important;
 }
 
 /* 词单按钮 active 态 */

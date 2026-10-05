@@ -267,13 +267,14 @@ async function getYouTubeCaptionTracks() {
  * 默认轨道选择策略（2026-07-03 按用户确认调整）：
  *   1) 首选 learnLanguage（所学语言=目标语言）轨道，前缀匹配
  *   2) 无则取第一条非 meaningLanguage（释义语言）轨道（避免默认选母语字幕）
- *   3) 全失败则取第一条
- * 反思：旧版硬编码优先 en、回退非 zh，无视用户在 popup 改的源语言，
- * 导致"字幕轨道可选，默认首选目标语言"未生效。
+ *   四层链：原始语言 → 目标语言 → 界面语言 → 释义语言 → 首条（第421次，用户裁定）。
+ * 反思：旧版曾硬编码优先 en（无视用户语言），第419次又改成 uiLanguage 首选——
+ *   uiLanguage 默认 'en' 且 popup 不暴露，用户改学习语言后重拉仍恒选英语轨，
+ *   "默认首选目标语言"从未生效。
  *
- * @param {string} [learnLanguage='en'] 所学语言（次选轨道）
- * @param {string} [meaningLanguage='zh'] 释义语言（回退时避开）
- * @param {string} [uiLanguage='en'] 界面语言（第419次起默认首选轨道）
+ * @param {string} [learnLanguage='en'] 所学语言（第2层）
+ * @param {string} [meaningLanguage='zh'] 释义语言（第4层）
+ * @param {string} [uiLanguage='en'] 界面语言（第3层）
  * @returns {Promise<{tracks: Array, subtitles: Array|null, pickedIndex: number}|null>}
  */
 export async function getYouTubeSubtitles(learnLanguage = 'en', meaningLanguage = 'zh', uiLanguage = 'en') {
@@ -301,23 +302,21 @@ export async function getYouTubeSubtitles(learnLanguage = 'en', meaningLanguage 
   }
   console.log('[VocabRadar][youtube] 所有字幕轨道:', trackList.map((t) => `${t.languageCode}=${t.name}`).join(', '));
 
-  // 第419次：默认字幕改界面语言优先——uiLanguage 轨道（asr 自动优先）先选，
-  // 无则沿用原 learnLanguage 四级回落（asr → 任意 → 非 meaningLanguage → 首条）
-  let pickedIndex = trackList.findIndex((t) => t.kind === 'asr' && t.languageCode.startsWith(uiLanguage));
-  if (pickedIndex < 0) {
-    pickedIndex = trackList.findIndex((t) => t.languageCode.startsWith(uiLanguage));
-  }
-  // 默认首选 learnLanguage 轨道；无则取非 meaningLanguage；再无则第一条
-  // 第一百二十次：优先选择 ASR 自动字幕（kind=asr），无则按语言匹配
-  if (pickedIndex < 0) {
-    pickedIndex = trackList.findIndex((t) => t.kind === 'asr' && t.languageCode.startsWith(learnLanguage));
-  }
-  if (pickedIndex < 0) {
-    pickedIndex = trackList.findIndex((t) => t.languageCode.startsWith(learnLanguage));
-  }
-  if (pickedIndex < 0) {
-    pickedIndex = trackList.findIndex((t) => !t.languageCode.startsWith(meaningLanguage));
-  }
+  // 第421次：默认选轨四层链（用户裁定）：原始语言 → 目标语言(learnLanguage)
+  //   → 界面语言(uiLanguage) → 释义语言(meaningLanguage) → 首条。
+  //   每层先 ASR 轨再任意同语言轨（前缀匹配）。原始语言 = 首条 ASR 轨的语言
+  //   （ASR 只从原始音频生成，其语言即视频原生语言；无 ASR 轨则无原始语言
+  //   信号，跳过该层）。用户手动选轨最高优先（tracks.js 手选恢复），本链仅决定默认。
+  const pickLayer = (lang) => {
+    let i = trackList.findIndex((t) => t.kind === 'asr' && t.languageCode.startsWith(lang));
+    if (i < 0) i = trackList.findIndex((t) => t.languageCode.startsWith(lang));
+    return i;
+  };
+  const origLang = (trackList.find((t) => t.kind === 'asr') || {}).languageCode || '';
+  let pickedIndex = origLang ? pickLayer(origLang) : -1;
+  if (pickedIndex < 0) pickedIndex = pickLayer(learnLanguage);
+  if (pickedIndex < 0) pickedIndex = pickLayer(uiLanguage);
+  if (pickedIndex < 0) pickedIndex = pickLayer(meaningLanguage);
   if (pickedIndex < 0) pickedIndex = 0;
 const picked = trackList[pickedIndex];
   console.log(`[VocabRadar][youtube] 默认选中轨道: ${picked.languageCode} (${picked.name}) kind=${picked.kind || '-'}`);

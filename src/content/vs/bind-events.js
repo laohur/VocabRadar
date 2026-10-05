@@ -216,17 +216,18 @@ export function bindEvents(options = {}) {
   const tgtLangSel = _root.querySelector('#beaver-meaning-lang');
   // 第514次（用户"侧栏的语言列表的语言名称参照引导页的"）：三组标签统一
   //   「两位代码 + 空格 + 语言自称」（LANG_NAMES），与引导页 renderLangSelect 同口径；
-  //   释义下拉"统一英文名称"（LANG_NAMES_EN）旧决策撤销。展示序保持 i18n.js 原序
-  //   （20260930 裁定：仅引导页按代码字典序排，其余端展示序不动）。
+  //   释义下拉"统一英文名称"（LANG_NAMES_EN）旧决策撤销。
+  // 第517次（用户令"侧栏中的语言顺序改为代码顺序"）：展示序与引导页同口径，
+  //   按两位代码字典序排——[...].sort() 只排展示副本，i18n.js 原序与默认值不动。
   const langLabel = (lang) => (LANG_NAMES[lang] ? `${lang} ${LANG_NAMES[lang]}` : lang);
-  for (const lang of UI_LANGS) {
+  for (const lang of [...UI_LANGS].sort()) {
     const opt = document.createElement('option');
     opt.value = lang;
     opt.textContent = langLabel(lang);
     uiLangSel.appendChild(opt);
   }
   // 填充目标/释义语言选项（42种）
-  for (const lang of TRANSLATE_LANGS) {
+  for (const lang of [...TRANSLATE_LANGS].sort()) {
     const opt1 = document.createElement('option');
     opt1.value = lang;
     opt1.textContent = langLabel(lang);
@@ -404,7 +405,8 @@ export function bindEvents(options = {}) {
   trackSelect.addEventListener('change', (e) => {
     e.stopPropagation();
     const idx = parseInt(e.target.value, 10);
-    onTrackSelect(idx);
+    // fromUser=true：真实用户手选（onTrackSelect 据此记录手选轨道，自动链/模拟切轨不传）
+    onTrackSelect(idx, { fromUser: true });
   });
 
   // 点击诊断：capture 阶段记录点击是否到达按钮，排查"点不动"

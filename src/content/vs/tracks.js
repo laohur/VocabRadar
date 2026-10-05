@@ -29,12 +29,15 @@ import { getSidebarCollapsedFlag, toggleSidebarCollapse } from './sidebar-layout
 import {
   getRoot, getSubtitlesRef, getActiveVideo, isASRActive, updateSubtitles,
   getUserPickedASR, setUserPickedASR, getAsrTrackIndex, setAsrTrackIndex,
-  getAsrCacheLoaded
+  getAsrCacheLoaded, getUserPickedTrack, setUserPickedTrack
 } from '../video-sidebar.js';
 
 // === 模块状态（仅本模块读写，随函数自门面迁入） ===
 let _tracks = null;           // 字幕轨道列表（YouTube 有多轨道）
 let _trackFetchFn = null;     // 按轨道下载字幕的函数（fetchYouTubeTrack）
+
+// 轨道身份串：手选恢复的匹配键（vss_id 最唯一，languageCode/kind 兜底）
+const trackIdentity = (t) => [t.vss_id || '', t.languageCode || '', t.kind || ''].join('|');
 
 // === 设置字幕轨道选择器 ===
 // tracks: 轨道列表, pickedIndex: 默认选中, fetchFn: 按轨道下载字幕的函数
@@ -90,8 +93,17 @@ export function setTracks(tracks, pickedIndex, fetchFn) {
     sel.value = String(_asrTrackIndex);
     log('轨道选择器已设置:', _tracks.length, '条轨道(含ASR), 保持用户已选 ASR');
   } else {
-    sel.value = String(pickedIndex || 0);
-    log('轨道选择器已设置:', _tracks.length, '条轨道(含ASR), 选中=', pickedIndex);
+    // 第421次：用户手选的常规轨道优先恢复（身份串匹配；不在当前列表则失效走默认链）
+    //   ——setTracks 会因 ASR 字幕异步到达等场景被再次调用，此前 sel.value=pickedIndex
+    //   会把用户手选覆盖回默认链选轨（"用户手选最高优先"被打破）。
+    const up = getUserPickedTrack();
+    let wantIdx = -1;
+    if (up) {
+      wantIdx = _tracks.findIndex((t) => !t.isASR && trackIdentity(t) === up);
+      if (wantIdx < 0) setUserPickedTrack(null);  // 手选轨道不在列表（换集/轨源变化），失效
+    }
+    sel.value = String(wantIdx >= 0 ? wantIdx : (pickedIndex || 0));
+    log('轨道选择器已设置:', _tracks.length, '条轨道(含ASR), 选中=', wantIdx >= 0 ? `${wantIdx}(手选恢复)` : pickedIndex);
   }
   row.style.display = 'flex';
 
@@ -208,7 +220,9 @@ export function ensureASRTrackOption() {
 // 选择其他轨道时停止 ASR（如运行中）并加载对应字幕。
 // Live/Cached 双轨道合并为单一 ASR 轨道，点击时
 //   startASR 内部先回放缓存段再实时识别接续（replayCachedSegs + 实时识别）。
-export async function onTrackSelect(idx) {
+// opts.fromUser：仅 bind-events 的 change 事件（真实用户手选）传 true——
+//   手选记录/清除只认它；自动链路与模拟切轨内部调用缺省，不冒充用户意图。
+export async function onTrackSelect(idx, opts = {}) {
   const _root = getRoot();
   if (!_root) return;
   const panel = _root.querySelector('#beaver-subtitle-panel');
@@ -225,6 +239,7 @@ export async function onTrackSelect(idx) {
   if (_tracks && _tracks[idx] && _tracks[idx].isASR) {
     // 用户手动选 ASR 轨道，置标记防止后续 setTracks 覆盖选中态
     setUserPickedASR(true);
+    if (opts.fromUser) setUserPickedTrack(null);  // ASR 与常规手选互斥，只留一个
     if (isASRActive()) {
       log('用户选择 ASR 轨道, ASR 已运行, 仅同步选中态');
       return;
@@ -266,6 +281,9 @@ export async function onTrackSelect(idx) {
   setAutoChainActive(false);
 
   if (!_tracks || !_tracks[idx] || !_trackFetchFn) return;
+  // 第421次：真实用户手选（opts.fromUser）记录轨道身份，供 setTracks 重建下拉时恢复
+  //   选中态（用户手选最高优先，不被默认链覆盖）；自动链路/模拟切轨不记录。
+  if (opts.fromUser) setUserPickedTrack(trackIdentity(_tracks[idx]));
   log('用户切换轨道:', idx, _tracks[idx].languageCode);
   if (panel) showLoading();
   try {
