@@ -44,6 +44,12 @@ export const HIDE_WORD_CLASS = 'beaver-word-hidden';
 //   作为 .beaver-word 的兄弟节点（非子节点），避免 validateSpan 误判失效
 export const SIDE_ANN_CLASS = 'beaver-side-ann';
 export const PROCESSED_ATTR = 'data-beaver-done';
+// flex/grid 容器整包层：文本节点的直接父元素是 flex/grid 布局容器时，先把整个文本节点
+//   1:1 套进这个无样式包裹 span 再在内部包词——flex/grid 容器里每个子节点（含文本）都是
+//   独立 item，直接 surroundContents 拆分会把 1 个匿名 item 打散成 N 个，文字分列、被
+//   align-items:stretch 拉高，排版散架（PayPal 警告横幅实证）。包裹层带 PROCESSED_ATTR
+//   防自观察器回扫；内部生词全部拆出后由 unwrapSingle/unwrapAll/cleanupStaleSpans 清掉。
+export const FLEX_WRAP_CLASS = 'beaver-flex-wrap';
 export const TOOLTIP_ID = 'beaver-hint-tooltip';
 export const PANEL_ID = 'beaver-context-panel';
 // OCR 结果面板：右键图片/视频 OCR 识别结果展示

@@ -911,6 +911,13 @@ async function init() {
   chrome.runtime.onMessage.addListener((msg) => {
     if (msg && msg.type === 'LEMMAS_READY' && _refreshDictStats) _refreshDictStats(0);
   });
+  // 分字段后台合并到账广播（projection.js：FAST 后台 Stage 2 合并/源重建完成时派发
+  //   vr-dict-rebuilt）：词表标签等分项异步到账即重取分项数字（2026-10-06 用户裁定
+  //   "各个字段独立……等有词表标签再加标签"——就绪行翻牌只等词频级，分项到一门亮
+  //   一门）。window 事件（同 context 派发，非 SW 消息，无需应答）。
+  window.addEventListener('vr-dict-rebuilt', () => {
+    if (_refreshDictStats) _refreshDictStats(0);
+  });
   // 地址/模型/Key/提示词：change（失焦或回车）时保存，与本页其他控件一致
   $('llmBaseUrl').addEventListener('change', (e) => {
     chrome.storage.local.set({ llmBaseUrl: e.target.value.trim() }, () => log('接口地址已保存'));

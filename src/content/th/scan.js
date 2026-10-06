@@ -56,6 +56,7 @@ function _uiLoad() {
 }
 import {
   thState, HIGHLIGHT_CLASS, FIRST_CLASS, LATER_CLASS, HIDE_WORD_CLASS, SIDE_ANN_CLASS,
+  FLEX_WRAP_CLASS,
   PROCESSED_ATTR, TOOLTIP_ID, PANEL_ID, STYLE_ID,
   SKIP_TAGS, NON_CONTENT_SELECTOR, JS_SENTINELS,
   waitForBody, isContextValid, injectStyles, applyColorVars, pickColors,
@@ -804,6 +805,29 @@ export async function processTextNode(textNode, stats) {
   if (highlights.length === 0) return;
   if (!textNode.isConnected || textNode.nodeValue !== text) return;
 
+  // flex/grid 容器整包再拆（排版保护）：flex 容器的每个子节点（含文本节点）都是独立
+  //   flex item，直接 surroundContents 拆分会把 1 个匿名 item 打散成 N 个——文字分列、
+  //   被 align-items:stretch 拉高成大方块（PayPal 警告横幅实证：标题行父元素非 flex
+  //   高亮正常，正文段落父元素是 flex 即散架）。先把整个文本节点 1:1 套进无样式包裹
+  //   span（item 数不变，同 old-immersive-translate encapsulateTextNode / Hypothesis
+  //   相邻文本组单包裹的业界做法），再在包裹层内部恢复正常行内流包词。
+  //   检测穿透 display:contents 祖先（其子内容在最近非 contents 祖先上参与布局）；
+  //   放在"确认有词要包"之后——不高亮就不动 DOM，包裹层零白增。
+  //   行内元素（<b>/<a> 等）内部的文本不在此列：行内元素自身已是 item，拆其内部
+  //   文本不改变 item 数，照常轻量包裹。
+  if (findFlexGridContainer(parent)) {
+    try {
+      const wrap = document.createElement('span');
+      wrap.className = FLEX_WRAP_CLASS;
+      wrap.setAttribute(PROCESSED_ATTR, '1');   // 防扫描/自观察器把包裹层内文本当正文回扫
+      parent.insertBefore(wrap, textNode);
+      wrap.appendChild(textNode);
+    } catch (e) {
+      console.warn('[VocabRadar][text-hint] flex/grid 容器整包失败，本节点不高亮:', e);
+      return;   // 兜底：宁可此地不高亮，不可打散页面排版
+    }
+  }
+
   // 包裹（从后往前，避免位置偏移）
   for (let i = highlights.length - 1; i >= 0; i--) {
     try {
@@ -1300,6 +1324,42 @@ export function clearProcessedAttr() {
   });
 }
 
+/**
+ * 判定 el 向上（含自身）最近的"实际布局容器"是否为 flex/grid：
+ *   文本节点的直接父元素命中 flex/inline-flex/grid/inline-grid 时，包词拆分会把
+ *   1 个匿名 item 打散成 N 个独立 item，排版散架，须走整包再拆；display:contents
+ *   祖先自己不生成盒子，其子内容在最近非 contents 祖先上参与布局，须穿透后再判。
+ *   普通块级/行内容器返回 null（拆分只动行内流，安全）。
+ * @param {Element} el 文本节点的直接父元素
+ * @returns {Element|null} 命中的 flex/grid 容器；非 flex/grid 布局返回 null
+ */
+function findFlexGridContainer(el) {
+  for (let i = 0; el && el.nodeType === Node.ELEMENT_NODE && i < 6; i++) {
+    let display = '';
+    try { display = getComputedStyle(el).display || ''; } catch (e) { return null; }
+    if (display.indexOf('flex') !== -1 || display.indexOf('grid') !== -1) return el;
+    if (display !== 'contents') return null;
+    el = el.parentElement;
+  }
+  return null;
+}
+
+/**
+ * 拆掉一个空的 flex/grid 整包层：内部已无生词 span 时把内容搬回原位并移除包裹层，
+ *   还原原文结构（站点 CSS 子选择器少一个命中面）。非整包层或仍有生词时不动。
+ * @param {Element} el 待检元素
+ * @returns {boolean} 是否实际拆除
+ */
+function tryUnwrapFlexWrapper(el) {
+  if (!el || !el.classList || !el.classList.contains(FLEX_WRAP_CLASS)) return false;
+  if (el.querySelector('.' + HIGHLIGHT_CLASS)) return false;
+  const outer = el.parentNode;
+  if (!outer) return false;
+  while (el.firstChild) outer.insertBefore(el.firstChild, el);
+  outer.removeChild(el);
+  return true;
+}
+
 export function unwrapSingle(el) {
   const parent = el.parentNode;
   if (!parent) return;
@@ -1316,6 +1376,8 @@ export function unwrapSingle(el) {
   }
   while (el.firstChild) parent.insertBefore(el.firstChild, el);
   parent.removeChild(el);
+  // 生词拆出后若宿主是我们的 flex/grid 整包层且已空，顺手把包裹层也拆掉还原
+  tryUnwrapFlexWrapper(parent);
   // 不调 parent.normalize()，避免触发网站脚本 DOM 响应
 }
 
@@ -1367,6 +1429,13 @@ export function cleanupStaleSpans() {
     console.warn('[VocabRadar][text-hint] 清理失效高亮 ' + stale.length +
       ' 个（无 dataset.word=' + noData + '，文本不符=' + (stale.length - noData) + '）');
   }
+  // 整包层清扫：站方直接移走生词 span 时（不经 unwrapSingle）包裹层会残留成裸壳，
+  //   整页扫描前顺手拆掉已空的包裹层还原原文结构（tryUnwrapFlexWrapper 内部
+  //   自查"仍有生词不动"，含词的包裹层不受影响）。
+  document.querySelectorAll('.' + FLEX_WRAP_CLASS).forEach((wrap) => {
+    if (wrap.closest && wrap.closest('#beaver-sidebar, #beaver-web-sidebar, #beaver-subtitle-overlay')) return;
+    tryUnwrapFlexWrapper(wrap);
+  });
 }
 
 // === 移除所有高亮 ===
@@ -1399,6 +1468,12 @@ export function unwrapAll() {
   document.querySelectorAll('.' + SIDE_ANN_CLASS).forEach((el) => {
     if (el.closest && el.closest('#beaver-sidebar, #beaver-web-sidebar, #beaver-subtitle-overlay')) return;  // 跳过侧栏/字幕 overlay 元素
     el.remove();
+  });
+  // 整包层清扫：词已全部拆出、注释已移除，flex/grid 包裹层没有存在意义，
+  //   拆掉还原原文结构（stopHint/clearHighlights 后不留空壳，站点 CSS 子选择器少一个命中面）。
+  document.querySelectorAll('.' + FLEX_WRAP_CLASS).forEach((wrap) => {
+    if (wrap.closest && wrap.closest('#beaver-sidebar, #beaver-web-sidebar, #beaver-subtitle-overlay')) return;
+    tryUnwrapFlexWrapper(wrap);
   });
   document.querySelectorAll('[' + PROCESSED_ATTR + ']').forEach((el) => {
     if (el.closest && el.closest('#beaver-sidebar, #beaver-web-sidebar, #beaver-subtitle-overlay')) return;  // 跳过侧栏/字幕 overlay
@@ -1435,8 +1510,9 @@ export function startObserver() {
         //   innerHTML，新节点里的 .beaver-word 无 dataset.word；若被这里调度扫描，
         //   text-hint 会把它当正文重新包裹/清理。
         if (n.id === 'beaver-subtitle-overlay' || (n.closest && n.closest('#beaver-subtitle-overlay'))) continue;
-        // 跳过 beaver-word 和 beaver-side-ann 自身（防止重复扫描已包裹的内容）
-        if (n.classList && (n.classList.contains(HIGHLIGHT_CLASS) || n.classList.contains(SIDE_ANN_CLASS))) continue;
+        // 跳过 beaver-word、beaver-side-ann、beaver-flex-wrap 自身（防止重复扫描已包裹的内容；
+        //   整包层自带 PROCESSED_ATTR 已挡回扫，此处跳过只是免掉一轮无效 scheduleScan）
+        if (n.classList && (n.classList.contains(HIGHLIGHT_CLASS) || n.classList.contains(SIDE_ANN_CLASS) || n.classList.contains(FLEX_WRAP_CLASS))) continue;
         // 跳过本扩展插入页面的译文节点（.beaver-page-insert）——插入含英文译文会
         //   经此处 scheduleScan 触发重扫，译文内英文被再高亮再注释（"网页提示重复"
         //   漏口之二，walker acceptNode 已同步排除）。classList 直判＋closest 双保险。

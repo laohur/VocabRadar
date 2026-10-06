@@ -99,6 +99,23 @@ export function isRanksLoaded() {
 }
 
 /**
+ * 等待词表标签字段就绪（2026-10-06 用户裁定"各个字段独立……可以当作多个不同词典"）
+ * tags 在 FAST 路由后台 Stage 2 合并、SLOW/rebuild 路随合并/重建完成落定（projection.js）。
+ * 消费方：my-words 词表选择器（getWordsByTag 前置等待）——唯一真需要 tags 的调用方；
+ *   其余消费方一律词频级（ensureReady/ensureRanksReady），不得陪等 tags。
+ * 承诺永不悬空：合并异常/重建失败/装载异常均按当前 dictMap 实况落定（projection.js
+ *   各落定点 + 此处兜底，与 ensureRanksReady 第二百四十四/四十五次同款防竞态）。
+ * @returns {Promise<Map|null>} 当前词典 Map（tags 已尽力合并，实况可查）
+ */
+export function ensureTagsReady() {
+  if (dictState.tagsPromise) return dictState.tagsPromise;
+  // 未注册（_loadDict 未启动）：触发装载读回同步段注册的承诺；兜底永不悬空
+  const _p = _loadDict().catch(() => null);
+  if (!dictState.tagsPromise) dictState.tagsPromise = _p;
+  return dictState.tagsPromise;
+}
+
+/**
  * 查询单词，返回 { rank, tags, lemma }
  *
  * 查询逻辑：

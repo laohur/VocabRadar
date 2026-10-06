@@ -16,7 +16,7 @@
 //   My Words 优先级高于词频范围。
 
 import { $, log, markOwnWrite } from './shared.js';
-import { ensureReady, getWordsByTag } from '../lib/dictionary.js';
+import { ensureTagsReady, getWordsByTag } from '../lib/dictionary.js';
 
 // 词表快捷选择器标签清单（wordlists.jsonl 2026-09-27 起 5 个标签，专有名词不做 i18n；
 // 2026-09-27 用户裁定移除 CET4/CET6/TEM4/TEM8/GRADUATE，存量勾选态由 fillFromStorage 清洗）
@@ -95,10 +95,12 @@ export function setMyWordsLearnLang(lang) {
 }
 
 // chip 点击（用户已确认交互语义）：
-//   勾选 → ensureReady 后整表单词并入生词文本框（去重，原词在前新词在后按字母序）；
+//   勾选 → ensureTagsReady（词表标签字段级就绪；2026-10-06 用户裁定"各个字段独立……
+//     可以当作多个不同词典"——ensureReady 已降为词频级，此处不得陪等全字段也不得
+//     在合并前误读空 tags）后整表单词并入生词文本框（去重，原词在前新词在后按字母序）；
 //   取消 → 移除「属于该表且不属于其他仍勾选词表」的词；文本框始终唯一真源。
 async function onChipClick(tag, chipEl) {
-  try { await ensureReady(); } catch (_) { /* 装载失败按空表处理，不掩饰：log 已打 */ }
+  try { await ensureTagsReady(); } catch (_) { /* 装载失败按空表处理，不掩饰：log 已打 */ }
   const idx = _presetSel.indexOf(tag);
   if (idx === -1) {
     const tagWords = getWordsByTag(tag);

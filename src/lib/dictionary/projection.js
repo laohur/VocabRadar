@@ -63,6 +63,22 @@ export async function _loadDict(lang) {
       dictState._settleRanks = null;
     };
   }
+  // tagsPromise 同步注册（2026-10-06 用户裁定"各个字段独立……可以当作多个不同词典"）：
+  //   词表标签字段级就绪承诺，与 ranksPromise 同款一次性 settler + _lang 防旧轮误碰。
+  //   消费方仅 my-words 词表选择器（getWordsByTag 前置等待，唯一真需要 tags 的调用方）；
+  //   其余消费方一律词频级（ranksPromise / 提前 resolve 的 loadPromise），不得陪等 tags。
+  //   settle 时机：SLOW 合并循环后 / FAST 后台 Stage 2 finally / rebuild finally /
+  //   loadPromise 异常兜底——永不悬空。
+  if (!dictState.tagsPromise || dictState.tagsPromise._lang !== meaningLang) {
+    let _resolveTagsEarly = null;
+    dictState.tagsPromise = new Promise((r) => { _resolveTagsEarly = r; });
+    dictState.tagsPromise._lang = meaningLang;
+    dictState._settleTags = (v) => {
+      try { if (_resolveTagsEarly) _resolveTagsEarly(v); } catch (_) {}
+      _resolveTagsEarly = null;
+      dictState._settleTags = null;
+    };
+  }
 
   // 第二百四十六次：每轮装载重置"空投影已重建过"标记（SLOW PATH 自愈守卫用），
   //   防语言切换后旧语言的标记误放行新语言的空投影（真 0 词库时逐页死循环的保险丝）。
@@ -77,6 +93,9 @@ export async function _loadDict(lang) {
   //   上方在途复用；wfUpdates 检查下移进 IIFE 内部，行为语义不变。
   dictState.loadPromise = (async () => {
     const startTime = Date.now();
+    // 本轮 tags settler 闭包捕获（语言切换开新轮后，旧轮落定不得碰新轮承诺——
+    //   与下方 _settleMine 同纪律；SLOW 合并后 / FAST 后台 Stage 2 finally 统一用它落定）
+    const _settleTagsMine = dictState._settleTags;
 
     // 2026-09-08（用户批复"主动轮询 files.json 检测更新并自动重建"）：SW 每 24h 比对
     //   storage.wfInstalled[lang].sha256 与 HF files.json（checkWfUpdates），差异写
@@ -170,10 +189,32 @@ export async function _loadDict(lang) {
       _seg.map = Math.round(performance.now() - _t0);
       console.log(`[VocabRadar][dictionary][${_ts()}] 词频先行就绪(Ranks Stage 1): ${dictState.dictMap.size} 词 (${((Date.now() - startTime) / 1000).toFixed(2)}s)，tags/lemma 随后合并`);
       try { if (dictState._settleRanks) dictState._settleRanks(dictState.dictMap); } catch (_) {}
-      // ---- Stage 2：整投影合并 tags/lemma（原位合并，Map 引用稳定）----
+      // ---- 用户裁定（2026-10-06"各个字段独立，有词频即可提示……可以当作多个不同词典"）----
+      //   就绪闸从"全字段合并完"提前到"词频级"：loadedLang 在此置位、loadPromise 在此
+      //   resolve（下方 return 即落定）。ensureReady 消费方里只有 my-words 词表选择器真
+      //   需要 tags（已改挂 ensureTagsReady），其余全部只做 rank 阈值过滤，不再陪等。
+      //   Stage 2（整投影读取 + tags/lemma 原位合并 + en 词表自愈补装 + 内置翻译补装）
+      //   整体转后台 fire-and-forget；完成后照旧广播 vr-dict-rebuilt（text-hint.js:318 /
+      //   video-sidebar.js:676 / subtitle-overlay.js:91 补扫补渲染、guide 就绪行分项重取）
+      //   ——释义加载后填充、词形/词表标签到一门亮一门。rank-only Map 引用稳定，后台
+      //   原位合并对已持有者透明（既有设计）。段体保持原缩进直迁；异常/作废走段尾
+      //   finally（tags 落定 + 到账广播），绝不影响已完成的词频级就绪。
+      dictState.loadedLang = meaningLang;
+      _seg.total = Math.round(Date.now() - startTime);
+      console.log(`[VocabRadar][dictionary][${_ts()}] 词典就绪(词频级): ${dictState.dictMap.size} 词 (ranks ${_seg.ranks}ms / 合计 ${_seg.total}ms)，tags/lemma/释义转后台分字段合并`);
+      // ---- Stage 2：整投影合并 tags/lemma（原位合并，Map 引用稳定）——后台段 ----
+      void (async () => {
+      try {
       _t0 = performance.now();
       let _full = null;
       try { _full = await getLangProjection(meaningLang); } catch (e) { _full = null; }
+      // 语言切换闸：本轮后台合并只为本次装载语言服务——用户切走后 loadedLang /
+      //   ranksReadyLang 均已翻新，本轮整投影结果全部作废（旧语言 tags/lemma 不得并入
+      //   新语言 dictMap；此竞态旧版同步段窗口极小，后台化拉长窗口，显式闸上）。
+      if (dictState.loadedLang !== meaningLang || dictState.ranksReadyLang !== meaningLang) {
+        console.log(`[VocabRadar][dictionary][${_ts()}] Stage 2 后台合并作废（语言已切至 ${dictState.loadedLang}）`);
+        return;
+      }
       _seg.proj = Math.round(performance.now() - _t0);
       if (_full && _full.built) {
         let _pt = _full.tags || {};
@@ -224,7 +265,8 @@ export async function _loadDict(lang) {
         //   自动刷新就绪行；tags/lemma 高亮全量需重扫。
         console.warn(`[VocabRadar][dictionary][${_ts()}] 整投影 built=false（库无构建标记/数据残缺）→ 后台源重建补全（346 渐进就绪：先放行词频 ${dictState.dictMap.size} 词，完成后自动刷新）`);
         _kickRebuildBackground(meaningLang, 'Stage2 整投影 built=false（库残缺）');
-        dictState.loadedLang = meaningLang;
+        // loadedLang 不在此重置——词频级就绪已在 Stage 1 置位；后台段再赋值会在语言
+        //   切换后 clobber 新语言状态（上方作废闸挡不住同步赋值，直接删）。
         return dictState.dictMap;
       }
       // 第三百四十次（用户实测就绪行 "tags 0 · translations 687"）：快道坏库自愈——缺就补。
@@ -303,18 +345,23 @@ export async function _loadDict(lang) {
           }
         });
       }
-      dictState.loadedLang = meaningLang;
-      _seg.total = Math.round(Date.now() - startTime);
-      console.log(`[VocabRadar][dictionary][${_ts()}] 词典完全就绪: ${dictState.dictMap.size} 词 (ranks ${_seg.ranks}ms / 整投影 ${_seg.proj}ms / 合计 ${_seg.total}ms)`);
-      // 第三百七十一次（用户批复 A"词典初始装载完成也广播"）：FAST 完整就绪点补广播——
-      //   旧版只在 _kickRebuildBackground 成功分支发 vr-dict-rebuilt（L523），正常装载
-      //   主路径不广播：字幕先于词典上屏的句子画了空注释后，词典就绪无人通知 overlay
-      //   重算（侧栏有就绪双钩子能自愈，叠加字幕没有——两侧表现差异的根源）。口径对齐。
-      try {
-        if (dictState.dictMap && dictState.dictMap.size > 0 && typeof window !== 'undefined') {
-          window.dispatchEvent(new CustomEvent('vr-dict-rebuilt', { detail: { size: dictState.dictMap.size, lang: meaningLang } }));
-        }
-      } catch (_) {}
+      } catch (e) {
+        console.warn(`[VocabRadar][dictionary][${_ts()}] Stage 2 后台合并异常（词频级就绪不受影响，分项待下次装载/重建补齐）:`, e && e.message);
+      } finally {
+        // tagsPromise 统一落定（合并成功/读取失败/语言切换作废均到这——getWordsByTag
+        //   按调用时 dictMap 实况取数，承诺只负责"等到合并节点"，永不悬空）
+        try { if (_settleTagsMine) _settleTagsMine(dictState.dictMap); } catch (_) {}
+        // 分字段到账广播（原 FAST 完整就绪点广播，370 次引入；现从"全字段就绪点"挪到
+        //   "后台合并完成点"，口径不变）：text-hint.js:318 补扫、video-sidebar.js:676 /
+        //   subtitle-overlay.js:91 补渲染、guide 就绪行分项重取（本批新增监听）
+        try {
+          if (dictState.dictMap && dictState.dictMap.size > 0 && typeof window !== 'undefined') {
+            window.dispatchEvent(new CustomEvent('vr-dict-rebuilt', { detail: { size: dictState.dictMap.size, lang: meaningLang } }));
+          }
+        } catch (_) {}
+        console.log(`[VocabRadar][dictionary][${_ts()}] Stage 2 后台字段合并结束 (整投影 ${_seg.proj}ms / 距词频就绪 ${Math.round(Date.now() - startTime)}ms)`);
+      }
+      })();
       return dictState.dictMap;
     }
     // ---- SLOW PATH：ranks 缺失/未 built——沿用旧整投影路径（首屏等多一轮，无分阶段收益）----
@@ -369,6 +416,9 @@ export async function _loadDict(lang) {
         if (dictState.dictMap.has(word)) continue;
         dictState.dictMap.set(word, { rank: null, tags: [], lemma: projLemmas[word], translation: undefined, translationLang: undefined, phonetic: undefined });
       }
+      // tagsPromise 落定（SLOW 路合并循环已含 tags；FAST 路在后台 Stage 2 finally 落定，
+      //   rebuild/异常分支各自兜底——永不悬空）
+      try { if (_settleTagsMine) _settleTagsMine(dictState.dictMap); } catch (_) {}
       dictState.loadedLang = meaningLang;
       _seg.map = Math.round(performance.now() - _t0);   // 第一百八十八次
       const cost = ((Date.now() - startTime) / 1000).toFixed(2);
@@ -431,6 +481,10 @@ export async function _loadDict(lang) {
   //   resolve，就地补一次（成功带完整 Map，异常带 null，扫描侧按无词典继续）。
   //   闭包捕获本轮 settler——语言切换开新一轮 _loadDict 时，旧轮的落定不得碰新轮的承诺。
   const _settleMine = dictState._settleRanks;
+  // tags 兜底捕获（仅异常分支用）：成功分支在词频级即落定 loadPromise，绝不可顺带
+  //   放行 tagsPromise——否则 my-words 会在后台合并前拿到空 tags（正常落定点：
+  //   SLOW 合并后 / FAST 后台 Stage 2 finally / rebuild finally）。
+  const _settleTagsFallback = dictState._settleTags;
   dictState.loadPromise.then(
     (m) => {
       try { if (_settleMine) _settleMine(m); } catch (_) {}
@@ -441,6 +495,8 @@ export async function _loadDict(lang) {
     },
     () => {
       try { if (_settleMine) _settleMine(null); } catch (_) {}
+      // tagsPromise 防悬空（仅异常分支）：按实况落定，正常路径轮不到这里
+      try { if (_settleTagsFallback) _settleTagsFallback(dictState.dictMap); } catch (_) {}
       try { reportDictSnap({ lang: meaningLang, loaded: false, size: 0, err: true }); } catch (_) {}
     }
   );
@@ -587,6 +643,14 @@ function _kickRebuildBackground(lang, reason) {
     .finally(() => {
       dictState._rebuildRunning = false;
       dictState.rebuildPending = null;
+      // tagsPromise 兜底落定：重建成功=tags 已并入 dictMap；失败=按实况落定不悬空
+      //   （getWordsByTag 调用时实况取数，承诺只负责"等到合并节点"）。语言已切换时
+      //   tagsPromise._lang 不符即跳过，不碰新轮承诺（与上方 _settleMine 同纪律）。
+      try {
+        if (dictState._settleTags && dictState.tagsPromise && dictState.tagsPromise._lang === lang) {
+          dictState._settleTags(dictState.dictMap);
+        }
+      } catch (_) {}
       console.log(`[VocabRadar][dictionary][${_ts()}] 后台重建结束，rebuildPending 已清空（页侧轮询将刷新就绪行）`);
     });
 }
