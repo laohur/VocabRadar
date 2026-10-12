@@ -53,6 +53,40 @@ const MSG = {
   mwNewPh: { en: 'One word per line — annotated regardless of frequency range', zh: '一行一个单词——无论词频范围如何都会标注' },
   mwKnownPh: { en: 'One word per line — never annotated', zh: '一行一个单词——一律不再标注' },
   groupModel: { en: 'Models', zh: '模型' },
+  // 账号（P1c 2026-10-08，独立标签 panel-account——用户裁定不进设定栏，帮助之前）：
+  // 连接网站账号/断开/状态行
+  tabAccount: { en: 'Account', zh: '账号' },
+  groupAccount: { en: 'Account', zh: '账号' },
+  accountStatusLabel: { en: 'Sign-in status', zh: '登录状态' },
+  btnAccountConnect: { en: 'Connect website account', zh: '连接网站账号' },
+  btnAccountDisconnect: { en: 'Disconnect', zh: '断开' },
+  accountConnected: { en: 'Connected: {email}', zh: '已连接：{email}' },
+  accountNotConnected: { en: 'Not connected — click "Connect website account" and sign in on the site', zh: '未连接——点「连接网站账号」到网站登录后自动回传' },
+  // 自动共享字幕开关（P3 2026-10-08，字幕库页顶——用户令自账号页挪入）：
+  // 开启后 SW 收割完整字幕即自动上传；上传资格作者按条判定
+  subsAutoShareLabel: { en: 'Auto-share subtitles', zh: '自动共享字幕' },
+  subsAutoShareDesc: { en: 'Auto-upload once recognition completes; you decide per item.', zh: '识别完整后自动上传；资格由你逐条判定' },
+  // 账号栏（P1c）：连接/断开/状态行
+  // 字幕库（P3 2026-10-08，独立标签 panel-subs）：本地库列表 + 上传分享/删除本地
+  tabSubs: { en: 'Subtitle Library', zh: '字幕库' },
+  subsTitle: { en: 'Local Subtitle Library', zh: '本地字幕库' },
+  subsEmpty: { en: 'No subtitles yet — produce one in the ASR tab, then save it to the library.', zh: '还没有字幕——在 ASR 标签完成转写后点「存入字幕库」。' },
+  subsTagLocal: { en: 'local', zh: '本地' },
+  subsTagShared: { en: 'shared', zh: '已分享' },
+  subsUpload: { en: 'Share', zh: '上传分享' },
+  subsUploading: { en: 'Uploading…', zh: '上传中…' },
+  subsShareAll: { en: 'Share all', zh: '共享全部' },
+  subsShareAllDone: { en: 'Shared {ok} / {total} (skipped {skip})', zh: '已共享 {ok}/{total}（跳过 {skip}）' },
+  subsUnshare: { en: 'Unshare', zh: '取消分享' },
+  subsUnshareFail: { en: 'Unshare failed', zh: '取消分享失败' },
+  subsDelete: { en: 'Delete', zh: '删除本地' },
+  subsConfirmDelete: { en: 'Delete local subtitle "{title}"? Cloud share (if any) is not affected.', zh: '删除本地字幕「{title}」？云端分享（如有）不受影响。' },
+  subsNeedConnect: { en: 'Connect account first', zh: '请先连接账号' },
+  subsShareFail: { en: 'Upload failed', zh: '上传失败' },
+  subsLoadFail: { en: 'Failed to load library', zh: '字幕库读取失败' },
+  subsSaveOk: { en: 'Saved to library', zh: '已存入字幕库' },
+  asrSaveToSubs: { en: '💾 Save to library', zh: '💾 存入字幕库' },
+  subsAsrTitle: { en: 'ASR', zh: '语音转写' },
   // 「模型」分组内分成小标题（对话大模型 / 翻译 / 语音识别模型 / OCR）
   subHeadChat: { en: 'Chat LLM', zh: '对话大模型' },
   subHeadAsr: { en: 'Speech Recognition Model', zh: '语音识别模型' },

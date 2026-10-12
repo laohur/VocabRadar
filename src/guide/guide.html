@@ -40,6 +40,8 @@
     <button class="guide-tab" data-tab="asr" data-key="tabAsr">ASR</button>
     <button class="guide-tab" data-tab="ocr" data-key="tabOcr">OCR</button>
     <button class="guide-tab" data-tab="parser" data-key="tabParser">Parser</button>
+    <button class="guide-tab" data-tab="account" data-key="tabAccount">账号</button>
+    <button class="guide-tab" data-tab="subs" data-key="tabSubs">字幕库</button>
     <button class="guide-tab" data-tab="help" data-key="tabHelp">说明栏</button>
   </nav>
 
@@ -96,6 +98,8 @@
       </div>
 
       <!-- 340次：My Words 分组已升为独立子标签 panel-my-words（设定栏之后、ASR 之前） -->
+      <!-- 账号（P1c，2026-10-08）同日用户裁定：不进设定栏，升为独立标签 panel-account
+           （帮助之前），见下方独立 section -->
 
       <!-- 模型（第二百二十三次重排：对话大模型 / 翻译 / 语音识别模型 / OCR 四小节；
            LLM 四参数一行、两提示词与正文最大长度各一行；ASR/OCR 引擎为下拉两行式） -->
@@ -612,6 +616,8 @@
           <!-- 再其次：识别 -->
           <div class="g-recognize-row">
             <button class="func-btn" id="g-asr-btn" data-key="recognize" disabled>🎤 开始识别</button>
+            <!-- P3 20261008：转写结果一键存入字幕库（panel-subs 审阅/上传） -->
+            <button class="func-btn" id="g-asr-save-subs" data-key="asrSaveToSubs" disabled>💾 存入字幕库</button>
           </div>
           <!-- 进度 -->
           <div class="g-progress" id="g-asr-progress" style="display:none;">
@@ -750,6 +756,53 @@
               </div>
             </div>
           </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ===== 账号：独立标签页（P1c，2026-10-08 用户裁定：帮助之前的独立标签） =====
+         连接网站账号——点击开网站登录页（带扩展ID深链），登录后网页经
+         chrome.runtime.sendMessage 把 token 对一次性交回本扩展（通道C，见
+         web/docs/桥接扩展.md §7；token 不走 postMessage 桥）。
+         连接/断开动 chrome.storage.local 的 vocabradarCloudAuth，状态行实时反映 -->
+    <section class="guide-panel" id="panel-account" data-panel="account">
+      <div class="group" id="group-account">
+        <div class="group-head">
+          <span class="group-name" data-key="groupAccount">账号</span>
+        </div>
+        <div class="group-body">
+          <div class="field-row">
+            <div class="field">
+              <label data-key="accountStatusLabel">状态</label>
+              <span id="spanAccountStatus" class="style-desc" style="margin:0;">…</span>
+            </div>
+          </div>
+          <div class="field-row">
+            <button id="btnAccountConnect" type="button" class="mw-btn" data-key="btnAccountConnect">连接网站账号</button>
+            <button id="btnAccountDisconnect" type="button" class="mw-btn" data-key="btnAccountDisconnect">断开</button>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ===== 字幕库：独立标签页（P3，2026-10-08）===== 本地字幕库列表（IndexedDB
+         vocabradar-subs）。页顶「自动共享字幕」开关（用户 20261008 令自账号页挪入）：
+         开启后 SW 收割完整字幕即自动上传；上传资格最终由作者按条 分享/取消分享/删除 -->
+    <section class="guide-panel" id="panel-subs" data-panel="subs">
+      <div class="group">
+        <div class="group-head">
+          <span class="group-name" data-key="subsTitle">字幕库</span>
+        </div>
+        <div class="group-body">
+          <div class="field-row">
+            <label class="chk" style="display:flex;align-items:center;gap:8px;">
+              <input type="checkbox" id="chkSubsAutoShare">
+              <span data-key="subsAutoShareLabel">自动共享字幕</span>
+            </label>
+            <span class="style-desc" style="margin:0;flex:1;" data-key="subsAutoShareDesc">识别完整后自动上传；资格由你逐条判定</span>
+            <button type="button" class="mw-btn" id="btnSubsShareAll" data-key="subsShareAll">共享全部</button>
+          </div>
+          <div id="subsList"></div>
         </div>
       </div>
     </section>

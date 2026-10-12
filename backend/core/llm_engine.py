@@ -259,7 +259,7 @@ class LlmEngine:
         # （llm.model 未选时回落首卡，与 start() 实际拉起的模型一致）。
         alive = self.proc is not None and self.proc.poll() is None
         running = alive and self._health_ok()
-        card = self._current_card()
+        card = self.current_card()
         return {
             "running": running,
             "starting": alive and not running,  # 启动中（进程活但 /health 未 200）
@@ -297,9 +297,10 @@ class LlmEngine:
         return next((h for h in cands
                      if os.path.splitext(h)[1] not in (".dll", ".so", ".dylib")), None)
 
-    def _current_card(self):
+    def current_card(self):
         """当前生效卡片——llm.model 为卡片名（匹配 cards[].name），
-        未命中或为空回落首卡；无卡片返回 None（start() 报错）。"""
+        未命中或为空回落首卡；无卡片返回 None（start() 报错）。
+        translate 的卡片级翻译提示词模板（translate_prompt）亦经此读取。"""
         cards = [c for c in (self.cfg.get("cards") or []) if isinstance(c, dict)]
         chosen = (self.cfg.get("model") or "").strip().lower()
         if chosen:
@@ -452,7 +453,7 @@ class LlmEngine:
             exe = self.server_path()
             if not exe:
                 raise RuntimeError("未找到 llama-server（backend/bin/）。请先运行 backend/scripts/install.py。")
-            card = self._current_card()
+            card = self.current_card()
             if card is None:
                 raise RuntimeError("未配置模型卡片（config.json llm.cards），无法拉起 llama-server")
             args = self._command_argv(card, exe)

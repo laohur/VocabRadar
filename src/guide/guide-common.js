@@ -395,6 +395,9 @@ export function clearResults(kind) {
   //   OCR 重置扫描总线（文本侧栏收到 reset 清空句子等新一批）。
   if (kind === 'asr') {
     pushVideoSubtitles();
+    // P3：清空结果时同步禁用「存入字幕库」（无结果可存）
+    const saveBtn = $('g-asr-save-subs');
+    if (saveBtn) saveBtn.disabled = true;
   } else {
     import('../content/page-scan-bus.js').then(({ resetScan }) => resetScan()).catch(() => {});
   }
@@ -410,7 +413,12 @@ export function appendResult(kind, seg) {
   // 反思（2026-08-21 第八十九次）：识别结果输入真实侧栏——ASR 句推视频侧栏字幕面板；
   //   OCR 行在注释就绪后经扫描总线推文本侧栏（见下方 .then 内）。
   //   ASR 标签页已移除扁平结果列表（结果展示在视频侧栏），box 可为 null，不再作前置返回。
-  if (kind === 'asr') pushVideoSubtitles();
+  if (kind === 'asr') {
+    pushVideoSubtitles();
+    // P3：出现转写结果即启用「存入字幕库」
+    const saveBtn = $('g-asr-save-subs');
+    if (saveBtn) saveBtn.disabled = false;
+  }
   if (!box) {
     // 无结果列表容器（ASR）：OCR 行仍需喂文本侧栏（无注释也推，侧栏按词条过滤句子）
     if (kind === 'ocr') emitOcrBlock(seg.text || '', []);

@@ -1,9 +1,9 @@
 """翻译 API：/api/translate（{text, from, to} → {ok, text, model}）。
 
-模型路由：取 config <translate>.model（"nllb" | translate_llm 卡片名，管理页
-翻译段下拉按模型名选择）。错误映射（对齐 api/ocr.py）：RuntimeError → 503
-translate_engine_failed；ValueError → 400 bad_request。结果不做缓存
-（plan §2.11）。from 是 JSON 字段名（core 层参数名用 src）。
+模型路由：取 config <translate>.model（translate_llm 卡片名，默认 Hy-MT2-1.8B，
+管理页翻译段下拉按模型名选择；进程内 NLLB 快路径已移除）。错误映射（对齐
+api/ocr.py）：RuntimeError → 503 translate_engine_failed；ValueError → 400
+bad_request。结果不做缓存（plan §2.11）。from 是 JSON 字段名（core 层参数名用 src）。
 """
 
 from flask import Blueprint, current_app, jsonify, request
@@ -42,15 +42,14 @@ def translate_status():
 def translate_models():
     """翻译模型清单（管理页翻译段下拉数据源）。
 
-    首元素恒为内置 NLLB（模型名即标签）；其后为 translate_llm 实例的卡片
-    （name/desc/installed/is_default，与 /api/llm/models 同口径——installed 扫
-    hub 缓存，is_default 对 <translate>.model 的当前选择）。"""
+    全部为 translate_llm 实例的卡片（name/desc/installed/is_default，与
+    /api/llm/models 同口径——installed 扫 hub 缓存，is_default 对
+    <translate>.model 的当前选择）。进程内 NLLB 快路径已移除，无内置首元素。"""
     engines = current_app.extensions["engines"]
     cfg = current_app.config["CFG"]
     llm_cfg = cfg.get("translate_llm", {})
     chosen = (engines["translate"].status()["model"] or "").strip().lower()
-    out = [{"name": "nllb", "desc": "NLLB-200-distilled-600M（内置 CT2 int8，快）",
-            "installed": True, "is_default": engines["translate"].status()["model"] == "nllb"}]
+    out = []
     for c in (llm_cfg.get("cards") or []):
         if not isinstance(c, dict):
             continue

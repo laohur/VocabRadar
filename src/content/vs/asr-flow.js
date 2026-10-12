@@ -22,7 +22,7 @@
 //       selectASRTrackAndContinue（vc/controller 引用方符号不变）。
 // =============================================================================
 
-import { startASR, stopASR, hasASRCache, getCachedSubtitles, getASRCoverage } from '../../lib/asr-client.js';
+import { startASR, stopASR, hasASRCache, getCachedSubtitles, getASRCoverage, getJobHandoff } from '../../lib/asr-client.js';
 import { showASRProgress, hideASRProgress, updateASRProgressFill } from '../vs-asr-progress.js';
 import { pushDiagLine, clearDiagLines, updateASRProgressFromStage } from './asr-stage.js';
 import { resetRenderState, appendASRSubtitle } from './subtitle-renderer.js';
@@ -32,6 +32,7 @@ import { setSubtitles as overlaySetSubtitles } from '../subtitle-overlay.js';
 import { makeVideoKey } from './dom-utils.js';
 import { t } from '../../lib/i18n.js';
 import { log } from './logger.js';
+import { onAsrStopped } from './auto-share.js';
 import {
   getRoot, getSubtitlesRef, getActiveVideo, isASRActive, updateSubtitles, toast,
   setSubtitles, setAsrActive, getAsrCacheLoaded, setAsrCacheLoaded,
@@ -193,9 +194,14 @@ export function stopASRInternal(skipRestore) {
   const _stack = new Error().stack;
   const _caller = _stack ? _stack.split('\n').slice(2, 5).map(s => s.trim()).join(' <- ') : 'unknown';
   console.log('[VocabRadar][asr][' + new Date().toLocaleTimeString('en-GB', { hour12: false }) + '.' + String(Date.now() % 1000).padStart(3, '0') + '] stopASRInternal 被调用, skipRestore=' + !!skipRestore + ', 调用来源: ' + _caller);
+  // P3 分流快照：必须在 stopASR() 之前取（stopJobPolling 即清 jobId）
+  const _jobHandoff = getJobHandoff();
   if (_asrUnsub) { try { _asrUnsub(); } catch (e) { /* ignore */ } _asrUnsub = null; }
   try { stopASR(); } catch (e) { /* ignore */ }
   setAsrActive(false);
+  // P3 用户令：只有完整识别的字幕才合格——任务进行中交接 SW 续拉到完整；
+  // 已完成的就地收割入库（自动共享开关在字幕库页顶，由作者判定上传）
+  onAsrStopped(_jobHandoff);
   // 卸载播放闸门；若暂停由闸门所为则恢复播放（不把用户卡在暂停态）
   uninstallPlaybackGate(true);
   // ASR 停止后清除用户选中标记，后续 setTracks 可正常按 pickedIndex 选轨

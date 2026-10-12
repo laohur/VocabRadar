@@ -28,6 +28,10 @@ import { initParser, disposeParser } from './parser.js';
 import { initDeactivate, disposeDeactivate } from './deactivate.js';
 // My Words（生词/熟词两栏，设定栏 group-global 后）独立模块
 import { initMyWords, syncMyWordsFromStorage, setMyWordsLearnLang } from './my-words.js';
+// 账号（P1c 2026-10-08：连接网站账号/断开/状态行，独立标签 panel-account）独立模块
+import { initAccount, disposeAccount } from './account.js';
+// 字幕库（P3 2026-10-08：本地字幕列表/上传分享/删除本地，独立标签 panel-subs）独立模块
+import { initSubs, disposeSubs } from './subs-library-ui.js';
 // 渠道状态行模块 ch-health.js（状态拉取/渲染独立成模块，控制本文件行数）
 import { initChHealth, refreshChHealth } from './ch-health.js';
 // 对话大模型来源预置表（与后台共用同一份，避免地址/模型名两处不一致）
@@ -578,6 +582,12 @@ function renderAll(res) {
   // My Words 两栏初始化（幂等；读 storage 回填 + 控件绑定 + chips 渲染）
   initMyWords();
 
+  // 账号栏初始化（幂等；读登录态回显 + 连接/断开绑定 + storage 跟随）
+  initAccount();
+
+  // 字幕库初始化（幂等；本地库列表 + 上传/删除绑定）
+  initSubs();
+
   // 界面文案
   applyTexts();
 }
@@ -1008,7 +1018,7 @@ async function init() {
   //   深链 ?deactivate= 需复用两者的既有监听）
   initDeactivate({ m, lang: () => getLangState() });
   window.addEventListener('pagehide', () => {
-    disposeAsrCommon(); disposeAsr(); disposeOcr(); disposeParser(); disposeDeactivate();
+    disposeAsrCommon(); disposeAsr(); disposeOcr(); disposeParser(); disposeDeactivate(); disposeAccount(); disposeSubs();
   });
 
   // 其他标签页改了设置（如字幕样式）→ 本页监听同步

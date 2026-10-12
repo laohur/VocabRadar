@@ -250,19 +250,17 @@ PAGES.translate = async function (main) {
   const cfg = (await api('/api/config')).config || {};
   const data = await api('/api/translate/models').catch(() => ({ models: [] }));
   const models = data.models || [];
-  const chosen = cfg.translate?.model ?? 'nllb';
+  const chosen = cfg.translate?.model ?? '';
   const modelSel = select(models.map((m) => [m.name,
-    m.name + (m.name === 'nllb' ? '' : (m.installed ? '' : ` (${t('Not downloaded')})`))]),
-    models.some((m) => m.name === chosen) ? chosen : 'nllb');
+    m.name + (m.installed ? '' : ` (${t('Not downloaded')})`)]),
+    models.some((m) => m.name === chosen) ? chosen : (models[0]?.name || ''));
   wrap.append(settingsCard(t('Settings'), [
     [t('Translation model'), modelSel,
-     t('nllb = built-in NLLB-200-distilled-600M (in-process CT2, fast). Any other entry is a llama.cpp card served by the dedicated Translate LLM engine (independent start/stop on the Overview page; first request may cold-start it).')],
+     t('All entries are llama.cpp cards served by the dedicated Translate LLM engine (independent start/stop on the Overview page; first request may cold-start it). Hy-MT2 = best quality; LMT-60-1.7B = mid tier; LMT-60-0.6B = lightweight tier.')]
   ], (_i, hint) => {
     const v = modelSel.value;
-    // 联动写入：translate.model=路由选择；选 llama.cpp 卡时同步 translate_llm.model
-    // （实例按卡启动）；切回 nllb 不动 translate_llm 选卡（保留，随时切回）
-    const patch = { translate: { model: v } };
-    if (v !== 'nllb') patch.translate_llm = { model: v };
+    // 联动写入：translate.model=路由选择，同时同步 translate_llm.model（实例按卡启动）
+    const patch = { translate: { model: v }, translate_llm: { model: v } };
     return saveCfg(null, patch, hint);
   }));
 
@@ -301,7 +299,9 @@ PAGES.asr = async function (main) {
   const wrap = el('div', { class: 'cols' });
 
   const cfg = (await api('/api/config')).config || {};
-  const engine = select([['faster-whisper', 'faster-whisper']],
+  const engine = select([['faster-whisper', 'faster-whisper（默认/无 GPU 回落）'],
+    ['qwen3-asr', 'qwen3-asr（Haujet GGUF，GPU）'],
+    ['moss', 'MOSS-Transcribe-Diarize（GPU，说话人分离）']],
     cfg.asr?.engine ?? 'faster-whisper');
   const mode = select([['resident', t('resident (always on)')], ['on-demand', t('on-demand')]],
     cfg.asr?.mode ?? 'resident');
@@ -310,14 +310,27 @@ PAGES.asr = async function (main) {
     ['base', 'base'], ['small', 'small'], ['medium', 'medium'],
     ['large-v3', 'large-v3']],
     cfg.asr?.whisper_model ?? 'large-v3-turbo');
+  const qsize = select([['0.6b', '0.6B（默认档，~1.35GB）'], ['1.7b', '1.7B（质量档，~2.15GB）']],
+    cfg.asr?.qwen3_size ?? '0.6b');
+  const mquant = select([['q4_K_M', 'q4_K_M（默认，最快档）'], ['q8_0', 'q8_0']],
+    cfg.asr?.moss_quant ?? 'q4_K_M');
+  const mpath = el('input', { value: cfg.asr?.moss_model_path || '',
+    placeholder: 'models/MOSS-Transcribe-Diarize-<quant>.gguf' });
   wrap.append(settingsCard(t('Settings'), [
     [t('Engine'), engine],
     [t('Run mode'), mode],
     [t('Result cache'), cacheOn, t('Deduplicate by video_id or audio content hash')],
     [t('whisper tier (faster-whisper only)'), wmodel],
+    [t('Qwen3-ASR tier (qwen3-asr only)'), qsize,
+     t('First use downloads the tool (~103MB) and model from GitHub releases; GPU (DML+Vulkan) required — falls back to faster-whisper on CPU-only machines.')],
+    [t('MOSS quant (moss only)'), mquant],
+    [t('MOSS model path (optional)'), mpath,
+     t('Leave empty for models/ inside the backend directory; the gguf must be placed manually (community distribution).')],
   ], (_i, hint) => saveCfg('asr', {
     engine: engine.value, mode: mode.value,
     cache: cacheOn.checked, whisper_model: wmodel.value,
+    qwen3_size: qsize.value, moss_quant: mquant.value,
+    moss_model_path: mpath.value.trim(),
   }, hint)));
 
   // ---- 缓存管理 ----

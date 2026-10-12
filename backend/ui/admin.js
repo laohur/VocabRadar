@@ -166,10 +166,7 @@ async function renderOverview(main) {
         + (eng.asr.loaded ? ' ' + t('· loaded {e}', { e: eng.asr.loaded_engine || '' }) : '')), 'asr'],
     ['OCR', eng.ocr, eng.ocr && eng.ocr.engine, eng.ocr && (eng.ocr.loaded || eng.ocr.loading),
       eng.ocr && t('mode={m}', { m: eng.ocr.mode }) + (eng.ocr.loaded ? ' · loaded' : ''), 'ocr'],
-    ['Translate', eng.translate, eng.translate && eng.translate.model,
-      eng.translate && (eng.translate.loaded || eng.translate.loading),
-      eng.translate && (t('mode={m}', { m: eng.translate.mode })
-        + (eng.translate.loaded ? ' · loaded' : '')), 'translate'],
+    // Translate 行已撤：翻译无进程内模型（NLLB 移除），生命周期全在 Translate LLM 行
     ['Downloader', eng.ytdl, 'yt-dlp' + (eng.ytdl && eng.ytdl.version ? ` v${eng.ytdl.version}` : ''), true,
       eng.ytdl && (t('default format {f}', { f: eng.ytdl.format })
         + (eng.ytdl.cookiefile ? ' ' + t('· cookie configured') : ''))],

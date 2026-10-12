@@ -10,13 +10,13 @@ import time
 
 from flask import Blueprint, current_app, jsonify, request
 
-from core.asr import ASR_CACHE_DIR, _safe_key, cache_clear, cache_list
+from core.asr import ASR_CACHE_DIR, ASR_ENGINES, _safe_key, cache_clear, cache_list, engine_tag
 
 log = logging.getLogger(__name__)  # 第446次：同步转写完成日志（视频任务路径已有，此处此前缺失）
 
 bp = Blueprint("asr", __name__)
 
-_VALID_ENGINES = ("faster-whisper",)  # 第404次：qwen3-asr 备选移除，唯一引擎
+_VALID_ENGINES = ASR_ENGINES  # 请求级 engine 参数校验（实际引擎由后端配置决定）
 
 
 @bp.get("/api/asr/status")
@@ -66,7 +66,7 @@ def _transcribe_multipart():
     language = (request.form.get("language") or "").strip() or None
     video_id = (request.form.get("video_id") or "").strip()
     asr_cfg = current_app.config["CFG"].get("asr", {})
-    eff_engine = "faster-whisper"  # 唯一引擎（engine_name 已过 _VALID_ENGINES 校验；历史配置残留值不再进缓存标签）
+    eff_engine = engine_tag(asr_cfg)  # 引擎/档位粒度标签（缓存条目引擎字段；引擎由后端配置决定）
     use_cache = asr_cfg.get("cache", True)
 
     fd, tmp_path = tempfile.mkstemp(

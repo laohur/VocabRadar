@@ -1657,3 +1657,43 @@ input::placeholder { color: var(--g-muted); opacity: 1; }
 @media (max-width: 760px) {
   .mw-cols { flex-direction: column; }
 }
+
+/* ===== 字幕库（P3 2026-10-08，panel-subs）===== 本地条目两行式 + 状态标签 + 行内操作 */
+.subs-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 0;
+  border-bottom: 1px solid rgba(128, 128, 128, 0.15);
+}
+.subs-item:last-child { border-bottom: none; }
+.subs-item-main { flex: 1; min-width: 0; }
+.subs-item-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary, #1c1c1e);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.subs-item-meta {
+  font-size: 11px;
+  color: var(--text-secondary, #888);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.subs-tag {
+  flex-shrink: 0;
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: rgba(128, 128, 128, 0.15);
+  color: var(--text-secondary, #888);
+}
+.subs-tag-shared {
+  background: rgba(48, 209, 88, 0.16);
+  color: #15803d;
+}
+.subs-item-actions { flex-shrink: 0; display: flex; gap: 6px; }
+.subs-empty { font-size: 13px; color: var(--text-secondary, #888); padding: 8px 0; }

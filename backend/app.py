@@ -185,15 +185,6 @@ def main():
         else:
             threading.Thread(target=_preload, args=(ocr, "OCR"),
                              daemon=True).start()
-    translate = engines["translate"]  # NLLB resident 后台预加载（快路径低时延）
-    # 选了 llama.cpp 翻译模型（model≠nllb）时翻译流量走 translate_llm 实例（自管
-    # 生命周期），NLLB 预加载纯属白占内存
-    if translate.mode == "resident" and translate.cfg.get("model", "nllb") == "nllb":
-        if translate.status()["manual_stop"]:
-            log.info("翻译引擎处于主动关停状态（translate.stopped=true），跳过自动预加载")
-        else:
-            threading.Thread(target=_preload, args=(translate, "翻译"),
-                             daemon=True).start()
     # 升级静默检查（plan §5.5）：daemon 线程，有更新仅日志提示不打扰
     threading.Thread(target=upgrade.silent_check, daemon=True).start()
     url = f"http://{cfg['host']}:{cfg['port']}"

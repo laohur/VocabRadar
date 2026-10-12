@@ -16,24 +16,78 @@ MEDIA_DIR = os.path.join(BASE_DIR, "media")
 CACHE_DIR = os.path.join(BASE_DIR, "cache")
 BIN_DIR = os.path.join(BASE_DIR, "bin")
 
-# 翻译特化卡片（bilibili IndexTeam Index-Translate-2B）：对话 LLM（llm.cards）
-# 与翻译 LLM（translate_llm.cards）共用同一张内置卡声明——翻译特化模型通用
-# 对话/推理弱于同规模通用模型，卡描述如实标注，用户自行权衡。
-# 无视觉（--no-mmproj）：翻译纯文本用不到投影，还省内存、避开仓库内两个
-# mmproj 文件的自动选择歧义。
-_INDEX_TRANSLATE_CARD = {
-    "name": "IndexTeam/Index-Translate-2B-GGUF:Q4_K_M",
-    "desc": "翻译特化模型（bilibili IndexTeam，150 语翻译与术语/格式指令遵循最强档；通用对话与推理弱于同规模通用模型，禁用视觉）",
-    "desc_en": "translation-specialized (bilibili IndexTeam; top-tier 150-language translation with glossary/format instruction following; weaker general chat/reasoning, vision disabled)",
-    "hf_repo": "IndexTeam/Index-Translate-2B-GGUF",
-    "fallback_url": "https://modelscope.cn/models/IndexTeam/Index-Translate-2B-GGUF/resolve/master/Index-Translate-2B.Q4_K_M.gguf",
-    "command": "llama-server -hf IndexTeam/Index-Translate-2B-GGUF:Q4_K_M --no-mmproj --jinja --host 127.0.0.1 --port 7789 -c 16384",
+# 翻译特化卡片（腾讯混元 Hy-MT2-1.8B）：翻译 LLM（translate_llm.cards）默认卡。
+# 2026-10-V1 基准实测（同机同 backend 自装 Vulkan llama-server）：13 句 3.0s 快于
+# Index-Translate-2B 的 3.6s，术语/专名全对且 Q4=Q8 无量化损失。纯文本
+# （--no-mmproj）：翻译用不到投影，省内存。translate_prompt=翻译提示词模板
+# （占位符 {dst}/{text}）：bench 口径对齐腾讯官方 translate.py 模板措辞，与
+# 其他家模板不同，core/translate.py 按当前生效卡选用，无模板回落通用模板。
+# ModelScope 仓库页未暴露该文件（resolve 404），第三级直链兜底改走 hf-mirror
+# （已验证 200；第二级 MODEL_ENDPOINT 镜像重定向本就覆盖 hf-mirror，此处仅
+# 直链双保险）。
+# -ngl 99（2026-10-10 翻译速度评测，通用技术）：显式全层 GPU 卸载——不写则依赖
+# 构建默认，老版 llama-server 默认 ngl=0 会静默全 CPU（Hy-MT2 CPU 仅 23 源词/s
+# vs GPU 105）；无 GPU 机器仅告警回落 CPU，安全。同评测：无 GPU 用户机建议切
+# LMT 卡（CPU 快 2.3x）；逐行请求即最优，勿做多行合并（LMT 完整性崩）。
+_HY_MT2_CARD = {
+    "name": "tencent/Hy-MT2-1.8B-GGUF:Q4_K_M",
+    "desc": "翻译特化模型（腾讯混元 Hy-MT2-1.8B；基准实测最优，术语/专名更稳；官方支持 33 语互译（含中英日韩等），纯文本，禁用视觉）原始卡：https://huggingface.co/tencent/Hy-MT2-1.8B-GGUF",
+    "desc_en": "translation-specialized (tencent Hy-MT2-1.8B; best in benchmarks with steadier terminology; official 33-language coverage incl. zh/en/ja/ko; text-only, vision disabled) original card: https://huggingface.co/tencent/Hy-MT2-1.8B-GGUF",
+    "hf_repo": "tencent/Hy-MT2-1.8B-GGUF",
+    "fallback_url": "https://hf-mirror.com/tencent/Hy-MT2-1.8B-GGUF/resolve/main/Hy-MT2-1.8B-Q4_K_M.gguf",
+    "command": "llama-server -hf tencent/Hy-MT2-1.8B-GGUF:Q4_K_M --no-mmproj --jinja --host 127.0.0.1 --port 7789 -c 16384 -ngl 99",
+    "translate_prompt": "将以下文本翻译为 `{dst}`，注意只需要输出翻译后的结果，不要额外解释：\n\n{text}",
     "sampling": {
-        "temperature": 0.7,
-        "top_p": 0.8,
-        "top_k": 20,
-        "min_p": 0,
-        "repeat_penalty": 1.1
+        "temperature": 0,
+        "top_p": 1.0,
+        "min_p": 0
+    }
+}
+
+# 翻译特化卡片（NiuTrans LMT-60-0.6B，mradermacher 社区 Q4_K_M 量化，484MB）：
+# 翻译 LLM 备选轻量卡。NiuTrans 官方权重 Apache-2.0，60 语 234 方向中英枢纽；
+# 2026-10-V1 基准 §5.2b：作为进程内 NLLB-600M 的平替是全面升级（Apache vs
+# CC-BY-NC、同 CPU 路径快一倍、不漏译不乱码），但术语句中英混杂，质量档请选
+# Hy-MT2。translate_prompt=NiuTrans 官方英文三行式提示词（README Quickstart），
+# 必须配英语言名占位符 {src_en}/{dst_en}——官方模板被换成中文指令会假崩坏
+# （zh2en 输出中文，lab 翻译调研 §5 事故）。.ModelScope 无此仓库，直链兜底走
+# hf-mirror（已验证 200，484,220,000 字节与本地 bench 文件一致）。
+_LMT60_CARD = {
+    "name": "mradermacher/LMT-60-0.6B-GGUF:Q4_K_M",
+    "desc": "轻量翻译模型（NiuTrans LMT-60-0.6B 社区量化，60 语中英枢纽；质量弱于 Hy-MT2，术语句中英混杂，胜在小快省）原始卡：https://huggingface.co/NiuTrans/LMT-60-0.6B",
+    "desc_en": "lightweight translation model (NiuTrans LMT-60-0.6B community quant, 60 languages zh-en hub; weaker than Hy-MT2 on terminology, but small & fast) original card: https://huggingface.co/NiuTrans/LMT-60-0.6B",
+    "hf_repo": "mradermacher/LMT-60-0.6B-GGUF",
+    "fallback_url": "https://hf-mirror.com/mradermacher/LMT-60-0.6B-GGUF/resolve/main/LMT-60-0.6B.Q4_K_M.gguf",
+    "command": "llama-server -hf mradermacher/LMT-60-0.6B-GGUF:Q4_K_M --no-mmproj --jinja --host 127.0.0.1 --port 7789 -c 8192 -ngl 99",
+    "translate_prompt": "Translate the following text from {src_en} into {dst_en}:\n{src_en}: {text}\n{dst_en}:",
+    "sampling": {
+        "temperature": 0,
+        "top_p": 1.0,
+        "min_p": 0
+    }
+}
+
+# 翻译特化卡片（NiuTrans LMT-60-1.7B，mradermacher 社区 Q4_K_M 量化，约 1.4GB）：
+# 与 0.6B 同套同语清单（60 语 234 方向中英枢纽——高资源 13 语 ar/en/es/de/fr/it/
+# ja/nl/pl/pt/ru/tr/zh，中资源 18 语含韩/越/泰/印，低资源 29 语含粤/藏/蒙），
+# Qwen3-1.7B 底座，Apache-2.0；体积/速度/质量介于 Hy-MT2-1.8B 与 LMT-60-0.6B
+# 之间（同套逐级放大，未单独跑基准）。translate_prompt 与 0.6B 完全一致
+# （NiuTrans 官方英文三行式为 LMT-60 全系共用模板，README Quickstart），必须
+# 配英语言名占位符 {src_en}/{dst_en}（原因见上方 0.6B 卡注记）。.ModelScope
+# 无此仓库，直链兜底走 hf-mirror（已验证 200，重定向 xethub CDN，文件
+# LMT-60-1.7B.Q4_K_M.gguf）。
+_LMT60_17B_CARD = {
+    "name": "mradermacher/LMT-60-1.7B-GGUF:Q4_K_M",
+    "desc": "中量翻译模型（NiuTrans LMT-60-1.7B 社区量化，60 语 234 方向中英枢纽；体积/速度/质量介于 Hy-MT2 与 LMT-60-0.6B 之间）原始卡：https://huggingface.co/NiuTrans/LMT-60-1.7B",
+    "desc_en": "mid-size translation model (NiuTrans LMT-60-1.7B community quant, 60 languages / 234 directions, zh-en hub; sits between Hy-MT2 and LMT-60-0.6B in size/speed) original card: https://huggingface.co/NiuTrans/LMT-60-1.7B",
+    "hf_repo": "mradermacher/LMT-60-1.7B-GGUF",
+    "fallback_url": "https://hf-mirror.com/mradermacher/LMT-60-1.7B-GGUF/resolve/main/LMT-60-1.7B.Q4_K_M.gguf",
+    "command": "llama-server -hf mradermacher/LMT-60-1.7B-GGUF:Q4_K_M --no-mmproj --jinja --host 127.0.0.1 --port 7789 -c 8192 -ngl 99",
+    "translate_prompt": "Translate the following text from {src_en} into {dst_en}:\n{src_en}: {text}\n{dst_en}:",
+    "sampling": {
+        "temperature": 0,
+        "top_p": 1.0,
+        "min_p": 0
     }
 }
 
@@ -88,6 +142,38 @@ _BUILTIN_CARDS = [
         }
     },
     {
+        "name": "unsloth/Qwen3.5-4B-GGUF:Q4_K_M",
+        "desc": "对话/翻译/视觉 OCR 模型（多模态；约 3.4GB 盘，显存占用明显高于 2B，小显存卡慎与 ASR/翻译并发）",
+        "desc_en": "chat/translate/vision OCR model (multimodal; ~3.4GB disk, noticeably more VRAM than 2b, mind concurrency on small-VRAM GPUs)",
+        "hf_repo": "unsloth/Qwen3.5-4B-GGUF",
+        "fallback_url": "https://modelscope.cn/models/unsloth/Qwen3.5-4B-GGUF/resolve/master/Qwen3.5-4B-Q4_K_M.gguf",
+        "fallback_mmproj_url": "https://modelscope.cn/models/unsloth/Qwen3.5-4B-GGUF/resolve/master/mmproj-F16.gguf",
+        "command": "llama-server -hf unsloth/Qwen3.5-4B-GGUF:Q4_K_M --image-min-tokens 1024 --jinja --host 127.0.0.1 --port 7788 -c 16384",
+        "sampling": {
+            "temperature": 0.7,
+            "top_p": 0.8,
+            "top_k": 20,
+            "min_p": 0,
+            "repeat_penalty": 1.1
+        }
+    },
+    {
+        "name": "unsloth/Qwen3.5-9B-GGUF:Q4_K_M",
+        "desc": "对话/翻译/视觉 OCR 最强档（多模态；约 6.6GB 盘；Q4 权重+投影已近 8GB 显存上限，仅限独占运行，并发/长上下文易 OOM 自担）",
+        "desc_en": "chat/translate/vision OCR model, strongest tier (multimodal; ~6.6GB disk; Q4 weights+mmproj near the 8GB VRAM ceiling — dedicated use only, OOM at your own risk)",
+        "hf_repo": "unsloth/Qwen3.5-9B-GGUF",
+        "fallback_url": "https://modelscope.cn/models/unsloth/Qwen3.5-9B-GGUF/resolve/master/Qwen3.5-9B-Q4_K_M.gguf",
+        "fallback_mmproj_url": "https://modelscope.cn/models/unsloth/Qwen3.5-9B-GGUF/resolve/master/mmproj-F16.gguf",
+        "command": "llama-server -hf unsloth/Qwen3.5-9B-GGUF:Q4_K_M --image-min-tokens 1024 --jinja --host 127.0.0.1 --port 7788 -c 16384",
+        "sampling": {
+            "temperature": 0.7,
+            "top_p": 0.8,
+            "top_k": 20,
+            "min_p": 0,
+            "repeat_penalty": 1.1
+        }
+    },
+    {
         "name": "openbmb/MiniCPM5-1B-GGUF:Q4_K_M",
         "desc": "轻量纯文本备选模型（无视觉 OCR；Q4_K_M 量化更省盘）",
         "desc_en": "lightweight text-only fallback (no vision OCR; Q4_K_M, smaller)",
@@ -115,7 +201,6 @@ _BUILTIN_CARDS = [
             "repeat_penalty": 1.1
         }
     },
-    _INDEX_TRANSLATE_CARD,
 ]
 
 DEFAULTS = {
@@ -137,30 +222,37 @@ DEFAULTS = {
         "cards": _BUILTIN_CARDS,
     },
     "asr": {
-        "engine": "faster-whisper",  # 唯一引擎
+        "engine": "faster-whisper",  # faster-whisper | qwen3-asr | moss（多引擎，评审 2026-10）
         "mode": "on-demand",
         "stopped": True,
         "cache": True,
         "whisper_model": "large-v3-turbo",  # faster-whisper 档位全名：large-v3-turbo/tiny/base/small/medium/large-v3
+        "qwen3_size": "0.6b",       # qwen3-asr 档位：0.6b（默认档，1.35GB/zh 最准）| 1.7b（质量档）
+        "moss_quant": "q4_K_M",     # moss 量化：q4_K_M（默认，最快档）| q8_0
+        "moss_model_path": "",      # moss 模型 gguf 路径覆盖；空 = backend/models/ 下默认名
     },
     "ocr": {"engine": "rapidocr", "mode": "on-demand", "stopped": True},  # engine: llm | rapidocr；mode 仅 rapidocr 生效（llm 归 llm 段管）
-    # 翻译模型选择（值 = 模型名）："nllb"=内置 NLLB-200-distilled-600M（CT2 int8
-    # 进程内，快，字幕/高频场景）；其他值 = translate_llm.cards 里的卡片名（如
-    # IndexTeam/Index-Translate-2B-GGUF:Q4_K_M，走翻译专用 llama-server 实例，
-    # 质量路径）。管理页翻译段下拉按模型名展示。
-    "translate": {"model": "nllb", "mode": "on-demand", "stopped": True, "idle_timeout": 600},
-    # 翻译 LLM 引擎（engine=llm 路径专属的 llama-server 实例）：与对话 LLM（llm 段，
-    # 7788）分开启停、分开选卡，默认卡为翻译特化的 Index-Translate-2B。
-    # 对话/OCR 归 llm 段管，翻译 llm 归本段管，互不牵连。默认全关同 llm 段口径。
+    # 翻译模型选择（值 = translate_llm.cards 卡片名，全部走翻译专用 llama-server
+    # 实例）：默认 = Hy-MT2-1.8B 卡（2026-10-V1 基准决策④）；备选 LMT-60-1.7B
+    # （中量档）与 LMT-60-0.6B（NLLB 平替轻量卡）。进程内 NLLB 快路径与
+    # Index-Translate-2B 卡已移除
+    # （基准实测 NLLB 专名漏译/乱码 + CC-BY-NC 商用风险；Index 术语译坏）——
+    # 旧值经 _migrate_translate 内存归一，不悬空。首请求可能触发 llama-server
+    # 冷启动/下载。管理页翻译段下拉按模型名展示。
+    "translate": {"model": _HY_MT2_CARD["name"], "mode": "on-demand", "stopped": True, "idle_timeout": 600},
+    # 翻译 LLM 引擎（llama-server 实例）：与对话 LLM（llm 段，7788）分开启停、
+    # 分开选卡，默认卡（首卡）= Hy-MT2-1.8B，备选 = LMT-60-1.7B（中量档）、
+    # LMT-60-0.6B（轻量档）。对话/OCR 归 llm 段管，翻译 llm 归本段管，互不牵连。
+    # 默认全关同 llm 段口径。
     "translate_llm": {
         "engine": "llamacpp",
         "port": 7789,            # 独立内部端口（llm 段 7788）
         "ctx": 16384,
         "mode": "on-demand",
         "idle_timeout": 600,
-        "model": "",             # 空 = 用首卡（内置只有 Index-Translate 一张）
+        "model": "",             # 空 = 用首卡（内置 Hy-MT2-1.8B，LMT-60 两档备选）
         "stopped": True,
-        "cards": [_INDEX_TRANSLATE_CARD],
+        "cards": [_HY_MT2_CARD, _LMT60_17B_CARD, _LMT60_CARD],
     },
     # cookiefile：Netscape 格式 cookie.txt 路径——仅登录墙内容需要（YouTube 年龄
     # 限制/机器人墙、B 站大会员清晰度等）；务必小号导出（主号自动化下载有风控
@@ -207,26 +299,34 @@ def load():
 
 
 def _migrate_translate(cfg):
-    """translate.engine（已废止的引擎抽象键）→ translate.model（模型名）。
+    """translate 旧值归一（内存视图，不回写磁盘——用户下次保存自然落新键）。
 
-    曾用 engine: "nllb"|"llm" 表达引擎路由——用户裁定列表元素应为模型名，
-    改为 translate.model 直接存模型选择。只看用户层原始磁盘配置（合并视图
-    已被 DEFAULTS 的 model 默认值填满，无法区分"用户已设新键"），旧键存在
-    且用户层未设新键才迁移："nllb" 原样；"llm" 取 translate_llm 首卡名
-    （当时 llm 路径的默认卡即首卡）。迁移只在内存视图做，不回写磁盘——
-    用户下次在管理页保存时自然落新键。"""
+    两类历史残留：
+    - engine（已废止的引擎抽象键）→ model（模型名）：曾用 engine: "nllb"|"llm"
+      表达引擎路由，用户裁定列表元素应为模型名。只看用户层原始磁盘配置
+      （合并视图已被 DEFAULTS 填满，无法区分"用户已设新键"），旧键存在且
+      用户层未设新键才迁移。
+    - model 指向已移除的模型（进程内 NLLB 快路径废除、Index-Translate-2B 卡
+      随 Hy-MT2 上位而删除）→ 映射到现役等价卡，防下拉/路由悬空：
+      "nllb"→LMT-60-0.6B（基准 §5.2b 实测平替）、Index 卡名→Hy-MT2（主选）。"""
     disk = _read_disk().get("translate")
     if not isinstance(disk, dict):
         return
     legacy = disk.get("engine")
-    if legacy is None or disk.get("model"):
-        return
-    if legacy == "llm":
-        cards = [c for c in (cfg.get("translate_llm", {}).get("cards") or [])
-                 if isinstance(c, dict) and c.get("name")]
-        cfg["translate"]["model"] = cards[0]["name"] if cards else "nllb"
-    else:
-        cfg["translate"]["model"] = "nllb"
+    if legacy is not None and not disk.get("model"):
+        if legacy == "llm":
+            cards = [c for c in (cfg.get("translate_llm", {}).get("cards") or [])
+                     if isinstance(c, dict) and c.get("name")]
+            cfg["translate"]["model"] = cards[0]["name"] if cards else _HY_MT2_CARD["name"]
+        else:
+            cfg["translate"]["model"] = _LMT60_CARD["name"]
+    remap = {
+        "nllb": _LMT60_CARD["name"],
+        "indexteam/index-translate-2b-gguf:q4_k_m": _HY_MT2_CARD["name"],
+    }
+    val = (cfg.get("translate", {}).get("model") or "").strip().lower()
+    if val in remap:
+        cfg["translate"]["model"] = remap[val]
 
 
 def save(cfg):

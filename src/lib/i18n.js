@@ -1,5 +1,5 @@
 // 界面语言 i18n 模块
-// 支持前十大语言（按总使用人数）：en/zh/hi/es/ar/fr/bn/pt/ru/ja
+// 支持前十大语言（按网民人数，顺序由用户给定）：en/zh/fr/es/pt/ja/ru/id/ar/hi
 // 完整翻译：en/zh；其他8种语言回退到 en（界面文案翻译待补充，语言名称已本地化）
 // 存储 key: uiLanguage，默认 'en'。
 //
@@ -19,10 +19,14 @@
 //   - LANG_NAMES 扩展到全部42种语言，便于下拉菜单显示本地化名称
 //   - （第二百二十五次：旧别名 SUPPORTED_LANGS 已随命名清查删除，全库统一只用 UI_LANGS）
 
-// === UI 语言列表：前十大语言（按总使用人数从大到小排，第二百二十八次调整 fr/ar 顺序） ===
-// 仅用于 #uiLangSelect 界面语言下拉菜单
-// 与 preprocess.mjs UI_LANGS 一致
-export const UI_LANGS = ['en', 'zh', 'hi', 'es', 'fr', 'ar', 'bn', 'pt', 'ru', 'ja'];
+// === UI 语言列表：前十大语言（按网民人数口径，顺序由用户给定） ===
+// 仅用于 #uiLangSelect 界面语言下拉菜单；popup.html 硬编码 option 需与此同步
+// ws/vs 端下拉按字母序展示（[...UI_LANGS].sort()），引导页按本数组原序展示
+// 更正（2026-10-10）：
+//   - 原注"按总使用人数从大到小排"不实：口径应为网民人数，具体顺序由用户给定
+//   - 原注"与 preprocess.mjs UI_LANGS 一致"已失效——preprocess.mjs 现复制全部
+//     wordfreq 文件，已无前十列表
+export const UI_LANGS = ['en', 'zh', 'fr', 'es', 'pt', 'ja', 'ru', 'id', 'ar', 'hi'];
 
 // （第二百二十五次：旧别名 SUPPORTED_LANGS 已删除——全库引用已统一为 UI_LANGS）
 
@@ -32,6 +36,8 @@ export const UI_LANGS = ['en', 'zh', 'hi', 'es', 'fr', 'ar', 'bn', 'pt', 'ru', '
 // 注：UI语言仅10种，但目标/释义语言扩展到42种（用户要求"几十种"）
 // 第二百二十八次（用户："三种语言列表都从规模往下排"）：按语言使用规模（总使用人数）
 //   从大到小排序，替代原字母序；仅影响下拉展示顺序，词典/词频按语言代码取用不受影响。
+//   更正（2026-10-10，用户："假的，这是给定的"）：上句排序依据不实——本列表顺序为
+//   给定列表，并非按总使用人数（或任何人数口径）排出。
 export const TRANSLATE_LANGS = [
   'en', 'zh', 'hi', 'es', 'fr', 'ar', 'bn', 'pt', 'ru', 'ur',
   'id', 'de', 'ja', 'tr', 'fil', 'vi', 'ta', 'ko', 'fa', 'it',
@@ -205,7 +211,8 @@ const DICT = {
     'lang.toggleTo': '中文',
     'loading': 'Loading subtitles...',
     'noSubtitle': 'No subtitle data',
-    'noSubtitleTip': 'No subtitles found — click 🎤 to start ASR. If the video has subtitles, see the backend log for why yt-dlp failed (e.g. cookies).',
+    // 20261008 用户令：无字幕提示两条路——本地后端 ASR 生产 / 登录获取云端共享（P4 生效）
+    'noSubtitleTip': 'No subtitles found — start ASR to produce them (requires the local backend), or sign in on vocabradar.com to fetch cloud-shared subtitles. If the video has subtitles but fetch failed, see the backend log for why yt-dlp failed (e.g. cookies).',
     'subtitleTimeoutTip': 'Subtitle load timeout, click 🎤 to start ASR',
     'asr.track': 'ASR Track',
     'tool.track': 'Track',
@@ -577,7 +584,7 @@ const DICT = {
     'lang.toggleTo': 'EN',
     'loading': '字幕加载中...',
     'noSubtitle': '无字幕数据',
-    'noSubtitleTip': '未获取到字幕——可点 🎤 开始语音转写；若视频本有字幕，请看后端日志中 yt-dlp 失败原因（如 cookies）。',
+    'noSubtitleTip': '未获取到字幕——可开启语音转写生产字幕（需本地后端），或登录 vocabradar.com 后获取云端共享字幕；若视频本有字幕而未取到，请看后端日志中 yt-dlp 失败原因（如 cookies）。',
     'subtitleTimeoutTip': '字幕加载超时，可点击 🎤 按钮启动语音识别',
     'asr.track': 'ASR 字幕',
     'asr.realtime': '🎤',
@@ -825,6 +832,8 @@ const DICT = {
     'lang.ui': '界面语言'
   }
   // 反思（2026-08-02）：其他8种语言（hi/es/ar/fr/bn/pt/ru/ja）界面文案翻译待补充。
+  //   更正（2026-10-10）：十大语言调整为 en/zh/fr/es/pt/ja/ru/id/ar/hi（按网民人数，
+  //   用户给定序），其余8种现为 fr/es/pt/ja/ru/id/ar/hi（bn 移出、id 递补）。
   //   切换到这些语言时，t() 会回退到 en，保证界面可用（仅"语言名称"在下拉菜单本地化）。
   //   后续补充：在 DICT 中添加对应语言对象即可，无需改动其他代码。
 };

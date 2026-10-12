@@ -1,20 +1,26 @@
-"""ASR 引擎：faster-whisper（唯一引擎，自带 timestamps）分发 + 生命周期。
+"""ASR 引擎属主：多引擎分发 + 生命周期（评审 2026-10《后端 ASR 接入评审》§2）。
 
-- 引擎：faster-whisper（CTranslate2，档位 asr.whisper_model 写全名如
-  large-v3-turbo，旧值 turbo 自动归一）；模型完全交
-  faster-whisper/huggingface_hub 自动维护（hub 默认缓存，不自建
-  models 目录、不落标记文件、不指明路径）：
-  ensure_local_model 先 hub 本地缓存直取（local_files_only，就绪绝不联网，
-  规避启动 etag 校验/镜像波动即重下），无缓存才联网补拉（第516次：
-  hf 官方 → hf-mirror 镜像源链，进程内记住直连坏源，后续调用不再重复
-  付直连超时）。历史残留 qwen3-asr 值一律归一。
-- 音频解码：faster-whisper 内部用 PyAV 解码，直接喂文件路径，无需预处理。
-- 生命周期：resident 启动即后台预加载；on-demand 首请求加载、
-  空闲超时卸载（进程内模型，卸载即释放内存）。加载互斥与 LLM 同款 _starting 防护。
-- 缓存读写归 api 层（见 api/asr.py）；本模块只提供推理与缓存目录管理。
+- 引擎（config <asr>.engine）：
+  - faster-whisper（默认/无 GPU 回落档）：CTranslate2，档位 asr.whisper_model
+    （CPU int8；fw 系接口 fw 专属——clip_timestamps / no_speech_prob / 生成器
+    增量，asr_job 对其保留专用零回归路径）。
+  - qwen3-asr（Haujet GGUF）：子进程 worker（core/asr_qwen3.py），档位
+    asr.qwen3_size（0.6b 默认档 / 1.7b 质量档），GPU（DML+Vulkan）专用。
+  - moss（MOSS-Transcribe-Diarize）：transcribe_cpp 进程内（core/asr_moss.py），
+    量化 asr.moss_quant，唯一自带说话人分离。
+- 模型获取：各引擎自管——fw 走 huggingface_hub snapshot_download（先本地
+  缓存直取、无缓存才联网补拉 hf 官方 → hf-mirror）；qwen3 工具/模型 zip 取
+  GitHub Releases 首用解压；MOSS gguf 按 moss_model_path/默认路径查找。
+- 生命周期：resident 启动即后台预加载；on-demand 首请求加载、空闲超时卸载
+  （fw 进程内模型 / moss 引用置空 / qwen3 关 worker 进程——卸载即释放资源）。
+  加载互斥同 llm_engine _starting 防护。第517次裁定延续：服务中已加载的模型
+  不随配置换档——已加载判定只比引擎名，档位/量化改动下次启动/卸载后生效。
+- 缓存读写归 api 层（见 api/asr.py / asr_job.py）；本模块提供推理与缓存
+  目录管理。缓存条目引擎标签 = engine_tag(cfg)（engine/model 粒度）。
 """
 
 import gc
+import logging
 import os
 import re
 import threading
@@ -22,7 +28,12 @@ import time
 
 import config
 
+log = logging.getLogger(__name__)
+
 ASR_CACHE_DIR = os.path.join(config.CACHE_DIR, "asr")
+
+# 合法引擎（api 层校验 + 管理页下拉同源）
+ASR_ENGINES = ("faster-whisper", "qwen3-asr", "moss")
 
 # 档位全名 → HF repo（旧值 turbo 经 _TIER_ALIASES 归一）
 _WHISPER_REPOS = {
@@ -41,6 +52,18 @@ def normalize_tier(name):
     """档位名归一：旧值 turbo → large-v3-turbo；空回落默认。"""
     name = (name or "").strip().lower()
     return _TIER_ALIASES.get(name) or name or _DEFAULT_TIER
+
+
+def engine_tag(cfg):
+    """缓存条目引擎标签（engine/model 粒度）：同音频换引擎/档位结果不同，
+    不复用。official（官方字幕直出）条目按 asr_job 侧语义另行放行。"""
+    cfg = cfg or {}
+    engine = cfg.get("engine") or "faster-whisper"
+    if engine == "qwen3-asr":
+        return f"qwen3-asr/{(cfg.get('qwen3_size') or '0.6b').strip().lower()}"
+    if engine == "moss":
+        return f"moss/{(cfg.get('moss_quant') or 'q4_K_M').strip()}"
+    return f"faster-whisper/{normalize_tier(cfg.get('whisper_model'))}"
 
 
 # 联网补拉镜像（第516次）：hf 官方直连在大陆网络常态不可达，换未缓存
@@ -88,19 +111,18 @@ def ensure_local_model(tier):
 
 
 class AsrEngine:
-    """进程内 ASR 引擎属主（挂 app.extensions["engines"]["asr"]）。
+    """ASR 引擎属主（挂 app.extensions["engines"]["asr"]）。
 
-    唯一引擎 faster-whisper；模型加载互斥，
-    on-demand 模式空闲超时自动卸载。
+    多引擎分发（ASR_ENGINES）；加载互斥，on-demand 空闲超时自动卸载。
     """
 
     def __init__(self, cfg):
         self.cfg = cfg or {}
         self.mode = self.cfg.get("mode", "resident")
-        self._model = None
-        self._engine_loaded = None      # 已加载模型对应的引擎名（切换引擎须重载）
+        self._model = None            # 引擎句柄（fw=WhisperModel / moss=MossEngine / qwen3=Qwen3Worker）
+        self._engine_loaded = None    # 已加载引擎名（切换引擎须重载；第517次：档位不热切）
         self._lock = threading.Lock()
-        self._starting = False          # 三层防重入标志（同 llm_engine）
+        self._starting = False        # 三层防重入标志（同 llm_engine）
         # 手动停机标志，置位期间懒加载被拒绝；从 config <asr>.stopped 恢复：
         # 默认 True（默认全关），重启后仍尊重用户设定
         self._manual_stop = bool(self.cfg.get("stopped"))
@@ -109,20 +131,34 @@ class AsrEngine:
             t = threading.Thread(target=self._idle_watch, daemon=True)
             t.start()
 
+    # ---- 引擎名/档位 ----
+
+    @property
+    def engine_name(self):
+        """当前配置引擎（加载与否无关；job/api 层据此分流）。"""
+        eng = (self.cfg.get("engine") or "faster-whisper").strip()
+        return eng if eng in ASR_ENGINES else "faster-whisper"
+
+    def _engine_model_name(self):
+        """当前引擎的模型展示名（状态行/缓存标签共用）。"""
+        eng = self.engine_name
+        if eng == "qwen3-asr":
+            return (self.cfg.get("qwen3_size") or "0.6b").strip().lower()
+        if eng == "moss":
+            return (self.cfg.get("moss_quant") or "q4_K_M").strip()
+        return normalize_tier(self.cfg.get("whisper_model"))
+
     # ---- 生命周期 ----
 
-    def ensure_loaded(self, engine=None, force=False):
-        """确保引擎就绪（懒加载）；返回 (model, engine_name)。线程安全。
+    def ensure_loaded(self, force=False):
+        """确保引擎就绪（懒加载）；返回 (handle, engine_name)。线程安全。
 
-        唯一引擎 faster-whisper；engine 参数作签名兼容，残留
-        qwen3-asr 值一律归一（不再分支加载）。
-        第517次（用户裁定重申既定规则）：服务中已加载的模型不随配置换档
-        ——已加载判定只比引擎名，whisper_model 改动下次启动/卸载后生效；
-        勿再改为「换档即刻重载」。
+        引擎取 config <asr>.engine；已加载判定只比引擎名（第517次：档位/
+        量化/whisper_model 改动下次启动/卸载后生效，勿改「换档即刻重载」）。
         force=True（管理页启动按钮）解除手动停机；普通调用在手动停机
         期间拒绝加载（停了就是停了，不被业务请求悄悄拉回）。
         """
-        engine = "faster-whisper"
+        engine = self.engine_name
         with self._lock:
             if force:
                 self._manual_stop = False
@@ -136,12 +172,30 @@ class AsrEngine:
                 raise RuntimeError("ASR 引擎正在加载中，请稍候重试")
             self._starting = True
             try:
-                self._model = self._load_whisper()
+                self._model = self._load(engine)
                 self._engine_loaded = engine
                 self._last_used = time.time()
                 return self._model, engine
             finally:
                 self._starting = False
+
+    def _load(self, engine):
+        if engine == "faster-whisper":
+            return self._load_whisper()
+        if engine == "qwen3-asr":
+            if os.name != "nt":
+                # DML 仅 Windows（requirements 已按平台标记装 directml 构建）；
+                # 纯 CPU 不可用级（评审实测 RTFx<0.1）——直接拒绝，指回落 fw
+                raise RuntimeError(
+                    "qwen3-asr 需要 Windows + DirectML（编码器 GPU 路径）；"
+                    "当前平台不可用，请回落 faster-whisper")
+            from core.asr_qwen3 import Qwen3Worker
+            return Qwen3Worker(size=self.cfg.get("qwen3_size"), dml=True)
+        if engine == "moss":
+            from core.asr_moss import MossEngine
+            return MossEngine(quant=self.cfg.get("moss_quant"),
+                              model_path=self.cfg.get("moss_model_path") or None)
+        raise ValueError(f"未知 ASR 引擎：{engine}")
 
     def _load_whisper(self):
         from faster_whisper import WhisperModel
@@ -151,8 +205,12 @@ class AsrEngine:
                             device="cpu", compute_type="int8")
 
     def _release(self):
-        self._model = None
-        self._engine_loaded = None
+        handle, self._model, self._engine_loaded = self._model, None, None
+        if handle is not None and hasattr(handle, "close"):
+            try:
+                handle.close()  # qwen3 worker / moss 显式释放；WhisperModel 无 close
+            except Exception as e:
+                log.warning("引擎句柄关闭异常（%s）：%s", type(handle).__name__, e)
         gc.collect()
 
     def stop(self):
@@ -178,36 +236,48 @@ class AsrEngine:
 
     def status(self):
         """/api/asr/status 与 /api/status 用。"""
+        engine = self.engine_name
         return {
-            "engine": "faster-whisper",
+            "engine": engine,
             "mode": self.mode,
             "loaded": self._model is not None,
             "loading": self._starting,
             "loaded_engine": self._engine_loaded,
             "manual_stop": self._manual_stop,  # 手动停机中（懒加载被抑制）
-            "model": normalize_tier(self.cfg.get("whisper_model", _DEFAULT_TIER)),
+            "model": self._engine_model_name(),
         }
 
     # ---- 推理 ----
 
     def transcribe(self, audio_path, engine=None, language=None):
-        """转写 → {text, segments, language}；segments 为 whisper 逐段时间戳。
+        """整文件转写（交互路径 /api/asr/transcribe）→ {text, segments, language}。
 
-        engine 参数作签名兼容（api 层已校验合法值），一律走 faster-whisper。
+        engine 参数作签名兼容（api 层已校验合法值），实际引擎取 config；
+        fw 走 vad_filter 内置路径，qwen3/moss 走各自整文件转写。
         """
-        model, _engine = self.ensure_loaded(engine)
-        # vad_filter=True 跳过静音段（只转写有人声部分，提速）并压制静音段
-        # 幻觉——幻觉是 whisper 段时间戳紊乱（乱序）的主要来源。
-        # silero-vad onnx 已随 faster-whisper 包内置。
-        segs, info = model.transcribe(audio_path, language=language or None,
-                                      vad_filter=True)
-        items, text = [], []
-        for s in segs:  # 生成器，须消费
-            items.append({"start": round(s.start, 3), "end": round(s.end, 3),
-                          "text": s.text.strip()})
-            text.append(s.text.strip())
-        return {"text": " ".join(t for t in text if t),
-                "segments": items, "language": info.language}
+        handle, eng = self.ensure_loaded()
+        if eng == "faster-whisper":
+            # vad_filter=True 跳过静音段（只转写有人声部分，提速）并压制静音段
+            # 幻觉——幻觉是 whisper 段时间戳紊乱（乱序）的主要来源。
+            # silero-vad onnx 已随 faster-whisper 包内置。
+            segs, info = handle.transcribe(audio_path, language=language or None,
+                                           vad_filter=True)
+            items, text = [], []
+            for s in segs:  # 生成器，须消费
+                items.append({"start": round(s.start, 3), "end": round(s.end, 3),
+                              "text": s.text.strip()})
+                text.append(s.text.strip())
+            return {"text": " ".join(t for t in text if t),
+                    "segments": items, "language": info.language}
+        if eng == "qwen3-asr":
+            items = handle.transcribe_file(audio_path, language=language)
+            return {"text": " ".join(s["text"] for s in items),
+                    "segments": items, "language": language or None}
+        if eng == "moss":
+            items = handle.transcribe_file(audio_path, language=language)
+            return {"text": " ".join(s["text"] for s in items),
+                    "segments": items, "language": language or None}
+        raise ValueError(f"未知 ASR 引擎：{eng}")
 
 
 # ---- 缓存目录管理（读写逻辑在 api 层，此处供管理界面列表/清空） ----

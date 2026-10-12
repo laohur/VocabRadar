@@ -97,8 +97,8 @@ const ZH = {
   'Playground': '试用',
   // ---- 翻译页模型选择 ----
   'Translation model': '翻译模型',
-  'nllb = built-in NLLB-200-distilled-600M (in-process CT2, fast). Any other entry is a llama.cpp card served by the dedicated Translate LLM engine (independent start/stop on the Overview page; first request may cold-start it).':
-    'nllb = 内置 NLLB-200-distilled-600M（进程内 CT2，快）。其余条目为 llama.cpp 模型卡，由翻译专用的「翻译 LLM」引擎承载（与对话 LLM 分开、在总览页独立启停；首次请求可能触发冷启动下载/加载）。',
+  'All entries are llama.cpp cards served by the dedicated Translate LLM engine (independent start/stop on the Overview page; first request may cold-start it). Hy-MT2 = best quality; LMT-60-1.7B = mid tier; LMT-60-0.6B = lightweight tier.':
+    '全部条目为 llama.cpp 模型卡，由翻译专用的「翻译 LLM」引擎承载（与对话 LLM 分开、在总览页独立启停；首次请求可能触发冷启动下载/加载）。Hy-MT2 = 质量档；LMT-60-1.7B = 中量档；LMT-60-0.6B = 轻量档。',
   'Model follows the Settings card; start/stop the serving engine on the Overview page.':
     '模型跟随上方设定卡；承载引擎的启停在总览页。',
   'Source language': '源语言',
@@ -112,6 +112,13 @@ const ZH = {
   'Result cache': '结果缓存',
   'Deduplicate by video_id or audio content hash': '按 video_id 或音频内容哈希去重',
   'whisper tier (faster-whisper only)': 'whisper 档位（仅 faster-whisper）',
+  'Qwen3-ASR tier (qwen3-asr only)': 'Qwen3-ASR 档位（仅 qwen3-asr）',
+  'First use downloads the tool (~103MB) and model from GitHub releases; GPU (DML+Vulkan) required — falls back to faster-whisper on CPU-only machines.':
+    '首次使用自动从 GitHub Releases 下载工具（约 103MB）与模型包；需 GPU（DML+Vulkan）——纯 CPU 机器不可用，请回落 faster-whisper。',
+  'MOSS quant (moss only)': 'MOSS 量化（仅 moss）',
+  'MOSS model path (optional)': 'MOSS 模型路径（可选）',
+  'Leave empty for models/ inside the backend directory; the gguf must be placed manually (community distribution).':
+    '留空则用 backend/models/ 目录；gguf 需手动放置（社区分发，ModelScope 搜 MOSS-Transcribe-Diarize-GGUF）。',
   'Result Cache': '结果缓存',
   '{n} entries': '{n} 条',
   'video {id}': '视频 {id}',

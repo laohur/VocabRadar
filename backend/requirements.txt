@@ -2,19 +2,32 @@ flask>=3.0
 yt-dlp
 huggingface_hub>=0.26
 requests>=2.31
-# 翻译引擎 NLLB（CTranslate2 int8，core/translate.py 直接 import 故显式列出；
-# faster-whisper 已带 ctranslate2 依赖，此处声明版本下限）+ sentencepiece 分词
-ctranslate2>=4.0
-sentencepiece
 # ASR 引擎 faster-whisper（CTranslate2，档位全名如 large-v3-turbo）；
 # av 即 PyAV（PyPI 项目名是 av，pip 26 下别名 PyAV 解析不到）为其解码依赖，
-# webm/m4a 等非 wav 格式靠它（faster-whisper 自带 av 依赖声明，此处显式钉下限）
-av>=14.0
+# webm/m4a 等非 wav 格式靠它（faster-whisper 自带 av 依赖声明，此处显式钉下限）。
+# 第518次钉上限 <19：PyAV 19.0.0 移除了 av.open 的 metadata_errors 参数
+# （官方 changelog），faster-whisper decode_audio 仍传该参数，av 19 会使
+# 全部转写任务失败于 TypeError（上游 faster-whisper#1495/#1589）
+av>=14.0,<19
 faster-whisper>=1.1
+# ASR 引擎 qwen3-asr（Haujet GGUF，子进程 worker core/asr_qwen3_worker.py）：
+# gguf=llama.cpp 权重读取；pydub=worker 内音频载入（backend 喂 16k wav，免
+# ffmpeg）；scipy=编码器重采样；srt=工具 exporters 导入链；nagisa/soynlp 为
+# 日/韩 ITN 增强（工具内建 ImportError 兜底，缺省自动降级不列）。
+gguf>=0.6
+pydub
+# pydub 依赖 stdlib audioop，Python 3.13+ 已移除，装社区替身（3.12 及以下不需要）
+audioop-lts; python_version >= '3.13'
+scipy
+srt
+# onnxruntime 平台变体二选一（同模块名不可共存）：Windows 用 directml 构建
+# （Qwen3-ASR 编码器 DML GPU 路径；含 CPU EP，rapidocr/silero VAD 通用），
+# 其他平台 CPU 构建（qwen3-asr 纯 CPU 不可用级，回落 faster-whisper）
+onnxruntime-directml>=1.17; sys_platform == 'win32'
+onnxruntime>=1.17; sys_platform != 'win32'
 # OCR 备选引擎（plan-backend §2.5）：纯 CPU，PP-OCR 模型随包分发无需下载；
 # 默认引擎走 LLM 多模态（复用 llama-server + mmproj），不依赖本段
 rapidocr>=2.0
-onnxruntime
 # ffmpeg/ffprobe 静态执行器（第514次起替代 imageio-ffmpeg，yt-dlp 的 HLS/合流
 # 兜底）：wheel 仅数 KB，平台二进制首次调用才下载并缓存（core/ytdl._ensure_ffmpeg
 # 补挂；系统 PATH 已有 ffmpeg 则不会触发下载）；比 imageio-ffmpeg 多提供 ffprobe

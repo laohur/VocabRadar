@@ -11,6 +11,7 @@
 //   sw/asr.js            分片/整段在线转写
 //   sw/parse-material.js PARSE_MATERIAL 分流（link/image/asr/document/llm/translation）
 //   sw/backend.js        网络代理（字幕 / ASR 任务 / 词典 / 正文 / kuromoji）
+//   sw/auth.js           账号通道（网站 auth-handoff 交接 / auth-ping / 断开 + GoTrue 续签；不计登录奖）
 //   sw/wf.js             wordfreq 拉取与校验 + 7天更新轮询（alarm 监听）
 //   sw/menu.js           右键菜单重建与点击分发（顶层幂等注册）
 //   sw/router.js         onMessage 消息路由（唯一分发点）
@@ -43,6 +44,10 @@ import './sw/asr.js';
 import './sw/llm.js';
 import './sw/parse-material.js';
 import './sw/backend.js';
+//   sw/auth.js           账号通道（P1c：onMessageExternal 交接/查询/断开 + GoTrue 续签）
+import './sw/auth.js';
+//   sw/subs-share.js     ASR 自动共享发布器（P3：autopublish 消息 → 开关门控+哈希去重+上传）
+import './sw/subs-share.js';
 import './sw/wf.js';
 import './sw/menu.js';
 import './sw/router.js';

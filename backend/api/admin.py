@@ -12,12 +12,12 @@ bp = Blueprint("admin", __name__)
 
 log = logging.getLogger(__name__)
 
-_ENGINE_NAMES = ("llm", "translate_llm", "asr", "ocr", "translate")  # 可加载/关停的模型服务
+_ENGINE_NAMES = ("llm", "translate_llm", "asr", "ocr")  # 可加载/关停的模型服务（translate 无进程内模型，生命周期归 translate_llm）
 
 
 @bp.post("/api/engine/<name>/start")
 def engine_start(name):
-    """显式加载模型服务：llm=拉起 llama-server 并等就绪；asr/ocr/translate=进程内模型加载。
+    """显式加载模型服务：llm=拉起 llama-server 并等就绪；asr/ocr=进程内模型加载。
 
     404 未知引擎；400 引擎形态不支持（如 OCR 由 llm 承载）；503 启动失败/依赖缺失。
     """
@@ -42,7 +42,7 @@ def engine_start(name):
 
 @bp.post("/api/engine/<name>/stop")
 def engine_stop(name):
-    """显式关停模型服务：llm=退出 llama-server；asr/ocr/translate=卸载进程内模型释放内存。"""
+    """显式关停模型服务：llm=退出 llama-server；asr/ocr=卸载进程内模型释放内存。"""
     if name not in _ENGINE_NAMES:
         return jsonify({"ok": False, "error": "unknown_engine"}), 404
     engine = current_app.extensions["engines"][name]

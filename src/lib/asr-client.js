@@ -339,6 +339,17 @@ async function resubmitJobAfter404() {
 /** 停止 ASR：停轮询 + 通知 SW + 清回调 */
 // 反思（2026-07-28）：用户反馈"asr中途退出"。保留调用栈日志，
 //   记录 stopASR 的调用来源，便于诊断自动停止的根因。
+/** P3 自动共享接续：停止前快照任务态。jobId/after 在 stopJobPolling 即被清空，
+ *  调用方必须在 stopASR() 之前取快照；completed=任务已全部识别（此时缓存已落盘） */
+export function getJobHandoff() {
+  return {
+    jobId: _jobId,
+    after: _jobAfter,
+    completed: _recogDoneAll,
+    modelSize: _currentModelSize || '',
+  };
+}
+
 export function stopASR() {
   const _stack = new Error().stack;
   const _caller = _stack ? _stack.split('\n').slice(2, 4).map(s => s.trim()).join(' <- ') : 'unknown';

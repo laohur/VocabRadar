@@ -61,6 +61,11 @@
   const PARSE_REQ = 'vocabradar:parse-request';
   const PARSE_RESP = 'vocabradar:parse-response';
   const FROM_WEB = 'vocabradar-web';
+  // 通道 C 中继常量（Firefox 路径，见文件尾该节）
+  const AUTH_RELAY = 'vocabradar:auth-relay';
+  const AUTH_RELAY_RESP = 'vocabradar:auth-relay-response';
+  const AUTH_ORIGINS = ['https://vocabradar.com', 'https://localhost:3001', 'http://localhost:3001'];
+  const AUTH_ACTIONS = ['vocabradar:auth-handoff', 'vocabradar:auth-ping', 'vocabradar:auth-disconnect'];
 
   function replyParse(reqId, fields) {
     try {
@@ -153,6 +158,7 @@
       const m = ev.data;
       if (!m || typeof m !== 'object' || m.from !== FROM_WEB) return;
       if (m.type === PARSE_PING) { replyParse(m.reqId, { ok: true, pong: true }); return; }
+      if (m.type === AUTH_RELAY) { handleAuthRelay(ev, m); return; }
       if (m.type !== PARSE_REQ) return;
       // 翻译类先试浏览器内置（700ms 竞速），未命中再转发 SW 在线快渠道
       if (m.kind === 'translation' && m.payload && m.payload.word) {
@@ -166,5 +172,42 @@
     });
   } catch (e) {
     console.error('[VocabRadar][bridge] parse 监听注册失败', e);
+  }
+
+  // ========== 通道 C 中继：账号交接（Firefox 专用路径） ==========
+  // Firefox 不支持 externally_connectable/onMessageExternal（MDN：未实现），网页无法
+  // 直发 chrome.runtime.sendMessage。本中继把网站的 auth 消息转发给 SW（内部消息，
+  // sw/auth.js 的 onMessage 监听承接），响应原样回传页面。
+  // **token 过页面是 Firefox 下的妥协**（方案风险表「扩展 token 经页面暴露」的
+  // Chrome 裁定在 Firefox 无替代），因此接收校验比通道 A/B 严一档：除 source/from
+  // 外必须校验 ev.origin ∈ 白名单——任意第三方网页不得借本中继投递/清除登录态。
+  // 契约：web/docs/桥接扩展.md §7 + 扩展 docs/桥接网站.md §八（改动四处同步）
+  function replyAuthRelay(reqId, fields) {
+    try {
+      window.postMessage(Object.assign({ type: AUTH_RELAY_RESP, from: FROM, reqId: reqId }, fields), '*');
+    } catch (e) {
+      console.error('[VocabRadar][bridge] auth 回复失败', e);
+    }
+  }
+
+  function handleAuthRelay(ev, m) {
+    if (AUTH_ORIGINS.indexOf(ev.origin) === -1) {
+      replyAuthRelay(m.reqId, { ok: false, error: 'origin not allowed' });
+      return;
+    }
+    const action = m.action;
+    if (AUTH_ACTIONS.indexOf(action) === -1) {
+      replyAuthRelay(m.reqId, { ok: false, error: 'unknown action' });
+      return;
+    }
+    // 透传 SW（handoff 载荷在 m.payload 内展开；ping/disconnect 无载荷）
+    const msg = Object.assign({ type: action }, action === 'vocabradar:auth-handoff' ? (m.payload || {}) : {});
+    chrome.runtime.sendMessage(msg)
+      .then(function (resp) {
+        replyAuthRelay(m.reqId, resp || { ok: false, error: 'no response from extension' });
+      })
+      .catch(function (e) {
+        replyAuthRelay(m.reqId, { ok: false, error: String(e && e.message || e) });
+      });
   }
 })();

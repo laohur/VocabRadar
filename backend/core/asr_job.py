@@ -96,7 +96,7 @@ from faster_whisper.vad import get_speech_timestamps
 
 import config
 from core import bili_api
-from core.asr import ASR_CACHE_DIR, _safe_key
+from core.asr import ASR_CACHE_DIR, _safe_key, engine_tag
 from core.ytdl import (_FMT_FORMAT, _HTTP_HEADERS, _base_opts,
                        _ensure_ffmpeg, _extract_info, parallel_download,
                        subtitles as _ytdl_subtitles)
@@ -108,6 +108,24 @@ log = logging.getLogger(__name__)
 #   静音段幻觉——vad_filter=False 后 whisper 对无人声区间易产幻觉重复串）。
 _HOLE_MIN_SEC = 30
 _NO_SPEECH_PROB = 0.6
+
+
+def _looks_hallucinated(text):
+    """通用反幻觉启发（fw 之外引擎的补转过滤，评审 2026-10 §1.4）：
+    空文本/单字符复读（"啊啊啊啊"）/同字高占比重复串判为幻觉。"""
+    t = re.sub(r"\s+", "", text)
+    if not t:
+        return True
+    if len(set(t)) == 1 and len(t) >= 4:
+        return True  # 单字符复读 ≥4（"AAAA"）
+    if len(t) >= 8:
+        # 周期复读检测：长度为 1-4 的子串整除且重复 ≥4 次（"谢谢谢谢谢谢"）
+        for p in (1, 2, 3, 4):
+            if len(t) % p == 0 and len(t) // p >= 4:
+                unit = t[:p]
+                if unit * (len(t) // p) == t:
+                    return True
+    return False
 
 _jobs = {}  # 任务表：模块级内存态（同 core/ytdl）
 _lock = threading.Lock()
@@ -162,7 +180,7 @@ def create(url, language, asr_engine):
     if not url or not url.startswith(("http://", "https://")):
         raise ValueError("url 必须为 http(s) 链接")
     key = _cache_key(url)  # 第440次：create 算一次（b23.tv 短链在此展开），全程复用
-    hit = _cache_get_key(key, language)
+    hit = _cache_get_key(key, language, tag=engine_tag(asr_engine.cfg))
     if not hit:
         live = _find_live_job(key, language)
         if live is not None:
@@ -189,7 +207,8 @@ def create_file(filepath, filename, language, asr_engine, cache_key=None):
     SHA-256 前 16 位（复用 ASR 缓存，重复上传同文件命中免转写；同内容任务
     进行中时复用返回，第512次同 create）。
     """
-    hit = _cache_get_key(cache_key, language) if cache_key else None
+    hit = (_cache_get_key(cache_key, language, tag=engine_tag(asr_engine.cfg))
+           if cache_key else None)
     if not hit and cache_key:
         live = _find_live_job(cache_key, language)
         if live is not None:
@@ -221,7 +240,7 @@ def _new_job(language, asr_engine, hit):
         "url": None,
         "source": "url",
         "language": language,
-        "engine": "faster-whisper",  # job 固定 whisper（时间戳 + 生成器增量）
+        "engine": engine_tag(asr_engine.cfg),  # 引擎/档位粒度标签（缓存条目与快照共用）
         "status": "queued",          # queued|downloading|transcribing|completed|failed
         "progress": {"download": 0, "transcribe": 0},
         "title": None,
@@ -551,14 +570,16 @@ def _transcribe(job, asr_engine, audio_path, video_id=None):
     """转写共用段（URL/文件两源）：逐段消费生成器、增量可见、完成写缓存。
 
     第439次（用户铁律：覆盖时间与识别结果时间是两个维度，禁止混用）：
-    独立跑 silero VAD 拿覆盖真值（coverage），显式按覆盖区间送转写
-    （clip_timestamps），进度按覆盖区间推进；空洞判定只看覆盖维度，
-    绝不以结果段时间反推覆盖。
+    独立跑 silero VAD 拿覆盖真值（coverage），显式按覆盖区间送转写，
+    进度按覆盖区间推进；空洞判定只看覆盖维度，绝不以结果段时间反推覆盖。
+    多引擎（评审 2026-10 §2）：faster-whisper 保留 clip_timestamps 专用
+    零回归路径（生成器逐段）；qwen3-asr/moss 走引擎中立窗口化批量循环
+    （逐窗追加段，增量语义 after=N 不变，产出节奏「逐段」→「逐窗」）。
     """
     job["status"] = "transcribing"
     _phase(job, "transcribing")  # 第441次：阶段打点（快照）
     _check_cancel(job)  # 第513次：模型加载前响应点（避免为已取消任务加载模型）
-    model, _ = asr_engine.ensure_loaded("faster-whisper")
+    handle, engine = asr_engine.ensure_loaded()
     # 一次解码供 VAD 与转写共用（transcribe 传 numpy 跳过二次解码）；
     #   16kHz float32 单声道，1h 音频约 230MB，与模型开销同量级可接受。
     audio = decode_audio(audio_path, sampling_rate=16000)
@@ -573,51 +594,19 @@ def _transcribe(job, asr_engine, audio_path, video_id=None):
     covered_total = sum(b - a for a, b in coverage)
     duration = len(audio) / 16000
     job["duration"] = round(duration, 3)  # 第440次：真实解码时长入 job，随缓存条目落盘
-    log.info("ASR 任务 %s VAD 覆盖：%d 区间 %.1fs / 音频 %.1fs",
-             job["id"], len(coverage), covered_total, duration)
+    log.info("ASR 任务 %s VAD 覆盖：%d 区间 %.1fs / 音频 %.1fs（引擎 %s）",
+             job["id"], len(coverage), covered_total, duration, engine)
     if not coverage:
         log.info("ASR 任务 %s 全程未检出人声，跳过转写，直接补转空洞", job["id"])
+    elif engine == "faster-whisper":
+        _fw_segments_iter(job, handle, audio, coverage, covered_total)
     else:
-        # clip_timestamps（秒成对序列）：只转写覆盖区间，时间戳由 faster-whisper
-        #   内部映射回原时间轴，绝对秒直出与 vad_filter 时代一致。
-        clips = ",".join(f"{a:.3f},{b:.3f}" for a, b in coverage)
-        segs_iter, tinfo = model.transcribe(audio,
-                                            language=job["language"] or None,
-                                            clip_timestamps=clips,
-                                            vad_filter=False)
-        job["detected_language"] = tinfo.language
-        ci, done = 0, 0.0
-        # 里程碑打印（用户裁定：由每 100 段改为每识别 5 分钟音频打一条）：
-        #   按识别产出的全局音频时间（段 end）驱动，next_log_mark 为下一阈值
-        next_log_mark = 300.0
-        for s in segs_iter:  # 生成器：识别一段、追加一段，轮询端即刻可见
-            if job.get("cancel"):  # 第513次：逐段响应点（抢占让位的最快出口）
-                raise _JobCancelled()
-            seg = {"start": round(s.start, 3), "end": round(s.end, 3),
-                   "text": s.text.strip()}
-            job["segments"].append(seg)
-            # 进度按覆盖区间推进：段 end 越过区间终点即计该区间完成
-            #   （段 end 只是转写位置指示，不用于覆盖计算）。
-            while ci < len(coverage) and s.end >= coverage[ci][1] - 0.01:
-                done += coverage[ci][1] - coverage[ci][0]
-                ci += 1
-            if covered_total:
-                job["progress"]["transcribe"] = round(done / covered_total * 100)
-            # 里程碑（每识别 5 分钟音频一条）：段 end 越过下一阈值即打印。
-            #   用 while 而非 if，防止单段跨越多个 5 分钟时漏打
-            while s.end >= next_log_mark:
-                net = job.get("last_net") or {}
-                log.info("ASR 任务 %s 转写进度：%.1fs/%.1fs 覆盖（%d%%）%d 段 已识别%.0f分钟 外联=%s",
-                         job["id"], done, covered_total,
-                         job["progress"]["transcribe"], len(job["segments"]),
-                         next_log_mark / 60,
-                         ("%s %s" % (net.get("action"), net.get("url", "")))
-                         if net else "无")
-                next_log_mark += 300.0
+        _windowed_segments(job, handle, audio, coverage, covered_total,
+                           language=job["language"] or None)
     # 第439次空洞补转：VAD 误判无人声的长间隙（BGM 重人声轻的营销号视频
     #   常态）强制转写一遍，补转区间并入覆盖——先补转再写缓存，缓存条目
     #   的覆盖必为终值。
-    _fill_holes(job, model, audio, coverage, language=job["language"] or None)
+    _fill_holes(job, handle, engine, audio, coverage, language=job["language"] or None)
     job["progress"]["transcribe"] = 100
     if _cache_enabled():
         if job.get("source") == "file":
@@ -628,6 +617,128 @@ def _transcribe(job, asr_engine, audio_path, video_id=None):
     log.info("ASR 任务 %s 转写完成：%d 段，覆盖 %d 区间（%s）",
              job["id"], len(job["segments"]), len(job["coverage"]),
              job["detected_language"])
+
+
+def _fw_segments_iter(job, model, audio, coverage, covered_total):
+    """faster-whisper 专用主转写循环（clip_timestamps 全覆盖清单一次送入，
+    生成器逐段产出——接口 fw 专属，零回归保留）。"""
+    # clip_timestamps（秒成对序列）：只转写覆盖区间，时间戳由 faster-whisper
+    #   内部映射回原时间轴，绝对秒直出与 vad_filter 时代一致。
+    clips = ",".join(f"{a:.3f},{b:.3f}" for a, b in coverage)
+    segs_iter, tinfo = model.transcribe(audio,
+                                        language=job["language"] or None,
+                                        clip_timestamps=clips,
+                                        vad_filter=False)
+    job["detected_language"] = tinfo.language
+    # 里程碑打印（用户裁定：由每 100 段改为每识别 5 分钟音频打一条）：
+    #   按识别产出的全局音频时间（段 end）驱动，next_log_mark 为下一阈值
+    next_log_mark = 300.0
+    for s in segs_iter:  # 生成器：识别一段、追加一段，轮询端即刻可见
+        if job.get("cancel"):  # 第513次：逐段响应点（抢占让位的最快出口）
+            raise _JobCancelled()
+        seg = {"start": round(s.start, 3), "end": round(s.end, 3),
+               "text": s.text.strip()}
+        job["segments"].append(seg)
+        # 进度按覆盖区间推进：段 end 越过区间终点即计该区间完成
+        #   （段 end 只是转写位置指示，不用于覆盖计算）。
+        _advance_progress(job, coverage, s.end)
+        # 里程碑（每识别 5 分钟音频一条）：段 end 越过下一阈值即打印。
+        #   用 while 而非 if，防止单段跨越多个 5 分钟时漏打
+        while s.end >= next_log_mark:
+            done = sum(b - a for a, b in
+                       coverage[:_count_done(coverage, s.end)])
+            net = job.get("last_net") or {}
+            log.info("ASR 任务 %s 转写进度：%.1fs/%.1fs 覆盖（%d%%）%d 段 已识别%.0f分钟 外联=%s",
+                     job["id"], done, covered_total,
+                     job["progress"]["transcribe"], len(job["segments"]),
+                     next_log_mark / 60,
+                     ("%s %s" % (net.get("action"), net.get("url", "")))
+                     if net else "无")
+            next_log_mark += 300.0
+
+
+def _count_done(coverage, end):
+    """覆盖区间推进计数：段/窗 end 越过区间终点即计该区间完成（返回完成区间数）。"""
+    ci = 0
+    while ci < len(coverage) and end >= coverage[ci][1] - 0.01:
+        ci += 1
+    return ci
+
+
+def _advance_progress(job, coverage, end):
+    """进度按覆盖区间推进（段/窗 end 只是转写位置指示，不用于覆盖计算）。"""
+    done = sum(b - a for a, b in coverage[:_count_done(coverage, end)])
+    total = sum(b - a for a, b in coverage)
+    if total:
+        job["progress"]["transcribe"] = round(done / total * 100)
+
+
+def _split_windows(coverage, audio, sr=16000, max_sec=60.0):
+    """覆盖区间 → 转写窗口：≤max_sec 的区间原样；超长区间按能量谷二分
+    （silero utterance 级区间通常 <30s，罕见超长如长段连续讲话——切在
+    中部附近最安静处，避免切在词中间）。"""
+    import numpy as np
+    frames = max(1, len(audio) // (sr // 10))  # 100ms 帧粒度
+    rms = None
+    win = sr // 10
+    if len(audio) >= win:
+        n = len(audio) // win
+        rms = np.sqrt((audio[:n * win].reshape(n, win) ** 2).mean(axis=1))
+    out = []
+    for a, b in coverage or []:
+        if b - a <= max_sec:
+            out.append((a, b))
+            continue
+        # 贪心切分：目标窗 max_sec，落点在前 0.7–1.0 倍目标窗内取能量谷
+        pos = a
+        while b - pos > max_sec:
+            target = pos + max_sec
+            lo_f, hi_f = int((pos + max_sec * 0.7) * 10), int(target * 10)
+            cut = target
+            if rms is not None and hi_f > lo_f:
+                lo_f = min(max(lo_f, 0), len(rms) - 1)
+                hi_f = min(max(hi_f, lo_f + 1), len(rms))
+                cut = (lo_f + int(np.argmin(rms[lo_f:hi_f]))) / 10.0
+            out.append((pos, cut))
+            pos = cut
+        if b - pos > 0.01:
+            out.append((pos, b))
+    return out
+
+
+def _windowed_segments(job, handle, audio, coverage, covered_total, language=None):
+    """引擎中立窗口化批量循环（qwen3-asr/moss）：逐窗调
+    handle.transcribe_window，段绝对时间直出，逐窗追加（after=N 增量语义
+    不变，轮询端按窗可见）。产出节奏「逐段」→「逐窗」。"""
+    windows = _split_windows(coverage, audio)
+    log.info("ASR 任务 %s 窗口化转写：%d 覆盖区间 → %d 窗（引擎中立路径）",
+             job["id"], len(coverage), len(windows))
+    next_log_mark = 300.0
+    for a, b in windows:
+        _check_cancel(job)  # 逐窗响应点（抢占让位出口；窗内不可中断）
+        try:
+            segs = handle.transcribe_window(audio, 16000, a, b, language=language)
+        except Exception as e:
+            # 单窗失败不废整个任务：记日志留空洞（补转阶段会再试一次）
+            log.warning("ASR 任务 %s 窗口转写失败 %.1f-%.1fs：%s",
+                        job["id"], a, b, e)
+            continue
+        for s in segs:
+            if job.get("cancel"):
+                raise _JobCancelled()
+            seg = {"start": round(s["start"], 3), "end": round(s["end"], 3),
+                   "text": (s.get("text") or "").strip()}
+            if seg["text"]:
+                job["segments"].append(seg)
+        _advance_progress(job, coverage, b)
+        while b >= next_log_mark:
+            net = job.get("last_net") or {}
+            log.info("ASR 任务 %s 转写进度：%d%% %d 段 已识别%.0f分钟 外联=%s",
+                     job["id"], job["progress"]["transcribe"],
+                     len(job["segments"]), next_log_mark / 60,
+                     ("%s %s" % (net.get("action"), net.get("url", "")))
+                     if net else "无")
+            next_log_mark += 300.0
 
 
 def _coverage_holes(coverage, duration):
@@ -646,12 +757,13 @@ def _coverage_holes(coverage, duration):
     return holes
 
 
-def _fill_holes(job, model, audio, coverage, language=None):
-    """第439次空洞补转：对覆盖空洞逐段强制转写（vad_filter=False），
-    no_speech_prob 过滤静音幻觉；无论转出与否，补转区间并入覆盖
-    （送过识别即覆盖）。覆盖只在结束时整体替换一次（快照并发安全）。
+def _fill_holes(job, handle, engine, audio, coverage, language=None):
+    """第439次空洞补转：对覆盖空洞逐段强制转写；无论转出与否，补转区间
+    并入覆盖（送过识别即覆盖）。覆盖只在结束时整体替换一次（快照并发安全）。
     补转段追加在主转写段之后（到达序≠时间序）：轮询批内排序与缓存条目
-    排序已由第436/437次机制兜住，无需在此重排本体。"""
+    排序已由第436/437次机制兜住，无需在此重排本体。
+    反幻觉过滤分引擎：fw 用专属 no_speech_prob；qwen3/moss 走通用启发
+    （空文本/连续重复串——评审 2026-10 §1.4）。"""
     _phase(job, "filling-holes")  # 第441次：阶段打点（快照）
     holes = _coverage_holes(coverage, len(audio) / 16000)
     if not holes:
@@ -662,18 +774,38 @@ def _fill_holes(job, model, audio, coverage, language=None):
     added = 0
     for a, b in holes:
         _check_cancel(job)  # 第513次：逐空洞响应点
-        segs_iter, _ = model.transcribe(audio, language=language,
-                                        clip_timestamps=f"{a:.3f},{b:.3f}",
-                                        vad_filter=False)
-        for s in segs_iter:
-            if job.get("cancel"):  # 第513次：逐段响应点
-                raise _JobCancelled()
-            if s.no_speech_prob > _NO_SPEECH_PROB or not s.text.strip():
-                continue  # 静音段幻觉过滤：no_speech 概率高或空文本不收
-            job["segments"].append({"start": round(s.start, 3),
-                                    "end": round(s.end, 3),
-                                    "text": s.text.strip()})
-            added += 1
+        if engine == "faster-whisper":
+            segs_iter, _ = handle.transcribe(audio, language=language,
+                                             clip_timestamps=f"{a:.3f},{b:.3f}",
+                                             vad_filter=False)
+            for s in segs_iter:
+                if job.get("cancel"):  # 第513次：逐段响应点
+                    raise _JobCancelled()
+                if s.no_speech_prob > _NO_SPEECH_PROB or not s.text.strip():
+                    continue  # 静音段幻觉过滤：no_speech 概率高或空文本不收
+                job["segments"].append({"start": round(s.start, 3),
+                                        "end": round(s.end, 3),
+                                        "text": s.text.strip()})
+                added += 1
+        else:
+            try:
+                segs = handle.transcribe_window(audio, 16000, a, b,
+                                                language=language)
+            except Exception as e:
+                log.warning("ASR 任务 %s 补转失败 %.1f-%.1fs：%s",
+                            job["id"], a, b, e)
+                continue
+            for s in segs:
+                if job.get("cancel"):
+                    raise _JobCancelled()
+                text = (s.get("text") or "").strip()
+                # 通用幻觉过滤：空文本、近重复串（同字重复/同句复读）不收
+                if not text or _looks_hallucinated(text):
+                    continue
+                job["segments"].append({"start": round(float(s["start"]), 3),
+                                        "end": round(float(s["end"]), 3),
+                                        "text": text})
+                added += 1
     job["coverage"] = sorted(coverage + [[a, b] for a, b in holes])
     if added:
         log.info("ASR 任务 %s 空洞补转出 %d 段", job["id"], added)
@@ -784,16 +916,26 @@ def _cache_key(url):
     return f"{h}-{p_seg or 'root'}-{hashlib.sha256(norm.encode('utf-8')).hexdigest()[:8]}"
 
 
-def _cache_get_key(key, language):
-    """按现成 key 读缓存（第409次：文件任务用内容 SHA-256 做 key）。"""
+def _cache_get_key(key, language, tag=None):
+    """按现成 key 读缓存（第409次：文件任务用内容 SHA-256 做 key）。
+
+    引擎粒度复用（多引擎评审 2026-10）：tag=None 时旧语义（放行 faster-whisper
+    与 official）；给 tag 时条目须同 tag——official（官方字幕直出）恒放行
+    （来源无关引擎），其余引擎/档位不同即不复用。"""
     try:
         with open(os.path.join(ASR_CACHE_DIR, _safe_key(key) + ".json"),
                   "r", encoding="utf-8") as f:
             data = json.load(f)
     except (OSError, ValueError):
         return None
-    if data.get("engine") not in ("faster-whisper", "official"):
-        return None  # 引擎不同不复用（同 api 层语义）；official=官方字幕直出（第437次）
+    eng = data.get("engine")
+    if eng == "official":
+        pass  # 官方字幕直出（第437次），与当前引擎无关恒放行
+    elif tag is not None:
+        if eng != tag:
+            return None  # 引擎/档位不同不复用（同 api 层语义）
+    elif eng not in ("faster-whisper", "official"):
+        return None
     if language and data.get("req_language") != language:
         return None
     if not data.get("segments"):
@@ -804,7 +946,7 @@ def _cache_get_key(key, language):
 def _cache_put(job, video_id):
     # 第440次：key 在 create() 时一次算好存 job["cache_key"]（b23.tv 短链
     #   只展开一次），写侧不再重复 _cache_key。
-    _cache_put_key(job["cache_key"], job, video_id)
+    _cache_put_key(job["cache_key"], job, video_id, engine=job["engine"])
 
 
 def _cache_put_official(job, video_id):
@@ -813,11 +955,11 @@ def _cache_put_official(job, video_id):
     _cache_put_key(job["cache_key"], job, video_id, engine="official")
 
 
-def _cache_put_key(key, job, video_id=None, engine="faster-whisper"):
+def _cache_put_key(key, job, video_id=None, engine=None):
     entry = {
         "key": key,
         "video_id": video_id,
-        "engine": engine,
+        "engine": engine or "faster-whisper",
         "req_language": job["language"],
         "ts": int(time.time()),
         # 第440次：条目去 text（唯一消费方管理页 preview 改从 segments 拼，
