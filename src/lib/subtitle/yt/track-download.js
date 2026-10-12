@@ -39,9 +39,12 @@ import { fetchSubsViaBackend, fetchSubtitleViaServiceWorker } from './backend.js
  *   XHR，CS 的 fetch 签名绑定播放器会话返回 0 字节；只有页面主世界操作才有真数据。
  *
  * @param {Object} track {baseUrl, languageCode, name}
+ * @param {{playerLast?:boolean}} [opts] playerLast=true（双语第二轨下载用）：
+ *   路径0 殿后——播放器拦截会临时切换可见 CC 轨再恢复，副轨下载把直连路径
+ *   （1/2/3/4/A/B/5）放前面，常规情况不惊动播放器（不闪变），全失败才回播放器拦截。
  * @returns {Promise<Array<{start, end, text}>|null>}
  */
-export async function fetchYouTubeTrack(track) {
+export async function fetchYouTubeTrack(track, opts = {}) {
   if (!track || !track.baseUrl) {
     // backend 伪轨（无 baseUrl）——经 SW 代理重调 backend 直出条目
     if (track && track._backend) {
@@ -68,23 +71,32 @@ export async function fetchYouTubeTrack(track) {
   if (needsPot) console.warn('[VocabRadar][youtube] 轨道带 exp=xpe（需 PoToken），跳过直连 timedtext 渠道');
 
   // === 路径 0：页面主世界拦截（检查缓存 + 触发播放器请求）===
-  try {
-    console.log('[VocabRadar][youtube] 路径0 页面拦截: 开始尝试, lang=', track.languageCode, 'kind=', track.kind || '-', 'videoId=', videoId);
-    // 把原轨道 kind/vss_id 带进播放器触发配置（自动生成轨必需）
-    const interceptResp = await triggerAndInterceptSubtitle(track.languageCode, videoId, 8, { kind: track.kind || '', vss_id: track.vss_id || '' });
-    if (interceptResp) {
-      console.log('[VocabRadar][youtube] 路径0 页面拦截成功, resp长度=', interceptResp.length);
-      const parsed = parseSubtitleContent(interceptResp, '');
-      if (parsed && parsed.length > 0) {
-        console.log('[VocabRadar][youtube] 路径0 页面拦截解析:', parsed.length, '条');
-        return parsed;
+  // 抽成 tryPath0 函数：默认（主轨下载）在最前执行；opts.playerLast=true
+  // （双语第二轨下载）时挪到全部直连路径之后——见函数头 @param 说明。
+  const tryPath0 = async () => {
+    try {
+      console.log('[VocabRadar][youtube] 路径0 页面拦截: 开始尝试, lang=', track.languageCode, 'kind=', track.kind || '-', 'videoId=', videoId);
+      // 把原轨道 kind/vss_id 带进播放器触发配置（自动生成轨必需）
+      const interceptResp = await triggerAndInterceptSubtitle(track.languageCode, videoId, 8, { kind: track.kind || '', vss_id: track.vss_id || '' });
+      if (interceptResp) {
+        console.log('[VocabRadar][youtube] 路径0 页面拦截成功, resp长度=', interceptResp.length);
+        const parsed = parseSubtitleContent(interceptResp, '');
+        if (parsed && parsed.length > 0) {
+          console.log('[VocabRadar][youtube] 路径0 页面拦截解析:', parsed.length, '条');
+          return parsed;
+        }
+        console.warn('[VocabRadar][youtube] 路径0 页面拦截响应解析为空, 前200字符:', interceptResp.slice(0, 200));
+      } else {
+        console.warn('[VocabRadar][youtube] 路径0 页面拦截: 响应为 null, 尝试其他方式');
       }
-      console.warn('[VocabRadar][youtube] 路径0 页面拦截响应解析为空, 前200字符:', interceptResp.slice(0, 200));
-    } else {
-      console.warn('[VocabRadar][youtube] 路径0 页面拦截: 响应为 null, 尝试其他方式');
+    } catch (e) {
+      console.warn('[VocabRadar][youtube] 路径0 页面拦截异常:', e.message || e);
     }
-  } catch (e) {
-    console.warn('[VocabRadar][youtube] 路径0 页面拦截异常:', e.message || e);
+    return null;
+  };
+  if (!opts.playerLast) {
+    const viaPath0 = await tryPath0();
+    if (viaPath0) return viaPath0;
   }
 
   // === 路径 1：页面主世界 fetch 原始 baseUrl（核心路径！）===
@@ -235,6 +247,12 @@ export async function fetchYouTubeTrack(track) {
     }
     const parsed = parseSubtitleContent(text, contentType);
     if (parsed && parsed.length > 0) return parsed;
+  }
+
+  // === 路径 0 殿后（opts.playerLast，双语第二轨）：直连全败才惊动播放器拦截 ===
+  if (opts.playerLast) {
+    const viaPath0Late = await tryPath0();
+    if (viaPath0Late) return viaPath0Late;
   }
 
   // === 全部失败：汇总诊断行——把关键探测结果集中一行，便于贴日志定位

@@ -9,7 +9,8 @@
 //   innertube.js         熔断器 + youtubei 单例 + warm + 路径A/B + 轨道补拉 + fresh baseUrl + URL 构造
 //   caption-tracks.js    四路轨道发现 + getYouTubeSubtitles
 //   track-download.js    fetchYouTubeTrack（七路下载）
-// 符号：getYouTubeSubtitles / warmYouTubeCaptionInnertube / fetchYouTubeTrack（由 index.js 统一 re-export）
+// 符号：getYouTubeSubtitles / warmYouTubeCaptionInnertube / fetchYouTubeTrack /
+//   fetchYouTubeSecondarySubtitles（由 index.js 统一 re-export）
 // 内部工具：ensureXmlFormat / extractVarFromScripts / extractBalancedJson / fetchTrackListViaInnertube 等
 //   仅被本门面的子模块使用，故落在 yt/ 而不放入 subtitle-parser.js（拆分计划规则）
 // 注：原文件头注释（修复历史）见下；其中 B 站相关修复历史现位于 bilibili-fetcher.js。
@@ -55,6 +56,6 @@
 // === 门面 re-export（2026-09-27 拆分第三刀；导出符号零差异，引用方零改动）===
 // 本轮同样跑过自由标识符对账（node --check 之外的孤儿引用/死导入检查）。
 
-export { getYouTubeSubtitles } from './yt/caption-tracks.js';
+export { getYouTubeSubtitles, fetchYouTubeSecondarySubtitles } from './yt/caption-tracks.js';
 export { warmYouTubeCaptionInnertube } from './yt/innertube.js';
 export { fetchYouTubeTrack } from './yt/track-download.js';

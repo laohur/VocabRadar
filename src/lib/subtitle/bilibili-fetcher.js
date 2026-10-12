@@ -1,6 +1,7 @@
 // ============================================================
 // 文件职责：B站字幕获取（wbi 签名、view API 取 aid/cid、轨道挑选与字幕下载）
-// 符号：getBilibiliSubtitles / fetchBilibiliTrack（由 index.js 统一 re-export）
+// 符号：getBilibiliSubtitles / fetchBilibiliTrack / fetchBilibiliSecondarySubtitles
+//   （由 index.js 统一 re-export；后者为双语第二轨数据源，D1）
 // ============================================================
 import { buildSignedUrl } from '../wbi.js';
 
@@ -232,4 +233,45 @@ export async function getBilibiliSubtitles(uiLanguage = 'en', learnLanguage = ''
 export async function fetchBilibiliTrack(track) {
   if (!track || !track.subtitle_url) return null;
   return await fetchBilibiliSubtitle(track.subtitle_url);
+}
+
+/**
+ * 取 B站站上第二语言字幕文件（双语副行数据源，D1）。
+ * 字幕列表滤 lan（剥 ai- 前缀）前缀匹配释义语言：人工轨优先、AI 轨次之，
+ * credentials:'omit' 直下 JSON（同 fetchBilibiliSubtitle 口径）。
+ * B站 AI/人工两轨同源同一音轨，时间轴天然近似对齐（错轴交给对齐层配对）。
+ * 无第二语言轨 → null（调用方回退实时翻译）。
+ * 注意参数序与 getBilibiliSubtitles（ui, learn, meaning）不同——本函数无界面语言层。
+ * @param {{learn?:string, meaning?:string}} [opts] learn=学习语言、meaning=释义语言
+ * @returns {Promise<Array<{start,end,text}>|null>}
+ */
+export async function fetchBilibiliSecondarySubtitles(opts = {}) {
+  const learn = opts.learn || '';
+  const meaning = opts.meaning || '';
+  if (!meaning || meaning === learn) {
+    console.log('[VocabRadar][bilibili] 双语第二轨跳过: 释义语言与学习语言相同或为空 (', learn, '→', meaning, ')');
+    return null;
+  }
+  const ids = await getBilibiliIds();
+  if (!ids) return null;
+  const list = await getBilibiliSubtitleList(ids.aid, ids.cid);
+  if (!list || list.length === 0) return null;
+
+  const isMeaning = (lan) => String(lan || '').replace(/^ai-/, '').startsWith(meaning);
+  const cands = list.filter((s) => isMeaning(s.lan));
+  const ordered = cands.filter((s) => !s.ai).concat(cands.filter((s) => s.ai));   // 人工轨优先
+  for (const pick of ordered) {
+    try {
+      const cues = await fetchBilibiliSubtitle(pick.subtitle_url);
+      if (cues && cues.length > 0) {
+        console.log('[VocabRadar][bilibili] 双语第二轨命中:', pick.lan,
+          (pick.ai ? '(AI)' : '(人工)'), cues.length, '条');
+        return cues;
+      }
+    } catch (e) {
+      console.warn('[VocabRadar][bilibili] 双语第二轨下载异常:', pick.lan, e && e.message);
+    }
+  }
+  console.log('[VocabRadar][bilibili] 双语第二轨未取到（无', meaning, '语言轨），转实时翻译兜底');
+  return null;
 }

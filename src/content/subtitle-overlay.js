@@ -38,9 +38,10 @@ import { getAnnotations, setRankMax, setMyWords } from '../lib/annotator.js';
 import { findWordPositions } from '../lib/tokenizer.js';
 // 视频内字幕注释的翻译优先级档（2=视频侧栏，先于网页正文批量）
 import { PRIO_VIDEO } from '../lib/translator.js';
-// 第514次双语字幕：整句译文取数与会话缓存唯一实现（lib/bilingual-trans.js，
-// 与视频侧栏字幕面板共用同一缓存与语言对监听）
-import { fetchBilingualTrans } from '../lib/bilingual-trans.js';
+// 双语副行取数统一入口（lib/bilingual-track.js）：站上第二语言字幕文件优先
+// + 时间重叠对齐（D1+D2），站上无第二语言文件时其内部回退 bilingual-trans
+// 实时翻译——与视频侧栏字幕面板共用同一编排、缓存与语言对监听
+import { fetchBilingualLine } from '../lib/bilingual-track.js';
 // 侧邻注释统一用短释（与各侧邻路径同源）
 import { pickCleanShortTrans } from '../lib/dict-clean.js';
 // 词典就绪态（缓存守卫/时间线上报）+ 诊断记录器
@@ -79,8 +80,9 @@ let _userStylesCache = [];       // 最近一次同步的用户样式列表（�
 
 // 第514次双语字幕（用户："视频叠加字幕的按钮后面增加双语标签按钮，目标语言在上，
 // 释义语言在下。有了双语字幕，自然就不用注释了"）：开启时注释管线整体旁路，
-// 原文纯文本在上、整句译文在下（.beaver-overlay-trans）。译文取数与语言对
-// 监听在 lib/bilingual-trans.js（与侧栏字幕面板共用）。
+// 原文纯文本在上、整句副行在下（.beaver-overlay-trans）。副行取数编排在
+// lib/bilingual-track.js（站上第二轨优先，与侧栏字幕面板共用），实时翻译兜底在
+// lib/bilingual-trans.js。
 let _bilingual = false;          // 双语开关（storage.overlayBilingual，默认关）
 
 // 词典后台重建完成——清注释缓存并强制重绘。
@@ -591,8 +593,9 @@ async function renderSubtitle(subtitle) {
   const transEl = _overlay.querySelector('.beaver-overlay-trans');
   if (transEl) transEl.innerHTML = '';   // 默认清残留译文行（双语命中路径再填充）
   // 双语模式：注释管线整体旁路（用户裁定"有了双语字幕，自然就不用注释了"）——
-  // 原文纯文本上屏（无高亮无注释，生词翻译队列零触发），整句译文经 _transCache
-  // 异步取回填下方；无译文/失败/同文时不渲染译文行（只展示原文，降级不出声）。
+  // 原文纯文本上屏（无高亮无注释，生词翻译队列零触发），整句副行经
+  // fetchBilingualLine 异步取回填下方（站上第二轨优先，实时翻译兜底）；
+  // 无译文/失败/同文时不渲染译文行（只展示原文，降级不出声）。
   if (_bilingual) {
     subtitleEl.textContent = subtitle.text;
     annEl.innerHTML = '';
@@ -601,7 +604,7 @@ async function renderSubtitle(subtitle) {
     _overlay.style.display = 'block';
     updateOverlayPosition();
     const key = subtitle.start + ':' + subtitle.text;
-    const trans = await fetchBilingualTrans(subtitle.text);
+    const trans = await fetchBilingualLine(subtitle, _subtitles);
     // 等待期间已换字幕/已关叠加/双语已关 → 丢弃（防旧译文画上新字幕）
     if (!_enabled || !_bilingual || _lastKey !== key) return;
     if (trans && transEl) {

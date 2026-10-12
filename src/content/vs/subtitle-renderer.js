@@ -49,9 +49,10 @@ import {
 } from '../video-sidebar.js';
 // 注释模板拆分（{word} 丢弃，取前后字面量包释义）
 import { splitAnnTemplate } from '../../lib/styles.js';
-// 第514次双语字幕：整句译文取数与会话缓存唯一实现（lib/bilingual-trans.js，
-// 与视频内叠加字幕共用同一缓存与语言对监听）
-import { fetchBilingualTrans } from '../../lib/bilingual-trans.js';
+// 双语副行取数统一入口（lib/bilingual-track.js）：站上第二语言字幕文件优先
+// + 时间重叠对齐（D1+D2），站上无第二语言文件时其内部回退 bilingual-trans
+// 实时翻译——与视频内叠加字幕共用同一编排、缓存与语言对监听
+import { fetchBilingualLine } from '../../lib/bilingual-track.js';
 
 // === 渲染状态 ===
 let _subEntries = [];         // 当前窗口内的字幕条目 [{sub, annotations, el, subIdx}]
@@ -110,7 +111,8 @@ let _collectedSubs = new WeakSet();  // 已收集进 _allAnnotations 的 sub 对
 //   开启时字幕面板正文纯文本（同 Annotation 关闭口径，无高亮无注释），
 //   整句译文填在 annContainer（.beaver-sub-trans），注释收集（含生词表
 //   数据侧）一并停——关闭双语后 rerenderPanelOnly 清缓存重算恢复。
-//   译文语言对与其会话缓存由 lib/bilingual-trans.js 自持监听。
+//   副行数据源编排在 lib/bilingual-track.js（语言对监听自持），
+//   实时翻译兜底与会话缓存在 lib/bilingual-trans.js。
 let _bilingual = false;
 try {
   chrome.storage.local.get({ overlayBilingual: false }, (r) => {
@@ -1335,15 +1337,16 @@ async function collectAnnotations(sub) {
 
 // 槽位注释获取+回填（替换原 fetchAnnotationsForSlot，统一走 collectAnnotations）
 // === 双语字幕槽位（第514次）===
-// 正文纯文本（无高亮无注释，同 Annotation 关闭口径），整句译文填在
-// annContainer（.beaver-sub-trans，与注释行同 grid 对齐）；译文经
-// lib/bilingual-trans 会话缓存异步取，失败/超时静默无译文行。
+// 正文纯文本（无高亮无注释，同 Annotation 关闭口径），整句副行填在
+// annContainer（.beaver-sub-trans，与注释行同 grid 对齐）；副行经
+// lib/bilingual-track 异步取（站上第二轨优先、实时翻译兜底），
+// 失败/超时静默无译文行。
 function fillBilingualSlot(slot, sub) {
   const contentSpan = slot.querySelector('.beaver-sub-content');
   if (contentSpan) contentSpan.textContent = sub.text || '';
   const container = slot.querySelector('.beaver-ann-container');
   if (container) container.innerHTML = '';
-  fetchBilingualTrans(sub.text || '').then((trans) => {
+  fetchBilingualLine(sub, getSubtitlesRef()).then((trans) => {
     if (!_bilingual || !trans) return;
     // 槽位已换字幕/已脱离面板 → 丢弃（同 collectAnnotationsForSlot 回填守卫口径：
     // ASR 前段插行使 idx 位移，按对象身份判定）

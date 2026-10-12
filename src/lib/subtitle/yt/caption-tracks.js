@@ -4,19 +4,22 @@
 // 职责：parseTimedTextListXml()（timedtext list XML 重建轨道）、
 //       getYouTubeCaptionTracks()（路径0 播放器对象轮询 + 路径1 script 提取 +
 //       路径2 innertube WEB + 路径3 timedtext list）、
-//       getYouTubeSubtitles()（默认选轨 + 下载 + innertube 补拉 + backend 兜底，导出）。
+//       getYouTubeSubtitles()（默认选轨 + 下载 + innertube 补拉 + backend 兜底，导出）、
+//       fetchYouTubeSecondarySubtitles()（双语第二轨：原生第二语言轨 + tlang 翻译轨，导出）。
 // 来源：拆分自 src/lib/subtitle/youtube-fetcher.js（2026-09-27 拆分第三刀，机械搬移）。
 // 关系：依赖 ./yt-utils.js（ensureXmlFormat/extractYtcfg/extractVarFromScripts——
 //       叶子共享，避免与 innertube 循环）、./page-context.js（注入+状态日志）、
-//       ./innertube.js（轨道列表补拉）、./backend.js（兜底）、./track-download.js（下载）。
-// 消费方：门面 youtube-fetcher.js（re-export getYouTubeSubtitles）。
+//       ./innertube.js（轨道列表补拉）、./backend.js（兜底）、./track-download.js（下载）、
+//       ../subtitle-parser.js（tlang 响应解析）。
+// 消费方：门面 youtube-fetcher.js（re-export getYouTubeSubtitles / fetchYouTubeSecondarySubtitles）。
 // =============================================================================
 
 import { ensureXmlFormat, extractYtcfg, extractVarFromScripts } from './yt-utils.js';
-import { injectPageScript, getPageInjectStatus } from './page-context.js';
+import { injectPageScript, getPageInjectStatus, fetchViaPageContext } from './page-context.js';
 import { fetchTrackListViaInnertube } from './innertube.js';
-import { backendSubtitlesFallback } from './backend.js';
+import { backendSubtitlesFallback, fetchSubtitleViaServiceWorker } from './backend.js';
 import { fetchYouTubeTrack } from './track-download.js';
+import { parseSubtitleContent } from '../subtitle-parser.js';
 
 // === YouTube ===
 //
@@ -332,3 +335,114 @@ const picked = trackList[pickedIndex];
   return { tracks: trackList, subtitles, pickedIndex };
 }
 // 第一百二十三次自纠：此处原有上次会话遗留的两个孤立 '}'（ESM 解析失败），随修清除。
+
+// =============================================================================
+// 双语第二轨（D1 落地：站上现成多语言字幕优先，不再逐行实时翻译）
+// 消费方：lib/bilingual-track.js（编排层，取不到才回退 bilingual-trans 实时翻译）。
+// =============================================================================
+
+/**
+ * 下载 YouTube 官方翻译轨内容（tlang=）：以源轨 baseUrl 为基础**显式**追加
+ * tlang=释义语言（fmt 同步置 json3），拉取站上现成机翻文件。tlang 响应沿用
+ * 源轨时间轴——与以同轨为主显轨的场景天然同轴，错轴场景交给对齐层配对。
+ * 两级下载：页面主世界 fetch（同路径1/2 口径，绕 CS 会话绑定）→ SW 代理（绕 CS CORS）。
+ * @param {{baseUrl:string, languageCode:string}} src 源轨（学习语言轨优先）
+ * @param {string} meaningLanguage 释义语言（tlang 目标）
+ * @returns {Promise<Array<{start,end,text}>|null>}
+ */
+async function fetchTlangCues(src, meaningLanguage) {
+  let url = '';
+  try {
+    const u = new URL(src.baseUrl);
+    u.searchParams.set('fmt', 'json3');
+    u.searchParams.set('tlang', meaningLanguage);   // 显式设置：不依赖源 URL 是否带 lang 参数
+    url = u.toString();
+  } catch (e) {
+    console.warn('[VocabRadar][youtube] tlang URL 构造失败:', e && e.message);
+    return null;
+  }
+  // ① 页面主世界 fetch（路径1/2 同口径）
+  try {
+    const r = await fetchViaPageContext(url);
+    if (r && r.ok && r.text && r.text.length > 0) {
+      const parsed = parseSubtitleContent(r.text, r.contentType || 'application/json');
+      if (parsed && parsed.length > 0) return parsed;
+      console.warn('[VocabRadar][youtube] tlang 页面fetch 解析为空, 前200字符:', r.text.slice(0, 200));
+    }
+  } catch (e) {
+    console.warn('[VocabRadar][youtube] tlang 页面fetch 异常:', e && e.message);
+  }
+  // ② SW 代理（绕 CS CORS；签名参数原样透传）
+  try {
+    const text = await fetchSubtitleViaServiceWorker(url);
+    if (text) {
+      const parsed = parseSubtitleContent(text, text.trim().startsWith('<') ? 'application/xml' : 'application/json');
+      if (parsed && parsed.length > 0) return parsed;
+    }
+  } catch (e) {
+    console.warn('[VocabRadar][youtube] tlang SW代理 异常:', e && e.message);
+  }
+  return null;
+}
+
+/**
+ * 取 YouTube 站上第二语言字幕文件（双语副行数据源，D1）。
+ * 优先级：
+ *   ① 原生第二语言轨（languageCode 前缀匹配释义语言；人工轨优先于 ASR 机轨），
+ *     经 fetchYouTubeTrack 七路下载（playerLast：直连路径先行，不惊动可见 CC）。
+ *   ② 无原生轨 → YouTube 官方翻译轨 tlang=（站上现成机翻文件，源轨时间轴）。
+ * ①② 皆空 → null（调用方回退实时翻译）。
+ * @param {{learn?:string, meaning?:string}} [opts] learn=学习语言、meaning=释义语言
+ * @returns {Promise<Array<{start,end,text}>|null>}
+ */
+export async function fetchYouTubeSecondarySubtitles(opts = {}) {
+  const learn = opts.learn || 'en';
+  const meaning = opts.meaning || 'zh';
+  if (!meaning || meaning === learn) {
+    console.log('[VocabRadar][youtube] 双语第二轨跳过: 释义语言与学习语言相同或为空 (', learn, '→', meaning, ')');
+    return null;
+  }
+  // 轨道发现（同 getYouTubeSubtitles：页面四路 → innertube 补拉）
+  let trackList = await getYouTubeCaptionTracks();
+  if (!trackList || trackList.length === 0) {
+    const videoId = location.search.match(/[?&]v=([A-Za-z0-9_-]{11})/)?.[1]
+      || location.pathname.match(/\/([A-Za-z0-9_-]{11})(?:[/?]|$)/)?.[1];
+    trackList = await fetchTrackListViaInnertube(videoId);
+  }
+  if (!trackList || trackList.length === 0) {
+    console.log('[VocabRadar][youtube] 双语第二轨: 轨道列表为空，转实时翻译兜底');
+    return null;
+  }
+
+  // ① 原生第二语言轨（人工轨优先）
+  const cands = trackList.filter((t) => String(t.languageCode || '').startsWith(meaning));
+  const ordered = cands.filter((t) => t.kind !== 'asr').concat(cands.filter((t) => t.kind === 'asr'));
+  for (const pick of ordered) {
+    try {
+      const cues = await fetchYouTubeTrack(pick, { playerLast: true });
+      if (cues && cues.length > 0) {
+        console.log('[VocabRadar][youtube] 双语第二轨命中原生轨:', pick.languageCode,
+          'kind=' + (pick.kind || '-'), cues.length, '条');
+        return cues;
+      }
+    } catch (e) {
+      console.warn('[VocabRadar][youtube] 双语第二轨原生轨下载异常:', pick.languageCode, e && e.message);
+    }
+  }
+
+  // ② 官方翻译轨 tlang=：源轨取学习语言轨（ASR 优先）——源语言与主显轨最接近时错轴最小
+  const src = trackList.find((t) => String(t.languageCode || '').startsWith(learn) && t.kind === 'asr')
+    || trackList.find((t) => String(t.languageCode || '').startsWith(learn))
+    || trackList.find((t) => t.kind === 'asr')
+    || trackList[0];
+  if (src && src.baseUrl) {
+    const cues = await fetchTlangCues(src, meaning);
+    if (cues && cues.length > 0) {
+      console.log('[VocabRadar][youtube] 双语第二轨命中翻译轨(tlang):', src.languageCode, '→', meaning, cues.length, '条');
+      return cues;
+    }
+  }
+
+  console.log('[VocabRadar][youtube] 双语第二轨未取到（原生+tlang 皆空），转实时翻译兜底');
+  return null;
+}
