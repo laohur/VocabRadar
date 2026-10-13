@@ -307,12 +307,14 @@ export async function idbCountTrans(lang) {
   });
 }
 
-export async function idbGetLangProjection(lang) {
+export async function idbGetLangProjection(lang, tOut) {
   // === 第一百九十次：IDB 投影读取内部细分计时 ===
   // 用户实测：词典装载 4448ms 全在投影读取（startHint→词典就绪 4537ms ≈ 投影 4448+Map 85），
   //   需定位连接打开/各表 getAll/meta 各占多少。查看：window.__beaverIdbTiming（实时引用）。
-  const _it = { open: 0, ranks: 0, tags: 0, lemmas: 0, meta: 0, rankRows: 0, tagRows: 0, lemmaRows: 0 };
-  if (typeof window !== 'undefined') window.__beaverIdbTiming = _it;
+  // 2026-10-13：SW 无 window，计时改支持 tOut 出参对象（sw-channel 取数链路分段计时用）；
+  //   不传时维持写 window.__beaverIdbTiming 的旧行为（CS 直连降级路径）。
+  const _it = tOut || { open: 0, ranks: 0, tags: 0, lemmas: 0, meta: 0, rankRows: 0, tagRows: 0, lemmaRows: 0 };
+  if (!tOut && typeof window !== 'undefined') window.__beaverIdbTiming = _it;
   let _t0 = performance.now();
   const db = await getDB();
   _it.open = Math.round(performance.now() - _t0);
@@ -443,10 +445,16 @@ export async function idbReadMeta(lang) {
  * @param {string} lang 语言代码
  * @returns {Promise<{built:boolean,ranks:object,ranksCount:number,expected:number,dataVersion:number}>}
  */
-export async function idbGetRanksProjection(lang) {
+export async function idbGetRanksProjection(lang, tOut) {
+  // 2026-10-13：tOut 出参计时（open/ranks/meta/rows）——sw-channel ranks 快道
+  //   实测 196s 卡顿需区分 storage.local 与 IDB 各占多少，SW 无 window 可挂。
+  const _t = tOut || {};
+  let _t0 = performance.now();
   const db = await getDB();
+  _t.open = Math.round(performance.now() - _t0);
   const tx = db.transaction(S_RANK, 'readonly');
   const idx = tx.objectStore(S_RANK).index('by-lang');
+  _t0 = performance.now();
   const rows = await new Promise((resolve, reject) => {
     try {
       const req = idx.getAll(IDBKeyRange.only(lang));
@@ -454,12 +462,16 @@ export async function idbGetRanksProjection(lang) {
       req.onsuccess = () => resolve(req.result || []);
     } catch (e) { reject(e); }
   });
+  _t.ranks = Math.round(performance.now() - _t0);
+  _t.rows = rows.length;
   const ranks = {};
   for (let i = 0; i < rows.length; i++) {
     const p = splitKey(rows[i].k);
     if (p) ranks[p.word] = rows[i].v;
   }
+  _t0 = performance.now();
   const meta = await readMetaFor(db, lang);
+  _t.meta = Math.round(performance.now() - _t0);
   const built = !!(meta && meta.built);
   const expected = (meta && Number.isFinite(meta.expected)) ? meta.expected : 0;
   const dataVersion = (meta && Number.isFinite(meta.dataVersion)) ? meta.dataVersion : 0;

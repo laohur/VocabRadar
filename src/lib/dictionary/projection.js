@@ -141,6 +141,20 @@ export async function _loadDict(lang) {
     let ranksProj = null;
     ranksProj = await getRanksProjection(meaningLang).catch(() => null);
     _seg.ranks = Math.round(performance.now() - _t0);
+    // 2026-10-13：ranks 一跳 SW 内部分段账（local读/meta对账/IDB扫库/总）——
+    //   用户实测本跳 196s，页面侧总账分不出卡在哪；挂 window 供诊断窗词典分段行展示。
+    try {
+      const _rd = ranksProj && ranksProj._diag;
+      if (_rd) {
+        if (typeof window !== 'undefined') {
+          window.__beaverSwTiming = window.__beaverSwTiming || {};
+          window.__beaverSwTiming.ranks = _rd;
+        }
+        const _o = _rd.idbDetail || {};
+        console.log(`[VocabRadar][dictionary][${_ts()}] ranks 投影 SW 账: 源=${_rd.src} 总${(_rd.ms && _rd.ms.total) || '?'}ms ｜ local读 ${(_rd.ms && _rd.ms.localRead) || 0}ms ｜ meta对账 ${(_rd.ms && _rd.ms.meta) || 0}ms ｜ IDB ${(_rd.ms && _rd.ms.idb) || 0}ms`
+          + (_rd.idbDetail ? `（连接 ${_o.open || 0}/rank表 ${_o.ranks || 0}/meta ${_o.meta || 0}ms，${_o.rows || 0} 行）` : ''));
+      }
+    } catch (e) { /* ignore */ }
     // ---- FAST PATH：ranks 先行（分阶段 Stage 1，2026-09-04）----
     // 判据与慢路径同源（built/version/expected），只是数据源换成 ranksProj 的 meta。
     // 命中即建 rank-only dictMap 并 resolve ranksPromise——扫描侧先重扫，高亮只认 rank；
@@ -208,6 +222,19 @@ export async function _loadDict(lang) {
       _t0 = performance.now();
       let _full = null;
       try { _full = await getLangProjection(meaningLang); } catch (e) { _full = null; }
+      // 2026-10-13：整投影 SW 内部分段账（同 ranks，见 Stage 1 处注释）。
+      try {
+        const _fd = _full && _full._diag;
+        if (_fd) {
+          if (typeof window !== 'undefined') {
+            window.__beaverSwTiming = window.__beaverSwTiming || {};
+            window.__beaverSwTiming.full = _fd;
+          }
+          const _o = _fd.idbDetail || {};
+          console.log(`[VocabRadar][dictionary][${_ts()}] 整投影 SW 账: 源=${_fd.src} 总${(_fd.ms && _fd.ms.total) || '?'}ms ｜ local读 ${(_fd.ms && _fd.ms.localRead) || 0}ms ｜ meta对账 ${(_fd.ms && _fd.ms.meta) || 0}ms ｜ IDB ${(_fd.ms && _fd.ms.idb) || 0}ms ｜ local写 ${(_fd.ms && _fd.ms.localWrite) || 0}ms`
+            + (_fd.idbDetail ? `（连接 ${_o.open || 0}/rank ${_o.ranks || 0}/tags ${_o.tags || 0}/lemma ${_o.lemmas || 0}/meta ${_o.meta || 0}ms，${_o.rankRows || 0}+${_o.tagRows || 0}+${_o.lemmaRows || 0} 行）` : ''));
+        }
+      } catch (e) { /* ignore */ }
       // 语言切换闸：本轮后台合并只为本次装载语言服务——用户切走后 loadedLang /
       //   ranksReadyLang 均已翻新，本轮整投影结果全部作废（旧语言 tags/lemma 不得并入
       //   新语言 dictMap；此竞态旧版同步段窗口极小，后台化拉长窗口，显式闸上）。
@@ -372,6 +399,17 @@ export async function _loadDict(lang) {
       proj = null;
     }
     _seg.proj = Math.round(performance.now() - _t0);
+    // 2026-10-13：SLOW 路整投影 SW 分段账（FAST 路 Stage 2 同款）。
+    try {
+      const _fd = proj && proj._diag;
+      if (_fd && typeof window !== 'undefined') {
+        window.__beaverSwTiming = window.__beaverSwTiming || {};
+        window.__beaverSwTiming.full = _fd;
+        const _o = _fd.idbDetail || {};
+        console.log(`[VocabRadar][dictionary][${_ts()}] 整投影 SW 账(SLOW): 源=${_fd.src} 总${(_fd.ms && _fd.ms.total) || '?'}ms ｜ local读 ${(_fd.ms && _fd.ms.localRead) || 0}ms ｜ meta对账 ${(_fd.ms && _fd.ms.meta) || 0}ms ｜ IDB ${(_fd.ms && _fd.ms.idb) || 0}ms ｜ local写 ${(_fd.ms && _fd.ms.localWrite) || 0}ms`
+          + (_fd.idbDetail ? `（连接 ${_o.open || 0}/rank ${_o.ranks || 0}/tags ${_o.tags || 0}/lemma ${_o.lemmas || 0}/meta ${_o.meta || 0}ms）` : ''));
+      }
+    } catch (e) { /* ignore */ }
     if (proj && proj.built) {
       // 投影对象是同一词典的字段（rank/tags/lemma），合并为一张全属性词条表。
       // 第一百八十七次·性能修复（用户实测：词典就绪 17093ms＝DCL 后 14.9s）：
@@ -541,15 +579,17 @@ async function _rebuildFromSources(lang) {
   ]);
   // 第三百七十次：词频/词表装载结果上报（诊断窗：确认源文件拉取是否失败/空包）。
   reportDictEvent(wf.size > 0 ? 'wf-ok' : 'wf-empty', { wf: wf.size, wl: wl.size, lang });
-  // 第三百七十次（方案A·堵洞②假就绪守卫）：两源全空 = 词频远程拉取与词表装载双双失败
-  //   （word-loader 各失败路径均返回空 Map 不抛错）。继续走下方会把空 Map 置为 dictMap
-  //   并置 loadedLang —— isLoaded() 翻真成"假就绪"：annotator 开始占 seen（247 次"冷装载期
-  //   查询不可信"语义失效）、侧栏 armed 钩子被空词典提前消耗、页侧就绪行误报。改法：
-  //   显性报错并 throw —— _kickRebuildBackground 的 catch 记"后台重建失败（下次装载再试）"，
-  //   loadPromise reject 被 ensureReady 的 .catch 吞掉 resolve undefined，isLoaded() 保持
-  //   false，语义回到"未就绪"，armed 钩子不消耗、seen 不占位。
-  if (wf.size === 0 && wl.size === 0) {
-    const msg = `源装载全空（wf=${wf.size} wl=${wl.size}，词频拉取/解压失败），拒绝假就绪（词典保持未就绪，下次装载重试）`;
+  // 第三百七十次（方案A·堵洞②假就绪守卫）+ 第三百七十二次（方案C 收紧）：词频源空即拒绝
+  //   （旧判据"两源全空"会放行 wf 空/wl 非空的半空词典）。词频是 rank 阈值过滤的根基，
+  //   wf=0 时全词 rank=null——wl 标签词也会被 filterByCurrentRank 按表外滤光（词汇页空、
+  //   高亮 0 命中）；放行还会置 isLoaded() 翻真成"假就绪"（annotator 开始占 seen、侧栏
+  //   armed 钩子被空词典提前消耗、页侧就绪行误报）。改法：显性报错并 throw ——
+  //   _kickRebuildBackground 的 catch 记"后台重建失败（下次装载再试）"，loadPromise
+  //   reject 被 ensureReady 的 .catch 吞掉 resolve undefined，isLoaded() 保持 false，
+  //   语义回到"未就绪"，armed 钩子不消耗、seen 不占位、下次装载自然重试。
+  //   wl 为 0 不再要求（en 词表装载失败只缺 tags，rank 完好即可用；非 en 本就无词表源）。
+  if (wf.size === 0) {
+    const msg = `词频源为空（wf=${wf.size} wl=${wl.size}，词频拉取/解压失败），拒绝半空就绪（词典保持未就绪，下次装载重试）`;
     console.error(`[VocabRadar][dictionary][${_ts()}] ${msg}`);
     reportDictEvent('rebuild-empty', { wf: wf.size, wl: wl.size, lang });
     throw new Error(`[VocabRadar][dictionary] ${msg}`);

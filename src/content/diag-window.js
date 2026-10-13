@@ -175,20 +175,37 @@ function renderLoadTab() {
         : '两侧一致')
       + '</td></tr>';
   }
-  // 词典装载分段（window.__beaverDictTiming + __beaverIdbTiming 细分）
+  // 词典装载分段（window.__beaverDictTiming 页面侧总账 + __beaverSwTiming SW 内部账）
+  // 2026-10-13：IDB 唯一属主是 SW，旧版读 window.__beaverIdbTiming 在内容脚本里永远为空；
+  //   SW 分段账（storage.local 读/meta 对账/IDB 扫库/local 写）现随投影消息回传挂 window。
   const dt = (typeof window !== 'undefined' && window.__beaverDictTiming) ? window.__beaverDictTiming : null;
-  if (dt && (dt.proj > 0 || dt.rebuild > 0)) {
-    const it = (typeof window !== 'undefined' && window.__beaverIdbTiming) ? window.__beaverIdbTiming : null;
-    const idbNote = it
-      ? ('IDB: 连接 ' + (it.open || 0) + 'ms ｜ rank表 ' + (it.ranks || 0) + 'ms/' + (it.rankRows || 0) + '行'
-        + ' ｜ tags表 ' + (it.tags || 0) + 'ms/' + (it.tagRows || 0) + '行'
-        + ' ｜ lemma表 ' + (it.lemmas || 0) + 'ms/' + (it.lemmaRows || 0) + '行'
-        + ' ｜ meta ' + (it.meta || 0) + 'ms')
-      : '';
+  if (dt && (dt.proj > 0 || dt.ranks > 0 || dt.rebuild > 0)) {
+    const swt = (typeof window !== 'undefined' && window.__beaverSwTiming) ? window.__beaverSwTiming : null;
+    const fmtSw = (d, label) => {
+      if (!d) return '';
+      const m = d.ms || {};
+      const o = d.idbDetail || {};
+      let s = label + ' 源=' + esc(d.src) + '：SW内总' + (m.total || 0) + 'ms'
+        + ' ｜ local读 ' + (m.localRead || 0) + 'ms ｜ meta ' + (m.meta || 0) + 'ms'
+        + ' ｜ IDB ' + (m.idb || 0) + 'ms';
+      if (d.src === 'idb') {
+        const parts = ['连接' + (o.open || 0)];
+        if (o.ranks != null) parts.push('rank' + o.ranks);
+        if (o.tags != null) parts.push('tags' + o.tags);
+        if (o.lemmas != null) parts.push('lemma' + o.lemmas);
+        parts.push('meta' + (o.meta || 0));
+        const rows = o.rankRows || o.rows || 0;
+        s += '（' + parts.join('/') + 'ms' + (rows ? '，' + rows + '行' : '') + '）';
+      }
+      if (m.localWrite) s += ' ｜ local写 ' + m.localWrite + 'ms';
+      return s;
+    };
+    const swNote = swt ? [fmtSw(swt.ranks, 'ranks快道'), fmtSw(swt.full, '整投影')].filter(Boolean).join('<br>') : '';
     html += '<tr><td class="k">词典装载分段</td><td class="v">'
-      + '投影读取 ' + (dt.proj || 0) + 'ms / Map构建 ' + (dt.map || 0) + 'ms'
+      + '投影读取 ' + (dt.proj || 0) + 'ms（含ranks ' + (dt.ranks || 0) + 'ms）/ Map构建 ' + (dt.map || 0) + 'ms'
       + ' / manifest对账 ' + (dt.manifest || 0) + 'ms / 重建补齐 ' + (dt.rebuild || 0) + 'ms'
-      + '</td><td class="n">合计 ' + (dt.total || 0) + 'ms（对照"词典就绪"行）' + (idbNote ? '<br>' + esc(idbNote) : '') + '</td></tr>';
+      + '</td><td class="n">合计 ' + (dt.total || 0) + 'ms（对照"词典就绪"行；页面侧=SW账+消息往返+排队）'
+      + (swNote ? '<br>' + swNote : '') + '</td></tr>';
   }
   html += '</tbody></table></div>';
   // 重复现场事件块（scanner.js 的 _wsDupEvents，旧→新，上限 10 条）

@@ -58,8 +58,13 @@ function fetchWfViaBackground(file) {
         chrome.runtime.sendMessage({ type: 'WF_FETCH', file }, (response) => {
           if (chrome.runtime.lastError) {
             const msg = String(chrome.runtime.lastError.message || '');
-            // 消息通道错误（SW 监听器未就绪 / 通道被关）：延迟重试；其余错误（扩展上下文失效等）不重试
-            if (/Receiving end does not exist|message port closed/i.test(msg)) {
+            // 消息通道错误（SW 监听器未就绪 / 通道被关）：延迟重试；其余错误（扩展上下文失效等）不重试。
+            // 第三百七十二次（方案B）：正则补 "message channel closed"——MV3 SW 在异步响应
+            //   挂起期间被 Chrome 杀掉时，lastError 是 "A listener indicated an asynchronous
+            //   response by returning true, but the message channel closed before a response
+            //   was received"，旧正则不匹配 -> 不重试直接空 Map -> rank 全 null 假就绪（用户
+            //   2026-10-12 实测 67s 拉取失败即此形态）。sendMessage 重试会重新唤醒 SW。
+            if (/Receiving end does not exist|message port closed|message channel closed/i.test(msg)) {
               if (attempts < 3) {
                 console.warn(`[VocabRadar][dictionary] wordfreq 消息通道错误（第 ${attempts}/3 次发送）: ${msg}——未获 SW 响应，本次无网络请求，500ms 后重试`);
                 setTimeout(send, 500);
