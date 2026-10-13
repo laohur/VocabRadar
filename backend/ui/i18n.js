@@ -24,6 +24,7 @@ const ZH = {
   'Saved. Port/host changes require a backend restart to take effect.': '已保存。端口/主机变更需重启后端生效。',
   'Save failed: {msg}': '保存失败：{msg}',
   'Settings': '设定',
+  'Save Settings': '保存设定',
   'Switch language': '切换语言',
   'Backend Logs': '后端日志',
   'Refresh': '刷新',
@@ -74,13 +75,58 @@ const ZH = {
   'Default model': '默认模型',
   'Internal port': '内部端口',
   'Model Cards': '模型卡片',
-  'Cards are read-only. Models auto-download at llama-server startup (order: HF → hf-mirror → fallback URL) into the HF hub cache.':
-    '卡片只读。模型在 llama-server 启动时自动下载（顺序：HF → hf-mirror → 直链兜底），存入 HF hub 缓存。',
+
+  // ---- 模型卡片编辑器（ui/cards.js）：清单在上、详情在下 ----
+  'Pick "Default model" above or click a card in the list — its details show in the form below. Built-in cards are read-only — edits are saved as a new card. Models auto-download at llama-server startup (HF → hf-mirror → fallback URL) into the HF hub cache.':
+    '在上方「默认模型」下拉选卡或点击清单中的卡片，即在下方表单显示该卡详情；卡片可修改、可删除、可新增。内置卡只读——改动会另存为新卡。模型在 llama-server 启动时自动下载（顺序：HF → hf-mirror → 直链兜底），存入 HF hub 缓存。',
+  'Pick the translation model above or click a card in the list — its details show in the form below. Built-in cards are read-only — edits are saved as a new card.':
+    '在上方「翻译模型」下拉选卡或点击清单中的卡片，即在下方表单显示该卡详情；卡片可修改、可删除、可新增。内置卡只读——改动会另存为新卡。',
+  'Select a card above to view and edit its details.': '点击上方卡片，在下方查看与编辑详情。',
+  'No cards yet — add one with "+ New card".': '暂无卡片——点上方「＋ 新增卡片」添加。',
+  'Name (unique ID, e.g. org/repo:Q4_K_M)': '卡片名（唯一 ID，如 org/repo:Q4_K_M）',
+  'Launch command (llama-server …; -hf <repo>:<quant> drives auto-download)':
+    '启动命令（llama-server …；其中 -hf <repo>:<quant> 驱动自动下载）',
+  'Description (中文)': '说明（中文）',
+  'Description (English)': '说明（英文）',
+  'HF repo': 'HF 仓库',
+  'Fallback URL (GGUF direct link)': '兜底直链（GGUF）',
+  'Fallback mmproj URL': '兜底 mmproj 直链',
+  'Translation prompt template ({dst} / {text} placeholders)':
+    '翻译提示词模板（占位符 {dst} / {text}）',
+  'Sampling (blank = llama-server default)': '采样参数（留空用 llama-server 默认）',
+  'Paste a full llama-server command to auto-fill…': '粘贴完整 llama-server 命令可自动填充…',
+  'Auto-fill from command': '从命令解析填充',
+  'Parsing…': '解析中…',
+  'Parsed. Review the fields and save.': '已解析，请核对字段后保存。',
+  'Parse failed: {msg}': '解析失败：{msg}',
+  'Saving…': '保存中…',
+  'Save': '保存',
+  'Add card': '新增卡片',
+  '+ New card': '＋ 新增卡片',
+  'Set as default': '设为默认',
+  'Download': '下载',
+  'Download started…': '已开始下载…',
+  'Download failed: {msg}': '下载失败：{msg}',
+  'Model downloaded into the HF hub cache.': '模型已下载进 HF hub 缓存。',
+  'Mirror': '镜像',
+  'Built-in': '内置',
+  'Custom': '自定义',
+  'Delete': '删除',
+  'Delete card {name}? (downloaded weights in the HF cache are kept)':
+    '删除卡片 {name}？（HF 缓存里已下载的权重不会被删）',
+  'Delete failed: {msg}': '删除失败：{msg}',
+  'Built-in card: read-only. Edits are saved as a NEW card — give it a different Name.':
+    '内置卡只读：改动会另存为新卡片——请把卡片名改成一个新名字。',
+  'Built-in cards are read-only — change the Name to save as a new card.':
+    '内置卡只读——改个卡片名即可另存为新卡片。',
+  'That name already exists — pick another one.': '该卡片名已存在，请换一个。',
+  'Built-in cards cannot be deleted.': '内置卡不可删除。',
+  'Failed to load cards: {msg}': '卡片加载失败：{msg}',
   'Default': '默认',
   'Downloaded': '已下载',
   'Not downloaded': '未下载',
-  'Status: {s} · internal port {p} · saving General Settings auto-reloads llama-server · MiniCPM is text-only (no vision OCR; use Qwen for vision)':
-    '状态：{s} · 内部端口 {p} · 保存通用设定会重载 llama-server · MiniCPM 为纯文本模型（无视觉 OCR；视觉用途请用 Qwen 系）',
+  'Status: {s} · internal port {p} · saving General Settings auto-reloads llama-server':
+    '状态：{s} · 内部端口 {p} · 保存通用设定会重载 llama-server',
   'Saved. Reloading llama-server with the new model…': '已保存，正在用新模型重载 llama-server…',
   'Think': '思考',
   'Thought process': '思考过程',
@@ -97,8 +143,8 @@ const ZH = {
   'Playground': '试用',
   // ---- 翻译页模型选择 ----
   'Translation model': '翻译模型',
-  'All entries are llama.cpp cards served by the dedicated Translate LLM engine (independent start/stop on the Overview page; first request may cold-start it). Hy-MT2 = best quality; LMT-60-1.7B = mid tier; LMT-60-0.6B = lightweight tier.':
-    '全部条目为 llama.cpp 模型卡，由翻译专用的「翻译 LLM」引擎承载（与对话 LLM 分开、在总览页独立启停；首次请求可能触发冷启动下载/加载）。Hy-MT2 = 质量档；LMT-60-1.7B = 中量档；LMT-60-0.6B = 轻量档。',
+  'All entries are llama.cpp cards served by the dedicated Translate LLM engine (independent start/stop on the Overview page; first request may cold-start it).':
+    '全部条目为 llama.cpp 模型卡，由翻译专用的「翻译 LLM」引擎承载（与对话 LLM 分开、在总览页独立启停；首次请求可能触发冷启动下载/加载）。',
   'Model follows the Settings card; start/stop the serving engine on the Overview page.':
     '模型跟随上方设定卡；承载引擎的启停在总览页。',
   'Source language': '源语言',
@@ -107,21 +153,47 @@ const ZH = {
   'Enter text to translate…': '输入要翻译的文本…',
   'Translating…': '翻译中…',
 
-  // ---- ASR 页 ----
+  // ---- ASR 页（模型卡：引擎清单，选中的才展开设定） ----
   'ASR (Speech-to-Text)': '语音识别 (ASR)',
   'Result cache': '结果缓存',
   'Deduplicate by video_id or audio content hash': '按 video_id 或音频内容哈希去重',
-  'whisper tier (faster-whisper only)': 'whisper 档位（仅 faster-whisper）',
-  'Qwen3-ASR tier (qwen3-asr only)': 'Qwen3-ASR 档位（仅 qwen3-asr）',
-  'First use downloads the tool (~103MB) and model from GitHub releases; GPU (DML+Vulkan) required — falls back to faster-whisper on CPU-only machines.':
-    '首次使用自动从 GitHub Releases 下载工具（约 103MB）与模型包；需 GPU（DML+Vulkan）——纯 CPU 机器不可用，请回落 faster-whisper。',
-  'MOSS quant (moss only)': 'MOSS 量化（仅 moss）',
+  'Models': '模型',
+  'Click a card to expand its details; use "Set as default" to switch the engine.':
+    '点击卡片展开详情；用「设为默认」切换引擎。',
+  'Default engine, falls back to CPU without GPU': '默认引擎，无 GPU 回落 CPU',
+  'Haujet GGUF, GPU only (DML+Vulkan)': 'Haujet GGUF，仅 GPU（DML+Vulkan）',
+  'GPU, with speaker diarization; gguf placed manually': 'GPU，支持说话人分离；gguf 需手动放置',
+  'whisper tier': 'whisper 档位',
+  'Qwen3-ASR tier': 'Qwen3-ASR 档位',
+  'Cached': '已缓存',
+  'Downloading…': '下载中…',
+  'Model cached. Ready for transcription.': '模型已缓存，转写即用。',
+  '0.6B = default tier (~1.35GB); 1.7B = quality tier (~2.15GB). First use downloads the tool (~103MB) and model from GitHub releases; GPU (DML+Vulkan) required — falls back to faster-whisper on CPU-only machines.':
+    '0.6B = 默认档（约 1.35GB）；1.7B = 质量档（约 2.15GB）。首次使用自动从 GitHub Releases 下载工具（约 103MB）与模型包；需 GPU（DML+Vulkan）——纯 CPU 机器不可用，请回落 faster-whisper。',
+  'MOSS quant': 'MOSS 量化',
+  'q4_K_M = default, fastest tier; q8_0 = higher quality, larger file.':
+    'q4_K_M = 默认，最快档；q8_0 = 质量更高，文件更大。',
   'MOSS model path (optional)': 'MOSS 模型路径（可选）',
   'Leave empty for models/ inside the backend directory; the gguf must be placed manually (community distribution).':
     '留空则用 backend/models/ 目录；gguf 需手动放置（社区分发，ModelScope 搜 MOSS-Transcribe-Diarize-GGUF）。',
+  // ---- ASR 页 · GPU 设定卡（第558次：装了 cuBLAS/检测到 CUDA 才渲染） ----
+  'GPU (faster-whisper)': 'GPU（faster-whisper）',
+  'Device': '设备',
+  'auto (use CUDA when detected)': 'auto（检测到 CUDA 即用）',
+  'Compute type': '计算精度',
+  'auto (int8 on CPU, float16 on CUDA)': 'auto（CPU 用 int8，CUDA 用 float16）',
+  'auto = use GPU when a CUDA device and cuBLAS are available; otherwise CPU. Takes effect on next engine start/unload (no hot switch)':
+    'auto＝检测到 CUDA 设备且 cuBLAS 可载即用 GPU，否则 CPU；改动下次引擎启动/卸载后生效（不热切）',
+  'Leave empty for automatic (CPU int8 / CUDA float16)': '留空自动（CPU 用 int8，CUDA 用 float16）',
+  'CUDA devices: {n} · cuBLAS runtime: {lib}': 'CUDA 设备：{n} · cuBLAS 运行库：{lib}',
+  'not installed': '未安装',
+  'installed': '已装',
+  'Effective device: {d}': '实际生效设备：{d}',
+  'fell back to CPU: {msg}': '已回落 CPU：{msg}',
+  'whisper GPU support not installed. Install with: {cmd}':
+    'whisper GPU 支持未安装。可运行：{cmd}',
   'Result Cache': '结果缓存',
   '{n} entries': '{n} 条',
-  'video {id}': '视频 {id}',
   'Clear cache': '清空缓存',
   'Playground · Upload Audio to Transcribe': '试用 · 上传音频转写',
   'Audio file (mp3/m4a/wav/webm…)': '音频文件 (mp3/m4a/wav/webm…)',
@@ -136,11 +208,15 @@ const ZH = {
   '[cache hit] ': '[缓存命中] ',
   'Transcribe': '开始转写',
 
-  // ---- OCR 页 ----
+  // ---- OCR 页（模型卡：引擎清单，选中的才展开说明/设定） ----
   'OCR (Image Text Recognition)': '文字识别 (OCR)',
-  'llm (vision model)': 'llm（视觉模型）',
-  'rapidocr (local lightweight)': 'rapidocr（本地轻量）',
-  'Run mode (rapidocr only; llm is managed on the LLM page)': '运行模式（仅 rapidocr；llm 归 LLM 页管理）',
+  'Vision model — uses the model selected on the LLM page. Current: {m}':
+    '视觉模型——使用 LLM 页所选的对话模型。当前：{m}',
+  'Pick and start the model on the LLM page — OCR follows it.':
+    '模型选择与启停在 LLM 页管理，OCR 跟随其后。',
+  'Local lightweight (rapidocr-onnxruntime), CPU-friendly, no GPU':
+    '本地轻量（rapidocr-onnxruntime），CPU 可跑，无需 GPU',
+  'not selected': '未选择',
   'Playground · Image Recognition': '试用 · 图片识别',
   'Image file': '图片文件',
   'Select an image first.': '请先选择图片。',

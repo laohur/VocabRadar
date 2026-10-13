@@ -42,17 +42,26 @@ _TOOL_URL = f"https://github.com/{_RELEASE_REPO}/releases/download/{_TOOL_TAG}/{
 _MODEL_URL = f"https://github.com/{_RELEASE_REPO}/releases/download/models/{{}}"
 
 
-def _gh_download(url, dest, timeout=(15, 600)):
-    """GitHub Releases 直链下载（requests 流式落盘，失败抛 RuntimeError）。"""
+def _gh_download(url, dest, timeout=(15, 600), progress=None):
+    """GitHub Releases 直链下载（requests 流式落盘，失败抛 RuntimeError）。
+    progress: 可选回调 callable(frac)，按当前文件已下比例（0..1）回报；
+    Content-Length 缺失时不回报、完成时补 1.0。"""
     import requests
     tmp = dest + ".part"
     try:
         with requests.get(url, stream=True, timeout=timeout) as r:
             r.raise_for_status()
+            total = int(r.headers.get("Content-Length") or 0)
+            done = 0
             with open(tmp, "wb") as f:
                 for chunk in r.iter_content(1 << 20):
                     f.write(chunk)
+                    done += len(chunk)
+                    if progress and total:
+                        progress(min(1.0, done / total))
         os.replace(tmp, dest)
+        if progress:
+            progress(1.0)
     except Exception as e:
         try:
             os.remove(tmp)
@@ -253,8 +262,8 @@ class Qwen3Worker:
 # ---- 资产获取（首用下载解压；齐备即跳过） ----
 
 
-def _ensure_tool():
-    """工具本体就绪 → 返回 Qwen3-ASR-Transcribe 根目录。"""
+def _ensure_tool(progress=None):
+    """工具本体就绪 → 返回 Qwen3-ASR-Transcribe 根目录。progress 透传给下载。"""
     root = os.path.join(config.BIN_DIR, "qwen3-asr")
     tool = os.path.join(root, "Qwen3-ASR-Transcribe")
     if _asset_ready(root):
@@ -263,7 +272,7 @@ def _ensure_tool():
     zip_path = os.path.join(root, _TOOL_ZIP)
     if not os.path.isfile(zip_path):
         log.info("Qwen3-ASR 工具未就绪，开始下载 %s（约 103MB）", _TOOL_URL)
-        _gh_download(_TOOL_URL, zip_path)
+        _gh_download(_TOOL_URL, zip_path, progress=progress)
     log.info("Qwen3-ASR 工具解压 → %s", tool)
     _unzip(zip_path, root)
     open(os.path.join(root, ".ok"), "w").close()
@@ -275,8 +284,8 @@ def _ensure_tool():
     return tool
 
 
-def _ensure_model(size):
-    """模型包就绪（0.6b/1.7b）→ 返回模型目录。size 归一小写。"""
+def _ensure_model(size, progress=None):
+    """模型包就绪（0.6b/1.7b）→ 返回模型目录。size 归一小写。progress 透传。"""
     size = (size or "0.6b").strip().lower()
     if size not in _MODEL_ZIPS:
         raise ValueError(f"未知 Qwen3-ASR 档位：{size}（可选 {'/'.join(_MODEL_ZIPS)}）")
@@ -292,7 +301,7 @@ def _ensure_model(size):
         zip_path = os.path.join(root, name)
         if not os.path.isfile(zip_path):
             log.info("Qwen3-ASR 模型包未就绪，开始下载 %s", url)
-            _gh_download(url, zip_path)
+            _gh_download(url, zip_path, progress=progress)
         log.info("Qwen3-ASR 模型包解压 → %s", root)
         _unzip(zip_path, root)
         os.remove(zip_path)

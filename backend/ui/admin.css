@@ -86,6 +86,9 @@ input.inline { width: auto; }
 .msg.assistant { align-self: flex-start; background: #f3f4f6; }
 .chatbar { display: flex; gap: 8px; align-items: center; margin: 8px 0; flex-wrap: wrap; }
 .chatbar .field { flex: 1; min-width: 120px; margin: 0; }
+/* 裸 input 在 chatbar 内不再吃满整行（width:100% 会把同行按钮挤到下一行，
+   如卡片表单「从命令解析填充」按钮必须贴在输入框右侧） */
+.chatbar > input { flex: 1 1 240px; width: auto; min-width: 160px; }
 .chatbar input[type="file"] { font-size: 13px; }
 /* 第421次：思考过程灰字小号（流式实时滚动/完成后折叠区同款），与正文虚线隔开 */
 .msg-think { color: #9ca3af; font-size: 12px; white-space: pre-wrap; border-bottom: 1px dashed #d1d5db; margin-bottom: 6px; max-height: 220px; overflow-y: auto; }
@@ -118,15 +121,31 @@ audio { width: 100%; margin-top: 10px; }
 .lang-globe:hover { background: #f3f4f6; border-color: #d1d5db; }
 .lang-globe svg { display: block; }
 
-/* ---- 第413次：LLM 页双栏（左：通用设定+模型卡片；右：对话试用）与卡片行 ---- */
-.llm-left { flex: 2 1 460px; min-width: 380px; }
-.llm-right { flex: 1 1 320px; min-width: 300px; }
-/* 第414次：卡片行固定布局——徽标固定左、按钮固定右，说明/文件清单整行换行 */
+/* ---- 第413次：功能页双栏（左：设定+模型卡片；右：试用），LLM/翻译/ASR/OCR 四页同构 ---- */
+.col-left { flex: 2 1 460px; min-width: 380px; }
+.col-right { flex: 1 1 320px; min-width: 300px; }
+/* 第414次：卡片行固定布局——徽标固定左，整行可点选卡 */
 .mrow {
   display: flex; align-items: center; flex-wrap: wrap; gap: 8px;
   padding: 8px 0; border-bottom: 1px solid #e5e7eb; cursor: pointer;
 }
 .mrow:last-child { border-bottom: 0; }
 .mrow .grow { flex: 1; min-width: 160px; }
-.mrow-ops { display: flex; align-items: center; gap: 6px; margin-left: auto; }
-.mrow-sub { flex-basis: 100%; }
+
+/* ---- 模型卡片编辑器（ui/cards.js，LLM 页与翻译页共用）：清单在上、详情在下 ---- */
+.mcards { margin-top: 8px; }
+.mcard { border-bottom: 1px solid #e5e7eb; }
+.mcard:last-child { border-bottom: 0; }
+.mcard .mrow { padding: 7px 6px; }
+.mcard .mrow:hover { background: #f3f4f6; }
+.mcard.sel .mrow { background: #eef2ff; }
+/* 卡片清单行的副行（hf_repo / 模型说明），模型说明直接可见不必展开 */
+.mrow-sub { font-size: 12px; margin-top: 2px; word-break: break-word; }
+.mform {
+  background: #f9fafb; border: 1px solid #e5e7eb; border-radius: 8px;
+  padding: 6px 12px 10px; margin: 8px 0 0;
+}
+.mform .field { margin: 8px 0; }
+.mform .chatbar .field { flex: 1 1 110px; min-width: 90px; margin: 0; }
+.mform textarea { font-family: ui-monospace, Consolas, "Courier New", monospace; font-size: 13px; }
+.mform-empty { color: #6b7280; padding: 12px; }

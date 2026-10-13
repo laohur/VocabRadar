@@ -15,6 +15,54 @@ log = logging.getLogger(__name__)
 _ENGINE_NAMES = ("llm", "translate_llm", "asr", "ocr")  # 可加载/关停的模型服务（translate 无进程内模型，生命周期归 translate_llm）
 
 
+def _engine_intent(name, engine):
+    """启动请求日志：按当前配置说明将要启动什么（模型/档位/设备/端口/模式）。"""
+    cfg = engine.cfg
+    mode = cfg.get("mode", "resident")
+    if name in ("llm", "translate_llm"):
+        card = engine.current_card()
+        model = str((card or {}).get("name") or cfg.get("model") or "(未选卡)")
+        return f"卡片 {model} · llama-server :{cfg.get('port', 7788)} · {mode}"
+    if name == "asr":
+        eng = cfg.get("engine", "faster-whisper")
+        tier_key = {"faster-whisper": "whisper_model", "qwen3-asr": "qwen3_size",
+                    "moss": "moss_quant"}.get(eng)
+        bits = [f"{eng} {cfg.get(tier_key)}" if tier_key else eng]
+        bits.append(f"device={cfg.get('whisper_device') or 'auto'}")
+        if cfg.get("whisper_compute_type"):
+            bits.append(str(cfg["whisper_compute_type"]))
+        bits.append(mode)
+        return " · ".join(bits)
+    if name == "ocr":
+        eng = cfg.get("engine", "llm")
+        note = "视觉模型走 LLM 引擎" if eng == "llm" else "本地轻量"
+        return f"{eng}（{note}） · {mode}"
+    return mode
+
+
+def _engine_loaded_desc(name, engine):
+    """启动/关停完成日志：按引擎实际状态说明结果（生效模型/设备/回落原因）。"""
+    st = engine.status()
+    mode = st.get("mode")
+    if name in ("llm", "translate_llm"):
+        return f"卡片 {st.get('model') or '(未知)'} · llama-server :{st.get('port')} · {mode}"
+    if name == "asr":
+        bits = [str(st.get("model") or st.get("loaded_engine") or st.get("engine") or "?")]
+        if st.get("device_effective"):
+            bits.append(f"device={st['device_effective']}")
+        if st.get("device_note"):
+            bits.append(f"回落 CPU：{st['device_note']}")
+        bits.append(str(mode))
+        return " · ".join(bits)
+    if name == "ocr":
+        if st.get("engine") == "llm":
+            llm_st = st.get("llm") or {}
+            return (f"视觉走 LLM 引擎（模型 {llm_st.get('model') or '?'} · "
+                    f"llama-server {'运行中' if llm_st.get('running') else '未运行'}）")
+        return f"{st.get('loaded_engine') or st.get('engine')}（进程内） · {mode}"
+    return str(mode)
+
+
 @bp.post("/api/engine/<name>/start")
 def engine_start(name):
     """显式加载模型服务：llm=拉起 llama-server 并等就绪；asr/ocr=进程内模型加载。
@@ -24,7 +72,7 @@ def engine_start(name):
     if name not in _ENGINE_NAMES:
         return jsonify({"ok": False, "error": "unknown_engine"}), 404
     engine = current_app.extensions["engines"][name]
-    log.info(f"引擎启动请求：{name}（管理页）")
+    log.info(f"引擎启动请求：{name}（管理页）—— {_engine_intent(name, engine)}")
     try:
         if name in ("llm", "translate_llm"):
             engine.start()  # llama-server 系（对话/翻译 LLM）：start() 内部解除手动停机抑制
@@ -36,7 +84,7 @@ def engine_start(name):
     except Exception as e:
         log.error(f"引擎 {name} 启动失败：{e}")
         return jsonify({"ok": False, "error": "start_failed", "message": str(e)}), 503
-    log.info(f"引擎 {name} 启动完成")
+    log.info(f"引擎 {name} 启动完成 —— {_engine_loaded_desc(name, engine)}")
     return jsonify({"ok": True, "engines": {name: engine.status()}})
 
 
@@ -46,7 +94,7 @@ def engine_stop(name):
     if name not in _ENGINE_NAMES:
         return jsonify({"ok": False, "error": "unknown_engine"}), 404
     engine = current_app.extensions["engines"][name]
-    log.info(f"引擎关停请求：{name}（管理页，将持久化 stopped 标志）")
+    log.info(f"引擎关停请求：{name}（管理页，将持久化 stopped 标志）—— {_engine_loaded_desc(name, engine)}")
     try:
         engine.stop()
     except ValueError as e:
@@ -55,7 +103,7 @@ def engine_stop(name):
     except Exception as e:
         log.error(f"引擎 {name} 关停失败：{e}")
         return jsonify({"ok": False, "error": "stop_failed", "message": str(e)}), 503
-    log.info(f"引擎 {name} 关停完成")
+    log.info(f"引擎 {name} 关停完成 —— {_engine_loaded_desc(name, engine)}")
     return jsonify({"ok": True, "engines": {name: engine.status()}})
 
 

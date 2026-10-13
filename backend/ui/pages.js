@@ -11,16 +11,14 @@ PAGES.llm = async function (main) {
   main.innerHTML = '';
   main.append(el('h1', {}, t('LLM (llama.cpp)')));
   const wrap = el('div', { class: 'cols' });
-  const left = el('div', { class: 'llm-left' });
-  const right = el('div', { class: 'llm-right' });
+  const left = el('div', { class: 'col-left' });
+  const right = el('div', { class: 'col-right' });
   wrap.append(left, right);
 
   const cfg = (await api('/api/config')).config || {};
   const st = await api('/api/llm/status').catch(() => ({}));
-  // /api/llm/models 返回 cards（含 installed/is_default）与安装状态
+  // 卡片清单由下方编辑器统一拉取（/api/llm/models），此处只留引用供下拉回填
   let cards = [];
-  const data0 = await api('/api/llm/models').catch(() => null);
-  if (data0) cards = data0.cards || [];
 
   // ---- 通用设定（默认模型 + 内部端口 + ctx + mode + idle） ----
   let selTouched = false;
@@ -29,7 +27,7 @@ PAGES.llm = async function (main) {
   const mode = select([['resident', t('resident (always on)')], ['on-demand', t('on-demand')]],
     cfg.llm?.mode ?? 'resident');
   const idle = el('input', { type: 'number', value: cfg.llm?.idle_timeout ?? 600 });
-  const modelSel = el('select', { onchange: () => { selTouched = true; } });
+  const modelSel = el('select', { onchange: () => { selTouched = true; editor.expand(modelSel.value); } });
   function fillModelSel() {
     // 轮询重绘不重置用户选择：动过下拉后以当前值为准
     const cur = selTouched ? modelSel.value : (cfg.llm?.model || '').toLowerCase();
@@ -38,7 +36,7 @@ PAGES.llm = async function (main) {
       modelSel.append(el('option', {
         value: c.name,
         ...(String(cur).toLowerCase() === String(c.name).toLowerCase() ? { selected: '' } : {}),
-      }, c.name + (c.installed ? '' : ` (${t('Not downloaded')})`)));
+      }, c.name));  // 下拉只显卡片名；说明/下载状态看下方「模型卡片」区
     }
   }
   const setCard = settingsCard(t('General Settings'), [
@@ -55,7 +53,7 @@ PAGES.llm = async function (main) {
     idle_timeout: Number(inputs[4].value) || 600,
   }, hint));
   setCard.prepend(el('div', { class: 'hint' },
-    t('Status: {s} · internal port {p} · saving General Settings auto-reloads llama-server · MiniCPM is text-only (no vision OCR; use Qwen for vision)', {
+    t('Status: {s} · internal port {p} · saving General Settings auto-reloads llama-server', {
       // 三态——running=探活 200；starting=进程活但未就绪（下载/加载模型中）
       s: st.running ? t('llama-server running')
         : st.starting ? t('llama-server starting') : t('not running'),
@@ -63,33 +61,31 @@ PAGES.llm = async function (main) {
     })));
   left.append(setCard);
 
-  // ---- 模型卡片列表（只读） ----
-  const cardsBody = el('div', {});
-  left.append(el('div', { class: 'card' },
-    el('h2', {}, t('Model Cards')),
-    el('div', { class: 'hint' },
-      t('Cards are read-only. Models auto-download at llama-server startup (order: HF → hf-mirror → fallback URL) into the HF hub cache.')),
-    cardsBody));
-
-  function renderCards() {
-    // 卡片只读——选卡走上方「Default model」下拉；模型下载交 llama-server -hf 三源自动补拉
-    cardsBody.innerHTML = '';
-    for (const c of cards) {
-      const descLine = [c.desc, c.desc_en].filter(Boolean).join(' / ');
-      const subs = [];
-      if (c.hf_repo) subs.push(el('div', { class: 'mrow-sub hint' }, c.hf_repo));
-      if (descLine) subs.push(el('div', { class: 'mrow-sub hint' }, descLine));
-      cardsBody.append(el('div', { class: 'mrow' },
-        el('div', { class: 'grow' },
-          el('strong', {}, c.name), ' ',
-          ...(c.is_default ? [badge(true, t('Default'))] : []),
-          ' ', badge(c.installed, t('Downloaded'), t('Not downloaded'))),
-        ...subs));
-    }
-  }
-
-  fillModelSel();
-  renderCards();
+  // ---- 模型卡片（可编辑；ui/cards.js 共用组件）：选上方下拉即展开该卡 ----
+  const editor = ModelCardEditor({
+    base: '/api/llm/models',
+    hint: t('Pick "Default model" above or click a card in the list — its details show in the form below. Built-in cards are read-only — edits are saved as a new card. Models auto-download at llama-server startup (HF → hf-mirror → fallback URL) into the HF hub cache.'),
+    onChanged: async (name) => {
+      await editor.refresh(name);
+      cards = editor.cards();
+      fillModelSel();
+    },
+    onSetDefault: async (name) => {
+      const r = await saveCfg('llm', { model: name }, setCard.hint);
+      if (!r) return;
+      modelSel.value = name;  // 下拉与「默认」徽标同步
+      selTouched = true;
+      await editor.refresh(name);
+      cards = editor.cards();
+      fillModelSel();
+    },
+  });
+  left.append(editor.el);
+  editor.refresh().then(() => {
+    cards = editor.cards();
+    fillModelSel();
+    editor.expand(cfg.llm?.model);  // 默认展开当前所选卡
+  });
 
   // ---- 试用（对话 + 图片上传，OpenAI 兼容 /v1/chat/completions 流式） ----
   const msgs = [];
@@ -244,32 +240,65 @@ const LANGS = [
 PAGES.translate = async function (main) {
   main.innerHTML = '';
   main.append(el('h1', {}, t('Translate')));
+  // 双栏同 LLM 页：左列设定+模型卡片上下堆叠（不并排挤成窄条），右列试用
   const wrap = el('div', { class: 'cols' });
+  const left = el('div', { class: 'col-left' });
+  const right = el('div', { class: 'col-right' });
+  wrap.append(left, right);
 
-  // ---- 设定（下拉元素=模型，标签=模型名；数据源 /api/translate/models）----
+  // ---- 设定（下拉元素=模型，标签=模型名）+ 模型卡片（可编辑，ui/cards.js） ----
   const cfg = (await api('/api/config')).config || {};
-  const data = await api('/api/translate/models').catch(() => ({ models: [] }));
-  const models = data.models || [];
   const chosen = cfg.translate?.model ?? '';
-  const modelSel = select(models.map((m) => [m.name,
-    m.name + (m.installed ? '' : ` (${t('Not downloaded')})`)]),
-    models.some((m) => m.name === chosen) ? chosen : (models[0]?.name || ''));
-  wrap.append(settingsCard(t('Settings'), [
+  const modelSel = el('select', { onchange: () => editor.expand(modelSel.value) });
+  function fillSel(models) {
+    // 下拉只显卡片名；说明/下载状态看下方「模型卡片」区（选卡即展开该卡）
+    const cur = modelSel.value || chosen;
+    modelSel.innerHTML = '';
+    for (const m of models) {
+      modelSel.append(el('option', {
+        value: m.name,
+        ...(m.name === cur ? { selected: '' } : {}),
+      }, m.name));
+    }
+  }
+  const setCard = settingsCard(t('Settings'), [
     [t('Translation model'), modelSel,
-     t('All entries are llama.cpp cards served by the dedicated Translate LLM engine (independent start/stop on the Overview page; first request may cold-start it). Hy-MT2 = best quality; LMT-60-1.7B = mid tier; LMT-60-0.6B = lightweight tier.')]
+     t('All entries are llama.cpp cards served by the dedicated Translate LLM engine (independent start/stop on the Overview page; first request may cold-start it).')]
   ], (_i, hint) => {
     const v = modelSel.value;
     // 联动写入：translate.model=路由选择，同时同步 translate_llm.model（实例按卡启动）
     const patch = { translate: { model: v }, translate_llm: { model: v } };
     return saveCfg(null, patch, hint);
-  }));
+  });
+  left.append(setCard);
+
+  const editor = ModelCardEditor({
+    base: '/api/translate/models',
+    withTranslatePrompt: true,
+    hint: t('Pick the translation model above or click a card in the list — its details show in the form below. Built-in cards are read-only — edits are saved as a new card.'),
+    onChanged: async (name) => {
+      await editor.refresh(name);
+      fillSel(editor.cards());
+    },
+    onSetDefault: async (name) => {
+      const patch = { translate: { model: name }, translate_llm: { model: name } };
+      const r = await saveCfg(null, patch, setCard.hint);
+      if (!r) return;
+      modelSel.value = name;
+      await editor.refresh(name);
+      fillSel(editor.cards());
+    },
+  });
+  left.append(editor.el);
+  await editor.refresh(chosen);
+  fillSel(editor.cards());
 
   // ---- 试用 ----
   const from = select([['auto', t('Auto detect')], ...LANGS], 'auto');
   const to = select(LANGS, 'zh');
   const text = el('textarea', { rows: 4, placeholder: t('Enter text to translate…') });
   const out = el('div', { class: 'result' });
-  wrap.append(el('div', { class: 'card' },
+  right.append(el('div', { class: 'card' },
     el('h2', {}, t('Playground')),
     el('div', { class: 'hint' }, t('Model follows the Settings card; start/stop the serving engine on the Overview page.')),
     el('div', { class: 'chatbar' }, field(t('Source language'), from), field(t('Target language'), to)),
@@ -296,42 +325,225 @@ PAGES.translate = async function (main) {
 PAGES.asr = async function (main) {
   main.innerHTML = '';
   main.append(el('h1', {}, t('ASR (Speech-to-Text)')));
+  // 双栏：左列 通用设定 / 模型卡（引擎清单，点行展开详情、「设为默认」切换
+  // 引擎；GPU 设定并入 faster-whisper 展开区）/ 结果缓存；右列试用
   const wrap = el('div', { class: 'cols' });
+  const left = el('div', { class: 'col-left' });
+  const right = el('div', { class: 'col-right' });
+  wrap.append(left, right);
 
   const cfg = (await api('/api/config')).config || {};
-  const engine = select([['faster-whisper', 'faster-whisper（默认/无 GPU 回落）'],
-    ['qwen3-asr', 'qwen3-asr（Haujet GGUF，GPU）'],
-    ['moss', 'MOSS-Transcribe-Diarize（GPU，说话人分离）']],
-    cfg.asr?.engine ?? 'faster-whisper');
-  const mode = select([['resident', t('resident (always on)')], ['on-demand', t('on-demand')]],
-    cfg.asr?.mode ?? 'resident');
-  const cacheOn = el('input', { type: 'checkbox', checked: cfg.asr?.cache !== false ? '' : null });
+  const st = await api('/api/asr/status').catch(() => ({}));
+  const gpu = st.gpu || {};
+  let curEngine = cfg.asr?.engine ?? 'faster-whisper';  // 默认引擎（实际生效；行上「默认」徽标）
+  let viewEngine = curEngine;                           // 当前点开查看的引擎（行高亮、下方详情）
+
+  // ---- 各引擎私有设定元素（常驻，随所查看引擎渲染进下方详情区） ----
   const wmodel = select([['large-v3-turbo', 'large-v3-turbo'], ['tiny', 'tiny'],
     ['base', 'base'], ['small', 'small'], ['medium', 'medium'],
     ['large-v3', 'large-v3']],
     cfg.asr?.whisper_model ?? 'large-v3-turbo');
-  const qsize = select([['0.6b', '0.6B（默认档，~1.35GB）'], ['1.7b', '1.7B（质量档，~2.15GB）']],
+  const qsize = select([['0.6b', '0.6B'], ['1.7b', '1.7B']],
     cfg.asr?.qwen3_size ?? '0.6b');
-  const mquant = select([['q4_K_M', 'q4_K_M（默认，最快档）'], ['q8_0', 'q8_0']],
+  const mquant = select([['q4_K_M', 'q4_K_M'], ['q8_0', 'q8_0']],
     cfg.asr?.moss_quant ?? 'q4_K_M');
   const mpath = el('input', { value: cfg.asr?.moss_model_path || '',
     placeholder: 'models/MOSS-Transcribe-Diarize-<quant>.gguf' });
-  wrap.append(settingsCard(t('Settings'), [
-    [t('Engine'), engine],
+  const dev = select([['auto', t('auto (use CUDA when detected)')], ['cpu', 'cpu'],
+    ['cuda', 'cuda']], st.whisper_device || 'auto');
+  const ct = select([['', t('auto (int8 on CPU, float16 on CUDA)')], ['int8', 'int8'],
+    ['int8_float16', 'int8_float16'], ['float16', 'float16'], ['bfloat16', 'bfloat16']],
+    cfg.asr?.whisper_compute_type ?? '');
+
+  // ---- 通用设定（运行模式/结果缓存，全引擎共用） ----
+  const mode = select([['resident', t('resident (always on)')], ['on-demand', t('on-demand')]],
+    cfg.asr?.mode ?? 'resident');
+  const cacheOn = el('input', { type: 'checkbox', checked: cfg.asr?.cache !== false ? '' : null });
+  const asrPatch = () => ({
+    engine: curEngine, mode: mode.value, cache: cacheOn.checked,
+    whisper_model: wmodel.value, qwen3_size: qsize.value,
+    moss_quant: mquant.value, moss_model_path: mpath.value.trim(),
+  });
+  const setCard = settingsCard(t('Settings'), [
     [t('Run mode'), mode],
     [t('Result cache'), cacheOn, t('Deduplicate by video_id or audio content hash')],
-    [t('whisper tier (faster-whisper only)'), wmodel],
-    [t('Qwen3-ASR tier (qwen3-asr only)'), qsize,
-     t('First use downloads the tool (~103MB) and model from GitHub releases; GPU (DML+Vulkan) required — falls back to faster-whisper on CPU-only machines.')],
-    [t('MOSS quant (moss only)'), mquant],
-    [t('MOSS model path (optional)'), mpath,
-     t('Leave empty for models/ inside the backend directory; the gguf must be placed manually (community distribution).')],
-  ], (_i, hint) => saveCfg('asr', {
-    engine: engine.value, mode: mode.value,
-    cache: cacheOn.checked, whisper_model: wmodel.value,
-    qwen3_size: qsize.value, moss_quant: mquant.value,
-    moss_model_path: mpath.value.trim(),
-  }, hint)));
+  ], (_i, hint) => saveCfg('asr', asrPatch(), hint));
+  left.append(setCard);
+
+  // ---- 模型卡（参照 LLM 模型卡片）：引擎行清单 + 下方所点引擎详情。
+  //      行点击只展开详情不写配置；切换默认引擎用详情区「设为默认」按钮，
+  //      默认引擎的行带「默认」徽标，查看中的行高亮 ----
+  const ENGINE_ROWS = [
+    ['faster-whisper', 'faster-whisper',
+     t('Default engine, falls back to CPU without GPU')],
+    ['qwen3-asr', 'qwen3-asr',
+     t('Haujet GGUF, GPU only (DML+Vulkan)')],
+    ['moss', 'MOSS-Transcribe-Diarize',
+     t('GPU, with speaker diarization; gguf placed manually')],
+  ];
+  const engineList = el('div', { class: 'mcards' });
+  const engineDetail = el('div', { class: 'mform' });
+  const detailHint = el('div', { class: 'hint' });
+
+  function renderEngineList() {
+    engineList.innerHTML = '';
+    for (const [id, name] of ENGINE_ROWS) {
+      const row = el('div', { class: 'mcard' + (id === viewEngine ? ' sel' : ''),
+        'data-engine': id },
+        el('div', { class: 'mrow' },
+          el('div', { class: 'grow' },
+            el('div', {}, el('strong', {}, name), ' ',
+              ...(id === curEngine ? [badge(true, t('Default'))] : [])))));
+      row.addEventListener('click', () => pickEngine(id));
+      engineList.append(row);
+    }
+  }
+
+  // ---- 预下载（fw/qwen3 详情区「下载」按钮；moss 手动分发无下载）----
+  // 按钮代表当前所选档位：初渲染与换档时按 /api/asr/downloads 刷新态
+  // （cached→已缓存置灰；running→进度置灰），点击起 2s 轮询直至终态
+  let dlTimer = null;
+  const stopDlPoll = () => { if (dlTimer) { clearInterval(dlTimer); dlTimer = null; } };
+  function applyDlBtn(btn, d) {
+    if (d && d.state === 'running') {
+      btn.disabled = true;
+      btn.textContent = d.progress > 0
+        ? t('Downloading {p}%', { p: d.progress }) : t('Downloading…');
+    } else if (d && (d.state === 'done' || d.cached)) {
+      btn.disabled = true;
+      btn.textContent = t('Cached');
+    } else {
+      btn.disabled = false;
+      btn.textContent = t('Download');
+    }
+  }
+  async function refreshDl(engine, tier, btn) {
+    try {
+      const r = await api('/api/asr/downloads');
+      if (btn.isConnected) applyDlBtn(btn, (r.downloads || {})[engine + ':' + tier]);
+    } catch (_e) { /* 状态未知保持可点 */ }
+  }
+  function startDl(engine, tier, btn) {
+    btn.disabled = true;
+    btn.textContent = t('Downloading…');
+    detailHint.className = 'hint';
+    detailHint.textContent = t('Download started…');
+    api('/api/asr/download', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ engine, tier }),
+    }).then(() => {
+      stopDlPoll();
+      const tick = async () => {
+        if (!engineDetail.isConnected) { stopDlPoll(); return; }  // 页面已切走
+        try {
+          const r = await api('/api/asr/downloads');
+          const d = (r.downloads || {})[engine + ':' + tier];
+          applyDlBtn(btn, d);
+          if (d && d.state === 'failed') {
+            stopDlPoll();
+            detailHint.className = 'error';
+            detailHint.textContent = t('Download failed: {msg}', { msg: d.error || '' });
+          } else if (d && (d.state === 'done' || d.cached)) {
+            stopDlPoll();
+            detailHint.className = 'hint';
+            detailHint.textContent = t('Model cached. Ready for transcription.');
+          }
+        } catch (_e) { /* 下轮重试 */ }
+      };
+      dlTimer = setInterval(tick, 2000);
+      return tick();
+    }).catch((e) => {
+      btn.disabled = false;
+      btn.textContent = t('Download');
+      detailHint.className = 'error';
+      detailHint.textContent = t('Download failed: {msg}', { msg: e.message });
+    });
+  }
+
+  function renderEngineDetail() {
+    engineDetail.innerHTML = '';
+    engineDetail.append(el('div', { class: 'hint' },
+      ENGINE_ROWS.find((e) => e[0] === viewEngine)[2]));
+    let dlBtn = null;
+    if (viewEngine === 'faster-whisper') {
+      engineDetail.append(field(t('whisper tier'), wmodel));
+      // GPU 设备/精度归 faster-whisper：原独立 GPU 卡并入此展开区
+      engineDetail.append(el('div', { class: 'hint' }, t('GPU (faster-whisper)')));
+      if (gpu.installed || gpu.cuda_devices > 0) {
+        engineDetail.append(field(t('Device'), dev,
+          t('auto = use GPU when a CUDA device and cuBLAS are available; otherwise CPU. Takes effect on next engine start/unload (no hot switch)')));
+        engineDetail.append(field(t('Compute type'), ct,
+          t('Leave empty for automatic (CPU int8 / CUDA float16)')));
+        // 环境与生效状态行（回落原因可见，不遮蔽错误）
+        let line = t('CUDA devices: {n} · cuBLAS runtime: {lib}', {
+          n: gpu.cuda_devices ?? 0,
+          lib: gpu.installed ? (gpu.version || t('installed')) : t('not installed'),
+        });
+        if (st.device_effective) {
+          line += ' · ' + t('Effective device: {d}', { d: st.device_effective });
+        }
+        if (st.device_note) {
+          line += ' · ' + t('fell back to CPU: {msg}', { msg: st.device_note });
+        }
+        engineDetail.append(el('div', { class: 'hint' }, line));
+      } else {
+        engineDetail.append(el('div', { class: 'hint' },
+          t('whisper GPU support not installed. Install with: {cmd}',
+            { cmd: 'python backend/scripts/install.py --whisper-gpu yes' })));
+      }
+      dlBtn = el('button', { class: 'btn',
+        onclick: () => startDl('faster-whisper', wmodel.value, dlBtn) }, t('Download'));
+      wmodel.addEventListener('change', () => {
+        stopDlPoll();
+        refreshDl('faster-whisper', wmodel.value, dlBtn);
+      });
+      refreshDl('faster-whisper', wmodel.value, dlBtn);
+    } else if (viewEngine === 'qwen3-asr') {
+      engineDetail.append(field(t('Qwen3-ASR tier'), qsize,
+        t('0.6B = default tier (~1.35GB); 1.7B = quality tier (~2.15GB). First use downloads the tool (~103MB) and model from GitHub releases; GPU (DML+Vulkan) required — falls back to faster-whisper on CPU-only machines.')));
+      dlBtn = el('button', { class: 'btn',
+        onclick: () => startDl('qwen3-asr', qsize.value, dlBtn) }, t('Download'));
+      qsize.addEventListener('change', () => {
+        stopDlPoll();
+        refreshDl('qwen3-asr', qsize.value, dlBtn);
+      });
+      refreshDl('qwen3-asr', qsize.value, dlBtn);
+    } else {
+      engineDetail.append(field(t('MOSS quant'), mquant,
+        t('q4_K_M = default, fastest tier; q8_0 = higher quality, larger file.')));
+      engineDetail.append(field(t('MOSS model path (optional)'), mpath,
+        t('Leave empty for models/ inside the backend directory; the gguf must be placed manually (community distribution).')));
+    }
+    const btns = el('div', { class: 'chatbar' },
+      el('button', {
+        class: 'btn', onclick: () => saveCfg('asr', asrPatch(), detailHint),
+      }, t('Save Settings')));
+    if (viewEngine !== curEngine) {  // 已是默认引擎时不出按钮（行上「默认」徽标即标识）
+      btns.append(el('button', { class: 'btn', onclick: setDefault }, t('Set as default')));
+    }
+    if (dlBtn) btns.append(dlBtn);
+    engineDetail.append(btns, detailHint);
+  }
+
+  function pickEngine(id) {
+    viewEngine = id;  // 只切换查看，不写配置
+    renderEngineList();
+    renderEngineDetail();
+  }
+
+  async function setDefault() {
+    curEngine = viewEngine;
+    renderEngineList();
+    renderEngineDetail();  // 「设为默认」按钮随已默认消失
+    await saveCfg('asr', asrPatch(), detailHint);
+  }
+
+  left.append(el('div', { class: 'card' },
+    el('h2', {}, t('Models')),
+    el('div', { class: 'hint' }, t('Click a card to expand its details; use "Set as default" to switch the engine.')),
+    engineList, engineDetail));
+  renderEngineList();
+  renderEngineDetail();
 
   // ---- 缓存管理 ----
   const cacheCard = el('div', { class: 'card' }, el('h2', {}, t('Result Cache')));
@@ -342,9 +554,10 @@ PAGES.asr = async function (main) {
     const items = r.items || [];
     cacheCard.append(el('div', { class: 'hint' }, t('{n} entries', { n: items.length })));
     if (items.length) {
+      // 条目 ID 完整显示不截断——key 自带站点前缀（bilibili-BVxx / youtube-<v> /
+      // 站点路径哈希），旧条目无 key 时回落 video_id
       cacheCard.append(el('ul', { class: 'models' },
-        ...items.slice(0, 20).map((it) => el('li', {},
-          it.video_id ? t('video {id}', { id: it.video_id }) : (it.key || '').slice(0, 16) + '…'))));
+        ...items.slice(0, 20).map((it) => el('li', {}, it.key || it.video_id || ''))));
       cacheCard.append(el('button', {
         class: 'btn ghost',
         onclick: async () => {
@@ -356,7 +569,7 @@ PAGES.asr = async function (main) {
   }
   cacheCard.append(el('div', { class: 'hint' }, t('Loading…')));
   renderCache();
-  wrap.append(cacheCard);
+  left.append(cacheCard);
 
   // ---- 试用（上传即建 job，1s 增量轮询——转写过程流式出部分结果，
   //      长音频不用等全部完成；协议与 URL 任务同构 /api/asr/jobs?after=N） ----
@@ -409,7 +622,7 @@ PAGES.asr = async function (main) {
     jobTimer = setInterval(tick, 1000);
   }
 
-  wrap.append(el('div', { class: 'card' },
+  right.append(el('div', { class: 'card' },
     el('h2', {}, t('Playground · Upload Audio to Transcribe')),
     field(t('Audio file (mp3/m4a/wav/webm…)'), file),
     field(t('Language hint'), lang, t('Leave empty for auto-detect')),
@@ -438,22 +651,98 @@ PAGES.asr = async function (main) {
 PAGES.ocr = async function (main) {
   main.innerHTML = '';
   main.append(el('h1', {}, t('OCR (Image Text Recognition)')));
+  // 双栏：左列 模型卡（引擎清单，选中的才在下方展开说明与设定），右列试用
   const wrap = el('div', { class: 'cols' });
+  const left = el('div', { class: 'col-left' });
+  const right = el('div', { class: 'col-right' });
+  wrap.append(left, right);
 
   const cfg = (await api('/api/config')).config || {};
-  const engine = select([['llm', t('llm (vision model)')], ['rapidocr', t('rapidocr (local lightweight)')]],
-    cfg.ocr?.engine ?? 'rapidocr');
+  const st = await api('/api/llm/status').catch(() => null);
+  const cur = st && Array.isArray(st.cards)
+    ? (st.cards.find((c) => c.name === st.model) || null) : null;
+  const curDesc = cur ? (currentLang() === 'zh'
+    ? (cur.desc || cur.desc_en || '') : (cur.desc_en || cur.desc || '')) : '';
+  let curEngine = cfg.ocr?.engine ?? 'rapidocr';  // 默认引擎（实际生效；行上「默认」徽标）
+  let viewEngine = curEngine;                     // 当前点开查看的引擎（行高亮、下方详情）
   const mode = select([['resident', t('resident (always on)')], ['on-demand', t('on-demand')]],
     cfg.ocr?.mode ?? 'resident');
-  wrap.append(settingsCard(t('Settings'), [
-    [t('Engine'), engine],
-    [t('Run mode (rapidocr only; llm is managed on the LLM page)'), mode],
-  ], (_i, hint) => saveCfg('ocr', { engine: engine.value, mode: mode.value }, hint)));
+
+  // ---- 模型卡（参照 LLM 模型卡片）：引擎行清单 + 下方所点引擎详情。
+  //      行点击只展开详情不写配置；切换默认引擎用详情区「设为默认」按钮 ----
+  const ENGINE_ROWS = [
+    ['llm', 'llm', t('Vision model — uses the model selected on the LLM page. Current: {m}',
+      { m: (st && st.model) || t('not selected') })],
+    ['rapidocr', 'rapidocr',
+     t('Local lightweight (rapidocr-onnxruntime), CPU-friendly, no GPU')],
+  ];
+  const engineList = el('div', { class: 'mcards' });
+  const engineDetail = el('div', { class: 'mform' });
+  const detailHint = el('div', { class: 'hint' });
+  const saveOcr = (hint) => saveCfg('ocr', { engine: curEngine, mode: mode.value }, hint);
+
+  function renderEngineList() {
+    engineList.innerHTML = '';
+    for (const [id, name] of ENGINE_ROWS) {
+      const row = el('div', { class: 'mcard' + (id === viewEngine ? ' sel' : ''),
+        'data-engine': id },
+        el('div', { class: 'mrow' },
+          el('div', { class: 'grow' },
+            el('div', {}, el('strong', {}, name), ' ',
+              ...(id === curEngine ? [badge(true, t('Default'))] : [])))));
+      row.addEventListener('click', () => pickEngine(id));
+      engineList.append(row);
+    }
+  }
+
+  function renderEngineDetail() {
+    engineDetail.innerHTML = '';
+    engineDetail.append(el('div', { class: 'hint' },
+      ENGINE_ROWS.find((e) => e[0] === viewEngine)[2]));
+    if (viewEngine === 'llm') {
+      if (curDesc) engineDetail.append(el('div', { class: 'hint' }, curDesc));
+      engineDetail.append(el('div', { class: 'hint' },
+        t('Pick and start the model on the LLM page — OCR follows it.')));
+      // 无本地字段；选择/启停都归 LLM 页
+    } else {
+      engineDetail.append(field(t('Run mode'), mode));
+    }
+    const btns = el('div', { class: 'chatbar' });
+    if (viewEngine !== 'llm') {  // llm 无本地字段，无保存按钮
+      btns.append(el('button', {
+        class: 'btn', onclick: () => saveOcr(detailHint),
+      }, t('Save Settings')));
+    }
+    if (viewEngine !== curEngine) {  // 已是默认引擎时不出按钮（行上「默认」徽标即标识）
+      btns.append(el('button', { class: 'btn', onclick: setDefault }, t('Set as default')));
+    }
+    if (btns.children.length) engineDetail.append(btns, detailHint);
+  }
+
+  function pickEngine(id) {
+    viewEngine = id;  // 只切换查看，不写配置
+    renderEngineList();
+    renderEngineDetail();
+  }
+
+  async function setDefault() {
+    curEngine = viewEngine;
+    renderEngineList();
+    renderEngineDetail();  // 「设为默认」按钮随已默认消失
+    await saveOcr(detailHint);
+  }
+
+  left.append(el('div', { class: 'card' },
+    el('h2', {}, t('Models')),
+    el('div', { class: 'hint' }, t('Click a card to expand its details; use "Set as default" to switch the engine.')),
+    engineList, engineDetail));
+  renderEngineList();
+  renderEngineDetail();
 
   const file = el('input', { type: 'file', accept: 'image/*' });
   const preview = el('img', { class: 'thumb hidden', alt: 'preview' });
   const out = el('div', { class: 'result' });
-  wrap.append(el('div', { class: 'card' },
+  right.append(el('div', { class: 'card' },
     el('h2', {}, t('Playground · Image Recognition')),
     field(t('Image file'), file),
     preview,

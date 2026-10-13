@@ -16,6 +16,13 @@ MEDIA_DIR = os.path.join(BASE_DIR, "media")
 CACHE_DIR = os.path.join(BASE_DIR, "cache")
 BIN_DIR = os.path.join(BASE_DIR, "bin")
 
+# 模型卡片推理方式说明（追加到各卡 desc/desc_en 末尾，避免逐卡重复）：
+# 所有卡片均由 llama-server（llama.cpp）子进程承载，设备在安装时由
+# binaries.gpu 一次性选定（auto→vulkan，NVIDIA/AMD/Intel 通吃；见 backend/README.md
+# 「推理方式与设备」）。卡片 command 无设备概念，故不在卡片级再选设备。
+_INFER_SUFFIX = "。推理方式：llama-server（llama.cpp）子进程，GPU 后端随安装 binaries.gpu（auto→Vulkan）"
+_INFER_SUFFIX_EN = ". Inference: llama-server (llama.cpp) subprocess; GPU backend fixed at install via binaries.gpu (auto→Vulkan)"
+
 # 翻译特化卡片（腾讯混元 Hy-MT2-1.8B）：翻译 LLM（translate_llm.cards）默认卡。
 # 2026-10-V1 基准实测（同机同 backend 自装 Vulkan llama-server）：13 句 3.0s 快于
 # Index-Translate-2B 的 3.6s，术语/专名全对且 Q4=Q8 无量化损失。纯文本
@@ -31,8 +38,8 @@ BIN_DIR = os.path.join(BASE_DIR, "bin")
 # LMT 卡（CPU 快 2.3x）；逐行请求即最优，勿做多行合并（LMT 完整性崩）。
 _HY_MT2_CARD = {
     "name": "tencent/Hy-MT2-1.8B-GGUF:Q4_K_M",
-    "desc": "翻译特化模型（腾讯混元 Hy-MT2-1.8B；基准实测最优，术语/专名更稳；官方支持 33 语互译（含中英日韩等），纯文本，禁用视觉）原始卡：https://huggingface.co/tencent/Hy-MT2-1.8B-GGUF",
-    "desc_en": "translation-specialized (tencent Hy-MT2-1.8B; best in benchmarks with steadier terminology; official 33-language coverage incl. zh/en/ja/ko; text-only, vision disabled) original card: https://huggingface.co/tencent/Hy-MT2-1.8B-GGUF",
+    "desc": "翻译特化模型（腾讯混元 Hy-MT2-1.8B；基准实测最优，术语/专名更稳；官方支持 33 语互译（含中英日韩等），纯文本，禁用视觉）原始卡：https://huggingface.co/tencent/Hy-MT2-1.8B-GGUF" + _INFER_SUFFIX,
+    "desc_en": "translation-specialized (tencent Hy-MT2-1.8B; best in benchmarks with steadier terminology; official 33-language coverage incl. zh/en/ja/ko; text-only, vision disabled) original card: https://huggingface.co/tencent/Hy-MT2-1.8B-GGUF" + _INFER_SUFFIX_EN,
     "hf_repo": "tencent/Hy-MT2-1.8B-GGUF",
     "fallback_url": "https://hf-mirror.com/tencent/Hy-MT2-1.8B-GGUF/resolve/main/Hy-MT2-1.8B-Q4_K_M.gguf",
     "command": "llama-server -hf tencent/Hy-MT2-1.8B-GGUF:Q4_K_M --no-mmproj --jinja --host 127.0.0.1 --port 7789 -c 16384 -ngl 99",
@@ -54,8 +61,8 @@ _HY_MT2_CARD = {
 # hf-mirror（已验证 200，484,220,000 字节与本地 bench 文件一致）。
 _LMT60_CARD = {
     "name": "mradermacher/LMT-60-0.6B-GGUF:Q4_K_M",
-    "desc": "轻量翻译模型（NiuTrans LMT-60-0.6B 社区量化，60 语中英枢纽；质量弱于 Hy-MT2，术语句中英混杂，胜在小快省）原始卡：https://huggingface.co/NiuTrans/LMT-60-0.6B",
-    "desc_en": "lightweight translation model (NiuTrans LMT-60-0.6B community quant, 60 languages zh-en hub; weaker than Hy-MT2 on terminology, but small & fast) original card: https://huggingface.co/NiuTrans/LMT-60-0.6B",
+    "desc": "轻量翻译模型（NiuTrans LMT-60-0.6B 社区量化，60 语中英枢纽；质量弱于 Hy-MT2，术语句中英混杂，胜在小快省）原始卡：https://huggingface.co/NiuTrans/LMT-60-0.6B" + _INFER_SUFFIX,
+    "desc_en": "lightweight translation model (NiuTrans LMT-60-0.6B community quant, 60 languages zh-en hub; weaker than Hy-MT2 on terminology, but small & fast) original card: https://huggingface.co/NiuTrans/LMT-60-0.6B" + _INFER_SUFFIX_EN,
     "hf_repo": "mradermacher/LMT-60-0.6B-GGUF",
     "fallback_url": "https://hf-mirror.com/mradermacher/LMT-60-0.6B-GGUF/resolve/main/LMT-60-0.6B.Q4_K_M.gguf",
     "command": "llama-server -hf mradermacher/LMT-60-0.6B-GGUF:Q4_K_M --no-mmproj --jinja --host 127.0.0.1 --port 7789 -c 8192 -ngl 99",
@@ -78,8 +85,8 @@ _LMT60_CARD = {
 # LMT-60-1.7B.Q4_K_M.gguf）。
 _LMT60_17B_CARD = {
     "name": "mradermacher/LMT-60-1.7B-GGUF:Q4_K_M",
-    "desc": "中量翻译模型（NiuTrans LMT-60-1.7B 社区量化，60 语 234 方向中英枢纽；体积/速度/质量介于 Hy-MT2 与 LMT-60-0.6B 之间）原始卡：https://huggingface.co/NiuTrans/LMT-60-1.7B",
-    "desc_en": "mid-size translation model (NiuTrans LMT-60-1.7B community quant, 60 languages / 234 directions, zh-en hub; sits between Hy-MT2 and LMT-60-0.6B in size/speed) original card: https://huggingface.co/NiuTrans/LMT-60-1.7B",
+    "desc": "中量翻译模型（NiuTrans LMT-60-1.7B 社区量化，60 语 234 方向中英枢纽；体积/速度/质量介于 Hy-MT2 与 LMT-60-0.6B 之间）原始卡：https://huggingface.co/NiuTrans/LMT-60-1.7B" + _INFER_SUFFIX,
+    "desc_en": "mid-size translation model (NiuTrans LMT-60-1.7B community quant, 60 languages / 234 directions, zh-en hub; sits between Hy-MT2 and LMT-60-0.6B in size/speed) original card: https://huggingface.co/NiuTrans/LMT-60-1.7B" + _INFER_SUFFIX_EN,
     "hf_repo": "mradermacher/LMT-60-1.7B-GGUF",
     "fallback_url": "https://hf-mirror.com/mradermacher/LMT-60-1.7B-GGUF/resolve/main/LMT-60-1.7B.Q4_K_M.gguf",
     "command": "llama-server -hf mradermacher/LMT-60-1.7B-GGUF:Q4_K_M --no-mmproj --jinja --host 127.0.0.1 --port 7789 -c 8192 -ngl 99",
@@ -96,8 +103,8 @@ _LMT60_17B_CARD = {
 _BUILTIN_CARDS = [
     {
         "name": "unsloth/Qwen3-0.6B-GGUF:Q4_K_M",
-        "desc": "最小最快的对话/翻译模型（纯文本，无视觉 OCR；Q4_K_M 量化更省盘）",
-        "desc_en": "smallest & fastest chat/translate model (text-only, no vision OCR; Q4_K_M, smaller)",
+        "desc": "最小最快的对话/翻译模型（纯文本，无视觉 OCR；Q4_K_M 量化更省盘）" + _INFER_SUFFIX,
+        "desc_en": "smallest & fastest chat/translate model (text-only, no vision OCR; Q4_K_M, smaller)" + _INFER_SUFFIX_EN,
         "hf_repo": "unsloth/Qwen3-0.6B-GGUF",
         "fallback_url": "https://modelscope.cn/models/unsloth/Qwen3-0.6B-GGUF/resolve/master/Qwen3-0.6B-Q4_K_M.gguf",
         "command": "llama-server -hf unsloth/Qwen3-0.6B-GGUF:Q4_K_M --jinja --host 127.0.0.1 --port 7788 -c 16384",
@@ -111,8 +118,8 @@ _BUILTIN_CARDS = [
     },
     {
         "name": "unsloth/Qwen3.5-0.8B-GGUF:Q4_K_M",
-        "desc": "对话/翻译/视觉 OCR 模型（多模态；Q4_K_M 量化更省盘）",
-        "desc_en": "chat/translate/vision OCR model (multimodal; Q4_K_M, smaller)",
+        "desc": "对话/翻译/视觉 OCR 模型（多模态；Q4_K_M 量化更省盘）" + _INFER_SUFFIX,
+        "desc_en": "chat/translate/vision OCR model (multimodal; Q4_K_M, smaller)" + _INFER_SUFFIX_EN,
         "hf_repo": "unsloth/Qwen3.5-0.8B-GGUF",
         "fallback_url": "https://modelscope.cn/models/unsloth/Qwen3.5-0.8B-GGUF/resolve/master/Qwen3.5-0.8B-Q4_K_M.gguf",
         "fallback_mmproj_url": "https://modelscope.cn/models/unsloth/Qwen3.5-0.8B-GGUF/resolve/master/mmproj-F16.gguf",
@@ -127,8 +134,8 @@ _BUILTIN_CARDS = [
     },
     {
         "name": "unsloth/Qwen3.5-2B-GGUF:Q4_K_M",
-        "desc": "对话/翻译/视觉 OCR 模型（多模态；比 0.8b 更强）",
-        "desc_en": "chat/translate/vision OCR model (multimodal; stronger than 0.8b)",
+        "desc": "对话/翻译/视觉 OCR 模型（多模态；比 0.8b 更强）" + _INFER_SUFFIX,
+        "desc_en": "chat/translate/vision OCR model (multimodal; stronger than 0.8b)" + _INFER_SUFFIX_EN,
         "hf_repo": "unsloth/Qwen3.5-2B-GGUF",
         "fallback_url": "https://modelscope.cn/models/unsloth/Qwen3.5-2B-GGUF/resolve/master/Qwen3.5-2B-Q4_K_M.gguf",
         "fallback_mmproj_url": "https://modelscope.cn/models/unsloth/Qwen3.5-2B-GGUF/resolve/master/mmproj-F16.gguf",
@@ -143,8 +150,8 @@ _BUILTIN_CARDS = [
     },
     {
         "name": "unsloth/Qwen3.5-4B-GGUF:Q4_K_M",
-        "desc": "对话/翻译/视觉 OCR 模型（多模态；约 3.4GB 盘，显存占用明显高于 2B，小显存卡慎与 ASR/翻译并发）",
-        "desc_en": "chat/translate/vision OCR model (multimodal; ~3.4GB disk, noticeably more VRAM than 2b, mind concurrency on small-VRAM GPUs)",
+        "desc": "对话/翻译/视觉 OCR 模型（多模态；约 3.4GB 盘，显存占用明显高于 2B，小显存卡慎与 ASR/翻译并发）" + _INFER_SUFFIX,
+        "desc_en": "chat/translate/vision OCR model (multimodal; ~3.4GB disk, noticeably more VRAM than 2b, mind concurrency on small-VRAM GPUs)" + _INFER_SUFFIX_EN,
         "hf_repo": "unsloth/Qwen3.5-4B-GGUF",
         "fallback_url": "https://modelscope.cn/models/unsloth/Qwen3.5-4B-GGUF/resolve/master/Qwen3.5-4B-Q4_K_M.gguf",
         "fallback_mmproj_url": "https://modelscope.cn/models/unsloth/Qwen3.5-4B-GGUF/resolve/master/mmproj-F16.gguf",
@@ -159,8 +166,8 @@ _BUILTIN_CARDS = [
     },
     {
         "name": "unsloth/Qwen3.5-9B-GGUF:Q4_K_M",
-        "desc": "对话/翻译/视觉 OCR 最强档（多模态；约 6.6GB 盘；Q4 权重+投影已近 8GB 显存上限，仅限独占运行，并发/长上下文易 OOM 自担）",
-        "desc_en": "chat/translate/vision OCR model, strongest tier (multimodal; ~6.6GB disk; Q4 weights+mmproj near the 8GB VRAM ceiling — dedicated use only, OOM at your own risk)",
+        "desc": "对话/翻译/视觉 OCR 最强档（多模态；约 6.6GB 盘；Q4 权重+投影已近 8GB 显存上限，仅限独占运行，并发/长上下文易 OOM 自担）" + _INFER_SUFFIX,
+        "desc_en": "chat/translate/vision OCR model, strongest tier (multimodal; ~6.6GB disk; Q4 weights+mmproj near the 8GB VRAM ceiling — dedicated use only, OOM at your own risk)" + _INFER_SUFFIX_EN,
         "hf_repo": "unsloth/Qwen3.5-9B-GGUF",
         "fallback_url": "https://modelscope.cn/models/unsloth/Qwen3.5-9B-GGUF/resolve/master/Qwen3.5-9B-Q4_K_M.gguf",
         "fallback_mmproj_url": "https://modelscope.cn/models/unsloth/Qwen3.5-9B-GGUF/resolve/master/mmproj-F16.gguf",
@@ -175,8 +182,8 @@ _BUILTIN_CARDS = [
     },
     {
         "name": "openbmb/MiniCPM5-1B-GGUF:Q4_K_M",
-        "desc": "轻量纯文本备选模型（无视觉 OCR；Q4_K_M 量化更省盘）",
-        "desc_en": "lightweight text-only fallback (no vision OCR; Q4_K_M, smaller)",
+        "desc": "轻量纯文本备选模型（无视觉 OCR；Q4_K_M 量化更省盘）" + _INFER_SUFFIX,
+        "desc_en": "lightweight text-only fallback (no vision OCR; Q4_K_M, smaller)" + _INFER_SUFFIX_EN,
         "hf_repo": "openbmb/MiniCPM5-1B-GGUF",
         "fallback_url": "https://modelscope.cn/models/OpenBMB/MiniCPM5-1B-GGUF/resolve/master/MiniCPM5-1B-Q4_K_M.gguf",
         "command": "llama-server -hf openbmb/MiniCPM5-1B-GGUF:Q4_K_M --jinja --host 127.0.0.1 --port 7788 -c 16384",
@@ -189,8 +196,8 @@ _BUILTIN_CARDS = [
     },
     {
         "name": "openbmb/MiniCPM5-2B-GGUF:Q4_K_M",
-        "desc": "纯文本备选模型（无视觉 OCR；比 1b 更强）",
-        "desc_en": "text-only fallback (no vision OCR; stronger than 1b)",
+        "desc": "纯文本备选模型（无视觉 OCR；比 1b 更强）" + _INFER_SUFFIX,
+        "desc_en": "text-only fallback (no vision OCR; stronger than 1b)" + _INFER_SUFFIX_EN,
         "hf_repo": "openbmb/MiniCPM5-2B-GGUF",
         "fallback_url": "https://modelscope.cn/models/OpenBMB/MiniCPM5-2B-GGUF/resolve/master/MiniCPM5-2B-Q4_K_M.gguf",
         "command": "llama-server -hf openbmb/MiniCPM5-2B-GGUF:Q4_K_M --jinja --host 127.0.0.1 --port 7788 -c 16384",
@@ -227,6 +234,15 @@ DEFAULTS = {
         "stopped": True,
         "cache": True,
         "whisper_model": "large-v3-turbo",  # faster-whisper 档位全名：large-v3-turbo/tiny/base/small/medium/large-v3
+        # 第558次：whisper 设备（auto|cpu|cuda）。auto=检测到 CUDA 设备且 cuBLAS
+        # 可载即用 GPU，失败回落 CPU；未装 GPU 支持（nvidia-cublas-cu12）时
+        # auto/cpu 行为与历史 CPU int8 完全一致（零回归）。不热切：改动下次
+        # 引擎启动/卸载后生效（第517次口径）。
+        "whisper_device": "auto",
+        # 计算精度：空=自动（cpu→int8 / cuda→float16）；cuda 可选
+        # int8/int8_float16/float16/bfloat16，cpu 可选 int8/int8_float32/float32，
+        # 越界值加载时告警并归 int8。
+        "whisper_compute_type": "",
         "qwen3_size": "0.6b",       # qwen3-asr 档位：0.6b（默认档，1.35GB/zh 最准）| 1.7b（质量档）
         "moss_quant": "q4_K_M",     # moss 量化：q4_K_M（默认，最快档）| q8_0
         "moss_model_path": "",      # moss 模型 gguf 路径覆盖；空 = backend/models/ 下默认名

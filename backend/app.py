@@ -17,7 +17,7 @@ import webbrowser
 from flask import Flask, jsonify, request, send_from_directory
 
 import config
-import scripts.upgrade as upgrade
+import scripts.install as install  # 升级能力唯一入口（--check/--upgrade）+ 启动静默检查
 from core.asr import AsrEngine
 from core.llm_engine import LlmEngine
 from core.logs import setup as setup_logs
@@ -29,7 +29,6 @@ from api.asr_job import bp as asr_job_bp
 from api.llm import bp as llm_bp
 from api.ocr import bp as ocr_bp
 from api.translate import bp as translate_bp
-from api.upgrade import bp as upgrade_bp
 from api.ytdl import bp as ytdl_bp
 
 VERSION = "0.1.0"
@@ -58,7 +57,7 @@ def create_app(cfg=None):
     }
 
     for bp in (admin_bp, llm_bp, asr_bp, asr_job_bp, ocr_bp, translate_bp,
-               ytdl_bp, upgrade_bp):
+               ytdl_bp):
         app.register_blueprint(bp)
 
     app.register_error_handler(NotImplementedError, _not_implemented)
@@ -105,6 +104,50 @@ def _add_cors(resp):
         resp.headers["Access-Control-Allow-Methods"] = "GET, POST, PUT, DELETE, OPTIONS"
         resp.headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization"
     return resp
+
+
+# 第559次实锤（2026-10-13）：Windows 上外部 Ctrl+C（CTRL_C_EVENT）/ Ctrl+Break
+# （CTRL_BREAK_EVENT）都会被系统投递成 KeyboardInterrupt 给主线程，而 werkzeug 3.x 的
+# BaseWSGIServer.serve_forever 把它 except 后静默 pass——app.run 于是「正常返回」、
+# 退出码 0、无 traceback，与闪退表现完全相同（已用 _thread.interrupt_main 实验复现）。
+# 真控制台事件与 _thread.interrupt_main()（3.14 实测同样过 SIGINT 处理器）必经下面
+# 打点；只有库线程直接调 server.shutdown() 不经处理器，由 main 末尾「无信号返回」
+# 分支兜底。
+_SIGNAL_DUMP_MARK = {"got": False, "name": ""}
+
+
+def _dump_all_threads():
+    """全部线程当前调用栈文本（信号到达瞬间的现场：worker 帧能暴露是哪个库在动）。"""
+    import traceback
+    main_tid = threading.main_thread().ident
+    chunks = []
+    for tid, frame in sys._current_frames().items():
+        role = "main" if tid == main_tid else "worker"
+        chunks.append(f"--- thread {tid}（{role}）---\n"
+                      + "".join(traceback.format_stack(frame)).rstrip())
+    return "\n".join(chunks)
+
+
+def _install_exit_signal_trace():
+    """SIGINT/SIGBREAK 到达瞬间落盘信号种类 + 全部线程栈，随后按默认语义抛
+    KeyboardInterrupt（Ctrl+C 仍照常退出，只多留证据，不改行为）。仅主线程可调。"""
+    import signal
+
+    def _on_exit(signum, frame):
+        name = {getattr(signal, "SIGINT", -1): "SIGINT（Ctrl+C）",
+                getattr(signal, "SIGBREAK", -2): "SIGBREAK（Ctrl+Break）",
+                }.get(signum, f"signal {signum}")
+        _SIGNAL_DUMP_MARK["got"] = True
+        _SIGNAL_DUMP_MARK["name"] = name
+        log.warning("收到退出信号 %s，主线程在 serve_forever 中被打断；全部线程栈：\n%s",
+                    name, _dump_all_threads())
+        for h in logging.getLogger().handlers:  # 关控制台场景系统只给几秒，立即刷盘
+            h.flush()
+        raise KeyboardInterrupt
+
+    signal.signal(signal.SIGINT, _on_exit)
+    if hasattr(signal, "SIGBREAK"):  # Windows 专属：Ctrl+Break（关窗是 CTRL_CLOSE_EVENT，Python 无对应信号，抓不到）
+        signal.signal(signal.SIGBREAK, _on_exit)
 
 
 def _preload(engine, label):
@@ -185,8 +228,8 @@ def main():
         else:
             threading.Thread(target=_preload, args=(ocr, "OCR"),
                              daemon=True).start()
-    # 升级静默检查（plan §5.5）：daemon 线程，有更新仅日志提示不打扰
-    threading.Thread(target=upgrade.silent_check, daemon=True).start()
+    # 升级静默检查（plan §5.5；第557次：升级动作只在安装脚本执行，这里只打日志提示）
+    threading.Thread(target=install.silent_check, args=(log.info,), daemon=True).start()
     url = f"http://{cfg['host']}:{cfg['port']}"
     log.info(f"VocabRadar backend v{VERSION} -> {url}")
 
@@ -199,7 +242,27 @@ def main():
     if os.environ.get("BACKEND_NO_BROWSER") != "1":
         threading.Timer(1.5, webbrowser.open, args=(url,)).start()
 
-    app.run(host=cfg["host"], port=cfg["port"], debug=False)
+    # 第559次：banner 之后 werkzeug 的 INFO 启动行被 logs.py 收敛，控制台无输出即
+    # 服务在跑；此前 app.run 若异常/静默返回，backend.log 无任何痕迹（用户报闪退
+    # 无法定位）。这里加进入/退出锚点并把异常落文件——Ctrl+C 与真异常分开记。
+    _install_exit_signal_trace()
+    log.info("进入 HTTP 服务循环：%s （Ctrl+C 退出，本行之后无输出属正常）", url)
+    try:
+        app.run(host=cfg["host"], port=cfg["port"], debug=False)
+    except KeyboardInterrupt:
+        # 信号处理器已落盘信号种类+全线程栈，这里只补一条语义日志后照常退出
+        log.info("收到 Ctrl+C（KeyboardInterrupt），HTTP 服务循环退出")
+        raise
+    except BaseException:
+        log.exception("HTTP 服务循环异常退出")
+        raise
+    finally:
+        if not _SIGNAL_DUMP_MARK["got"]:
+            # werkzeug 吞掉的 KeyboardInterrupt 必经信号处理器打点；走到这里说明
+            # serve_forever 是被 shutdown() 或 _thread.interrupt_main() 终结的
+            log.warning("HTTP 服务循环未经退出信号即返回（疑似库线程 interrupt_main/"
+                        "shutdown），现场线程栈：\n%s", _dump_all_threads())
+        log.info("HTTP 服务循环已结束，进程退出")
 
 
 if __name__ == "__main__":

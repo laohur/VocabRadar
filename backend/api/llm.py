@@ -10,7 +10,7 @@ import time
 import requests
 from flask import Blueprint, Response, current_app, jsonify, request
 
-import config
+from api import cards  # 模型卡片 CRUD 共用件（llm 与 translate_llm 同构）
 
 bp = Blueprint("llm", __name__)
 
@@ -97,120 +97,37 @@ def chat_completions():
 # （权威，自动下载由其中 -hf <repo>[:quant] 驱动）；hf_repo=归属仓库
 # （installed 扫 %USERPROFILE%/.cache/huggingface/hub 判定）；
 # fallback_url/fallback_mmproj_url = hf 与 hf-mirror 均失败后的直链兜底
-# （engine 启动时改写 -mu/-mmu）。
+# （engine 启动时改写 -mu/-mmu）。增改删与内置卡保护见 api/cards.py。
 # ---------------------------------------------------------------------------
-
-def _get_cards():
-    cards = current_app.config["CFG"].get("llm", {}).get("cards")
-    return cards if isinstance(cards, list) else []
-
-
-def _save_cards(cards, model=None):
-    """写回 llm.cards（put_config 同款最小持久化：update_user→load→CFG→4 引擎同步）。
-
-    deep_merge 对 list 整体替换，cards 传 [] 即清空；model 非 None 时一并
-    写 llm.model（设默认/默认卡改名跟随/删默认回未选卡）。
-    """
-    patch = {"llm": {"cards": cards}}
-    if model is not None:
-        patch["llm"]["model"] = model
-    config.update_user(patch)  # 用户层最小持久化，不固化 DEFAULTS
-    merged = config.load()     # 运行时全量视图 = DEFAULTS + 用户层覆盖
-    current_app.config["CFG"] = merged
-    engines = current_app.extensions["engines"]
-    for name in ("llm", "translate_llm", "asr", "ocr", "translate"):
-        engines[name].cfg = merged.get(name, {})
-
-
-def _normalize_card(body):
-    """校验并规范化卡片；合法返回 (card, None)，否则 (None, 错误码)。"""
-    if not isinstance(body, dict):
-        return None, "bad_body"
-    name = str(body.get("name") or "").strip()
-    command = str(body.get("command") or "").strip()
-    if not name or not command:
-        return None, "name_and_command_required"
-    card = {"name": name, "command": command}
-    for key in ("desc", "desc_en", "hf_repo", "fallback_url",
-                "fallback_mmproj_url"):
-        v = str(body.get(key) or "").strip()
-        if v:
-            card[key] = v
-    # 采样参数白名单（数值过滤；llm_engine.start 注入 llama-server 启动参数）
-    smp = body.get("sampling")
-    if isinstance(smp, dict):
-        norm_smp = {}
-        for k in ("temperature", "top_p", "top_k", "min_p", "repeat_penalty"):
-            v = smp.get(k)
-            if isinstance(v, (int, float)) and not isinstance(v, bool):
-                norm_smp[k] = float(v)
-        if norm_smp:
-            card["sampling"] = norm_smp
-    return card, None
 
 
 @bp.get("/api/llm/models")
 def list_model_cards():
-    engine = current_app.extensions["engines"]["llm"]
     cfg = current_app.config["CFG"].get("llm", {})
-    model = (cfg.get("model") or "").strip().lower()
-    out = []
-    for c in _get_cards():
-        d = dict(c)
-        # installed：扫 llama.cpp/huggingface_hub 共用 hub 缓存判定
-        d["installed"] = engine.card_installed(c)
-        d["is_default"] = bool(model) and str(c.get("name", "")).lower() == model
-        out.append(d)
-    return jsonify({"ok": True, "cards": out})
+    return jsonify({"ok": True,
+                    "cards": cards.listing("llm", "llm",
+                                            (cfg.get("model") or "").strip())})
 
 
 @bp.post("/api/llm/models")
 def add_model_card():
-    card, err = _normalize_card(request.get_json(silent=True))
-    if err:
-        return jsonify({"ok": False, "error": err}), 400
-    cards = _get_cards()
-    if any(c.get("name") == card["name"] for c in cards):
-        return jsonify({"ok": False, "error": "duplicate_name"}), 400
-    cards.append(card)
-    _save_cards(cards)
-    return jsonify({"ok": True, "card": card})
+    return cards.add("llm", request.get_json(silent=True))
 
 
 @bp.put("/api/llm/models/<path:name>")
 def update_model_card(name):
-    card, err = _normalize_card(request.get_json(silent=True))
-    if err:
-        return jsonify({"ok": False, "error": err}), 400
-    cards = _get_cards()
-    idx = next((i for i, c in enumerate(cards) if c.get("name") == name), None)
-    if idx is None:
-        return jsonify({"ok": False, "error": "not_found"}), 404
-    if any(c.get("name") == card["name"] and i != idx
-           for i, c in enumerate(cards)):
-        return jsonify({"ok": False, "error": "duplicate_name"}), 400
-    old_name = str(cards[idx].get("name", ""))
-    cards[idx] = card
-    # 默认模型跟随：旧卡名正被设为默认且卡改名 → 指向新名
-    cfg_model = (current_app.config["CFG"]["llm"].get("model") or "").lower()
-    model = (card["name"] if old_name.lower() == cfg_model
-             and old_name != card["name"] else None)
-    _save_cards(cards, model)
-    return jsonify({"ok": True, "card": card})
+    return cards.update("llm", name, request.get_json(silent=True))
 
 
 @bp.delete("/api/llm/models/<path:name>")
 def delete_model_card(name):
-    cards = _get_cards()
-    idx = next((i for i, c in enumerate(cards) if c.get("name") == name), None)
-    if idx is None:
-        return jsonify({"ok": False, "error": "not_found"}), 404
-    removed = cards.pop(idx)
-    # 删的是默认卡 → model 清空（needs_setup 重新置位）；只删卡不清 hub 缓存
-    cfg_model = (current_app.config["CFG"]["llm"].get("model") or "").lower()
-    model = "" if str(removed.get("name", "")).lower() == cfg_model else None
-    _save_cards(cards, model)
-    return jsonify({"ok": True})
+    return cards.delete("llm", name)
+
+
+@bp.post("/api/llm/models/download/<path:name>")
+def download_model_card(name):
+    """手动预下载卡片模型进 hub 缓存（管理页卡片「下载」按钮）。"""
+    return cards.download("llm", "llm", name)
 
 
 @bp.post("/api/llm/models/parse")

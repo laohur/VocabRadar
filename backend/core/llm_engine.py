@@ -106,27 +106,123 @@ def _repo_cache_path(repo):
     return None
 
 
+def _repo_cache_bytes(repo):
+    """单 repo 的 hub 缓存字节量（目录不存在返回 0）——手动预下载的进度
+    分母用 repo_info 元数据字节数，分子扫本 repo 目录（含 .incomplete 半成品，
+    下载中即占位），与 llama.cpp 下载进度同口径。计数用 lstat 递归：hub 1.x
+    Python 侧新布局文件直落 snapshots/（blobs 空），llama.cpp 旧布局 blobs 实
+    文件 + snapshots 符号链接——lstat 对链接只计链接本身，两种布局不重不漏。"""
+    path = _repo_cache_path(repo)
+    if not path:
+        return 0
+    total = 0
+    for dirpath, _dirs, files in os.walk(path):
+        for f in files:
+            try:
+                total += os.lstat(os.path.join(dirpath, f)).st_size
+            except OSError:
+                continue
+    return total
+
+
+def _card_hf_args(card):
+    """从卡片解析下载要素 (repo, quant, want_mmproj)：hf_repo 优先，缺则从
+    command 的 -hf/-hfr/--hf-repo 值取（值形如 org/repo[:quant]）；
+    want_mmproj=命令未显式 --no-mmproj（视觉卡随模型一并下 mmproj，
+    对齐 llama.cpp -hf 行为）。"""
+    repo = str((card or {}).get("hf_repo") or "").strip()
+    quant, want_mmproj = "", "--no-mmproj" not in str((card or {}).get("command") or "")
+    try:
+        tokens = shlex.split(str((card or {}).get("command") or ""), posix=False)
+    except ValueError:
+        tokens = []
+    i = 1  # parts[0] 是可执行文件名
+    while i < len(tokens):
+        tok = tokens[i].strip().strip('"').strip("'")
+        if tok.lower() in ("-hf", "-hfr", "--hf-repo") and i + 1 < len(tokens):
+            val = tokens[i + 1].strip().strip('"').strip("'")
+            if not repo:
+                repo = val.partition(":")[0]
+            quant = val.partition(":")[2]
+            i += 2
+            continue
+        if tok.lower().startswith(("-hf=", "-hfr=", "--hf-repo=")):
+            val = tok.partition("=")[2].strip('"').strip("'")
+            if not repo:
+                repo = val.partition(":")[0]
+            quant = val.partition(":")[2]
+        i += 1
+    return repo, quant, want_mmproj
+
+
+def _sibling_field(s, key):
+    """repo 文件条目取字段：新版 huggingface_hub 是 RepoSibling 属性，
+    旧版/某些路径是 dict——两种形态都兼容。"""
+    v = getattr(s, key, None)
+    if v is None and isinstance(s, dict):
+        v = s.get(key)
+    return v
+
+
+def _select_repo_files(siblings, quant, want_mmproj):
+    """从 repo 文件清单挑要下的 GGUF：quant 精确匹配文件名尾段（含分片
+    -00001-of-00002 形态）；无 quant 只下 mmproj（避免整仓误下）。返回
+    (files, expected_bytes)。"""
+    files, expected = [], 0
+    quant_pat = (re.compile(r"(?:^|[-_.])" + re.escape(quant.lower())
+                            + r"(?:\.gguf|-000\d+-of-\d+\.gguf)$")
+                 if quant else None)
+    for s in siblings or []:
+        fn = str(_sibling_field(s, "rfilename") or "")
+        base = fn.rsplit("/", 1)[-1].lower()
+        if not base.endswith(".gguf"):
+            continue
+        size = int(_sibling_field(s, "size") or 0)
+        if "mmproj" in base:
+            if want_mmproj:  # mmproj 与 quant 无关，视觉卡才下
+                files.append(fn)
+                expected += size
+            continue
+        if quant_pat is not None and quant_pat.search(base):
+            files.append(fn)
+            expected += size
+    return files, expected
+
+
 def _hub_cache_bytes():
-    """hub 缓存根下全部 blobs 字节总量（无根目录返回 None）。
+    """hub 缓存根下全部模型目录字节总量（无根目录返回 None）。
 
     start() 等待期每轮取一次：大小变化=下载活动进行中，据此延长健康等待
     超时（首次自动下载体积大；\r 进度条不产生换行，输出行检测不可用，
-    改量测缓存体积）。仅 scandir+stat 元数据，毫秒级开销。"""
+    改量测缓存体积）。仅元数据遍历，毫秒级开销。计数用 lstat 递归——
+    hub 1.x Python 侧新布局文件直落 snapshots/（blobs 空），llama.cpp 旧
+    布局 blobs 实文件 + snapshots 符号链接，lstat 两种布局都不重不漏。"""
     root = _hub_cache_dir()
     total = 0
     try:
-        for e in os.scandir(root):
-            if not e.is_dir() or not e.name.startswith("models--"):
-                continue
-            try:
-                for b in os.scandir(os.path.join(e.path, "blobs")):
-                    if b.is_file():
-                        total += b.stat().st_size
-            except OSError:
-                continue
+        entries = list(os.scandir(root))
     except OSError:
         return None
+    for e in entries:
+        if not e.is_dir() or not e.name.startswith("models--"):
+            continue
+        for dirpath, _dirs, files in os.walk(e.path):
+            for f in files:
+                try:
+                    total += os.lstat(os.path.join(dirpath, f)).st_size
+                except OSError:
+                    continue
     return total
+
+
+def _fmt_bytes(n):
+    """字节量人读格式（日志用）。"""
+    v, unit = float(n or 0), ["B", "KB", "MB", "GB"]
+    i = 0
+    while v >= 1024 and i < len(unit) - 1:
+        v /= 1024
+        i += 1
+    return f"{v:.1f}{unit[i]}"
 
 
 def _pid_alive_is_llama(pid):
@@ -248,6 +344,8 @@ class LlmEngine:
         self.last_used = time.time()
         # 最近输出环形缓冲（启动即退出报错附证据，不遮蔽失败原因）
         self._last_lines = collections.deque(maxlen=8)
+        # 手动预下载状态（管理页「下载」按钮）：卡片名 -> {state, progress, source, error}
+        self._downloads = {}
         if self.cfg.get("mode", "resident") == "on-demand":
             threading.Thread(target=self._idle_watch, daemon=True).start()
 
@@ -327,6 +425,77 @@ class LlmEngine:
                         "desc": str(c.get("desc") or ""),
                         "installed": self.card_installed(c)})
         return out
+
+    # ---- 手动预下载（管理页卡片「下载」按钮；llama.cpp 自管下载的补充——
+    #      不切默认卡也可提前把权重拉进 hub 缓存，启动时缓存命中离线直启） ----
+
+    def download_state(self, card_name):
+        """卡片下载状态（无记录返回 None）。"""
+        return self._downloads.get(str(card_name or ""))
+
+    def start_card_download(self, card):
+        """后台预下载卡片模型进 HF hub 缓存（hf → hf-mirror 双源，对齐启动
+        探测链；cache_dir 与 llama.cpp 同根，启动即缓存命中）。幂等：进行中
+        重复触发返回现状不另起线程。返回状态 dict 快照。"""
+        name = str((card or {}).get("name") or "")
+        cur = self._downloads.get(name)
+        if cur and cur.get("state") == "running":
+            return dict(cur)
+        state = {"state": "running", "progress": 0, "source": "", "error": ""}
+        self._downloads[name] = state
+        threading.Thread(target=self._download_worker, args=(dict(card), state),
+                         daemon=True).start()
+        return dict(state)
+
+    def _download_worker(self, card, state):
+        """下载线程体：挑文件 → 双源下载（官方失败转 hf-mirror）→ 看门线程
+        按 repo 缓存增量报进度。失败如实写 state 不抛出（管理页轮询可见）。"""
+        from huggingface_hub import HfApi
+
+        name = str(card.get("name") or "")
+        repo, quant, want_mmproj = _card_hf_args(card)
+        try:
+            if not repo:
+                raise RuntimeError("卡片未配置 hf_repo 且 command 不含 -hf，无法定位下载仓库")
+            api = HfApi()
+            source = "hf"
+            try:
+                info = api.model_info(repo, files_metadata=True)
+            except Exception as e:
+                api = HfApi(endpoint=_HF_MIRROR.rstrip("/"))
+                info = api.model_info(repo, files_metadata=True)
+                source = "hf-mirror"
+                log.info("卡片 %s 预下载：hf 官方源不可达（%s），转 hf-mirror", name, str(e)[:120])
+            files, expected = _select_repo_files(info.siblings, quant, want_mmproj)
+            if not files:
+                raise RuntimeError(
+                    f"仓库 {repo} 中未匹配到可下载文件"
+                    + (f"（quant={quant}）" if quant else "（卡片未声明 quant，且无 mmproj）"))
+            state["source"] = source
+            log.info("卡片 %s 开始预下载（%s 源，%d 个文件，约 %s）：%s",
+                     name, source, len(files), _fmt_bytes(expected) if expected else "?", repo)
+            stop = threading.Event()
+            if expected > 0:
+                def _watch():
+                    while not stop.wait(1.0):
+                        done = _repo_cache_bytes(repo)
+                        state["progress"] = min(99, round(done / expected * 100))
+                threading.Thread(target=_watch, daemon=True).start()
+            try:
+                for fn in files:
+                    api.hf_hub_download(repo_id=repo, filename=fn,
+                                        cache_dir=_hub_cache_dir())
+            finally:
+                stop.set()
+            state.update(state="done", progress=100)
+            log.info("卡片 %s 预下载完成（%s 源）", name, source)
+        except Exception as e:
+            state.update(state="failed", error=str(e)[:300])
+            log.warning("卡片 %s 预下载失败：%s", name, str(e)[:300])
+            if not state.get("source"):
+                # 双源都进不去时给出可读指引（直链兜底仅启动链支持）
+                log.warning("提示：hf 与 hf-mirror 均不可达或仓库无法访问；"
+                            "fallback_url 直链兜底只在 llama-server 启动链生效")
 
     def _command_argv(self, card, exe):
         """解析卡片 command 为启动 argv——卡片命令即权威，模型交 llama.cpp

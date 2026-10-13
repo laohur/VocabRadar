@@ -72,14 +72,16 @@ function select(options, value, attrs = {}) {
 }
 
 // 设定卡通用组装：fields = [[label, input, hint?], ...]
+// card.hint = 保存提示元素（供页内其他动作复用同一提示位，如「设为默认」）
 function settingsCard(title, fields, onSave, saveText = 'Save Settings') {
   const hint = el('div', { class: 'hint' });
   const inputs = fields.map((f) => f[1]);
   const card = el('div', { class: 'card' },
     el('h2', {}, title),
     ...fields.map((f) => field(f[0], f[1], f[2])),
-    el('button', { class: 'btn', onclick: () => onSave(inputs, hint) }, saveText),
+    el('button', { class: 'btn', onclick: () => onSave(inputs, hint) }, t(saveText)),
     hint);
+  card.hint = hint;
   return card;
 }
 

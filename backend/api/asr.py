@@ -1,5 +1,5 @@
 """ASR API：/api/asr/transcribe（含缓存）、/v1/audio/transcriptions（OpenAI 兼容薄壳）、
-/api/asr/cache（列表/清空）、/api/asr/status。"""
+/api/asr/cache（列表/清空）、/api/asr/status、/api/asr/downloads + /download（预下载）。"""
 
 import hashlib
 import json
@@ -10,7 +10,8 @@ import time
 
 from flask import Blueprint, current_app, jsonify, request
 
-from core.asr import ASR_CACHE_DIR, ASR_ENGINES, _safe_key, cache_clear, cache_list, engine_tag
+from core.asr import (ASR_CACHE_DIR, ASR_ENGINES, _safe_key, cache_clear,
+                      cache_list, downloads_status, engine_tag, start_download)
 
 log = logging.getLogger(__name__)  # 第446次：同步转写完成日志（视频任务路径已有，此处此前缺失）
 
@@ -23,6 +24,25 @@ _VALID_ENGINES = ASR_ENGINES  # 请求级 engine 参数校验（实际引擎由�
 def asr_status():
     engine = current_app.extensions["engines"]["asr"]
     return jsonify({"ok": True, **engine.status()})
+
+
+@bp.get("/api/asr/downloads")
+def asr_downloads():
+    """各档位预下载状态（cached=资产已齐备；state/progress=手动预下载态，
+    管理页模型卡「下载」按钮的数据源）。"""
+    return jsonify({"ok": True, "downloads": downloads_status()})
+
+
+@bp.post("/api/asr/download")
+def asr_download():
+    """手动预下载：{engine, tier} → 后台线程拉取，立即返回状态快照
+    （fw=hub 双源 snapshot；qwen3=GitHub Releases 自取；moss 手动分发无下载）。"""
+    body = request.get_json(silent=True) or {}
+    try:
+        st = start_download(body.get("engine"), body.get("tier"))
+    except ValueError as e:
+        return jsonify({"ok": False, "error": "bad_request", "message": str(e)}), 400
+    return jsonify({"ok": True, "download": st})
 
 
 @bp.post("/api/asr/transcribe")

@@ -3,7 +3,10 @@
 - 引擎（config <asr>.engine）：
   - faster-whisper（默认/无 GPU 回落档）：CTranslate2，档位 asr.whisper_model
     （CPU int8；fw 系接口 fw 专属——clip_timestamps / no_speech_prob / 生成器
-    增量，asr_job 对其保留专用零回归路径）。
+    增量，asr_job 对其保留专用零回归路径）。第558次起设备可选（asr.whisper_device
+    auto/cpu/cuda）：安装器装 nvidia-cublas-cu12（cuDNN 9 已随 ct2 Windows wheel
+    自带）后 auto/cuda 走 CUDA，加载或环境不满足回落 CPU 并把原因记入 status；
+    缓存标签带设备维度（@cuda），设备不热切（第517次口径）。
   - qwen3-asr（Haujet GGUF）：子进程 worker（core/asr_qwen3.py），档位
     asr.qwen3_size（0.6b 默认档 / 1.7b 质量档），GPU（DML+Vulkan）专用。
   - moss（MOSS-Transcribe-Diarize）：transcribe_cpp 进程内（core/asr_moss.py），
@@ -23,8 +26,10 @@ import gc
 import logging
 import os
 import re
+import sys
 import threading
 import time
+from pathlib import Path
 
 import config
 
@@ -55,15 +60,148 @@ def normalize_tier(name):
 
 
 def engine_tag(cfg):
-    """缓存条目引擎标签（engine/model 粒度）：同音频换引擎/档位结果不同，
-    不复用。official（官方字幕直出）条目按 asr_job 侧语义另行放行。"""
+    """缓存条目引擎标签（engine/model/device 粒度）：同音频换引擎/档位/设备
+    结果不同，不复用。official（官方字幕直出）条目按 asr_job 侧语义另行放行。"""
     cfg = cfg or {}
     engine = cfg.get("engine") or "faster-whisper"
     if engine == "qwen3-asr":
         return f"qwen3-asr/{(cfg.get('qwen3_size') or '0.6b').strip().lower()}"
     if engine == "moss":
         return f"moss/{(cfg.get('moss_quant') or 'q4_K_M').strip()}"
-    return f"faster-whisper/{normalize_tier(cfg.get('whisper_model'))}"
+    return (f"faster-whisper/{normalize_tier(cfg.get('whisper_model'))}"
+            + _device_tag(cfg))
+
+
+# ---- whisper GPU 支持（第558次：安装器可选装 nvidia-cublas-cu12 后启用） ----
+
+_GPU_INFO = None          # 探测缓存（驱动/库状态进程内视为不变）
+_CUDA_DLL_PREPARED = False
+
+# 计算精度合法集（越界加载时告警归 int8）：cpu 不支持 fp16 系（无 AVX512-FP16
+# 的机器 CT2 直接拒），cuda 全开
+_CPU_COMPUTES = ("int8", "int8_float32", "float32")
+_CUDA_COMPUTES = ("int8", "int8_float16", "float16", "bfloat16", "float32")
+
+
+def _normalize_device(val):
+    """设备值归一：auto/cpu/cuda，非法/空回落 auto。"""
+    v = (val or "").strip().lower()
+    return v if v in ("auto", "cpu", "cuda") else "auto"
+
+
+def _nvidia_lib_dirs(pkg):
+    """pip nvidia 包的库目录（Windows=bin，Linux=lib）；找不到返回空表。
+
+    先 importlib.util.find_spec（标准路径），namespace 包偶发探测不到时扫
+    sys.path 兜底。"""
+    out = []
+    sub = "bin" if os.name == "nt" else "lib"
+    try:
+        from importlib.util import find_spec
+        spec = find_spec(f"nvidia.{pkg}")
+        if spec and spec.submodule_search_locations:
+            d = Path(spec.submodule_search_locations[0]) / sub
+            if d.is_dir():
+                out.append(d)
+    except (ImportError, ValueError):
+        pass
+    if not out:
+        for base in sys.path:
+            if not base:
+                continue
+            d = Path(base) / "nvidia" / pkg / sub
+            if d.is_dir():
+                out.append(d)
+    return out
+
+
+def _prepare_cuda_dlls():
+    """注册 pip 版 cuBLAS 的库目录（幂等，进程内一次）。
+
+    Windows：nvidia/cublas/bin 不在系统 DLL 搜索路径——实测仅
+    os.add_dll_directory 不够（CT2 用无标志 LoadLibrary，只搜传统路径含
+    PATH），须同时 PATH 前置。
+    Linux：LD_LIBRARY_PATH 进程启动后改不动，按绝对路径 ctypes 预载
+    （先 Lt 后主库；cuDNN 一并预载——Linux ct2 wheel 不带 cuDNN，官方
+    README 口径装 nvidia-cudnn-cu12）。"""
+    global _CUDA_DLL_PREPARED
+    if _CUDA_DLL_PREPARED:
+        return
+    _CUDA_DLL_PREPARED = True
+    if os.name == "nt":
+        dirs = _nvidia_lib_dirs("cublas")
+        for d in dirs:
+            try:
+                os.add_dll_directory(str(d))
+            except OSError:
+                pass
+        if dirs:
+            os.environ["PATH"] = (os.pathsep.join(str(d) for d in dirs)
+                                  + os.pathsep + os.environ.get("PATH", ""))
+        return
+    import ctypes
+    targets = [(d, ("libcublasLt.so.12", "libcublas.so.12"))
+               for d in _nvidia_lib_dirs("cublas")]
+    targets += [(d, ("libcudnn.so.9",)) for d in _nvidia_lib_dirs("cudnn")]
+    for d, sonames in targets:
+        for so in sonames:
+            p = d / so
+            if p.exists():
+                try:
+                    ctypes.CDLL(str(p))
+                except OSError as e:
+                    log.warning("预载 %s 失败：%s", so, e)
+
+
+def gpu_info():
+    """whisper GPU 支持状态（模块级缓存；/api/status 与管理页 GPU 卡共用）。
+
+    installed：nvidia-cublas-cu12 pip 包在否（只查元数据不 import）；
+    cuda_devices：ctranslate2 驱动级 CUDA 设备数（无驱动/无卡=0）；
+    cublas_loadable：注册 DLL 目录后 cuBLAS 能否实际加载（ctypes 试载——
+    模型加载不上卡不发错，推理时才炸 cublas，故必须预检这一步）。"""
+    global _GPU_INFO
+    if _GPU_INFO is None:
+        gi = {"installed": False, "version": "", "cuda_devices": 0,
+              "cublas_loadable": False}
+        try:
+            from importlib.metadata import version
+            gi["version"] = version("nvidia-cublas-cu12")
+            gi["installed"] = True
+        except Exception:
+            pass
+        try:
+            import ctranslate2
+            gi["cuda_devices"] = ctranslate2.get_cuda_device_count()
+        except Exception:
+            pass  # 未装 faster-whisper/驱动缺失：一律按 CPU 处理
+        if gi["cuda_devices"] > 0:
+            _prepare_cuda_dlls()
+            try:
+                import ctypes
+                if os.name == "nt":
+                    ctypes.WinDLL("cublas64_12.dll")
+                else:
+                    ctypes.CDLL("libcublas.so.12")
+                gi["cublas_loadable"] = True
+            except OSError:
+                pass
+        _GPU_INFO = gi
+    return _GPU_INFO
+
+
+def _cuda_ready():
+    """auto/cuda 上卡判据：有 CUDA 设备且 cuBLAS 可载（两者缺一回落 CPU）。"""
+    gi = gpu_info()
+    return gi["cuda_devices"] > 0 and gi["cublas_loadable"]
+
+
+def _device_tag(cfg):
+    """缓存标签设备维度：CUDA 生效路径加 @cuda（CPU/CUDA 数值有微差，不混
+    缓存）；cpu 与「要 cuda 但环境不满足必回落」同走 CPU，共用无后缀标签。"""
+    if _normalize_device((cfg or {}).get("whisper_device")) == "cpu":
+        return ""
+    return "@cuda" if _cuda_ready() else ""
 
 
 # 联网补拉镜像（第516次）：hf 官方直连在大陆网络常态不可达，换未缓存
@@ -126,6 +264,10 @@ class AsrEngine:
         # 手动停机标志，置位期间懒加载被拒绝；从 config <asr>.stopped 恢复：
         # 默认 True（默认全关），重启后仍尊重用户设定
         self._manual_stop = bool(self.cfg.get("stopped"))
+        # whisper 设备（第558次）：effective=最近一次加载实际用的设备；note=
+        # 要 GPU 而回落 CPU 的原因（加载失败/环境不满足），status 透出
+        self._device_effective = None
+        self._device_note = ""
         self._last_used = 0.0
         if self.mode == "on-demand":
             t = threading.Thread(target=self._idle_watch, daemon=True)
@@ -200,12 +342,39 @@ class AsrEngine:
     def _load_whisper(self):
         from faster_whisper import WhisperModel
         tier = normalize_tier(self.cfg.get("whisper_model", _DEFAULT_TIER))
+        model_dir = ensure_local_model(tier)
+        want = _normalize_device(self.cfg.get("whisper_device"))
+        compute = (self.cfg.get("whisper_compute_type") or "").strip().lower()
+        if want in ("auto", "cuda") and _cuda_ready():
+            _prepare_cuda_dlls()  # gpu_info 预检时已注册，此处显式调用读着直白
+            try:
+                self._device_effective = "cuda"
+                self._device_note = ""
+                return WhisperModel(model_dir, device="cuda",
+                                    compute_type=compute or "float16")
+            except Exception as e:  # 显存不足/驱动版本错等加载期失败：回落 CPU
+                log.warning("whisper CUDA 加载失败，回落 CPU：%s: %s",
+                            type(e).__name__, e)
+                self._device_note = f"{type(e).__name__}: {e}"
+        elif want == "cuda":
+            gi = gpu_info()
+            self._device_note = (f"CUDA 设备 {gi['cuda_devices']} 个、"
+                                 f"cuBLAS 可载 {gi['cublas_loadable']}")
+            log.warning("whisper 指定 cuda 但 CUDA 不可用（%s），回落 CPU int8",
+                        self._device_note)
+        else:
+            self._device_note = ""
+        self._device_effective = "cpu"
+        if compute and compute not in _CPU_COMPUTES:
+            log.warning("whisper compute_type %s 不适用于 CPU，改用 int8", compute)
+            compute = "int8"
         # hub 缓存路径直载（ensure_local_model 已确保本地就绪，不联网）
-        return WhisperModel(ensure_local_model(tier),
-                            device="cpu", compute_type="int8")
+        return WhisperModel(model_dir, device="cpu",
+                            compute_type=compute or "int8")
 
     def _release(self):
         handle, self._model, self._engine_loaded = self._model, None, None
+        self._device_effective = None
         if handle is not None and hasattr(handle, "close"):
             try:
                 handle.close()  # qwen3 worker / moss 显式释放；WhisperModel 无 close
@@ -245,6 +414,11 @@ class AsrEngine:
             "loaded_engine": self._engine_loaded,
             "manual_stop": self._manual_stop,  # 手动停机中（懒加载被抑制）
             "model": self._engine_model_name(),
+            # 第558次：whisper 设备三维（请求值/实际生效/回落原因）+ GPU 环境
+            "whisper_device": _normalize_device(self.cfg.get("whisper_device")),
+            "device_effective": self._device_effective,
+            "device_note": self._device_note,
+            "gpu": gpu_info(),
         }
 
     # ---- 推理 ----
@@ -329,3 +503,180 @@ def cache_clear():
             os.remove(os.path.join(ASR_CACHE_DIR, name))
             n += 1
     return n
+
+
+# ---- 手动预下载（管理页模型卡「下载」按钮）：提前拉齐档位资产，首次转写
+#      不再等下载。fw=hub snapshot（hf → hf-mirror 双源，同 ensure_local_model
+#      顺序）；qwen3=GitHub Releases 自取（复用 _ensure_tool/_ensure_model）；
+#      moss 为手动分发，无下载。状态进 _DOWNLOADS，api 层 /api/asr/downloads
+#      查询、/api/asr/download 触发。 ----
+
+QWEN3_SIZES = ("0.6b", "1.7b")
+
+_DOWNLOADS = {}  # "{engine}:{tier}" -> {state, progress, source, error}
+_DL_LOCK = threading.Lock()
+
+
+def _fw_cached(repo):
+    """whisper 档位 hub 缓存齐备判定（local_files_only，不联网）。"""
+    from huggingface_hub import snapshot_download
+    try:
+        snapshot_download(repo_id=repo, local_files_only=True)
+        return True
+    except Exception:
+        return False
+
+
+def _qwen3_cached(size):
+    """qwen3 档位资产齐备判定（工具 + 模型包 .ok 标记，与首用自取同口径）。"""
+    from core import asr_qwen3
+    size = (size or "0.6b").strip().lower()
+    tool_root = os.path.join(config.BIN_DIR, "qwen3-asr")
+    model_root = os.path.join(config.CACHE_DIR, "models", "qwen3-asr", size)
+    return (asr_qwen3._asset_ready(tool_root)
+            and asr_qwen3._asset_ready(model_root))
+
+
+def _hub_repo_bytes(repo):
+    """repo 在 hf hub 默认缓存里的现有字节量（预下载进度分子；目录不存在=0）。
+    snapshot_download 未指定 cache_dir，默认根与 huggingface_hub.constants
+    一致，这里取同源值。计数用 lstat 递归——hub 1.x 新布局文件直落
+    snapshots/（blobs 空），旧布局 blobs 实文件 + snapshots 符号链接，
+    lstat 对链接只计链接本身，两种布局都不重不漏。"""
+    from huggingface_hub.constants import HF_HUB_CACHE
+    org, _, name = str(repo or "").strip().strip("/").partition("/")
+    target = f"models--{org}--{name}".casefold()
+    try:
+        entries = list(os.scandir(HF_HUB_CACHE))
+    except OSError:
+        return 0
+    for e in entries:
+        if e.is_dir() and e.name.casefold() == target:
+            total = 0
+            for dirpath, _dirs, files in os.walk(e.path):
+                for f in files:
+                    try:
+                        total += os.lstat(os.path.join(dirpath, f)).st_size
+                    except OSError:
+                        continue
+            return total
+    return 0
+
+
+def _sibling_size(s):
+    """repo 文件条目字节数（新版 RepoSibling 属性 / 旧版 dict 双形态兼容）。"""
+    v = getattr(s, "size", None)
+    if v is None and isinstance(s, dict):
+        v = s.get("size")
+    return int(v or 0)
+
+
+def downloads_status():
+    """GET 视图：各可预下载档位的 {cached}，叠加活跃/最近一次手动下载状态。"""
+    out = {}
+    for tier, repo in _WHISPER_REPOS.items():
+        key = f"faster-whisper:{tier}"
+        st = _DOWNLOADS.get(key)
+        out[key] = {"cached": _fw_cached(repo), **(dict(st) if st else {})}
+    for size in QWEN3_SIZES:
+        key = f"qwen3-asr:{size}"
+        st = _DOWNLOADS.get(key)
+        out[key] = {"cached": _qwen3_cached(size), **(dict(st) if st else {})}
+    return out
+
+
+def start_download(engine, tier):
+    """触发预下载（后台线程，立即返回状态快照）。进行中重复触发幂等返回
+    现状；引擎/档位非法抛 ValueError（api 层转 400）。"""
+    engine = str(engine or "").strip()
+    if engine == "faster-whisper":
+        tier = normalize_tier(tier)
+        if tier not in _WHISPER_REPOS:
+            raise ValueError(f"未知 whisper 档位：{tier}")
+    elif engine == "qwen3-asr":
+        tier = (tier or "0.6b").strip().lower()
+        if tier not in QWEN3_SIZES:
+            raise ValueError(f"未知 qwen3-asr 档位：{tier}（可选 {'/'.join(QWEN3_SIZES)}）")
+    else:
+        raise ValueError(f"引擎 {engine} 无可预下载资产（moss 为手动分发）")
+    key = f"{engine}:{tier}"
+    with _DL_LOCK:
+        cur = _DOWNLOADS.get(key)
+        if cur and cur.get("state") == "running":
+            return dict(cur)
+        state = {"state": "running", "progress": 0, "source": "", "error": ""}
+        _DOWNLOADS[key] = state
+    threading.Thread(target=_download_worker, args=(engine, tier, state),
+                     daemon=True).start()
+    return dict(state)
+
+
+def _download_worker(engine, tier, state):
+    """下载线程体：失败如实写 state 不抛出（管理页轮询可见）。"""
+    try:
+        if engine == "faster-whisper":
+            _download_fw(tier, state)
+        else:
+            _download_qwen3(tier, state)
+        state.update(state="done", progress=100)
+        log.info("ASR 预下载完成：%s:%s", engine, tier)
+    except Exception as e:
+        state.update(state="failed", error=str(e)[:300])
+        log.warning("ASR 预下载失败 %s:%s —— %s", engine, tier, str(e)[:300])
+
+
+def _download_fw(tier, state):
+    """whisper 档位：先本地判齐备（秒过），再选源（hf → hf-mirror，记入进程内
+    坏源记忆同 ensure_local_model），repo 缓存增量报进度。"""
+    from huggingface_hub import HfApi
+    repo = _WHISPER_REPOS[tier]
+    if _fw_cached(repo):
+        return  # 已齐备，秒过
+    api = HfApi()
+    source = "hf"
+    try:
+        info = api.model_info(repo, files_metadata=True)
+    except Exception as e:
+        api = HfApi(endpoint=_HF_MIRROR)
+        info = api.model_info(repo, files_metadata=True)
+        source = "hf-mirror"
+        log.info("ASR 预下载 %s：hf 官方源不可达（%s），转 hf-mirror", tier, str(e)[:120])
+    state["source"] = source
+    expected = sum(_sibling_size(s) for s in (info.siblings or []))
+    stop = threading.Event()
+    if expected > 0:
+        def _watch():
+            while not stop.wait(1.0):
+                state["progress"] = min(99, round(_hub_repo_bytes(repo) / expected * 100))
+        threading.Thread(target=_watch, daemon=True).start()
+    try:
+        api.snapshot_download(repo_id=repo)
+    finally:
+        stop.set()
+
+
+def _download_qwen3(size, state):
+    """qwen3 档位：复用首用自取（工具 + 模型 zip 解压，齐备即跳过），
+    多文件整体进度 =（已完成文件数 + 当前文件比例）/ 总文件数。"""
+    from core import asr_qwen3
+    tool_ready = asr_qwen3._asset_ready(os.path.join(config.BIN_DIR, "qwen3-asr"))
+    model_root = os.path.join(config.CACHE_DIR, "models", "qwen3-asr", size)
+    if asr_qwen3._asset_ready(model_root) and tool_ready:
+        return  # 齐备，秒过
+    total = (0 if tool_ready else 1) + (0 if asr_qwen3._asset_ready(model_root) else
+                                        (2 if size == "1.7b" else 1))
+    if total == 0:
+        return
+    done = [0]
+
+    def _progress(frac):
+        frac = max(0.0, min(1.0, float(frac or 0)))
+        if frac >= 1.0:
+            done[0] += 1
+            state["progress"] = min(99, round(done[0] / total * 100))
+        else:
+            state["progress"] = min(99, round((done[0] + frac) / total * 100))
+
+    if not tool_ready:
+        asr_qwen3._ensure_tool(progress=_progress)
+    asr_qwen3._ensure_model(size, progress=_progress)

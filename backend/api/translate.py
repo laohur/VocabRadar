@@ -8,6 +8,8 @@ bad_request。结果不做缓存（plan §2.11）。from 是 JSON 字段名（co
 
 from flask import Blueprint, current_app, jsonify, request
 
+from api import cards  # 模型卡片 CRUD 共用件（与 /api/llm/models 同构）
+
 bp = Blueprint("translate", __name__)
 
 
@@ -40,23 +42,37 @@ def translate_status():
 
 @bp.get("/api/translate/models")
 def translate_models():
-    """翻译模型清单（管理页翻译段下拉数据源）。
+    """翻译模型清单（管理页翻译段下拉 + 模型卡片区数据源）。
 
-    全部为 translate_llm 实例的卡片（name/desc/installed/is_default，与
-    /api/llm/models 同口径——installed 扫 hub 缓存，is_default 对
-    <translate>.model 的当前选择）。进程内 NLLB 快路径已移除，无内置首元素。"""
+    全部为 translate_llm 实例的卡片：全字段 + installed/is_default/builtin，
+    与 /api/llm/models 同口径（installed 扫 hub 缓存，is_default 对
+    <translate>.model 当前选择）。进程内 NLLB 快路径已移除，无内置首元素。"""
     engines = current_app.extensions["engines"]
-    cfg = current_app.config["CFG"]
-    llm_cfg = cfg.get("translate_llm", {})
-    chosen = (engines["translate"].status()["model"] or "").strip().lower()
-    out = []
-    for c in (llm_cfg.get("cards") or []):
-        if not isinstance(c, dict):
-            continue
-        out.append({
-            "name": str(c.get("name") or ""),
-            "desc": str(c.get("desc") or ""),
-            "installed": engines["translate_llm"].card_installed(c),
-            "is_default": bool(chosen) and str(c.get("name", "")).lower() == chosen,
-        })
-    return jsonify({"ok": True, "models": out})
+    chosen = (engines["translate"].status()["model"] or "").strip()
+    return jsonify({"ok": True,
+                    "models": cards.listing("translate_llm", "translate_llm",
+                                            chosen)})
+
+
+@bp.post("/api/translate/models")
+def add_translate_model():
+    """新增翻译卡（内置卡「另存为新卡」与「新增卡片」同走此口）。"""
+    return cards.add("translate_llm", request.get_json(silent=True))
+
+
+@bp.put("/api/translate/models/<path:name>")
+def update_translate_model(name):
+    """改翻译卡；内置卡 409 builtin_card（前端引导另存为新卡）。"""
+    return cards.update("translate_llm", name, request.get_json(silent=True))
+
+
+@bp.delete("/api/translate/models/<path:name>")
+def delete_translate_model(name):
+    """删翻译卡；内置卡 409 builtin_card。删中选中卡时指针回落首卡。"""
+    return cards.delete("translate_llm", name)
+
+
+@bp.post("/api/translate/models/download/<path:name>")
+def download_translate_model(name):
+    """手动预下载翻译卡模型进 hub 缓存（与 /api/llm/models/download 同构）。"""
+    return cards.download("translate_llm", "translate_llm", name)
