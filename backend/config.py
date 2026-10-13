@@ -245,7 +245,7 @@ DEFAULTS = {
         "whisper_compute_type": "",
         "qwen3_size": "0.6b",       # qwen3-asr 档位：0.6b（默认档，1.35GB/zh 最准）| 1.7b（质量档）
         "moss_quant": "q4_K_M",     # moss 量化：q4_K_M（默认，最快档）| q8_0
-        "moss_model_path": "",      # moss 模型 gguf 路径覆盖；空 = backend/models/ 下默认名
+        "moss_model_path": "",      # moss 模型 gguf 路径覆盖；空 = backend/models/ 下默认名（缺失时自动补拉，hf → hf-mirror）
     },
     "ocr": {"engine": "rapidocr", "mode": "on-demand", "stopped": True},  # engine: llm | rapidocr；mode 仅 rapidocr 生效（llm 归 llm 段管）
     # 翻译模型选择（值 = translate_llm.cards 卡片名，全部走翻译专用 llama-server

@@ -560,6 +560,17 @@ def check_llamacpp():
             "update_available": tag != current}
 
 
+def _version_key(v):
+    """宽松版本键：数字段转 int 元组，'2026.08.19' 与 '2026.8.19' 同版
+    （PEP 440 数字段按整数比较等值；yt-dlp 源码树 version.py 带前导零、
+    PyPI 元数据归一后不带，纯字符串 != 会把同版误报成新版本，第560次）。
+    含非数字段（dev 等预发布号）时返回 None，调用方回退字符串比较。"""
+    try:
+        return tuple(int(p) for p in str(v).strip().split("."))
+    except ValueError:
+        return None
+
+
 def check_ytdlp():
     """yt-dlp 新版本检查（只读）：venv 内已装版本 vs PyPI latest。"""
     from importlib.metadata import version as pkg_version
@@ -574,8 +585,13 @@ def check_ytdlp():
         latest = r.json()["info"]["version"]
     except Exception as e:
         return {"status": "error", "current": current, "detail": str(e)}
+    cur_k, lat_k = _version_key(current), _version_key(latest)
+    if cur_k is not None and lat_k is not None:
+        update = cur_k != lat_k  # 数值段比较：同版不同写法（前导零）不误报
+    else:
+        update = latest != current  # 预发布等非数字段：回退字符串比较
     return {"status": "ok", "current": current, "latest": latest,
-            "update_available": latest != current}
+            "update_available": update}
 
 
 def check_all():

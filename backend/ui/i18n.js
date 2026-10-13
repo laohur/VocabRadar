@@ -162,7 +162,7 @@ const ZH = {
     '点击卡片展开详情；用「设为默认」切换引擎。',
   'Default engine, falls back to CPU without GPU': '默认引擎，无 GPU 回落 CPU',
   'Haujet GGUF, GPU only (DML+Vulkan)': 'Haujet GGUF，仅 GPU（DML+Vulkan）',
-  'GPU, with speaker diarization; gguf placed manually': 'GPU，支持说话人分离；gguf 需手动放置',
+  'GPU, with speaker diarization; gguf auto-downloads on first use': 'GPU，支持说话人分离；gguf 首用自动下载',
   'whisper tier': 'whisper 档位',
   'Qwen3-ASR tier': 'Qwen3-ASR 档位',
   'Cached': '已缓存',
@@ -174,8 +174,8 @@ const ZH = {
   'q4_K_M = default, fastest tier; q8_0 = higher quality, larger file.':
     'q4_K_M = 默认，最快档；q8_0 = 质量更高，文件更大。',
   'MOSS model path (optional)': 'MOSS 模型路径（可选）',
-  'Leave empty for models/ inside the backend directory; the gguf must be placed manually (community distribution).':
-    '留空则用 backend/models/ 目录；gguf 需手动放置（社区分发，ModelScope 搜 MOSS-Transcribe-Diarize-GGUF）。',
+  'Leave empty for models/ inside the backend directory; the gguf auto-downloads on first use (HuggingFace, hf-mirror fallback). Or fill in a local file path.':
+    '留空则用 backend/models/ 目录；gguf 首用自动下载（HF 官方，hf-mirror 兜底）。也可填写本地文件路径。',
   // ---- ASR 页 · GPU 设定卡（第558次：装了 cuBLAS/检测到 CUDA 才渲染） ----
   'GPU (faster-whisper)': 'GPU（faster-whisper）',
   'Device': '设备',

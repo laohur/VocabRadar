@@ -379,7 +379,7 @@ PAGES.asr = async function (main) {
     ['qwen3-asr', 'qwen3-asr',
      t('Haujet GGUF, GPU only (DML+Vulkan)')],
     ['moss', 'MOSS-Transcribe-Diarize',
-     t('GPU, with speaker diarization; gguf placed manually')],
+     t('GPU, with speaker diarization; gguf auto-downloads on first use')],
   ];
   const engineList = el('div', { class: 'mcards' });
   const engineDetail = el('div', { class: 'mform' });
@@ -399,7 +399,7 @@ PAGES.asr = async function (main) {
     }
   }
 
-  // ---- 预下载（fw/qwen3 详情区「下载」按钮；moss 手动分发无下载）----
+  // ---- 预下载（fw/qwen3/moss 详情区「下载」按钮）----
   // 按钮代表当前所选档位：初渲染与换档时按 /api/asr/downloads 刷新态
   // （cached→已缓存置灰；running→进度置灰），点击起 2s 轮询直至终态
   let dlTimer = null;
@@ -512,7 +512,14 @@ PAGES.asr = async function (main) {
       engineDetail.append(field(t('MOSS quant'), mquant,
         t('q4_K_M = default, fastest tier; q8_0 = higher quality, larger file.')));
       engineDetail.append(field(t('MOSS model path (optional)'), mpath,
-        t('Leave empty for models/ inside the backend directory; the gguf must be placed manually (community distribution).')));
+        t('Leave empty for models/ inside the backend directory; the gguf auto-downloads on first use (HuggingFace, hf-mirror fallback). Or fill in a local file path.')));
+      dlBtn = el('button', { class: 'btn',
+        onclick: () => startDl('moss', mquant.value, dlBtn) }, t('Download'));
+      mquant.addEventListener('change', () => {
+        stopDlPoll();
+        refreshDl('moss', mquant.value, dlBtn);
+      });
+      refreshDl('moss', mquant.value, dlBtn);
     }
     const btns = el('div', { class: 'chatbar' },
       el('button', {

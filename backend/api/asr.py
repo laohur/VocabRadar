@@ -36,7 +36,8 @@ def asr_downloads():
 @bp.post("/api/asr/download")
 def asr_download():
     """手动预下载：{engine, tier} → 后台线程拉取，立即返回状态快照
-    （fw=hub 双源 snapshot；qwen3=GitHub Releases 自取；moss 手动分发无下载）。"""
+    （fw=hub 双源 snapshot；qwen3=GitHub Releases 自取；moss=hf 单文件双源
+    补拉，落 backend/models/）。"""
     body = request.get_json(silent=True) or {}
     try:
         st = start_download(body.get("engine"), body.get("tier"))

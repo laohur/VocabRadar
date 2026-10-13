@@ -13,7 +13,8 @@
     量化 asr.moss_quant，唯一自带说话人分离。
 - 模型获取：各引擎自管——fw 走 huggingface_hub snapshot_download（先本地
   缓存直取、无缓存才联网补拉 hf 官方 → hf-mirror）；qwen3 工具/模型 zip 取
-  GitHub Releases 首用解压；MOSS gguf 按 moss_model_path/默认路径查找。
+  GitHub Releases 首用解压；MOSS gguf 默认路径缺失时自动补拉（hf 官方 →
+  hf-mirror，见 asr_moss._download_model）；moss_model_path 显式路径只查找。
 - 生命周期：resident 启动即后台预加载；on-demand 首请求加载、空闲超时卸载
   （fw 进程内模型 / moss 引用置空 / qwen3 关 worker 进程——卸载即释放资源）。
   加载互斥同 llm_engine _starting 防护。第517次裁定延续：服务中已加载的模型
@@ -508,8 +509,9 @@ def cache_clear():
 # ---- 手动预下载（管理页模型卡「下载」按钮）：提前拉齐档位资产，首次转写
 #      不再等下载。fw=hub snapshot（hf → hf-mirror 双源，同 ensure_local_model
 #      顺序）；qwen3=GitHub Releases 自取（复用 _ensure_tool/_ensure_model）；
-#      moss 为手动分发，无下载。状态进 _DOWNLOADS，api 层 /api/asr/downloads
-#      查询、/api/asr/download 触发。 ----
+#      moss=hf 双源单文件补拉（复用 asr_moss._download_model，落 backend/
+#      models/，与首用自动补拉同路径同源顺序）。状态进 _DOWNLOADS，api 层
+#      /api/asr/downloads 查询、/api/asr/download 触发。 ----
 
 QWEN3_SIZES = ("0.6b", "1.7b")
 
@@ -537,6 +539,25 @@ def _qwen3_cached(size):
             and asr_qwen3._asset_ready(model_root))
 
 
+def _moss_cached(quant):
+    """moss 量化 gguf 齐备判定（默认路径单文件在即齐备，不联网）。"""
+    from core import asr_moss
+    return os.path.isfile(asr_moss._default_model_path(quant))
+
+
+def _dir_bytes(root):
+    """目录现有字节量（递归 lstat，不存在=0）——moss 落地目录进度用，
+    与 _hub_repo_bytes 同口径（链接只计链接本身）。"""
+    total = 0
+    for dirpath, _dirs, files in os.walk(root):
+        for f in files:
+            try:
+                total += os.lstat(os.path.join(dirpath, f)).st_size
+            except OSError:
+                continue
+    return total
+
+
 def _hub_repo_bytes(repo):
     """repo 在 hf hub 默认缓存里的现有字节量（预下载进度分子；目录不存在=0）。
     snapshot_download 未指定 cache_dir，默认根与 huggingface_hub.constants
@@ -552,14 +573,7 @@ def _hub_repo_bytes(repo):
         return 0
     for e in entries:
         if e.is_dir() and e.name.casefold() == target:
-            total = 0
-            for dirpath, _dirs, files in os.walk(e.path):
-                for f in files:
-                    try:
-                        total += os.lstat(os.path.join(dirpath, f)).st_size
-                    except OSError:
-                        continue
-            return total
+            return _dir_bytes(e.path)
     return 0
 
 
@@ -573,6 +587,7 @@ def _sibling_size(s):
 
 def downloads_status():
     """GET 视图：各可预下载档位的 {cached}，叠加活跃/最近一次手动下载状态。"""
+    from core.asr_moss import _QUANTS as _MOSS_QUANTS
     out = {}
     for tier, repo in _WHISPER_REPOS.items():
         key = f"faster-whisper:{tier}"
@@ -582,6 +597,10 @@ def downloads_status():
         key = f"qwen3-asr:{size}"
         st = _DOWNLOADS.get(key)
         out[key] = {"cached": _qwen3_cached(size), **(dict(st) if st else {})}
+    for quant in _MOSS_QUANTS:
+        key = f"moss:{quant}"
+        st = _DOWNLOADS.get(key)
+        out[key] = {"cached": _moss_cached(quant), **(dict(st) if st else {})}
     return out
 
 
@@ -597,8 +616,13 @@ def start_download(engine, tier):
         tier = (tier or "0.6b").strip().lower()
         if tier not in QWEN3_SIZES:
             raise ValueError(f"未知 qwen3-asr 档位：{tier}（可选 {'/'.join(QWEN3_SIZES)}）")
+    elif engine == "moss":
+        from core.asr_moss import _QUANTS as _MOSS_QUANTS
+        tier = (tier or "q4_K_M").strip()
+        if tier not in _MOSS_QUANTS:
+            raise ValueError(f"未知 moss 量化：{tier}（可选 {'/'.join(_MOSS_QUANTS)}）")
     else:
-        raise ValueError(f"引擎 {engine} 无可预下载资产（moss 为手动分发）")
+        raise ValueError(f"引擎 {engine} 无可预下载资产")
     key = f"{engine}:{tier}"
     with _DL_LOCK:
         cur = _DOWNLOADS.get(key)
@@ -616,6 +640,8 @@ def _download_worker(engine, tier, state):
     try:
         if engine == "faster-whisper":
             _download_fw(tier, state)
+        elif engine == "moss":
+            _download_moss(tier, state)
         else:
             _download_qwen3(tier, state)
         state.update(state="done", progress=100)
@@ -680,3 +706,42 @@ def _download_qwen3(size, state):
     if not tool_ready:
         asr_qwen3._ensure_tool(progress=_progress)
     asr_qwen3._ensure_model(size, progress=_progress)
+
+
+def _download_moss(quant, state):
+    """moss 量化：默认路径已齐备则秒过；否则复用 asr_moss._download_model
+    （hf → hf-mirror 双源 + 坏源记忆，落 backend/models/）。进度按落地目录
+    字节增量报——expected 取自 model_info 元数据，元数据不可得就不报中间
+    进度（不编造百分比），完成即 100。"""
+    from core import asr_moss
+    if _moss_cached(quant):
+        return  # 已齐备，秒过
+    dest = os.path.join(config.BASE_DIR, "models")
+    baseline = _dir_bytes(dest)
+    expected = 0
+    try:
+        from huggingface_hub import HfApi
+        filename = asr_moss._QUANT_FILES[quant]
+        info = HfApi().model_info(asr_moss._HF_REPO, files_metadata=True)
+        for s in (info.siblings or []):
+            name = s.get("rfilename") if isinstance(s, dict) else getattr(s, "rfilename", None)
+            if name == filename:
+                expected = _sibling_size(s)
+                break
+    except Exception:
+        expected = 0
+
+    def _mark_source(src):
+        state["source"] = src
+
+    stop = threading.Event()
+    if expected > 0:
+        def _watch():
+            while not stop.wait(1.0):
+                got = _dir_bytes(dest) - baseline
+                state["progress"] = min(99, max(0, round(got / expected * 100)))
+        threading.Thread(target=_watch, daemon=True).start()
+    try:
+        asr_moss._download_model(quant, on_source=_mark_source)
+    finally:
+        stop.set()

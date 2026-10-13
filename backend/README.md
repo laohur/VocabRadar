@@ -162,7 +162,7 @@ ASR（faster-whisper）：
 | GET | /api/asr/status | 引擎状态 |
 | GET / DELETE | /api/asr/cache | 缓存列表 / 清空 |
 | GET | /api/asr/downloads | 各档位预下载状态（cached=资产齐备；state/progress=手动预下载态；管理页模型卡「下载」按钮数据源） |
-| POST | /api/asr/download | `{engine, tier}` 手动预下载（faster-whisper=hub 双源 snapshot；qwen3-asr=GitHub Releases 自取；moss 手动分发无下载），后台线程执行幂等 |
+| POST | /api/asr/download | `{engine, tier}` 手动预下载（faster-whisper=hub 双源 snapshot；qwen3-asr=GitHub Releases 自取；moss=hf 双源单文件补拉落 backend/models/），后台线程执行幂等 |
 
 OCR：
 
