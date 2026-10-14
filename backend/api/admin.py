@@ -26,7 +26,7 @@ def _engine_intent(name, engine):
     if name == "asr":
         eng = cfg.get("engine", "faster-whisper")
         tier_key = {"faster-whisper": "whisper_model", "qwen3-asr": "qwen3_size",
-                    "moss": "moss_quant"}.get(eng)
+                    "moss": "moss_quant", "whisper-cpp": "wcpp_quant"}.get(eng)
         bits = [f"{eng} {cfg.get(tier_key)}" if tier_key else eng]
         bits.append(f"device={cfg.get('whisper_device') or 'auto'}")
         if cfg.get("whisper_compute_type"):

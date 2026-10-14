@@ -11,6 +11,10 @@
     asr.qwen3_size（0.6b 默认档 / 1.7b 质量档），GPU（DML+Vulkan）专用。
   - moss（MOSS-Transcribe-Diarize）：transcribe_cpp 进程内（core/asr_moss.py），
     量化 asr.moss_quant，唯一自带说话人分离。
+  - whisper-cpp（whisper.cpp large-v3-turbo q5_0）：子进程 CLI（core/
+    asr_whispercpp.py，官方 win-cuda 预编译 + 官方 ggml，评审 §1.3b 第 4
+    适配器候选）；仅 GPU 档，无 CUDA 如实拒绝指回落 faster-whisper；
+    量化 asr.wcpp_quant。
 - 模型获取：各引擎自管——fw 走 huggingface_hub snapshot_download（先本地
   缓存直取、无缓存才联网补拉 hf 官方 → hf-mirror）；qwen3 工具/模型 zip 取
   GitHub Releases 首用解压；MOSS gguf 默认路径缺失时自动补拉（hf 官方 →
@@ -39,7 +43,7 @@ log = logging.getLogger(__name__)
 ASR_CACHE_DIR = os.path.join(config.CACHE_DIR, "asr")
 
 # 合法引擎（api 层校验 + 管理页下拉同源）
-ASR_ENGINES = ("faster-whisper", "qwen3-asr", "moss")
+ASR_ENGINES = ("faster-whisper", "qwen3-asr", "moss", "whisper-cpp")
 
 # 档位全名 → HF repo（旧值 turbo 经 _TIER_ALIASES 归一）
 _WHISPER_REPOS = {
@@ -69,6 +73,8 @@ def engine_tag(cfg):
         return f"qwen3-asr/{(cfg.get('qwen3_size') or '0.6b').strip().lower()}"
     if engine == "moss":
         return f"moss/{(cfg.get('moss_quant') or 'q4_K_M').strip()}"
+    if engine == "whisper-cpp":
+        return f"whisper-cpp/{(cfg.get('wcpp_quant') or 'q5_0').strip()}"
     return (f"faster-whisper/{normalize_tier(cfg.get('whisper_model'))}"
             + _device_tag(cfg))
 
@@ -289,6 +295,8 @@ class AsrEngine:
             return (self.cfg.get("qwen3_size") or "0.6b").strip().lower()
         if eng == "moss":
             return (self.cfg.get("moss_quant") or "q4_K_M").strip()
+        if eng == "whisper-cpp":
+            return (self.cfg.get("wcpp_quant") or "q5_0").strip()
         return normalize_tier(self.cfg.get("whisper_model"))
 
     # ---- 生命周期 ----
@@ -338,6 +346,14 @@ class AsrEngine:
             from core.asr_moss import MossEngine
             return MossEngine(quant=self.cfg.get("moss_quant"),
                               model_path=self.cfg.get("moss_model_path") or None)
+        if engine == "whisper-cpp":
+            if os.name != "nt":
+                # 官方预编译仅 win-cuda x64（评审 §1.3b）——如实拒绝，指回落 fw
+                raise RuntimeError(
+                    "whisper-cpp 仅提供 Windows x64 CUDA 预编译；当前平台不可用，"
+                    "请回落 faster-whisper")
+            from core.asr_whispercpp import WcppEngine
+            return WcppEngine(quant=self.cfg.get("wcpp_quant"))
         raise ValueError(f"未知 ASR 引擎：{engine}")
 
     def _load_whisper(self):
@@ -452,6 +468,10 @@ class AsrEngine:
             items = handle.transcribe_file(audio_path, language=language)
             return {"text": " ".join(s["text"] for s in items),
                     "segments": items, "language": language or None}
+        if eng == "whisper-cpp":
+            items = handle.transcribe_file(audio_path, language=language)
+            return {"text": " ".join(s["text"] for s in items),
+                    "segments": items, "language": language or None}
         raise ValueError(f"未知 ASR 引擎：{eng}")
 
 
@@ -510,8 +530,9 @@ def cache_clear():
 #      不再等下载。fw=hub snapshot（hf → hf-mirror 双源，同 ensure_local_model
 #      顺序）；qwen3=GitHub Releases 自取（复用 _ensure_tool/_ensure_model）；
 #      moss=hf 双源单文件补拉（复用 asr_moss._download_model，落 backend/
-#      models/，与首用自动补拉同路径同源顺序）。状态进 _DOWNLOADS，api 层
-#      /api/asr/downloads 查询、/api/asr/download 触发。 ----
+#      models/，与首用自动补拉同路径同源顺序）；whisper-cpp=GitHub Releases
+#      二进制 zip + hf 双源权重两段（复用 asr_whispercpp._ensure_*）。状态进
+#      _DOWNLOADS，api 层 /api/asr/downloads 查询、/api/asr/download 触发。 ----
 
 QWEN3_SIZES = ("0.6b", "1.7b")
 
@@ -543,6 +564,14 @@ def _moss_cached(quant):
     """moss 量化 gguf 齐备判定（默认路径单文件在即齐备，不联网）。"""
     from core import asr_moss
     return os.path.isfile(asr_moss._default_model_path(quant))
+
+
+def _wcpp_cached(quant):
+    """whisper-cpp 档位齐备判定（二进制 .ok + 权重单文件在，不联网）。"""
+    from core import asr_whispercpp
+    return (asr_whispercpp._asset_ready(
+                os.path.join(config.BIN_DIR, "whisper-cpp"))
+            and os.path.isfile(asr_whispercpp._default_model_path(quant)))
 
 
 def _dir_bytes(root):
@@ -588,6 +617,7 @@ def _sibling_size(s):
 def downloads_status():
     """GET 视图：各可预下载档位的 {cached}，叠加活跃/最近一次手动下载状态。"""
     from core.asr_moss import _QUANTS as _MOSS_QUANTS
+    from core.asr_whispercpp import _QUANTS as _WCPP_QUANTS
     out = {}
     for tier, repo in _WHISPER_REPOS.items():
         key = f"faster-whisper:{tier}"
@@ -601,6 +631,10 @@ def downloads_status():
         key = f"moss:{quant}"
         st = _DOWNLOADS.get(key)
         out[key] = {"cached": _moss_cached(quant), **(dict(st) if st else {})}
+    for quant in _WCPP_QUANTS:
+        key = f"whisper-cpp:{quant}"
+        st = _DOWNLOADS.get(key)
+        out[key] = {"cached": _wcpp_cached(quant), **(dict(st) if st else {})}
     return out
 
 
@@ -621,6 +655,12 @@ def start_download(engine, tier):
         tier = (tier or "q4_K_M").strip()
         if tier not in _MOSS_QUANTS:
             raise ValueError(f"未知 moss 量化：{tier}（可选 {'/'.join(_MOSS_QUANTS)}）")
+    elif engine == "whisper-cpp":
+        from core.asr_whispercpp import _QUANTS as _WCPP_QUANTS
+        tier = (tier or "q5_0").strip()
+        if tier not in _WCPP_QUANTS:
+            raise ValueError(
+                f"未知 whisper-cpp 量化：{tier}（可选 {'/'.join(_WCPP_QUANTS)}）")
     else:
         raise ValueError(f"引擎 {engine} 无可预下载资产")
     key = f"{engine}:{tier}"
@@ -642,6 +682,8 @@ def _download_worker(engine, tier, state):
             _download_fw(tier, state)
         elif engine == "moss":
             _download_moss(tier, state)
+        elif engine == "whisper-cpp":
+            _download_wcpp(tier, state)
         else:
             _download_qwen3(tier, state)
         state.update(state="done", progress=100)
@@ -743,5 +785,79 @@ def _download_moss(quant, state):
         threading.Thread(target=_watch, daemon=True).start()
     try:
         asr_moss._download_model(quant, on_source=_mark_source)
+    finally:
+        stop.set()
+
+
+def _download_wcpp(quant, state):
+    """whisper-cpp 档位：二进制（GitHub Releases zip，期望字节=实测常量）+
+    权重（hf 双源单文件，期望字节=HF 元数据优先、实测常量兜底）两段资产，
+    进度按各自期望字节加权合计；元数据与常量皆不可得就不报该段中间进度
+    （不编造百分比，完成即 100，同 moss 口径）。"""
+    from core import asr_whispercpp as wc
+    if _wcpp_cached(quant):
+        return  # 已齐备，秒过
+    bin_root = os.path.join(config.BIN_DIR, "whisper-cpp")
+    weight_path = wc._default_model_path(quant)
+    bin_ready = wc._asset_ready(bin_root)
+    weight_ready = os.path.isfile(weight_path)
+    if bin_ready and weight_ready:
+        return
+    expected_w = 0
+    if not weight_ready:
+        filename = wc._QUANT_FILES[quant]
+        for endpoint in (None, _HF_MIRROR):
+            try:
+                from huggingface_hub import HfApi
+                info = HfApi(endpoint=endpoint).model_info(
+                    wc._HF_REPO, files_metadata=True)
+                for s in (info.siblings or []):
+                    name = (s.get("rfilename") if isinstance(s, dict)
+                            else getattr(s, "rfilename", None))
+                    if name == filename:
+                        expected_w = _sibling_size(s)
+                        break
+                if expected_w:
+                    break
+            except Exception:
+                continue  # 元数据不可得：换源/落常量兜底
+        if not expected_w:
+            expected_w = wc._WEIGHT_BYTES.get(quant, 0)
+    bin_bytes = 0 if bin_ready else wc._BINARY_BYTES
+    w_bytes = 0 if weight_ready else expected_w
+    total = bin_bytes + w_bytes
+    if total == 0:
+        return  # 期望全不可得：直接跑首用补拉，不报中间进度
+    prog = {"bin": 1.0 if bin_ready else 0.0, "w": 1.0 if weight_ready else 0.0}
+    stop = threading.Event()
+
+    def _report():
+        state["progress"] = min(
+            99, max(0, round((prog["bin"] * bin_bytes + prog["w"] * w_bytes)
+                             / total * 100)))
+
+    def _gh_progress(frac):
+        prog["bin"] = max(0.0, min(1.0, float(frac or 0)))
+        _report()
+
+    def _watch():
+        # 权重段进度：backend/models 落地字节增量（hf_hub_download 无回调，
+        # moss 同款 1s 字节观测）
+        baseline = _dir_bytes(os.path.join(config.BASE_DIR, "models"))
+        while not stop.wait(1.0):
+            if w_bytes:
+                prog["w"] = max(0.0, min(1.0, (_dir_bytes(
+                    os.path.join(config.BASE_DIR, "models")) - baseline)
+                    / w_bytes))
+                _report()
+
+    threading.Thread(target=_watch, daemon=True).start()
+    try:
+        if not bin_ready:
+            state["source"] = "github"
+            wc._ensure_binary(progress=_gh_progress)
+        if not weight_ready:
+            wc._ensure_weights(
+                quant, on_source=lambda src: state.__setitem__("source", src))
     finally:
         stop.set()

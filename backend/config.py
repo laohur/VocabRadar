@@ -132,6 +132,32 @@ _BUILTIN_CARDS = [
             "repeat_penalty": 1.1
         }
     },
+    # MiniCPM-V 4.7 1B（官方 GGUF，2026-10 发布）：Qwen3.5 底座 + SigLIP2 视觉塔，
+    # 官方评测整体与效率双超 Qwen3.5-0.8B。llama.cpp 支持随 PR #29416 合入（安装器
+    # 取 latest nightly，≥ b11574 满足）。视觉投影必须 -mmu 钉官方推荐的
+    # mmproj-model-f16.gguf——-hf 的自动挑选按「量化位数贴近模型」启发式
+    # （download.cpp find_best_sibling），Q4 模型会误选 mmproj-model-f16-4x.gguf
+    # （4x 细粒度变体，视觉 token ×4）；arg.cpp 中 mmproj.url 非空即跳过仓库自动
+    # 挑选，-hf 三源链不受影响。-mmu 用 ModelScope 直链：hf 官方与仅 hf-mirror
+    # 两种可达场景都可用（MODEL_ENDPOINT 只重定向 -hf 的仓库解析，不覆盖绝对
+    # URL）。--reasoning off：官方注明 v4.7 模板默认开思考，普通回复须显式关
+    # （请求级 chat_template_kwargs 仍可按需覆盖，管理页思考开关不受影响）。
+    {
+        "name": "openbmb/MiniCPM-V-4.7-1B-gguf:Q4_K_M",
+        "desc": "对话/翻译/视觉 OCR 模型（多模态，MiniCPM-V 4.7 官方 GGUF；Q4_K_M+视觉投影约 1.8GB 盘；官方评测整体与效率双超 Qwen3.5-0.8B；需 PR #29416 后的 llama.cpp）原始卡：https://huggingface.co/openbmb/MiniCPM-V-4.7-1B-gguf" + _INFER_SUFFIX,
+        "desc_en": "chat/translate/vision OCR model (multimodal, official MiniCPM-V 4.7 GGUF; ~1.8GB disk incl. vision projector; beats Qwen3.5-0.8B on official evals; needs llama.cpp with MiniCPM-V 4.7 support, PR #29416) original card: https://huggingface.co/openbmb/MiniCPM-V-4.7-1B-gguf" + _INFER_SUFFIX_EN,
+        "hf_repo": "openbmb/MiniCPM-V-4.7-1B-gguf",
+        "fallback_url": "https://modelscope.cn/models/OpenBMB/MiniCPM-V-4.7-1B-gguf/resolve/master/MiniCPM-V-4_7-1B-Q4_K_M.gguf",
+        "fallback_mmproj_url": "https://modelscope.cn/models/OpenBMB/MiniCPM-V-4.7-1B-gguf/resolve/master/mmproj-model-f16.gguf",
+        "command": "llama-server -hf openbmb/MiniCPM-V-4.7-1B-gguf:Q4_K_M -mmu https://modelscope.cn/models/OpenBMB/MiniCPM-V-4.7-1B-gguf/resolve/master/mmproj-model-f16.gguf --reasoning off --jinja --host 127.0.0.1 --port 7788 -c 16384",
+        "sampling": {
+            "temperature": 0.7,
+            "top_p": 0.8,
+            "top_k": 100,
+            "min_p": 0,
+            "repeat_penalty": 1.05
+        }
+    },
     {
         "name": "unsloth/Qwen3.5-2B-GGUF:Q4_K_M",
         "desc": "对话/翻译/视觉 OCR 模型（多模态；比 0.8b 更强）" + _INFER_SUFFIX,
@@ -221,7 +247,8 @@ DEFAULTS = {
         "idle_timeout": 600,    # on-demand 空闲退出秒数
         # 主模型名（= 所选卡片 name，如 unsloth/Qwen3.5-0.8B-GGUF:Q4_K_M）；
         # 空 = 未选卡（needs_setup 据此判定首次设置未完成）。
-        # 注意 MiniCPM 系纯文本无 mmproj，选它则 LLM 视觉 OCR 失效，视觉需切回 Qwen 系。
+        # 注意 MiniCPM5 系纯文本无 mmproj，选它则 LLM 视觉 OCR 失效，视觉需切回
+        # Qwen 系或 MiniCPM-V-4.7（后者为多模态）。
         "model": "",
         # 默认全关：不预载、业务请求不自动拉起；管理页点启动 = 写 stopped:false
         # （用户设定持久化），点关停 = 移除该键回落默认停机。
@@ -229,7 +256,7 @@ DEFAULTS = {
         "cards": _BUILTIN_CARDS,
     },
     "asr": {
-        "engine": "faster-whisper",  # faster-whisper | qwen3-asr | moss（多引擎，评审 2026-10）
+        "engine": "faster-whisper",  # faster-whisper | qwen3-asr | moss | whisper-cpp（多引擎，评审 2026-10）
         "mode": "on-demand",
         "stopped": True,
         "cache": True,
@@ -246,6 +273,11 @@ DEFAULTS = {
         "qwen3_size": "0.6b",       # qwen3-asr 档位：0.6b（默认档，1.35GB/zh 最准）| 1.7b（质量档）
         "moss_quant": "q4_K_M",     # moss 量化：q4_K_M（默认，最快档）| q8_0
         "moss_model_path": "",      # moss 模型 gguf 路径覆盖；空 = backend/models/ 下默认名（缺失时自动补拉，hf → hf-mirror）
+        # whisper.cpp 量化（评审 §1.3b 第 4 适配器候选，仅 GPU）：q5_0 唯一档
+        # （官方 ggml 574MB + CUDA 二进制 685MB，DLL 随包自带）；q4_0 有损
+        # （fr 30.5/hi 44.7）、q8_0 未本地基准，均不接入。无 CUDA 设备如实
+        # 拒绝加载，指回落 faster-whisper。
+        "wcpp_quant": "q5_0",
     },
     "ocr": {"engine": "rapidocr", "mode": "on-demand", "stopped": True},  # engine: llm | rapidocr；mode 仅 rapidocr 生效（llm 归 llm 段管）
     # 翻译模型选择（值 = translate_llm.cards 卡片名，全部走翻译专用 llama-server

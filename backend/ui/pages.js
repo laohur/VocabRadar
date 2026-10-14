@@ -349,6 +349,7 @@ PAGES.asr = async function (main) {
     cfg.asr?.moss_quant ?? 'q4_K_M');
   const mpath = el('input', { value: cfg.asr?.moss_model_path || '',
     placeholder: 'models/MOSS-Transcribe-Diarize-<quant>.gguf' });
+  const wcquant = select([['q5_0', 'q5_0']], cfg.asr?.wcpp_quant ?? 'q5_0');
   const dev = select([['auto', t('auto (use CUDA when detected)')], ['cpu', 'cpu'],
     ['cuda', 'cuda']], st.whisper_device || 'auto');
   const ct = select([['', t('auto (int8 on CPU, float16 on CUDA)')], ['int8', 'int8'],
@@ -363,6 +364,7 @@ PAGES.asr = async function (main) {
     engine: curEngine, mode: mode.value, cache: cacheOn.checked,
     whisper_model: wmodel.value, qwen3_size: qsize.value,
     moss_quant: mquant.value, moss_model_path: mpath.value.trim(),
+    wcpp_quant: wcquant.value,
   });
   const setCard = settingsCard(t('Settings'), [
     [t('Run mode'), mode],
@@ -380,6 +382,8 @@ PAGES.asr = async function (main) {
      t('Haujet GGUF, GPU only (DML+Vulkan)')],
     ['moss', 'MOSS-Transcribe-Diarize',
      t('GPU, with speaker diarization; gguf auto-downloads on first use')],
+    ['whisper-cpp', 'whisper.cpp (large-v3-turbo q5_0)',
+     t('GPU CUDA, fastest tier (RTFx ~36x, ~1GB VRAM); binary & weights auto-download on first use')],
   ];
   const engineList = el('div', { class: 'mcards' });
   const engineDetail = el('div', { class: 'mform' });
@@ -508,6 +512,16 @@ PAGES.asr = async function (main) {
         refreshDl('qwen3-asr', qsize.value, dlBtn);
       });
       refreshDl('qwen3-asr', qsize.value, dlBtn);
+    } else if (viewEngine === 'whisper-cpp') {
+      engineDetail.append(field(t('whisper.cpp quant'), wcquant,
+        t('q5_0 = only tier (~574MB weights + ~685MB CUDA runtime, DLLs bundled — no pip cuBLAS needed). NVIDIA GPU required — falls back to faster-whisper on CPU-only machines. Weights from HuggingFace (hf-mirror fallback); binary from whisper.cpp release b5454; both auto-download on first use.')));
+      dlBtn = el('button', { class: 'btn',
+        onclick: () => startDl('whisper-cpp', wcquant.value, dlBtn) }, t('Download'));
+      wcquant.addEventListener('change', () => {
+        stopDlPoll();
+        refreshDl('whisper-cpp', wcquant.value, dlBtn);
+      });
+      refreshDl('whisper-cpp', wcquant.value, dlBtn);
     } else {
       engineDetail.append(field(t('MOSS quant'), mquant,
         t('q4_K_M = default, fastest tier; q8_0 = higher quality, larger file.')));

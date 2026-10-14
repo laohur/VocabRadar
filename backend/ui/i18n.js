@@ -176,6 +176,11 @@ const ZH = {
   'MOSS model path (optional)': 'MOSS 模型路径（可选）',
   'Leave empty for models/ inside the backend directory; the gguf auto-downloads on first use (HuggingFace, hf-mirror fallback). Or fill in a local file path.':
     '留空则用 backend/models/ 目录；gguf 首用自动下载（HF 官方，hf-mirror 兜底）。也可填写本地文件路径。',
+  'GPU CUDA, fastest tier (RTFx ~36x, ~1GB VRAM); binary & weights auto-download on first use':
+    'GPU CUDA，最快档（RTFx ~36x、显存约 1GB）；二进制与权重首用自动下载',
+  'whisper.cpp quant': 'whisper.cpp 量化',
+  'q5_0 = only tier (~574MB weights + ~685MB CUDA runtime, DLLs bundled — no pip cuBLAS needed). NVIDIA GPU required — falls back to faster-whisper on CPU-only machines. Weights from HuggingFace (hf-mirror fallback); binary from whisper.cpp release b5454; both auto-download on first use.':
+    'q5_0 = 唯一档（权重约 574MB + CUDA 运行时约 685MB，DLL 随包自带、无需 pip cuBLAS）。需 NVIDIA GPU——纯 CPU 机器不可用，请回落 faster-whisper。权重取自 HuggingFace（hf-mirror 兜底）；二进制取自 whisper.cpp b5454 官方预编译；均首用自动下载。',
   // ---- ASR 页 · GPU 设定卡（第558次：装了 cuBLAS/检测到 CUDA 才渲染） ----
   'GPU (faster-whisper)': 'GPU（faster-whisper）',
   'Device': '设备',
