@@ -245,6 +245,10 @@ DEFAULTS = {
         "ctx": 16384,           # 默认 16k（大值吃显存，Vulkan 小卡易 OOM）
         "mode": "on-demand",    # resident | on-demand
         "idle_timeout": 600,    # on-demand 空闲退出秒数
+        # llama-server 并行槽位（-np，默认 4）：多请求同刻推理的并发上限，
+        # 服务端队列外的第一道闸。启动时 -c 按 ctx×parallel 放大注入（每槽
+        # 上下文=ctx；llama-server 把总 ctx 均分给各槽），显存随总 ctx 增长。
+        "parallel": 4,
         # 主模型名（= 所选卡片 name，如 unsloth/Qwen3.5-0.8B-GGUF:Q4_K_M）；
         # 空 = 未选卡（needs_setup 据此判定首次设置未完成）。
         # 注意 MiniCPM5 系纯文本无 mmproj，选它则 LLM 视觉 OCR 失效，视觉需切回
@@ -260,6 +264,10 @@ DEFAULTS = {
         "mode": "on-demand",
         "stopped": True,
         "cache": True,
+        # 转写并发槽位（默认 4，取代第398次起的全局单路）：URL job 与同步
+        # multipart 转写共用同一槽位池，超出者排队。CPU 单路已近饱和，调高
+        # 收益有限；GPU（cuda）多路才有明显提速。
+        "job_slots": 4,
         "whisper_model": "large-v3-turbo",  # faster-whisper 档位全名：large-v3-turbo/tiny/base/small/medium/large-v3
         # 第558次：whisper 设备（auto|cpu|cuda）。auto=检测到 CUDA 设备且 cuBLAS
         # 可载即用 GPU，失败回落 CPU；未装 GPU 支持（nvidia-cublas-cu12）时
@@ -296,6 +304,7 @@ DEFAULTS = {
         "engine": "llamacpp",
         "port": 7789,            # 独立内部端口（llm 段 7788）
         "ctx": 16384,
+        "parallel": 4,           # llama-server 并行槽位（-np），同 llm 段
         "mode": "on-demand",
         "idle_timeout": 600,
         "model": "",             # 空 = 用首卡（内置 Hy-MT2-1.8B，LMT-60 两档备选）

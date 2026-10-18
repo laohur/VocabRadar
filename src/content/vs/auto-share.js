@@ -11,35 +11,28 @@
 //   'vocabradar:subs-autopublish'（token 续签与站点 fetch 全在 SW）。
 // =============================================================================
 
-import { getCachedSubtitles } from '../../lib/asr-client.js';
-import { makeVideoKey } from './dom-utils.js';
-import { makeEntry, saveSub } from '../../lib/subs-library.js';
+import { getCachedSubtitles, getCachedMeta } from '../../lib/asr-client.js';
+import { makeVideoKey, parsePlatformVideo } from './dom-utils.js';
+import { makeEntry, saveSub, isGarbageAsr } from '../../lib/subs-library.js';
 import { log } from './logger.js';
-
-// location → {platform, videoId}：bilibili 取 BV 号，youtube 取 v 参数，其余用 videoKey
-function parsePlatformVideo() {
-  try {
-    const u = new URL(location.href);
-    if (/(^|\.)bilibili\.com$/.test(u.hostname)) {
-      const m = u.pathname.match(/\/video\/(BV[0-9A-Za-z]+)/);
-      if (m) return { platform: 'bilibili', videoId: m[1] };
-      const ep = u.searchParams.get('ep_id');
-      if (ep) return { platform: 'bilibili', videoId: 'ep' + ep };
-    }
-    if (/(^|\.)youtube\.com$/.test(u.hostname) || u.hostname === 'youtu.be') {
-      const v = u.searchParams.get('v') || u.pathname.slice(1);
-      if (v) return { platform: 'youtube', videoId: v };
-    }
-  } catch (e) { /* 解析失败走兜底 */ }
-  return { platform: 'web', videoId: makeVideoKey() };
-}
 
 function storageGet(defaults) {
   return new Promise((res) => chrome.storage.local.get(defaults, (r) => res(r)));
 }
 
 // 从 ASR 缓存收割完整字幕并入库（shareState=local；上传由调用方按开关决定）
+// 无人声门控（20261017 用户报无人声视频也产出了字幕）：whisper 对静音会幻觉出
+//   文本，长度拦不住——按缓存里的 VAD 覆盖真值算覆盖率，<2% 不入库
 async function harvestAndIngest(videoKey, meta) {
+  const meta2 = await getCachedMeta(videoKey);
+  if (meta2 && Array.isArray(meta2.coverage)) {
+    const covered = meta2.coverage.reduce((a, r) => a + Math.max(0, (r[1] || 0) - (r[0] || 0)), 0);
+    const span = meta2.coverage.length ? Math.max(...meta2.coverage.map((r) => r[1] || 0)) : 0;
+    if (span > 0 && covered / span < 0.02) {
+      log('[VocabRadar][auto-share] 无人声（覆盖 ' + (covered / span * 100).toFixed(1) + '%）——不入库:', videoKey);
+      return null;
+    }
+  }
   const cached = await getCachedSubtitles(videoKey);
   const segs = (cached && cached.segments) || [];
   const lines = segs.map((s) => (s && s.text) || '').filter(Boolean);
@@ -49,6 +42,14 @@ async function harvestAndIngest(videoKey, meta) {
   const durationSec = last && Number.isFinite(last.speechEnd) && last.speechEnd > 0
     ? Math.ceil(last.speechEnd)
     : (last && Number.isFinite(last.listenEnd) && last.listenEnd > 0 ? Math.ceil(last.listenEnd) : 0);
+  // 反幻觉门控（20261017）：语速超限/复读文本不入库
+  if (isGarbageAsr(content, durationSec)) {
+    log('[VocabRadar][auto-share] 疑似幻觉文本（语速/复读异常）——不入库:', videoKey);
+    return null;
+  }
+  // cues 随条目存（20261017）：下载 SRT 的数据源（缓存段自带时间戳）
+  const cues = segs.map((s) => ({ start: s.start || 0, end: s.end || 0, text: (s.text || '').trim() }))
+    .filter((c) => c.text);
   const entry = makeEntry({
     platform: meta.platform,
     videoId: meta.videoId,
@@ -58,6 +59,7 @@ async function harvestAndIngest(videoKey, meta) {
     durationSec,
     model: `backend/${meta.modelSize || 'unknown'}`,
     content,
+    cues,
   });
   await saveSub(entry);
   return entry;
@@ -97,6 +99,7 @@ export function onAsrStopped(handoff) {
               model: entry.model,
               durationSec: entry.durationSec,
               content: entry.content,
+              cues: entry.cues || null,
               title: entry.title,
             },
           },

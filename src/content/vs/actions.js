@@ -3,7 +3,8 @@
 // -----------------------------------------------------------------------------
 // 职责：speakWordVideo()（Web Speech API 朗读单词，随 learnLanguage 设置）、
 //       runVideoQuery()（query 标签查询，复用 th/panel 卡片，Shadow DOM 承载）、
-//       onLearnClickVs()（learn 按钮：字幕正文+生词组装草稿入缓存并跳转我的卷轴）、
+//       onLearnClickVs()（learn 按钮：字幕正文+生词组装草稿入缓存并跳转学习页
+//       该卷轴详情页 /learn?id=），
 //       autoStartASR()（已废弃的无字幕自动识别入口，保留供未来恢复）。
 // 关系：依赖 ./asr-flow.js（toggleASR）、./logger.js、../../lib/i18n.js（t）、
 //       ./toast.js、../th/panel.js、../ws/draft-export.js、./subtitle-renderer.js；
@@ -78,8 +79,11 @@ export async function runVideoQuery(text) {
  * learn 按钮（🎯）：视频侧栏草稿导入——字幕正文（buildSubtitleBody）+ 生词
  * （getAllAnnotations，trim+小写去重）组装草稿，id 前缀 ext-v- 与网页草稿区分
  * （同视频换集/换页各自成稿），复用 ws/draft-export 的缓存 upsert（网站按
- * id+version 幂等）；成功后跳转站点「我的卷轴」（getSiteUrl：本地构建跳本地、
- * 商店安装跳线上）。无正文 toast 提示不静默，失败 toast 原因。
+ * id+version 幂等）；成功后跳转站点学习页该卷轴详情页（/learn?id=<草稿id>，
+ * 20261018 用户裁定替代原「我的卷轴」列表落点：列表页还得自己找卡，直达即可
+ * 学习；草稿由桥推送落库，网站 LearnPage 已放行草稿态并监听导入 tick 重载）。
+ * getSiteUrl：本地构建跳本地、商店安装跳线上。无正文 toast 提示不静默，失败
+ * toast 原因。
  */
 export async function onLearnClickVs() {
   try {
@@ -110,7 +114,9 @@ export async function onLearnClickVs() {
     await saveDraftToCache(draft);
     log('learn 草稿已入缓存 id=' + draft.id + ' words=' + words.length);
     toast(t('learn.importOk'));
-    window.open(getSiteUrl() + '/#/my-scrolls', '_blank');
+    // 学习页该卷轴详情页（20261018 裁定；站点 2026-10-06 起 history 路由，
+    // 旧 #/ 形态仅站点启动期迁址兼容，新跳转一律裸路径）
+    window.open(getSiteUrl() + '/learn?id=' + encodeURIComponent(draft.id), '_blank');
   } catch (e) {
     console.error('[VocabRadar][video-sidebar] learn 草稿导入失败:', e);
     toast(t('learn.importFail'));

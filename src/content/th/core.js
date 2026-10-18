@@ -140,6 +140,12 @@ export const thState = {
   observer: null,
   hideTimer: null,
   panelHideDelay: 5000,
+  // 20261014 用户令"快速划过不飘窗，停留一小段时间才飘窗"：
+  //   飘窗显示延时（ms），默认 300，config.json tooltipShowDelay 覆盖（scan.js 启动读取）。
+  tooltipShowDelay: 300,
+  // 停留计时器与待显数据（onWordHover 登记；到期显示，期间翻译回调只刷新待显数据）
+  hoverShowTimer: null,
+  hoverPending: null,
   scrollHandler: null,
   tooltipTargetEl: null,
   // 当前生效的文本样式 id；空串表示"未启用文本样式"（'none' 哨兵非法），truthy 判定。

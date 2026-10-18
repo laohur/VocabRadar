@@ -8,6 +8,9 @@
 import { _ts, log } from './log.js';
 import { b64ToUint8, pcmF32ToWavBlob } from './util.js';
 import { resolveLlmEngineCfg } from './llm.js';
+// 引导类错误（Anthropic 无转写端点 / Base URL 未配置）随 UI 语言（20261014）；
+//   纯技术类错误按第二百三十九次裁定固定英文。
+import { t, initLang } from '../../lib/i18n.js';
 
 // === ASR 的 LLM 引擎（音频转写）===
 // 端点形态（用户裁定采用主流候选）：OpenAI 兼容 multipart POST {baseUrl}/audio/transcriptions，
@@ -18,8 +21,10 @@ export async function llmTranscribeBlob(blob, cfg, lang, fileName, signal) {
   // cfg 由调用方传入（ASR-LLM 独立配置 resolveLlmEngineCfg('asr') 产物）
   // signal 为第 5 形参（AbortSignal，调用方可选）——fetch 透传，超时中断在线
   // 请求；不传（在线分片 handleSegmentByLlm）行为不变
-  if (cfg.format === 'anthropic') throw new Error('Anthropic 无音频转写端点，请改用 OpenAI 兼容来源');
-  if (!cfg.baseUrl) throw new Error('Base URL 未配置');
+  // 引导类错误文案随 UI 语言：await initLang（幂等，已初始化即刻返回）
+  await initLang();
+  if (cfg.format === 'anthropic') throw new Error(t('sw.anthropicNoAsr'));
+  if (!cfg.baseUrl) throw new Error(t('sw.noBaseUrl'));
   const url = cfg.baseUrl.replace(/\/+$/, '') + '/audio/transcriptions';
   const fd = new FormData();
   fd.append('file', blob, fileName || 'segment.wav');
@@ -36,7 +41,7 @@ export async function llmTranscribeBlob(blob, cfg, lang, fileName, signal) {
     const j = JSON.parse(raw);
     return String((j && j.text) || '');
   } catch (e) {
-    throw new Error('响应不是 JSON：' + raw.slice(0, 200));
+    throw new Error('Response is not JSON: ' + raw.slice(0, 200));
   }
 }
 
@@ -44,7 +49,7 @@ export async function llmTranscribeBlob(blob, cfg, lang, fileName, signal) {
 export async function handleSegmentByLlm(msg, sender) {
   let f32 = msg.audio;
   if (!(f32 instanceof ArrayBuffer) && msg.audioB64) f32 = b64ToUint8(msg.audioB64).buffer;
-  if (!f32) throw new Error('段音频缺失');
+  if (!f32) throw new Error('Audio segment missing');
   const pcm = new Float32Array(f32);
   const wav = pcmF32ToWavBlob(pcm, 16000);
   let lang = null;

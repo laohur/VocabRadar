@@ -93,11 +93,12 @@ const ROOT = path.resolve(import.meta.dirname, '..');
 const RUNTIME_ITEMS = ['manifest.json', '_locales', 'src'];
 
 // 第一百九十八次：esbuild 预打包的入口清单（详见 bundleContentScripts 注释）
+//   20261014 删除 src/lib/bilibili-comment.js：无任何 import 方的死代码，
+//   评论功能实际在 vs/subtitle-renderer.js onCommentClick + vs/comment-fill.js。
 const BUNDLE_ENTRIES = [
   'src/content/text-hint-impl.js',
   'src/content/web-sidebar-impl.js',
   'src/content/video-controller.js',
-  'src/lib/bilibili-comment.js',
 ];
 
 // 需排除的文件名（即使出现在 src/ 下也排除，如 .DS_Store 等）

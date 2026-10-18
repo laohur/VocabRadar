@@ -23,6 +23,8 @@ import { waitForVideo, waitForVideoReady, observeVideoChange } from './video-det
 // 停用规则（Deactivate）抑制表——匹配/存储唯一来源 lib/deactivate.js，
 //   本模块按「视频侧栏/视频叠加字幕」两位组合编排启动内容。
 import { suppressionFor } from '../../lib/deactivate.js';
+// 20261014 用户令"给用户看的一并走 i18n"：catch 里的错误提示随 UI 语言
+import { t } from '../../lib/i18n.js';
 
 // storage.onChanged 监听器必须注册在 startVideoController 开头（若放在字幕处理之后，
 // 字幕为空/失败走 autoStartASR 提前 return，监听器永不注册，popup 切换 Subtitle Hints
@@ -398,6 +400,50 @@ export async function startVideoController(platform) {
       _ttLastHandler = ttHandler;
       window.addEventListener('vr-timedtext-captured', ttHandler);
       console.log('[VocabRadar][video-controller] timedtext 捕获监听已注册（点开 CC 自动发现字幕）');
+    } else {
+      // B站镜像（20261018 用户批"要"：补齐 B站字幕捕获重试）：page-fetch.js 捕获
+      // 播放器自己的 wbi/v2 / 字幕 JSON（bilibili-fetcher 广播 vr-bili-subtitle-captured）。
+      // 未点开 CC 时自动链直拉列表为空 → 走 ASR/云端兜底后永不再试；用户点开 CC
+      // 播放器请求字幕被捕获 → 事件驱动重拉（重拉内部回查页面缓存，cues 直用）。
+      // 防风暴/换集/已在手 口径与 YouTube 完全一致
+      if (_ttLastHandler) {
+        try { window.removeEventListener('vr-bili-subtitle-captured', _ttLastHandler); } catch (_) { /* ignore */ }
+      }
+      const biliHandler = async () => {
+        try {
+          if (myRequestId !== _requestId) return;
+          if (_subOk || isASRActive()) return;
+          if (_ttRetryCount >= 3) return;
+          _ttRetryCount += 1;
+          console.log('[VocabRadar][video-controller] B站字幕捕获信号 → 重拉轨道（第 ' + _ttRetryCount + '/3 次）');
+          const result2 = await getBilibiliSubtitles(settings.uiLanguage, settings.learnLanguage, settings.meaningLanguage);
+          if (myRequestId !== _requestId) return;
+          const subs2 = result2 ? (Array.isArray(result2) ? result2 : (result2.subtitles || [])) : [];
+          if (!subs2.length) {
+            console.log('[VocabRadar][video-controller] B站重拉仍无字幕，等待下次捕获信号');
+            return;
+          }
+          console.log('[VocabRadar][video-controller] B站重拉成功: ' + subs2.length + ' 条 → 自动填充');
+          if (!sup.videoSidebar) {
+            await updateSubtitles(subs2);
+            _subOk = true;
+          } else {
+            startOverlay(video, subs2, {
+              rankThreshold: settings.rankThreshold,
+              rankThresholdMax: settings.rankThresholdMax,
+              myWords: settings.myWords,
+              enabled: true,
+              annotateRepeat: settings.annotateRepeat === true
+            });
+            _subOk = true;
+          }
+        } catch (e) {
+          console.warn('[VocabRadar][video-controller] B站重拉异常:', e);
+        }
+      };
+      _ttLastHandler = biliHandler;
+      window.addEventListener('vr-bili-subtitle-captured', biliHandler);
+      console.log('[VocabRadar][video-controller] B站字幕捕获监听已注册（点开 CC 自动发现字幕）');
     }
 
     // waitForVideoReady 与字幕获取并行：字幕获取不依赖 video.duration
@@ -550,13 +596,13 @@ export async function startVideoController(platform) {
       console.error('[VocabRadar][video-controller] sidebar 填充失败:', e);
       // 用户反馈"有的视频你一直转转转还不自知"：此前 catch 只 console.error，未清
       // loading 态，侧栏永远停在转圈。现调用 showNoSubtitle 清除 loading 并显示错误提示。
-      showNoSubtitle('字幕渲染失败：' + (e && e.message ? e.message : String(e)));
+      showNoSubtitle(t('vc.renderFail') + (e && e.message ? e.message : String(e)));
     }
 
     // observeVideoChange() 已在函数开头注册（幂等），此处不再重复
   } catch (e) {
     console.error('[VocabRadar][video-controller] 启动失败:', e);
     // 外层 catch 同样需清 loading，避免任何未预期异常导致永转
-    try { showNoSubtitle('启动失败：' + (e && e.message ? e.message : String(e))); } catch (_) { /* ignore */ }
+    try { showNoSubtitle(t('vc.startFail') + (e && e.message ? e.message : String(e))); } catch (_) { /* ignore */ }
   }
 }

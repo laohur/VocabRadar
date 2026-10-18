@@ -11,6 +11,9 @@
 import { cleanDictEntry } from '../../lib/dict-clean.js';
 import { resolveLlmConfig } from '../../lib/llm.js';
 import { fetchWithTimeout, md5Hex } from './util.js';
+// 引导类错误（Base URL / API Key 未配置）随 UI 语言（20261014）；
+//   纯技术类错误按第二百三十九次裁定固定英文。
+import { t, initLang } from '../../lib/i18n.js';
 
 /**
  * 后端翻译渠道（用户裁定）——POST {后端}/api/translate（**翻译路由**）。
@@ -34,8 +37,10 @@ export async function backendTranslateOnce(text, src, tgt) {
   const cfg = resolveLlmConfig(res);
   // 预置 baseUrl 形如 http://127.0.0.1:7777/v1 —— 翻译路由不在 /v1 下，去尾再拼
   const base = String(cfg.baseUrl || '').trim().replace(/\/+$/, '').replace(/\/v1$/i, '');
-  if (!base) throw new Error('Base URL 未配置');
-  if (!cfg.noKey && !cfg.apiKey) throw new Error('API Key 未配置');
+  // 引导类错误文案随 UI 语言：await initLang（幂等，已初始化即刻返回）
+  await initLang();
+  if (!base) throw new Error(t('sw.noBaseUrl'));
+  if (!cfg.noKey && !cfg.apiKey) throw new Error(t('sw.noApiKey'));
   const headers = { 'Content-Type': 'application/json' };
   if (!cfg.noKey) headers['Authorization'] = 'Bearer ' + cfg.apiKey;
   const resp = await fetchWithTimeout(base + '/api/translate', {
@@ -268,7 +273,7 @@ export async function baiduTranslate(text, src, tgt) {
 let _bingSess = null;   // { origin, ig, iid, keyTs, token, ts }
 export async function bingTranslate(text, src, tgt) {
   if (!text) return null;
-  if (tgt === 'sh') throw new Error('不支持目标语言(sh)（Bing 端点 400）');
+  if (tgt === 'sh') throw new Error('Target language sh not supported (Bing endpoint returns 400)');
   const to = tgt === 'zh' ? 'zh-Hans' : tgt; // 实测 to=zh → 400，需区域码
   for (let attempt = 0; attempt < 2; attempt++) {
     if (!_bingSess || Date.now() - _bingSess.ts > 4 * 60 * 1000) {
@@ -299,12 +304,12 @@ export async function bingTranslate(text, src, tgt) {
         const translations = Array.isArray(data) && data[0] && data[0].translations;
         const out = Array.isArray(translations) && translations[0] && translations[0].text;
         if (out) return String(out).trim();
-        throw new Error('响应无译文: ' + JSON.stringify(data).slice(0, 120));
+        throw new Error('No translation in response: ' + JSON.stringify(data).slice(0, 120));
       }
       throw new Error('HTTP ' + res.status);
     } catch (e) {
       _bingSess = null; // token 过期/站点换签：清缓存，下一轮（attempt=1）重取页面
-      if (attempt === 1) throw new Error('Bing 翻译失败: ' + String(e.message || e));
+      if (attempt === 1) throw new Error('Bing translate failed: ' + String(e.message || e));
     }
   }
   return null;
@@ -316,13 +321,13 @@ async function _bingFetchSession() {
     credentials: 'omit',
     headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36' }
   }, 8000);
-  if (!pageRes.ok) throw new Error('translator 页 HTTP ' + pageRes.status);
+  if (!pageRes.ok) throw new Error('Translator page HTTP ' + pageRes.status);
   const origin = new URL(pageRes.url).origin; // 302 落点（cn 地区为 cn.bing.com）
   const html = await pageRes.text();
   const ig = (html.match(/IG:"([^"]+)"/) || [])[1];
   const iid = (html.match(/data-iid="([^"]+)"/) || [])[1];
   const ab = html.match(/params_AbusePreventionHelper\s*=\s*\[\s*(\d+)\s*,\s*"?([^",\s]+)"?/);
-  if (!ig || !iid || !ab) throw new Error('页面三件套解析失败(IG=' + !!ig + ',IID=' + !!iid + ',token=' + !!ab + ')');
+  if (!ig || !iid || !ab) throw new Error('Failed to parse session tokens (IG=' + !!ig + ',IID=' + !!iid + ',token=' + !!ab + ')');
   _bingSess = { origin, ig, iid, keyTs: ab[1], token: ab[2], ts: Date.now() };
   return true;
 }
@@ -345,10 +350,10 @@ const REV_SRC_BAD = ['bn', 'ur', 'id', 'fil', 'ta', 'fa', 'pl', 'sh', 'bg', 'fi'
 const REV_TGT_BAD = ['bn', 'ur', 'id', 'fil', 'ta', 'fa', 'ms', 'sh', 'he', 'bg', 'fi', 'nb', 'lt', 'sl', 'mk', 'lv', 'is'];
 export async function reversoTranslate(text, src, tgt) {
   if (!text) return null;
-  if (!src || src === 'auto') throw new Error('需显式源语言（端点不支持 auto）');
-  if (REV_SRC_BAD.includes(src)) throw new Error('不支持源语言(' + src + ')');
-  if (REV_TGT_BAD.includes(tgt)) throw new Error('不支持目标语言(' + tgt + ')');
-  if (src === tgt) throw new Error('源语言与目标语言相同(' + src + ')');
+  if (!src || src === 'auto') throw new Error('Explicit source language required (endpoint does not support auto)');
+  if (REV_SRC_BAD.includes(src)) throw new Error('Unsupported source language(' + src + ')');
+  if (REV_TGT_BAD.includes(tgt)) throw new Error('Unsupported target language(' + tgt + ')');
+  if (src === tgt) throw new Error('Source and target languages are the same(' + src + ')');
   const res = await fetchWithTimeout('https://api.reverso.net/translate/v1/translation', {
     method: 'POST',
     credentials: 'omit',

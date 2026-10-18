@@ -22,8 +22,10 @@
 - 第437次方案A（用户裁定）：下载音频前先查官方字幕（core.ytdl.subtitles），
   有 cues 秒级直出（segments=官方字幕条目，缓存条目 engine=official），无才
   走下载+转写——backend 已拿到现成字幕时不再干等慢速 CPU 转写。
-- 并发：全局信号量 1——CPU 转写单路即饱和，同刻只放行一个任务，其余停在
-  queued 排队。任务表同 core/ytdl：内存态，进程重启即清，无持久化。
+- 并发：转写槽位池（第560次多槽化，默认 4，asr.job_slots 可配）——URL
+  job 与同步 multipart 转写共用同一池，超出者 queued 排队；CPU 单路已近
+  饱和，多槽主要收益在 GPU（cuda）档。任务表同 core/ytdl：内存态，进程
+  重启即清，无持久化。
 - 缓存：读写在本模块（任务生命周期内：创建时查、转写完写；api 层 multipart
   的缓存读写仍归 api/asr.py）。条目格式与现有缓存兼容（ASR_CACHE_DIR，管理
   界面 cache_list 可见）。命中校验引擎与请求语言（同 api 层语义）。
@@ -77,6 +79,13 @@
   新视频排队 30 分钟+）且有活跃等待者 → 置 job["cancel"]，管线在下一响应点
   （阶段边界/逐转写段）中止让位；下载等无逐段响应点的长阶段到下一检查点才
   生效。被抛弃任务若无人等待则继续跑完（结果照常落缓存，用户回来即命中）。
+- 第560次多槽化（用户裁定「除了下载都改为默认4，可配置」）：单路槽位池扩为
+  N 路（asr.job_slots，默认 4，下限 1；put_config 热更即时生效）。第513次
+  活跃度遴选与抢占语义不变，仅作用域从「唯一槽」变为「多槽」：满槽才评估
+  抢占，每次评估只抢占一个被抛弃任务；放行一个等待者后若有剩余空槽立即
+  notify_all 重新遴选（防多等待者多等一个心跳）。同步 multipart 转写
+  （api/asr.py 两共享端点）此前无限并发，本次经 hold_sync_slot 纳入同一
+  池排队——同步请求无轮询响应点，标 kind=sync 不参与抢占（占位到完成）。
 """
 
 import hashlib
@@ -130,9 +139,11 @@ def _looks_hallucinated(text):
 _jobs = {}  # 任务表：模块级内存态（同 core/ytdl）
 _lock = threading.Lock()
 
-# 第513次：转写单路调度（取代 Semaphore(1) FIFO，语义见模块头第513次条目）
+# 第513次活跃度调度与抢占，第560次多槽化（默认 4，asr.job_slots 可配，
+# 取代第398次起的单路信号量；语义见模块头）：转写槽位池——放行与让位按
+# 「前台活跃度」裁决。slot 数随配置热更（引擎 cfg 引用由 put_config 同步）。
 _slot_cond = threading.Condition()
-_active_job = None   # 当前占用转写路的任务（_slot_cond 保护）
+_active = []        # 当前占用转写槽的任务（list，len ≤ slots；_slot_cond 保护）
 _waiters = []        # 等待槽位的任务 FIFO（_slot_cond 保护）
 _POLL_FRESH_SEC = 30   # 等待者最近轮询在此窗口内视为活跃（轮询间隔 5s）
 _ABANDON_SEC = 180     # 运行中任务无人轮询超过此值视为被抛弃（可抢占；后台
@@ -297,31 +308,45 @@ def _net(job, action, url=None):
                        "url": (url or "")[:150]}
 
 
-def _acquire_slot(job):
-    """占用转写路（阻塞直到放行）。第513次活跃度调度：等待期间每 5s 醒来
-    评估一次抢占（见模块头）；槽位空出且自己被遴选（活跃优先）即占用。
-    须在任务线程内调用，与 _release_slot 配对。"""
-    global _active_job
+def _slots_limit(asr_engine):
+    """转写并发上限：asr.job_slots 配置值（默认 4，下限 1）。传引擎实例取
+    cfg（put_config 热更后引擎 cfg 已指向新配置，槽位随保存即时生效）。"""
+    try:
+        return max(1, int(asr_engine.cfg.get("job_slots", 4)))
+    except (AttributeError, TypeError, ValueError):
+        return 4
+
+
+def _acquire_slot(job, asr_engine):
+    """占用转写槽（阻塞直到放行）。第560次多槽化：同刻至多 _slots_limit()
+    个任务上场；等待期间每 5s 醒来评估抢占（见模块头第513次条目）。槽位
+    空出且自己被遴选（活跃优先）即占用。须在任务线程内调用，与
+    _release_slot 配对。"""
     with _slot_cond:
         _waiters.append(job)
-        while _active_job is not None or _pick_waiter_locked() is not job:
-            _maybe_preempt_locked()
+        while True:
+            if (len(_active) < _slots_limit(asr_engine)
+                    and _pick_waiter_locked() is job):
+                _waiters.remove(job)
+                _active.append(job)
+                # 多槽下放行自己后可能仍有空槽：唤醒其余等待者立即重新遴选
+                # （否则要多等一个 5s 心跳才上场）
+                _slot_cond.notify_all()
+                return
+            _maybe_preempt_locked(asr_engine)
             _slot_cond.wait(timeout=5)
-        _active_job = job
-        _waiters.remove(job)
 
 
 def _release_slot(job):
-    """让出转写路并唤醒全部等待者重新遴选。"""
-    global _active_job
+    """让出转写槽并唤醒全部等待者重新遴选。"""
     with _slot_cond:
-        if _active_job is job:
-            _active_job = None
+        if job in _active:
+            _active.remove(job)
         _slot_cond.notify_all()
 
 
 def _pick_waiter_locked():
-    """槽位空闲时的等待者遴选：活跃优先（_POLL_FRESH_SEC 内被轮询过），
+    """槽位空闲时的遴选：活跃等待者优先（_POLL_FRESH_SEC 内被轮询过），
     全不活跃回退 FIFO 队首。须持 _slot_cond。"""
     now = time.time()
     for w in _waiters:
@@ -330,25 +355,29 @@ def _pick_waiter_locked():
     return _waiters[0] if _waiters else None
 
 
-def _maybe_preempt_locked():
-    """第513次抢占评估：运行中任务无人轮询超 _ABANDON_SEC（页面已关/跳走）
-    且存在活跃等待者 → 置其 cancel 位，管线在下一响应点中止让位。
-    被抛弃任务若无人等待则不动（跑完落缓存）。须持 _slot_cond。"""
-    if _active_job is None or _active_job.get("cancel"):
+def _maybe_preempt_locked(asr_engine):
+    """第513次抢占评估（第560次多槽化后仅在满槽时有意义）：槽满且存在
+    活跃等待者时，运行中任务无人轮询超 _ABANDON_SEC（页面已关/跳走）→
+    置其 cancel 位，管线在下一响应点中止让位。被抛弃任务若无人等待则不动
+    （跑完落缓存）。须持 _slot_cond。"""
+    if len(_active) < _slots_limit(asr_engine):
         return
     now = time.time()
-    if now - (_active_job.get("last_poll") or 0) <= _ABANDON_SEC:
-        return
-    for w in _waiters:
-        if now - (w.get("last_poll") or 0) <= _POLL_FRESH_SEC:
-            _active_job["cancel"] = True
-            log.info("ASR 任务 %s 已 %ds 无人读取，取消让位给等待任务 %s",
-                     _active_job["id"], _ABANDON_SEC, w["id"])
-            return
+    for a in _active:
+        if a.get("cancel") or a.get("kind") == "sync":
+            continue  # sync 同步转写无响应点，不可抢占
+        if now - (a.get("last_poll") or 0) <= _ABANDON_SEC:
+            continue
+        for w in _waiters:
+            if not w.get("cancel") and now - (w.get("last_poll") or 0) <= _POLL_FRESH_SEC:
+                a["cancel"] = True
+                log.info("ASR 任务 %s 已 %ds 无人读取，取消让位给活跃任务 %s",
+                         a["id"], _ABANDON_SEC, w["id"])
+                return  # 每次评估只抢占一个，下次唤醒继续
 
 
 def _run_url(job, asr_engine):
-    _acquire_slot(job)
+    _acquire_slot(job, asr_engine)
     try:
         _pipeline_url(job, asr_engine)
     finally:
@@ -356,11 +385,25 @@ def _run_url(job, asr_engine):
 
 
 def _run_file(job, asr_engine):
-    _acquire_slot(job)
+    _acquire_slot(job, asr_engine)
     try:
         _pipeline_file(job, asr_engine)
     finally:
         _release_slot(job)
+
+
+def hold_sync_slot(asr_engine):
+    """同步 multipart 转写占槽（api/asr.py 用，第560次纳入同一槽位池）：
+    与 URL job 共池排队，超出上限阻塞请求线程等待。同步转写无轮询响应点，
+    标记 kind=sync 不参与抢占（占位到转写完成）。返回释放用的令牌 dict。"""
+    token = {"id": f"sync-{uuid.uuid4().hex[:8]}", "kind": "sync"}
+    _acquire_slot(token, asr_engine)
+    return token
+
+
+def release_sync_slot(token):
+    """释放同步转写占槽（与 hold_sync_slot 配对，finally 中调用）。"""
+    _release_slot(token)
 
 
 def _pipeline_url(job, asr_engine):

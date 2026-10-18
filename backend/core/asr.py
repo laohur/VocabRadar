@@ -502,6 +502,8 @@ def cache_list():
                 "engine": data.get("engine"),
                 "language": data.get("language"),
                 "duration": data.get("duration"),
+                # 20261017：覆盖区间真值随清单透出——扩展导入时按此拦无人声条目
+                "coverage": data.get("coverage"),
                 # 条目不存 text，preview 从 segments 拼（字段名保持）。
                 "preview": " ".join(
                     (s.get("text") or "").strip()

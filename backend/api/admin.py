@@ -147,7 +147,8 @@ def put_config():
     for sec in ("llm", "translate_llm"):
         eng = engines[sec]
         if (old[sec].get("model") != merged[sec].get("model")
-                or old[sec].get("ctx") != merged[sec].get("ctx")):
+                or old[sec].get("ctx") != merged[sec].get("ctx")
+                or old[sec].get("parallel") != merged[sec].get("parallel")):
             chosen = (merged[sec].get("model") or "").strip()
             if no_reload:
                 log.info(f"{sec} 配置变更（model={chosen!r}），按 no_reload 请求"

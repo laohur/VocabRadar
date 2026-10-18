@@ -12,6 +12,7 @@ from flask import Blueprint, current_app, jsonify, request
 
 from core.asr import (ASR_CACHE_DIR, ASR_ENGINES, _safe_key, cache_clear,
                       cache_list, downloads_status, engine_tag, start_download)
+from core import asr_job
 
 log = logging.getLogger(__name__)  # 第446次：同步转写完成日志（视频任务路径已有，此处此前缺失）
 
@@ -105,8 +106,16 @@ def _transcribe_multipart():
                 return {"ok": True, "cached": True, **hit}, 200
         try:
             t0 = time.time()
-            result = current_app.extensions["engines"]["asr"].transcribe(
-                tmp_path, engine=engine_name, language=language)
+            # 第560次：同步转写纳入与 URL job 同一槽位池（asr.job_slots，
+            # 默认 4）——此前无限并发跑转写，多请求同刻互抢 CPU/GPU。
+            # 缓存命中在上方已返回，走到这里必占槽。
+            _slot = asr_job.hold_sync_slot(
+                current_app.extensions["engines"]["asr"])
+            try:
+                result = current_app.extensions["engines"]["asr"].transcribe(
+                    tmp_path, engine=engine_name, language=language)
+            finally:
+                asr_job.release_sync_slot(_slot)
         except RuntimeError as e:  # 模型缺失 / 加载互斥
             return {"ok": False, "error": "asr_engine_failed",
                     "message": str(e)}, 503
@@ -132,6 +141,27 @@ def _transcribe_multipart():
 @bp.get("/api/asr/cache")
 def cache_items():
     return jsonify({"ok": True, "items": cache_list()})
+
+
+@bp.get("/api/asr/cache/<key>")
+def cache_item(key):
+    """单条 ASR 缓存全文（20261017：扩展字幕库"从后端导入"详情源）。
+    key 经 _safe_key 白名单化防路径穿越；返回 {ok, entry:{segments,coverage,…}}。"""
+    import json
+    import os
+    import re
+    from core.asr import ASR_CACHE_DIR, _safe_key
+    if not re.fullmatch(r"[A-Za-z0-9_.-]{1,120}", key or ""):
+        return jsonify({"ok": False, "error": "bad_key"}), 400
+    path = os.path.join(ASR_CACHE_DIR, _safe_key(key) + ".json")
+    if not os.path.isfile(path):
+        return jsonify({"ok": False, "error": "not_found"}), 404
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            entry = json.load(f)
+    except (OSError, ValueError):
+        return jsonify({"ok": False, "error": "read_failed"}), 500
+    return jsonify({"ok": True, "entry": entry})
 
 
 @bp.delete("/api/asr/cache")

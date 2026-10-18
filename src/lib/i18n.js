@@ -180,7 +180,7 @@ const DICT = {
     'chat.placeholder': 'Ask a follow-up (Enter to send, Shift+Enter for a new line)',
     'chat.send': 'Send',
     'chat.thinking': 'Thinking...',
-    'chat.failed': 'Request failed',
+    'chat.failed': 'Request failed: ',
     'chat.openGuide': 'Open settings to configure the model',
     'chat.noText': 'No text to discuss',
     // 第398次：toast.dlAudioBusy/Ok/Fail 随下载音频管线退役删除
@@ -203,6 +203,8 @@ const DICT = {
     // 第398次：asr.dlGetInfo/sameOrigin/audioSaved、dl.noTrack/ytFail/unsupportedSite/
     //   metaProbeFail/chunkFail 随扩展内音频下载管线退役删除
     'asr.ctxInvalidated': 'Extension updated — reload this page (F5), then retry ASR',
+    // 20261014 用户令：backend 不可用报错走 i18n（原硬编码中文在 asr-client 抛错，不跟语言）
+    'asr.backendUnavailable': 'backend not available ({reason}) — please login or start the backend service',
     // 第一百一十三次：录制工作流与回退提示——第398次：录制工作流（recordOffer/recBtn/backBtn/
     //   recording/recordingUntilEnd/recSavedForAsr/recStop/longWarn）随录音工作流一并退役
     'btn.settings': 'Settings',
@@ -211,9 +213,30 @@ const DICT = {
     'lang.toggleTo': '中文',
     'loading': 'Loading subtitles...',
     'noSubtitle': 'No subtitle data',
-    // 20261008 用户令：无字幕提示两条路——本地后端 ASR 生产 / 登录获取云端共享（P4 生效）
-    'noSubtitleTip': 'No subtitles found — start ASR to produce them (requires the local backend), or sign in on vocabradar.com to fetch cloud-shared subtitles. If the video has subtitles but fetch failed, see the backend log for why yt-dlp failed (e.g. cookies).',
+    // 20261014 用户令：无字幕提示只留一句 + 引导图标（🎤 同 subtitleTimeoutTip / ASR 按钮），
+    //   旧版两条路长文案（ASR 生产 / 登录取云端共享 / yt-dlp 日志指引）删除
+    'noSubtitleTip': 'No subtitles found, click 🎤 to generate',
     'subtitleTimeoutTip': 'Subtitle load timeout, click 🎤 to start ASR',
+    // 20261017 P4 云端消费：无字幕面板云端获取流（扣分前必经确认；未连接静默）
+    'subsCloudFetch': '☁️ Get cloud subs',
+    'subsCloudNone': 'No cloud subtitles shared yet',
+    'subsCloudConfirm': 'Spend {points} pts to fetch ({kind} · {min} min)?',
+    'subsCloudGet': 'Fetch',
+    'subsCloudFetching': 'Fetching…',
+    'subsCloudVersions': '{count} versions, best picked',
+    'subsCloudMine': 'your share',
+    'subsCloudPoor': 'Not enough points',
+    'subsCloudConnect': 'Connect account first',
+    'subsCloudFail': 'Fetch failed, try again',
+    // 20261018 P5 多版本切换
+    'subsCloudVerUse': 'Use',
+    'subsCloudFree': 'free',
+    'subsCloudPts': '{n} pts',
+    // 20261018 P5 侧栏评价入口
+    'btn.vote': 'Rate this subtitle',
+    'subsVoteNone': 'Not a cloud-shared subtitle — nothing to rate',
+    // 20261018 P5 ASR 前云端探测：付费版确认块的跳过出口
+    'subsAsrSkip': 'Skip, transcribe locally',
     'asr.track': 'ASR Track',
     'tool.track': 'Track',
     'tool.none': 'None',
@@ -482,6 +505,31 @@ const DICT = {
     'ws.segments': '段',
     'ws.noDef': '—',
     'th.noDef': '—',
+    // 20261014 用户令"给用户看的一并走 i18n"：用户可见硬编码中文清查新增键。
+    //   vc / ws / ocr / asr / parser / popup / guide 各上屏点，以及 sw（后台）错误：
+    //   只有"引导类"（可操作的配置提示）走 i18n，纯技术类按第二百三十九次裁定改英文硬编码。
+    'vc.renderFail': 'Subtitle render failed: ',
+    'vc.startFail': 'Start failed: ',
+    'ws.diagOpenFail': 'Failed to open diagnostics: ',
+    'ocr.title': 'VocabRadar · OCR result',
+    'ocr.recognizing': 'Recognizing video frame…',
+    'asr.jobFailed': 'backend job failed: ',
+    'asr.resubmitFailed': 'backend job lost, resubmit failed: ',
+    'asr.llmFail': 'LLM transcription failed',
+    'asr.noEngine': 'No transcription engine available — configure a transcription model below (local backend / official / API), or use a browser with speech recognition',
+    'parser.epubContainerFail': 'EPUB container parse failed: ',
+    'parser.epubEncrypted': 'Encrypted (DRM) epub is not supported',
+    'parser.epubNoContainer': 'Not a valid epub (missing META-INF/container.xml)',
+    'parser.epubNoRootfile': 'Not a valid epub (container.xml has no rootfile)',
+    'parser.epubEmptySpine': 'Not a valid epub (spine is empty)',
+    'popup.refreshToApply': '💡 Refresh the page to apply',
+    'popup.timeout': '{label} timed out ({ms}ms)',
+    'guide.title': 'VocabRadar · Guide',
+    'sw.noApiKey': 'API key not configured',
+    'sw.noBaseUrl': 'Base URL not configured',
+    'sw.noModel': 'Model name not configured',
+    'sw.anthropicNoAsr': 'Anthropic has no audio transcription endpoint — use an OpenAI-compatible source',
+    'sw.transcribeTimeout': 'Online transcription timed out (90s): the network is too slow or the endpoint is not responding — retry later or check the backend address',
   },
   zh: {
     // 第一百七十六次：同上，去掉 🦫
@@ -552,7 +600,7 @@ const DICT = {
     'chat.placeholder': '继续追问（回车发送，Shift+回车换行）',
     'chat.send': '发送',
     'chat.thinking': '思考中...',
-    'chat.failed': '请求失败',
+    'chat.failed': '请求失败：',
     'chat.openGuide': '打开设置配置模型',
     'chat.noText': '没有可讨论的文本',
     // 第398次：toast.dlAudioBusy/Ok/Fail 随下载音频管线退役删除
@@ -575,6 +623,8 @@ const DICT = {
     // 第398次：asr.dlGetInfo/sameOrigin/audioSaved、dl.noTrack/ytFail/unsupportedSite/
     //   metaProbeFail/chunkFail 随扩展内音频下载管线退役删除
     'asr.ctxInvalidated': '扩展已更新，请刷新页面（F5）后再使用 ASR',
+    // 20261014 用户令：backend 不可用报错走 i18n（原硬编码中文在 asr-client 抛错，不跟语言）
+    'asr.backendUnavailable': '无后端（{reason}）：请先登录或启动后端服务',
     // 第一百一十三次：录制工作流与回退提示——第398次：录制工作流（recordOffer/recBtn/backBtn/
     //   recording/recordingUntilEnd/recSavedForAsr/recStop/longWarn）随录音工作流一并退役
     'btn.settings': '设定',
@@ -584,8 +634,29 @@ const DICT = {
     'lang.toggleTo': 'EN',
     'loading': '字幕加载中...',
     'noSubtitle': '无字幕数据',
-    'noSubtitleTip': '未获取到字幕——可开启语音转写生产字幕（需本地后端），或登录 vocabradar.com 后获取云端共享字幕；若视频本有字幕而未取到，请看后端日志中 yt-dlp 失败原因（如 cookies）。',
+    // 20261014 用户令：与 en 同步——一句 + 🎤 图标（旧长文案删除）
+    'noSubtitleTip': '未获取到字幕，点击 🎤 生成字幕',
     'subtitleTimeoutTip': '字幕加载超时，可点击 🎤 按钮启动语音识别',
+    // 20261017 P4 云端消费：无字幕面板云端获取流（扣分前必经确认；未连接静默）
+    'subsCloudFetch': '☁️ 获取云端字幕',
+    'subsCloudNone': '云端暂无共享字幕',
+    'subsCloudConfirm': '消耗 {points} 分获取（{kind} · {min} 分钟）？',
+    'subsCloudGet': '获取',
+    'subsCloudFetching': '获取中…',
+    'subsCloudVersions': '共 {count} 个版本，取最高分',
+    'subsCloudMine': '你分享的',
+    'subsCloudPoor': '积分不足',
+    'subsCloudConnect': '请先连接账号',
+    'subsCloudFail': '获取失败，请重试',
+    // 20261018 P5 多版本切换
+    'subsCloudVerUse': '取用',
+    'subsCloudFree': '免费',
+    'subsCloudPts': '{n} 分',
+    // 20261018 P5 侧栏评价入口
+    'btn.vote': '评价这条字幕',
+    'subsVoteNone': '当前字幕非云端共享版本，无可评价对象',
+    // 20261018 P5 ASR 前云端探测：付费版确认块的跳过出口
+    'subsAsrSkip': '跳过，直接识别',
     'asr.track': 'ASR 字幕',
     'asr.realtime': '🎤',
     'asr.realtimeTitle': '实时语音识别',
@@ -829,7 +900,30 @@ const DICT = {
     'popup.asrModelSizeHint': '更大的模型更准确但下载和运行更慢。切换后需重启 ASR 生效。',
     'popup.asrSegmentSec': 'ASR 单段时长（秒）',
     'popup.asrSegmentSecHint': '每次送 Whisper 识别的音频段长。越小延迟越低但更碎；越大上下文越多但更慢。范围 1-30 秒。',
-    'lang.ui': '界面语言'
+    'lang.ui': '界面语言',
+    // 20261014 用户令"给用户看的一并走 i18n"：与 en 段同键（sw 仅引导类进词表）
+    'vc.renderFail': '字幕渲染失败：',
+    'vc.startFail': '启动失败：',
+    'ws.diagOpenFail': '诊断打开失败：',
+    'ocr.title': 'VocabRadar · OCR 识别结果',
+    'ocr.recognizing': '正在识别视频帧...',
+    'asr.jobFailed': 'backend 任务失败：',
+    'asr.resubmitFailed': 'backend 任务丢失且重提失败：',
+    'asr.llmFail': 'LLM 转写失败',
+    'asr.noEngine': '无可用识别引擎：请先在下方配置转写模型（本地后端/官方/API），或改用支持语音识别的浏览器',
+    'parser.epubContainerFail': 'EPUB 容器解析失败: ',
+    'parser.epubEncrypted': 'epub 含加密（DRM），暂不支持',
+    'parser.epubNoContainer': '不是有效的 epub（缺 META-INF/container.xml）',
+    'parser.epubNoRootfile': '不是有效的 epub（container.xml 无 rootfile）',
+    'parser.epubEmptySpine': '不是有效的 epub（spine 为空）',
+    'popup.refreshToApply': '💡 刷新页面后生效',
+    'popup.timeout': '{label} 超时（{ms}ms）',
+    'guide.title': 'VocabRadar · 引导',
+    'sw.noApiKey': 'API Key 未配置',
+    'sw.noBaseUrl': 'Base URL 未配置',
+    'sw.noModel': '模型名未配置',
+    'sw.anthropicNoAsr': 'Anthropic 无音频转写端点，请改用 OpenAI 兼容来源',
+    'sw.transcribeTimeout': '在线转写超时（90 秒）：网络过慢或端点无响应，请稍后重试或检查后端地址'
   }
   // 反思（2026-08-02）：其他8种语言（hi/es/ar/fr/bn/pt/ru/ja）界面文案翻译待补充。
   //   更正（2026-10-10）：十大语言调整为 en/zh/fr/es/pt/ja/ru/id/ar/hi（按网民人数，

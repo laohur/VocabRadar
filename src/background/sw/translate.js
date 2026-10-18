@@ -298,10 +298,10 @@ export async function handleBridgeTranslation(payload) {
   //   捕获记日志，不影响其他并行候选。
   if (ch.reverso !== false) tasks.push(_bridgeTryChannel('Reverso', reversoTranslate(word, src, tgt), word, src, tgt));
   // 用户裁定：失败返回 ok:true+空 text（空文本降级，见上方分支注释），error 照带不遮蔽
-  if (!tasks.length) return { ok: true, text: '', error: '快渠道均不可用（backend 未勾选或超预算；baidusug/youdaodict 需勾选启用且目标语言为中文；reverso 被取消勾选）' };
+  if (!tasks.length) return { ok: true, text: '', error: 'No fast channel available (backend unchecked or over budget; BaiduSug/YoudaoDict need to be enabled with Chinese target; Reverso unchecked)' };
   const results = await Promise.all(tasks);
   const hit = results.find(Boolean);
-  if (!hit) return { ok: true, text: '', error: '快渠道（' + (ch.backend === true ? 'Backend/' : '') + 'BaiduSug/YoudaoDict/Reverso）均失败——网站侧降级其自身 API' };
+  if (!hit) return { ok: true, text: '', error: 'All fast channels failed (' + (ch.backend === true ? 'Backend/' : '') + 'BaiduSug/YoudaoDict/Reverso) — site falls back to its own API' };
 
   // ③ 回写缓存（小写主键与 makeKey 口径一致），下次网站请求毫秒级命中
   try { await updateFields(src, word, { translation: hit.text, translationLang: tgt }); } catch (_) { /* ignore */ }

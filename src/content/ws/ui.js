@@ -132,8 +132,8 @@ export function buildSidebar() {
            与视频侧栏 Annotation 按钮同语义），联动 text-hint 网页提示启停。 -->
       <div class="beaver-web-footer">
         <button class="beaver-web-action-btn" id="beaver-web-copy" title="${t('ws.copy')}">📋 ${t('ws.copy')}</button>
-        <!-- learn——导入卷轴草稿并跳转网站「我的卷轴」；跳转按本地/线上构建自动判定（getSiteUrl）；
-             图标 🎯（用户裁定） -->
+        <!-- learn——导入卷轴草稿并跳转网站学习页该卷轴详情页（/learn?id=，20261018 裁定）；
+             跳转按本地/线上构建自动判定（getSiteUrl）；图标 🎯（用户裁定） -->
         <button class="beaver-web-action-btn" id="beaver-web-learn-btn" title="${t('btn.learn')}">🎯 ${t('btn.learn')}</button>
         <button class="beaver-web-action-btn" id="beaver-web-chat" title="${t('btn.chat')}">💬</button>
       </div>
@@ -287,7 +287,7 @@ export function bindEvents() {
     closeAllPopups();
     openDiagCenter().catch((e) => {
       // 不遮蔽错误：诊断窗自身挂了也要出声
-      toast('诊断打开失败：' + String((e && e.message) || e), { error: true });
+      toast(t('ws.diagOpenFail') + String((e && e.message) || e), { error: true });
     });
   });
   setPop.addEventListener('click', (e) => e.stopPropagation());
@@ -1218,7 +1218,7 @@ async function doImportDraft() {
     const r = await importCurrentSidebarDraft();
     if (!r.ok) { toast(t('learn.noContent')); return { ok: false }; }
     toast(t('learn.importOk'));
-    return { ok: true };
+    return { ok: true, draft: r.draft }; // draft 透传：跳学习页详情需要 id
   } catch (e) {
     console.error('[VocabRadar][web-sidebar] 草稿导入失败', e);
     toast(t('learn.importFail'));
@@ -1228,11 +1228,13 @@ async function doImportDraft() {
   }
 }
 
-// 底部 learn 按钮——导入成功才打开网站「我的卷轴」（hash 路由）。
+// 底部 learn 按钮——导入成功才打开网站学习页该卷轴详情页（/learn?id=<草稿id>，
+// 20261018 裁定替代原「我的卷轴」列表落点，与视频侧栏 onLearnClickVs 同语义；
+// 站点 history 路由，草稿由桥推送落库、LearnPage 放行草稿态并监听导入 tick 重载）。
 // 跳转规则=getSiteUrl()（本地构建跳本地、商店安装跳线上）；图标 🎯（用户裁定）
 async function onDraftImportAndOpenClick() {
   const r = await doImportDraft();
-  if (r.ok) window.open(getSiteUrl() + '/#/my-scrolls', '_blank');
+  if (r.ok) window.open(getSiteUrl() + '/learn?id=' + encodeURIComponent(r.draft.id), '_blank');
 }
 // === 工具栏 ===
 // 注释总开关（与视频侧栏 Annotation 按钮同语义，active=显示注释）。

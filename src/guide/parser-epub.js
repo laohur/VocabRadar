@@ -119,18 +119,18 @@ export async function parseEpub(file, onStatus) {
   try {
     zip = await unzip(u8);
   } catch (e) {
-    throw new Error('EPUB 容器解析失败: ' + String(e.message || e));
+    throw new Error(t('parser.epubContainerFail') + String(e.message || e));
   }
   // DRM 甄别：Adobe 加密的 epub 会有 encryption.xml（解出来是密文，如实拒）
   if (zip.has('META-INF/encryption.xml')) {
-    throw new Error('epub 含加密（DRM），暂不支持');
+    throw new Error(t('parser.epubEncrypted'));
   }
   const containerXml = zip.get('META-INF/container.xml');
-  if (!containerXml) throw new Error('不是有效的 epub（缺 META-INF/container.xml）');
+  if (!containerXml) throw new Error(t('parser.epubNoContainer'));
   const containerDoc = new DOMParser().parseFromString(new TextDecoder().decode(containerXml), 'application/xml');
   const rootfile = containerDoc.querySelector('rootfile');
   const opfPath = rootfile && rootfile.getAttribute('full-path');
-  if (!opfPath || !zip.has(opfPath)) throw new Error('不是有效的 epub（container.xml 无 rootfile）');
+  if (!opfPath || !zip.has(opfPath)) throw new Error(t('parser.epubNoRootfile'));
 
   const opfDoc = new DOMParser().parseFromString(new TextDecoder().decode(zip.get(opfPath)), 'application/xml');
   const baseDir = opfPath.includes('/') ? opfPath.slice(0, opfPath.lastIndexOf('/')) : '';
@@ -144,7 +144,7 @@ export async function parseEpub(file, onStatus) {
   const spine = [...opfDoc.querySelectorAll('spine > itemref')]
     .map((ref) => manifest.get(ref.getAttribute('idref')))
     .filter(Boolean);
-  if (spine.length === 0) throw new Error('不是有效的 epub（spine 为空）');
+  if (spine.length === 0) throw new Error(t('parser.epubEmptySpine'));
 
   const parts = [];
   for (let i = 0; i < spine.length; i++) {

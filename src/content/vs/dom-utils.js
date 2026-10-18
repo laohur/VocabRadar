@@ -33,6 +33,30 @@ export function makeVideoKey() {
   }
 }
 
+// location → {platform, videoId}（P4 云端消费查索引用，2026-10-17 自 auto-share.js 上移）：
+// bilibili 取 BV 号/ep 号，youtube 取 v 参数，其余用 makeVideoKey（页面哈希键）。
+// **分P 口径（20261017 用户令"视频带分P，字幕也带，链接也带，口径一致"）**：
+// p≥2 时并入 videoId（`BV..?p=N`）——云端索引、库条目、出链均区分分P；p=1 或缺省
+// 归一为不带（P1 即默认页，同内容同 id），与侧栏缓存键（makeVideoKey 一直含 p）对齐
+export function parsePlatformVideo() {
+  try {
+    const u = new URL(location.href);
+    if (/(^|\.)bilibili\.com$/.test(u.hostname)) {
+      const p = Number(u.searchParams.get('p')) || 0;
+      const suffix = p > 1 ? `?p=${p}` : '';
+      const m = u.pathname.match(/\/video\/(BV[0-9A-Za-z]+)/);
+      if (m) return { platform: 'bilibili', videoId: m[1] + suffix };
+      const ep = u.searchParams.get('ep_id');
+      if (ep) return { platform: 'bilibili', videoId: 'ep' + ep + suffix };
+    }
+    if (/(^|\.)youtube\.com$/.test(u.hostname) || u.hostname === 'youtu.be') {
+      const v = u.searchParams.get('v') || u.pathname.slice(1);
+      if (v) return { platform: 'youtube', videoId: v };
+    }
+  } catch (e) { /* 解析失败走兜底 */ }
+  return { platform: 'web', videoId: makeVideoKey() };
+}
+
 // === 复制到剪切板（带 fallback） ===
 export async function copyToClipboard(text) {
   // 1. 优先 navigator.clipboard

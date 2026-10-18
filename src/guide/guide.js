@@ -10,7 +10,7 @@
 // 文案全部经 data-key 属性由本地化字典填充，跟随界面语言。
 
 import {
-  initLang, setLang,
+  initLang, setLang, t,
   LANG_NAMES, UI_LANGS, TRANSLATE_LANGS
 } from '../lib/i18n.js';
 import { DEFAULT_ANN_TEMPLATE, BUILD_STAMP, ANN_DEFAULT_STYLE, VANN_DEFAULT_STYLE, SUB_DEFAULT_STYLE } from '../lib/styles.js';
@@ -756,7 +756,7 @@ function applyEngineProviderHints(prefix, id, modelPlaceholder) {
 
 // 界面文案填充（data-key 通用 + 动态内容）
 function applyTexts() {
-  document.title = 'VocabRadar · Guide';
+  document.title = t('guide.title');
   document.documentElement.lang = getLangState();
   fillByDataKey();
   // fillByDataKey 会把 poolNoteRerender 覆盖回静态兜底文案（段2），须在其后重跑动态拼接

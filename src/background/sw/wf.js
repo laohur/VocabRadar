@@ -106,12 +106,12 @@ export function wfFetchMemoized(file) {
 async function handleWfFetch(file) {
   try {
     if (typeof file !== 'string' || !WF_FILE_RE.test(file)) {
-      return { ok: false, error: 'wfFetch: 非白名单词频文件: ' + file };
+      return { ok: false, error: 'wfFetch: non-whitelisted wordfreq file: ' + file };
     }
     const manifest = await getWfFilesJson();
-    if (!manifest) return { ok: false, error: 'wfFetch: files.json 全源失败: ' + WF_SOURCES.map((b) => b + 'files.json').join(' | ') };
+    if (!manifest) return { ok: false, error: 'wfFetch: files.json failed on all sources: ' + WF_SOURCES.map((b) => b + 'files.json').join(' | ') };
     const entry = manifest.files.find((f) => f.file === file);
-    if (!entry || !entry.sha256) return { ok: false, error: 'wfFetch: files.json 无记录: ' + file };
+    if (!entry || !entry.sha256) return { ok: false, error: 'wfFetch: no entry in files.json: ' + file };
     const srcErrs = []; // 逐源失败原因收集（用户裁定：失败要说清哪个链接连不上）
     for (const base of WF_SOURCES) {
       try {
@@ -126,12 +126,12 @@ async function handleWfFetch(file) {
         const buf = await res.arrayBuffer();
         if (!buf || buf.byteLength === 0) {
           log('[VocabRadar][sw][' + _ts() + '] wfFetch 空响应: ' + base + file);
-          srcErrs.push(base + file + ' -> 空响应');
+          srcErrs.push(base + file + ' -> empty response');
           continue;
         }
         if (entry.bytes && buf.byteLength !== entry.bytes) {
           log('[VocabRadar][sw][' + _ts() + '] wfFetch ' + base + file + ' bytes 不符 ' + buf.byteLength + '≠' + entry.bytes + '，弃包');
-          srcErrs.push(base + file + ' -> bytes 不符 ' + buf.byteLength + '≠' + entry.bytes);
+          srcErrs.push(base + file + ' -> bytes mismatch ' + buf.byteLength + '≠' + entry.bytes);
           continue;
         }
         // SHA-256 校验（SW 恒 secure context，crypto.subtle 可用）
@@ -139,7 +139,7 @@ async function handleWfFetch(file) {
         const hex = Array.prototype.map.call(new Uint8Array(digest), (b) => b.toString(16).padStart(2, '0')).join('');
         if (hex !== String(entry.sha256).toLowerCase()) {
           log('[VocabRadar][sw][' + _ts() + '] wfFetch ' + base + file + ' sha256 不符，弃包');
-          srcErrs.push(base + file + ' -> sha256 不符');
+          srcErrs.push(base + file + ' -> sha256 mismatch');
           continue;
         }
         // 必须 base64 分块编码回传（abToB64）：chrome.runtime 消息默认 JSON 序列化，
@@ -164,7 +164,7 @@ async function handleWfFetch(file) {
         return { ok: true, b64: abToB64(buf), sha256: hex, bytes: buf.byteLength, kept };
       } catch (e) { srcErrs.push(base + file + ' -> ' + String((e && e.message) || e)); }
     }
-    return { ok: false, error: 'wfFetch 全源失败: ' + srcErrs.join(' | ') };
+    return { ok: false, error: 'wfFetch all sources failed: ' + srcErrs.join(' | ') };
   } catch (e) {
     return { ok: false, error: String(e.message || e) };
   }

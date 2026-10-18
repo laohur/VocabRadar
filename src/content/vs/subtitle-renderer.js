@@ -1193,7 +1193,7 @@ function fillSlotAnnotations(slot, sub, anns) {
       if (allTrans.length > 0) {
         html += `<span class="beaver-ann-detail-trans">${escapeHtml(allTrans.join(' | '))}</span>`;
       } else if (a.pending) {
-        html += `<span class="beaver-ann-detail-trans pending">翻译中...</span>`;
+        html += `<span class="beaver-ann-detail-trans pending">${escapeHtml(t('ws.translating'))}</span>`;
       }
     } else {
       // 简略模式：随机短义项，生词(注释) 格式
@@ -1584,7 +1584,7 @@ function formatAnnotationLine(a, forComment, phon) {
   const transArr = a.translations || [];
   const trans = transArr.length > 0 ? transArr.join('；') : '-';
   const tags = (a.tags && a.tags.length > 0) ? a.tags.join(',') : '-';
-  const stage = (a.rank !== null && a.rank !== undefined) ? rankToStage(a.rank) : '表外';
+  const stage = rankToStage(a.rank);  // 含 null/0 → th.outside（随 UI 语言，20261014）
   // 用户"评论带上[注音]，{原形}若非原形"：评论行单词后带 [注音]
   //   （getPhoneticsBatch 批量预取，缺失回空不拼）；词面非原形（a.lemma 与 word
   //   大小写不敏感不等，同 ws/scanner.js 口径）再带 {原形}。复制路径不传参维持原格式。

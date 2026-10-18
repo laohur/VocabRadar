@@ -1248,7 +1248,7 @@ export function ensureOcrPanel() {
   `;
   thState.ocrPanel.innerHTML = `
     <div style="display:flex;justify-content:space-between;align-items:center;padding:10px 14px;background:#f5f8f3;border-radius:16px 16px 0 0;flex-shrink:0;">
-      <span style="font-size:13px;color:#424942;display:inline-flex;align-items:center;gap:6px;">${brandIconSVG()}<span>VocabRadar · OCR 识别结果</span></span>
+      <span style="font-size:13px;color:#424942;display:inline-flex;align-items:center;gap:6px;">${brandIconSVG()}<span>${t('ocr.title')}</span></span>
       <button class="beaver-ocr-close" style="background:none;border:0;cursor:pointer;font-size:18px;color:#424942;padding:0 4px;">✕</button>
     </div>
     <div class="beaver-ocr-text" style="padding:12px 14px;overflow-y:auto;flex:1 1 auto;white-space:pre-wrap;word-break:break-word;"></div>
@@ -1291,7 +1291,7 @@ export function showOcrResultPanel(text, clientX, clientY, info = '') {
   // 清空旧内容（含已注释的 .beaver-word span）
   textEl.innerHTML = '';
   if (!text || !text.trim()) {
-    textEl.textContent = info || '未识别到文字';
+    textEl.textContent = info || t('ocr.noText');
     textEl.style.color = '#72797a';
     textEl.style.fontStyle = 'italic';
   } else {
@@ -1386,11 +1386,11 @@ export async function ocrVideoFrame(clientX, clientY) {
     video = videos.find((v) => v.videoWidth > 0 && v.videoHeight > 0);
   }
   if (!video) {
-    showOcrResultPanel('', clientX, clientY, '未找到视频元素，无法 OCR');
+    showOcrResultPanel('', clientX, clientY, t('ocr.noVideo'));
     return;
   }
   // 显示加载提示
-  showOcrResultPanel('', clientX, clientY, '正在识别视频帧...');
+  showOcrResultPanel('', clientX, clientY, t('ocr.recognizing'));
   try {
     const canvas = document.createElement('canvas');
     canvas.width = video.videoWidth;
@@ -1408,14 +1408,14 @@ export async function ocrVideoFrame(clientX, clientY) {
       lang: ocrLang
     });
     if (!resp || !resp.ok) {
-      const errMsg = resp && resp.error ? resp.error : '未知错误';
-      showOcrResultPanel('', clientX, clientY, 'OCR 失败: ' + errMsg);
+      const errMsg = resp && resp.error ? resp.error : t('ocr.unknownErr');
+      showOcrResultPanel('', clientX, clientY, t('ocr.failPrefix') + errMsg);
       return;
     }
     const result = resp.text || '';
-    showOcrResultPanel(result, clientX, clientY, result.trim() ? '' : '未识别到文字');
+    showOcrResultPanel(result, clientX, clientY, result.trim() ? '' : t('ocr.noText'));
   } catch (e) {
     const errMsg = String(e && e.message ? e.message : e);
-    showOcrResultPanel('', clientX, clientY, 'OCR 失败: ' + errMsg);
+    showOcrResultPanel('', clientX, clientY, t('ocr.failPrefix') + errMsg);
   }
 }

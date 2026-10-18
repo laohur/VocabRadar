@@ -25,7 +25,8 @@
 import { startASR, stopASR, hasASRCache, getCachedSubtitles, getASRCoverage, getJobHandoff } from '../../lib/asr-client.js';
 import { showASRProgress, hideASRProgress, updateASRProgressFill } from '../vs-asr-progress.js';
 import { pushDiagLine, clearDiagLines, updateASRProgressFromStage } from './asr-stage.js';
-import { resetRenderState, appendASRSubtitle } from './subtitle-renderer.js';
+import { resetRenderState, appendASRSubtitle, rerenderPanelOnly } from './subtitle-renderer.js';
+import { tryCloudForAsr } from './loading.js';
 import { setSizeFrozen } from './sidebar-layout.js';
 import { installPlaybackGate, uninstallPlaybackGate } from './playback-gate.js';
 import { setSubtitles as overlaySetSubtitles } from '../subtitle-overlay.js';
@@ -73,6 +74,18 @@ export async function toggleASR(clickX, clickY) {
   setAsrCacheLoaded(false);  // 决策完毕，重置（换集/重建时也会重置）
   if (!skipReplay) {
     _videoKey = makeVideoKey();
+  }
+  // P5（20261018 用户令"应当asr时候能够拉取"）：ASR 的语义是获取字幕——云端有
+  // 共享版本先取云端（免费版自动；付费版面板内确认，含"跳过，直接识别"出口），
+  // 云端没有/用户跳过才回落本地转写。无字幕面板已显示云端报价时不重复查——
+  // 免费版早已自动上屏，可见报价即付费版，用户再点 ASR=明确要识别
+  const _panel0 = _root.querySelector('#beaver-subtitle-panel');
+  if (!(_panel0 && _panel0.querySelector('.beaver-subs-cloud-btn'))) {
+    const taken = await tryCloudForAsr();
+    if (taken) return;
+    // 云端没有或用户跳过：付费确认块可能占着面板——skipReplay 场景还原缓存字幕
+    // （随后 ASR 保留它接续）；非 skipReplay 场景下方板随即被清空，无需还原
+    if (skipReplay) rerenderPanelOnly();
   }
   // 不记录墙钟偏移：asr-client 的 onText 回调直接返回绝对视频秒数（backend 直出），
   // appendASRSubtitle 直接使用。
@@ -175,8 +188,11 @@ export async function toggleASR(clickX, clickY) {
     }
     // 用户要求"整个处理不了直接不显示窗口，别现眼"：ASR 启动失败（如无音轨）
     // 静默退出，仅控制台保留 warn 日志供诊断。
-    // backend 是唯一路径，其不可用须如实报错引导启动 backend（用户裁定）。
-    if (e.code === 'BACKEND_UNAVAILABLE' || String(e.message || e).includes('backend 不可用')) {
+    // backend 是唯一路径，其不可用须如实报错引导（用户裁定）；报错文案已本地化
+    //   （asr-client 用 t('asr.backendUnavailable') 生成），故判断以 err.code 为准，
+    //   文案兜底同时认中英两种语言（原文案仅中文，语言切换后匹配不到）。
+    const _m = String(e.message || e);
+    if (e.code === 'BACKEND_UNAVAILABLE' || _m.startsWith('backend not available') || _m.startsWith('无后端')) {
       toast(String(e.message || e), { x: clickX, y: clickY, error: true, duration: 8000 });
     }
     stopASRInternal();

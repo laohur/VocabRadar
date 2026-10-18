@@ -28,6 +28,8 @@
  *   Content Script ↔ Page Script 通过 window.postMessage 双向通信：
  *   - Content Script 发送 BEAVER_FETCH_REQUEST → Page Script 执行 fetch 并回复 BEAVER_FETCH_RESPONSE
  *   - Page Script 拦截 timedtext XHR → 主动发送 BEAVER_TIMEDTEXT_CAPTURE 给 Content Script
+ *   - Page Script 拦截 B站 wbi/v2 / 字幕 JSON → BEAVER_BILI_WBI / BEAVER_BILI_SUBTITLE
+ *     （20261018 用户批"要"：B站 AI/CC 字幕捕获重试，未点开 CC 时自动链拉列表为空的补盲区）
  *   - Page Script 加载完成 → 发送 BEAVER_PAGE_FETCH_READY 给 Content Script
  *   - Content Script 发送 BEAVER_PAGE_FETCH_PING → Page Script 补发 READY
  *     （document_start 注入时 READY 早于 CS 监听器建立，必须能补问一次）
@@ -102,6 +104,62 @@
     );
   }
 
+  // === B站字幕捕获（20261018 用户批"要"：补齐与 YouTube timedtext 对等的捕获重试）===
+  // 机理：B站 AI/CC 字幕在播放器未点开 CC 时，wbi/v2 的 subtitle.subtitles 常返回空
+  // （自动链直接拉列表 → 0 轨 → 永远"无字幕"）。两条捕获线补盲区：
+  //   ① wbi/v2 响应（播放器自己会请求，URL 带 cid 可作数据卫生键）——响应里的
+  //      subtitle.subtitles 一旦非空即权威轨道列表（lan/lan_doc/ai 齐全）；
+  //   ② 字幕 JSON（aisubtitle.hdslb.com AI 轨 / hdslb.com/bfs/subtitle/ CC 轨，
+  //      形如 {body:[{from,to,content}]}）——用户点开 CC 后播放器必发，直接就是字幕；
+  //      URL 不带 cid，用捕获时刻 URL 的 p 参数标记防多P连播跨P污染。
+  var biliWbiCache = {};    // cid -> resp(text)
+  var biliSubCache = [];    // [{p, url, resp}]（最新在后，上限 20）
+
+  function biliPageP() {
+    try { return new URLSearchParams(location.search).get('p') || '1'; } catch (e) { return '1'; }
+  }
+
+  function isBiliWbi(u) {
+    return typeof u === 'string' && u.indexOf('bilibili.com') !== -1 && u.indexOf('/x/player/wbi/v2') !== -1;
+  }
+
+  function isBiliSubtitleJson(u) {
+    return typeof u === 'string' && (
+      u.indexOf('aisubtitle.hdslb.com') !== -1 ||
+      u.indexOf('hdslb.com/bfs/subtitle/') !== -1
+    );
+  }
+
+  function reportBiliWbi(rawUrl, respText) {
+    try {
+      if (!respText || respText.length < 32) return;
+      var cid = '';
+      try { cid = new URL(rawUrl, location.origin).searchParams.get('cid') || ''; } catch (e) { /* ignore */ }
+      var data = JSON.parse(respText);
+      if (!data || !data.data || !data.data.subtitle) return; // 非播放器 v2 结构不缓存
+      if (cid) {
+        biliWbiCache[cid] = respText;
+        var ks = Object.keys(biliWbiCache);
+        if (ks.length > 8) delete biliWbiCache[ks[0]]; // 防长会话增长
+        window.postMessage({ type: 'BEAVER_BILI_WBI', cid: cid, resp: respText }, '*');
+      }
+    } catch (e) { /* 非 JSON/结构不符：忽略 */ }
+  }
+
+  function reportBiliSub(rawUrl, respText) {
+    try {
+      if (!respText || respText.length < 32) return;
+      var data = JSON.parse(respText);
+      if (!data || !Array.isArray(data.body) || !data.body.length) return; // 字幕 JSON 形状校验
+      for (var i = 0; i < biliSubCache.length; i++) {
+        if (biliSubCache[i].url === rawUrl) return; // 同 URL 去重
+      }
+      biliSubCache.push({ p: biliPageP(), url: rawUrl, resp: respText });
+      if (biliSubCache.length > 20) biliSubCache.shift();
+      window.postMessage({ type: 'BEAVER_BILI_SUBTITLE', url: rawUrl, p: biliPageP() }, '*');
+    } catch (e) { /* 非 JSON/结构不符：忽略 */ }
+  }
+
   // === XHR 拦截：捕获 /api/timedtext 与 B站 playurl 响应 ===
   var origOpen = XMLHttpRequest.prototype.open;
   var origSend = XMLHttpRequest.prototype.send;
@@ -115,6 +173,18 @@
       this.addEventListener('load', function () {
         try {
           if (selfX.readyState === 4 && selfX.status === 200) reportPlayurl(selfX._beaverUrl, selfX.responseText);
+        } catch (e) { /* ignore */ }
+      });
+    }
+    // B站 wbi/v2 与字幕 JSON 捕获（同 load 路径）
+    if (isBiliWbi(url) || isBiliSubtitleJson(url)) {
+      var selfS = this;
+      this.addEventListener('load', function () {
+        try {
+          if (selfS.readyState === 4 && selfS.status === 200) {
+            if (isBiliWbi(selfS._beaverUrl)) reportBiliWbi(selfS._beaverUrl, selfS.responseText);
+            else reportBiliSub(selfS._beaverUrl, selfS.responseText);
+          }
         } catch (e) { /* ignore */ }
       });
     }
@@ -191,6 +261,19 @@
         }
       }).catch(function () { /* ignore */ });
     }
+    // B站 wbi/v2 / 字幕 JSON fetch 路径捕获
+    if (isBiliWbi(url) || isBiliSubtitleJson(url)) {
+      promise.then(function (resp) {
+        if (resp.ok) {
+          try {
+            resp.clone().text().then(function (t) {
+              if (isBiliWbi(url)) reportBiliWbi(url, t);
+              else reportBiliSub(url, t);
+            }).catch(function () { /* ignore */ });
+          } catch (e) { /* ignore */ }
+        }
+      }).catch(function () { /* ignore */ });
+    }
 
     if (url.indexOf('/api/timedtext') !== -1) {
       promise.then(function (resp) {
@@ -253,6 +336,35 @@
         id: id0,
         ok: !!pick,
         text: pick || '',
+        contentType: 'application/json'
+      }, '*');
+      return;
+    }
+
+    // B站 wbi/v2 缓存回查（按 cid；播放器自发请求的响应——自动链拉列表为空时
+    // 从这里取权威轨道列表）
+    if (id0 && url0 === '__beaver_bili_wbi_query__') {
+      var wcid = (event.data.cid || '') + '';
+      var wpick = (wcid && biliWbiCache[wcid]) || null;
+      window.postMessage({
+        type: 'BEAVER_FETCH_RESPONSE',
+        id: id0,
+        ok: !!wpick,
+        text: wpick || '',
+        contentType: 'application/json'
+      }, '*');
+      return;
+    }
+
+    // B站字幕 JSON 缓存回查（按 p 过滤防多P连播跨P污染；整批返回）
+    if (id0 && url0 === '__beaver_bili_subtitle_query__') {
+      var wp = (event.data.p || '') + '' || biliPageP();
+      var subs = biliSubCache.filter(function (c) { return c.p === wp; });
+      window.postMessage({
+        type: 'BEAVER_FETCH_RESPONSE',
+        id: id0,
+        ok: subs.length > 0,
+        text: JSON.stringify(subs),
         contentType: 'application/json'
       }, '*');
       return;

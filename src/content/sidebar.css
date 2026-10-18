@@ -733,7 +733,7 @@
   cursor: not-allowed;
 }
 
-/* icon-only 按钮（#beaver-asr-toggle/#beaver-ocr/#beaver-dlaudio）不参与
+/* icon-only 按钮（#beaver-asr-toggle/#beaver-ocr/#beaver-vote）不参与
    flex:1 拉伸、padding 收窄，把宽度让给文字按钮，避免 footer 两排换行
    （用户："asr ocr 下载音频按钮都改为只有图标，前两个按钮可以更窄而不至于多行"）。
    特异性（0,2,1）高于 .beaver-footer-row button（0,1,1）与 .beaver-asr-toggle-btn（0,1,0），
@@ -741,6 +741,73 @@
 .beaver-footer-row button.beaver-icon-btn {
   flex: 0 0 auto;
   padding: 8px 7px;
+}
+
+/* P5 评价展开行（20261018 用户定稿：点 👍👎 在两排 footer 之间展开一行——
+   左踩/中五星/右赞；赞=五星、踩=一星。默认隐藏 */
+.beaver-vote-row {
+  display: none;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 2px 2px;
+}
+
+.beaver-vote-row.show {
+  display: flex;
+}
+
+.beaver-vote-thumb {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 28px;
+  padding: 0;
+  font-size: 15px;
+  border: none;
+  border-radius: var(--beaver-radius-sm);
+  background: transparent;
+  color: var(--beaver-text-soft);
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.beaver-vote-thumb:hover {
+  background: var(--beaver-btn-bg-hover);
+}
+
+.beaver-vote-thumb.active {
+  background: var(--beaver-secondary-container, #dce9df);
+}
+
+/* 五星条：⭐ 彩色 emoji（20261018 用户令"谁让你用 svg 了"）——未点亮灰阶低透明，
+   点亮全彩；点选 1-5 星 */
+.beaver-vote-stars {
+  display: inline-flex;
+  align-items: center;
+  gap: 1px;
+  font-size: 16px;
+  line-height: 1;
+}
+
+.beaver-vote-star {
+  display: inline-flex;
+  padding: 1px;
+  opacity: 0.35;
+  filter: grayscale(1);
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.beaver-vote-star.on {
+  opacity: 1;
+  filter: none;
+}
+
+.beaver-vote-star:hover {
+  opacity: 0.8;
 }
 
 /* 设定浮层：M3 large 圆角 + 阴影替代 border */

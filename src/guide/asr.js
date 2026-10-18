@@ -145,7 +145,7 @@ async function startAsr() {
     });
     if (S.asrAborted) return;
     if (!resp || !resp.ok) {
-      const errMsg = String((resp && resp.error) || 'LLM 转写失败');
+      const errMsg = String((resp && resp.error) || t('asr.llmFail'));
       showAsrProgress(t('ws.error'), errMsg.slice(0, 60));
       toast('ASR(LLM): ' + errMsg.slice(0, 100), { error: true, duration: 5000 });
       return;
@@ -612,7 +612,7 @@ async function beginRecording(stream, kind) {
     // 第三百九十四次：whisper 兜底移除——配置不全（llmReady=false）且浏览器 SR 不可用
     //   （录屏恒不可用）时无引擎可用，如实报错而非静默空转（旧版此时走本地 whisper）。
     if (!llmReady && (!srSupported || kind === 'screen')) {
-      throw new Error('无可用识别引擎：请先在下方配置转写模型（本地后端/官方/API），或改用支持语音识别的浏览器');
+      throw new Error(t('asr.noEngine'));
     }
 
     S.recordingAudioCtx = new (window.AudioContext || window.webkitAudioContext)();

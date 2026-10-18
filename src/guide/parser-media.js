@@ -246,7 +246,7 @@ export async function transcribeAvFile(file, onStatus) {
       audioB64: arrayBufferToBase64(buf)
     }).then(resolve).catch((e) => resolve({ ok: false, error: String(e.message || e) }));
   });
-  if (!resp || !resp.ok) throw new Error(String((resp && resp.error) || 'LLM 转写失败'));
+  if (!resp || !resp.ok) throw new Error(String((resp && resp.error) || t('asr.llmFail')));
   // 整段回包按句切分入列，与 asr.js 口径一致（无语音时空串，交调用方处理）
   const texts = [];
   const trimmed = String(resp.text || '').trim();

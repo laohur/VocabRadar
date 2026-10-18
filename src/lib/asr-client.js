@@ -41,6 +41,9 @@
 //   text,chunks}], totalListened, modelSize}，累积超 asrCacheSegmentSec 写 storage，
 //   按产出模型失效（第八十九次）。
 
+// 关系：依赖 ./i18n.js（t）——backend 不可用报错随 UI 语言本地化（20261014 用户令）。
+import { t } from './i18n.js';
+
 // === 模块状态 ===
 // 反思（2026-07-06）：_debug 标志（config.json 读取），仅 debug=true 时打印状态日志。
 let _debug = false;
@@ -148,7 +151,7 @@ export async function startASR(opts) {
     const reason = (submit && submit.error) || 'no response';
     console.warn('[VocabRadar][asr-client][' + _ts() + '] backend job 提交失败:', reason);
     stopASR();
-    const err = new Error('backend 不可用（' + reason + '）：请先启动本地 backend 再使用 ASR');
+    const err = new Error(t('asr.backendUnavailable', { reason }));
     err.code = 'BACKEND_UNAVAILABLE';
     throw err;
   }
@@ -306,7 +309,7 @@ async function pollJobOnceInner() {
     pushStatusLocal('gate-done', 'job completed', { jobId: _jobId });
     stopJobPolling(); // 任务终态：停轮询，会话保留（由用户停止）
   } else if (resp.status === 'failed') {
-    const msg = 'backend job 失败: ' + (resp.error || 'unknown');
+    const msg = t('asr.jobFailed') + (resp.error || 'unknown');
     console.warn('[VocabRadar][asr-client][' + _ts() + ']', msg);
     const cb = _onError;
     stopASR();
@@ -328,7 +331,7 @@ async function resubmitJobAfter404() {
     _jobFailStreak = 0;
     pushStatusLocal('job-submitted', 'job ' + submit.id + ' (resubmit)', { jobId: submit.id });
   } else {
-    const msg = 'backend job 丢失且重提失败: ' + ((submit && submit.error) || 'no response');
+    const msg = t('asr.resubmitFailed') + ((submit && submit.error) || 'no response');
     console.warn('[VocabRadar][asr-client][' + _ts() + ']', msg);
     const cb = _onError;
     stopASR();
@@ -542,6 +545,18 @@ export async function getCachedSubtitles(videoKey) {
   const subs = [];
   replayCachedSegsFromCache(cache, (seg) => subs.push(seg));
   return subs;
+}
+
+/**
+ * 缓存元数据（20261017）：coverage（backend VAD 覆盖区间真值，随缓存条目保存）
+ * 供 auto-share 收割门控——无人声（覆盖率<2%）不产字幕，防 whisper 静音幻觉入库。
+ * @param {string} videoKey
+ * @returns {Promise<{coverage: Array|null, totalListened: number}|null>}
+ */
+export async function getCachedMeta(videoKey) {
+  if (!videoKey) return null;
+  const cache = await loadCache(videoKey);
+  return { coverage: cache.coverage || null, totalListened: cache.totalListened || 0 };
 }
 
 // === 增量识别缓存读写（2026-07-09 重构）===
@@ -769,7 +784,7 @@ function sendMessage(msg) {
   return new Promise((resolve) => {
     try {
       if (!chrome.runtime?.id) {
-        const err = new Error('Extension context invalidated. 请刷新页面（扩展已更新）');
+        const err = new Error(t('asr.ctxInvalidated'));
         err.code = 'CONTEXT_INVALIDATED';
         console.warn('[VocabRadar][asr-client][' + _ts() + '] sendMessage 异常:', err.message);
         resolve({ ok: false, error: err.message, code: 'CONTEXT_INVALIDATED' });
@@ -786,7 +801,7 @@ function sendMessage(msg) {
     } catch (e) {
       console.warn('[VocabRadar][asr-client][' + _ts() + '] sendMessage 异常:', e);
       if (e.message && e.message.includes('Extension context invalidated')) {
-        resolve({ ok: false, error: 'Extension context invalidated. 请刷新页面（扩展已更新）', code: 'CONTEXT_INVALIDATED' });
+        resolve({ ok: false, error: t('asr.ctxInvalidated'), code: 'CONTEXT_INVALIDATED' });
       } else {
         resolve(null);
       }

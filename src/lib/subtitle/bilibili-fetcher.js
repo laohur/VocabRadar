@@ -181,13 +181,99 @@ function pickSubtitleTrack(list, ui = 'en', learn = '', meaning = '') {
   return list[0];
 }
 
+// === 页面主世界捕获桥（20261018 用户批"要"：B站字幕捕获重试，对齐 YouTube
+// timedtext 机制）=== page-fetch.js（manifest 已在 B站页 document_start 注入 MAIN
+// world）拦截播放器自己的 wbi/v2 响应（cid 键控，轨道 lan 齐全）与字幕 JSON
+// （p 标记防跨P）。自动链直拉列表为空时回查缓存；捕获信号广播给 controller
+// 事件驱动重拉（点开 CC 自动发现字幕）。
+window.addEventListener('message', function (event) {
+  if (event.source !== window) return;
+  const d = event.data;
+  if (!d || typeof d !== 'object') return;
+  if (d.type === 'BEAVER_BILI_WBI' || d.type === 'BEAVER_BILI_SUBTITLE') {
+    console.log('[VocabRadar][bilibili] 页面捕获:', d.type, d.type === 'BEAVER_BILI_WBI' ? ('cid=' + d.cid) : ('p=' + d.p));
+    try {
+      window.dispatchEvent(new CustomEvent('vr-bili-subtitle-captured', { detail: { type: d.type } }));
+    } catch (e) { /* 广播失败不影响回查主链 */ }
+  }
+});
+
+// 页面主世界缓存回查（BEAVER_FETCH_REQUEST 特殊 url 指令，page-fetch.js 应答）
+function queryPageBili(queryUrl, extra = {}, timeout = 3000) {
+  return new Promise((resolve) => {
+    const id = 'bili_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8);
+    const handler = (event) => {
+      if (event.source !== window) return;
+      if (event.data && event.data.type === 'BEAVER_FETCH_RESPONSE' && event.data.id === id) {
+        window.removeEventListener('message', handler);
+        resolve(event.data);
+      }
+    };
+    window.addEventListener('message', handler);
+    try {
+      window.postMessage({ type: 'BEAVER_FETCH_REQUEST', id, url: queryUrl, ...extra }, '*');
+    } catch (e) {
+      window.removeEventListener('message', handler);
+      resolve(null);
+    }
+    setTimeout(() => {
+      window.removeEventListener('message', handler);
+      resolve(null);
+    }, timeout);
+  });
+}
+
+// 空列表救援：回查页面捕获——①播放器自己的 wbi/v2 响应（按 cid 匹配，取
+// subtitle.subtitles 权威列表）②字幕 JSON 捕获（按当前 p 过滤，合成兜底轨，
+// cues 直嵌避免二次下载）。返回 {list, cuesByUrl} 或 null
+async function rescueCapturedTracks(ids) {
+  const out = { list: [], cuesByUrl: new Map() };
+  try {
+    const wbi = await queryPageBili('__beaver_bili_wbi_query__', { cid: String(ids.cid) });
+    if (wbi && wbi.ok && wbi.text) {
+      const data = JSON.parse(wbi.text);
+      const subs = data && data.data && data.data.subtitle && data.data.subtitle.subtitles;
+      if (Array.isArray(subs)) {
+        for (const s of subs) {
+          if (!s || !s.subtitle_url) continue;
+          const url = s.subtitle_url.startsWith('//') ? 'https:' + s.subtitle_url : s.subtitle_url;
+          out.list.push({ lan: s.lan || '', lan_doc: s.lan_doc || s.lan || '', subtitle_url: url, ai: String(s.lan || '').startsWith('ai-') });
+        }
+      }
+    }
+  } catch (e) { /* wbi 回查失败继续走字幕 JSON 兜底 */ }
+  try {
+    const pageP = new URLSearchParams(location.search).get('p') || '1';
+    const cap = await queryPageBili('__beaver_bili_subtitle_query__', { p: pageP });
+    if (cap && cap.ok && cap.text) {
+      const entries = JSON.parse(cap.text);
+      for (const it of Array.isArray(entries) ? entries : []) {
+        if (!it || !it.url || !it.resp || out.cuesByUrl.has(it.url)) continue;
+        try {
+          const data = JSON.parse(it.resp);
+          if (!Array.isArray(data.body) || !data.body.length) continue;
+          const cues = data.body.map((b) => ({ start: b.from, end: b.to, text: b.content }));
+          out.cuesByUrl.set(it.url, cues);
+          out.list.push({
+            lan: 'cc', lan_doc: '页面捕获字幕', subtitle_url: it.url,
+            ai: it.url.indexOf('aisubtitle.hdslb.com') !== -1, cues,
+          });
+        } catch (e) { /* 单条解析失败跳过 */ }
+      }
+    }
+  } catch (e) { /* 字幕 JSON 回查失败：如实放弃 */ }
+  return (out.list.length || out.cuesByUrl.size) ? out : null;
+}
+
 /**
  * 获取 B站字幕（第518次：默认选轨对齐 421 裁定链 原始→目标→界面→释义，见 pickSubtitleTrack）。
  * 返回 {tracks, subtitles, pickedIndex} 格式（与 YouTube 一致）：tracks 含
  *   languageCode(lan) + name(lan_doc) + subtitle_url，setTracks 据此填充下拉框
  *   显示字幕轨道名（如"中文（自动生成）"）——只返回字幕数组会使轨道下拉框
  *   只有 ASR 一项。
- * @param {string} [uiLanguage='en'] 界面语言（默认链第3层；bilibili-comment 不传保持英文提词）
+ * 空列表救援（20261018）：未点开 CC 时 wbi/v2 常返回空——回查页面主世界捕获
+ *   （播放器自己的 wbi/v2 响应 + 字幕 JSON），有则并入列表照常走选轨链。
+ * @param {string} [uiLanguage='en'] 界面语言（默认链第3层；缺省回落 en）
  * @param {string} [learnLanguage=''] 学习语言（默认链第2层）
  * @param {string} [meaningLanguage=''] 释义语言（默认链第4层）
  * @returns {Promise<{tracks:Array, subtitles:Array, pickedIndex:number}|null>}
@@ -200,9 +286,19 @@ export async function getBilibiliSubtitles(uiLanguage = 'en', learnLanguage = ''
     return null;
   }
 
-  const list = await getBilibiliSubtitleList(ids.aid, ids.cid);
+  let list = await getBilibiliSubtitleList(ids.aid, ids.cid);
+  let cuesByUrl = null;
   if (!list || list.length === 0) {
-    console.warn('[VocabRadar][bilibili] 字幕列表为空（可能未登录/无字幕/需 wbi 签名）');
+    console.warn('[VocabRadar][bilibili] 字幕列表为空（可能未登录/无字幕/需 wbi 签名）→ 回查页面捕获');
+    const rescued = await rescueCapturedTracks(ids);
+    if (rescued) {
+      list = rescued.list;
+      cuesByUrl = rescued.cuesByUrl;
+      console.log('[VocabRadar][bilibili] 页面捕获救援: 轨道', list.length, '个, cues', cuesByUrl.size, '条 URL');
+    }
+  }
+  if (!list || list.length === 0) {
+    console.warn('[VocabRadar][bilibili] 捕获缓存亦无字幕（点开播放器 CC 后会自动重拉）');
     return null;
   }
   // 打印所有轨道便于排查
@@ -211,7 +307,9 @@ export async function getBilibiliSubtitles(uiLanguage = 'en', learnLanguage = ''
   const track = pickSubtitleTrack(list, uiLanguage, learnLanguage, meaningLanguage);
   if (!track) return null;
 
-  const subs = await fetchBilibiliSubtitle(track.subtitle_url);
+  // 捕获轨 cues 已在手（页面侧连响应一起捕获），免二次下载（auth_key 时效内重取也可，
+  // 直用更稳）；API 轨照旧按 URL 下载
+  const subs = (track.cues && track.cues.length) ? track.cues : await fetchBilibiliSubtitle(track.subtitle_url);
   console.log(`[VocabRadar][bilibili] 字幕条数: ${subs ? subs.length : 0}`);
 
   // 构造 tracks 信息（与 YouTube 格式一致），供 sidebar 下拉框显示
@@ -231,7 +329,9 @@ export async function getBilibiliSubtitles(uiLanguage = 'en', learnLanguage = ''
  * @returns {Promise<Array<{start, end, text}>|null>}
  */
 export async function fetchBilibiliTrack(track) {
-  if (!track || !track.subtitle_url) return null;
+  if (!track) return null;
+  if (Array.isArray(track.cues) && track.cues.length) return track.cues; // 页面捕获轨：cues 直用
+  if (!track.subtitle_url) return null;
   return await fetchBilibiliSubtitle(track.subtitle_url);
 }
 

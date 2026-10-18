@@ -85,10 +85,11 @@ export const LLM_PROVIDERS = [
   {
     // 官方后端占位（plan 阶段三上线）：域名未定，先占 api.vocabradar.com，上线时改此一处
     //   即可（引导页 placeholder 随表走）。鉴权方式阶段三再定，暂按 openai 格式留 Key 框。
+    //   20261017 用户裁定"官方暂无 ASR，只有拉取已存在的字幕"——标签加未上线标注防误选
     id: 'official-backend',
     format: 'openai',
     group: 'backend',
-    label: { en: 'Official', zh: '官方' },
+    label: { en: 'Official (not yet live)', zh: '官方（未上线）' },
     baseUrl: 'https://api.vocabradar.com/v1',
     model: 'qwen3.5-0.8b'
   },

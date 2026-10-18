@@ -387,19 +387,19 @@ async function sendMessage(content) {
     } else if (resp.partial && resp.content) {
       // 已有部分输出后中断：保留已显示内容，附上原始错误（不遮蔽）；本轮不进上下文
       pending.className = 'msg err';
-      pending.textContent = resp.content + '\n[' + t('chat.failed') + '：' + resp.error + ']';
+      pending.textContent = resp.content + '\n[' + t('chat.failed') + resp.error + ']';
       _history.pop();
     } else {
       // 不遮蔽错误：把后台返回的原始错误原文显示出来，便于用户与诊断
       pending.className = 'msg err';
-      pending.textContent = t('chat.failed') + (resp && resp.error ? '：' + resp.error : '');
+      pending.textContent = t('chat.failed') + (resp && resp.error ? resp.error : '');
       if (resp && resp.needConfig) appendConfigButton();
       // 失败的这一轮不留在上下文里，避免污染后续对话
       _history.pop();
     }
   } catch (e) {
     pending.className = 'msg err';
-    pending.textContent = t('chat.failed') + '：' + String((e && e.message) || e);
+    pending.textContent = t('chat.failed') + String((e && e.message) || e);
     _history.pop();
   }
   _busy = false;

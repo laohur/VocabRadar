@@ -17,7 +17,7 @@
 //       附着于该根的元素，根销毁即随元素卸载，事件不可再达，读取时点等价）。
 // =============================================================================
 
-import { getLang, setLang, UI_LANGS, TRANSLATE_LANGS, LANG_NAMES } from '../../lib/i18n.js';
+import { getLang, setLang, t, UI_LANGS, TRANSLATE_LANGS, LANG_NAMES } from '../../lib/i18n.js';
 import { upsertDeactivateRule } from '../../lib/deactivate.js';
 import { openDiagCenter } from '../diag-window.js';
 import { setOverlayEnabled as overlaySetEnabled, setOverlayBilingual } from '../subtitle-overlay.js';
@@ -29,6 +29,8 @@ import {
   onChatClickVs, toggleLemmaGroup
 } from './subtitle-renderer.js';
 import { onOcrClick } from './ocr.js';
+import { toast } from './toast.js';
+import { makeVideoKey } from './dom-utils.js';
 import { toggleASR, stopASRInternal } from './asr-flow.js';
 import { onTrackSelect } from './tracks.js';
 import { speakWordVideo, runVideoQuery, onLearnClickVs } from './actions.js';
@@ -173,7 +175,7 @@ export function bindEvents(options = {}) {
   const btnCopy = _root.querySelector('#beaver-copy');
   const btnOcr = _root.querySelector('#beaver-ocr');
   const btnComment = _root.querySelector('#beaver-comment');
-  // 底部 learn 按钮（🎯）——导入视频草稿并跳转网站「我的卷轴」
+  // 底部 learn 按钮（🎯）——导入视频草稿并跳转网站学习页该卷轴详情页（/learn?id=，20261018 裁定）
   const btnLearn = _root.querySelector('#beaver-learn-btn');
   const btnChat = _root.querySelector('#beaver-chat');
   btnCopy.addEventListener('click', onCopy);
@@ -181,6 +183,91 @@ export function bindEvents(options = {}) {
   btnComment.addEventListener('click', onCommentClick);
   if (btnLearn) btnLearn.addEventListener('click', onLearnClickVs);
   if (btnChat) btnChat.addEventListener('click', onChatClickVs);
+
+  // P5 评价（20261018 用户定稿）：👍👎 占复制原位（复制挪第二排），点开在 footer
+  // 两排间展开评价行——左踩/中五星/右赞，赞=五星、踩=一星（再点取消）。
+  // 仅云端共享版本可评：SW cloud-meta 查当前视频的云端行 id（消费落库/缓存的
+  // subtitleId）；本地 ASR/官方轨道如实 toast 提示无可评价对象。票态经 SW 投票
+  // 代理（subs-vote），响应即服务端计数——无乐观更新
+  const btnVote = _root.querySelector('#beaver-vote');
+  const voteRow = _root.querySelector('#beaver-vote-row');
+  if (btnVote && voteRow) {
+    const starsBox = voteRow.querySelector('#beaver-vote-stars');
+    const btnUp = voteRow.querySelector('#beaver-vote-up');
+    const btnDown = voteRow.querySelector('#beaver-vote-down');
+    let voteSubId = null; // 当前视频可评的云端行 id（null=非云端版本）
+    let myVote = 0;
+    let myStars = 0;
+
+    const sendVote = (payload) => new Promise((resolve) => {
+      try {
+        chrome.runtime.sendMessage({ type: 'vocabradar:subs-vote', ...payload }, (res) => {
+          const err = chrome.runtime.lastError; // 必须读，防未处理 lastError 告警
+          resolve(err ? { ok: false, error: err.message } : (res || { ok: false, error: 'no-response' }));
+        });
+      } catch (e) { resolve({ ok: false, error: String(e && e.message || e) }); }
+    });
+
+    const renderStars = () => {
+      // ⭐ 彩色 emoji（20261018 用户令"谁让你用 svg 了"——弃 SVG，emoji 本就着色；
+      // 未点亮态 grayscale+低透明，点亮全彩）
+      starsBox.innerHTML = [1, 2, 3, 4, 5].map((n) =>
+        `<span class="beaver-vote-star${n <= myStars ? ' on' : ''}" data-n="${n}">⭐</span>`).join('');
+      starsBox.querySelectorAll('.beaver-vote-star').forEach((el) => {
+        el.addEventListener('click', () => {
+          const n = Number(el.dataset.n);
+          castVote({ stars: myStars === n ? 0 : n }); // 点同值清除；赞踩不动
+        });
+      });
+      btnUp.classList.toggle('active', myVote === 1);
+      btnDown.classList.toggle('active', myVote === -1);
+    };
+
+    const castVote = (ballot) => {
+      if (!voteSubId) return;
+      sendVote({ id: voteSubId, ...ballot }).then((res) => {
+        if (!res || !res.ok) {
+          console.warn('[VocabRadar][subs-vote] 投票失败:', res && res.error); // 恒可见（log 受门控）
+          return;
+        }
+        myVote = res.myVote || 0;
+        myStars = res.myStars || 0;
+        renderStars();
+      });
+    };
+
+    // 赞=五星/踩=一星（用户裁定映射）：再点同向键取消（票与星一并清）
+    btnUp.addEventListener('click', () => castVote(myVote === 1 ? { vote: 0, stars: 0 } : { vote: 1, stars: 5 }));
+    btnDown.addEventListener('click', () => castVote(myVote === -1 ? { vote: 0, stars: 0 } : { vote: -1, stars: 1 }));
+
+    btnVote.addEventListener('click', async () => {
+      const willShow = !voteRow.classList.contains('show');
+      if (!willShow) { voteRow.classList.remove('show'); return; }
+      if (!voteSubId) {
+        // 首次展开：查当前视频的云端行 id 并预填票态；非云端版本如实提示不展开
+        const meta = await new Promise((resolve) => {
+          try {
+            chrome.runtime.sendMessage({ type: 'vocabradar:subs-cloud-meta', videoKey: makeVideoKey() }, (res) => {
+              const err = chrome.runtime.lastError;
+              resolve(err ? { ok: false, error: err.message } : (res || { ok: false, error: 'no-response' }));
+            });
+          } catch (e) { resolve({ ok: false, error: String(e && e.message || e) }); }
+        });
+        if (!meta || !meta.ok || !meta.subtitleId) {
+          toast(t('subsVoteNone'));
+          return;
+        }
+        voteSubId = meta.subtitleId;
+        const st = await sendVote({ id: voteSubId }); // 无 ballot=GET 读票态
+        if (st && st.ok) {
+          myVote = st.myVote || 0;
+          myStars = st.myStars || 0;
+        }
+      }
+      renderStars();
+      voteRow.classList.add('show');
+    });
+  }
 
   // query 标签——查询按钮与 Enter（与文本侧栏 query 标签同构）
   const _vsQRun = _root.querySelector('#beaver-vs-query-run');

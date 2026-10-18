@@ -38,27 +38,95 @@ function esc(s) {
   ));
 }
 
+// 条目 → 规范视频链接（20261017 用户令：给链接时只带基本必要信息——平台+视频号，
+// 不携带任何其他参数；无可还原地址返回 null 不渲染链接）：
+//   bilibili BV → /video/BV..；ep 号 → /bangumi/play/ep..（P3 发布时的两种形态）
+//   youtube     → watch?v=..；videoId 含 / 的路径形态（shorts/ID 等）→ 原路径还原
+//   web         → videoId 即 makeVideoKey（host/path?ident 参数），https 前缀还原页面
+//   local 等无平台视频号 → 无链接
+// 防御剥离（20261017 二次令，用户实测链接带出 ?vd_source=.. 跟踪后缀）：videoId 若
+//   混入查询/片段（历史数据脏字段），bilibili/youtube 一律截断，web 只保留视频定位
+//   必需的 v/ep_id/p/cid 四个参数，其余（vd_source 等）无论来源一律不带出。
+function urlForEntry(entry) {
+  const id = String(entry.videoId || '').trim();
+  if (!id) return null;
+  if (entry.platform === 'bilibili') {
+    // 分P 口径（20261017）：videoId 自带 `?p=N`（parsePlatformVideo p≥2 时并入），
+    // 出链原样透传——字幕、链接、侧栏缓存键三方一致；其余查询/片段仍一律剥离
+    const q = id.indexOf('?');
+    const bare = (q === -1 ? id : id.slice(0, q)).split('#')[0];
+    // 后缀只放行 p=N（分P 口径），vd_source 等其余参数仍一律剥离
+    let suffix = '';
+    if (q !== -1) {
+      const pm = id.slice(q + 1).split('#')[0].match(/(?:^|&)(p=\d+)(?:&|$)/);
+      if (pm) suffix = '?' + pm[1];
+    }
+    if (/^BV[0-9A-Za-z]+$/.test(bare)) return `https://www.bilibili.com/video/${bare}${suffix}`;
+    if (/^ep\d+$/.test(bare)) return `https://www.bilibili.com/bangumi/play/${bare}${suffix}`;
+    return null;
+  }
+  if (entry.platform === 'youtube') {
+    const bare = id.split(/[?#]/)[0];
+    if (bare.includes('/')) return `https://www.youtube.com/${bare}`;
+    return `https://www.youtube.com/watch?v=${encodeURIComponent(bare)}`;
+  }
+  if (entry.platform === 'web') {
+    const q = id.indexOf('?');
+    const path = (q === -1 ? id : id.slice(0, q)).split('#')[0];
+    if (!/^[\w.-]+/.test(path)) return null;
+    const keep = [];
+    if (q !== -1) {
+      for (const kv of id.slice(q + 1).split('#')[0].split('&')) {
+        if (/^(v|ep_id|p|cid)=/.test(kv)) keep.push(kv);
+      }
+    }
+    return `https://${path}${keep.length ? '?' + keep.join('&') : ''}`;
+  }
+  return null;
+}
+
 async function publishEntry(entry, token) {
-  const res = await fetch(`${siteUrl()}/api/subs/publish`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-    body: JSON.stringify({
-      platform: entry.platform,
-      videoId: entry.videoId,
-      lang: entry.lang,
-      kind: entry.kind,
-      model: entry.model,
-      durationSec: entry.durationSec,
-      content: entry.content,
-      title: entry.title,
-    }),
-  });
-  const data = await res.json();
+  // 20261018 用户报"分享一直在 uploading，日志无记录"：此路 fetch 无超时、失败
+  // 走 log() 受门控全静默——挂起与失败皆不可见。补 30s 超时 + 失败恒 console.warn
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), 30000);
+  let res;
+  let data = null;
+  try {
+    res = await fetch(`${siteUrl()}/api/subs/publish`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      body: JSON.stringify({
+        platform: entry.platform,
+        videoId: entry.videoId,
+        lang: entry.lang,
+        kind: entry.kind,
+        model: entry.model,
+        durationSec: entry.durationSec,
+        content: entry.content,
+        cues: entry.cues || null,
+        title: entry.title,
+      }),
+      signal: ctrl.signal,
+    });
+    data = await res.json();
+  } catch (e) {
+    console.warn('[VocabRadar][subs] 上传网络失败:', entry.id, String(e && e.message || e)); // 恒可见
+    return false;
+  } finally {
+    clearTimeout(timer);
+  }
   if (data && data.success && data.subtitle) {
-    await markShared(entry.id, data.subtitle.id, data.subtitle.content_hash);
+    // 新发布（duplicate:false）云端行必属我；duplicate 时仅 mine:true 回填——
+    // 撞他人行不回填，否则 cloudId 指到别人行、取消分享必报 not-owner。
+    // （20261018 修：此前无条件读 data.mine——新发布响应没有该字段，fresh 分享
+    // 永不 markShared，按钮永远停在「分享」，用户误判失败反复重传）
+    if (!data.duplicate || data.mine) {
+      await markShared(entry.id, data.subtitle.id, data.subtitle.content_hash);
+    }
     return true;
   }
-  log('[VocabRadar][subs] 上传失败:', data && data.error);
+  console.warn('[VocabRadar][subs] 上传失败:', res && res.status, data && data.error); // 恒可见
   return false;
 }
 
@@ -91,13 +159,16 @@ async function shareAll(btn) {
   if (!token) { toast(m('subsNeedConnect')); return; }
   btn.disabled = true;
   const oldText = btn.textContent;
-  btn.textContent = m('subsUploading');
   let ok = 0;
-  for (const entry of locals) {
+  for (let i = 0; i < locals.length; i++) {
+    // 逐条进度可见（20261018 用户报"一直在 uploading"——共享全部本就是逐条串行，
+    // 条目多时耗时数分钟，无进度即像挂死）
+    btn.textContent = `${m('subsUploading')} ${i + 1}/${locals.length}`;
     try {
-      if (await publishEntry(entry, token)) ok++;
+      if (await publishEntry(locals[i], token)) ok++;
+      else console.warn('[VocabRadar][subs] 共享全部单条失败:', locals[i].id); // 恒可见
     } catch (e) {
-      log('[VocabRadar][subs] 共享全部异常:', entry.id, e);
+      console.warn('[VocabRadar][subs] 共享全部异常:', locals[i].id, String(e && e.message || e));
     }
   }
   btn.disabled = false;
@@ -122,11 +193,20 @@ async function unshareEntry(entry, btn) {
   try {
     const token = await getToken();
     if (!token) { btn.disabled = false; btn.textContent = m('subsNeedConnect'); return; }
-    const res = await fetch(`${siteUrl()}/api/subs/${entry.cloudId}/unshare`, {
-      method: 'POST',
-      headers: { Authorization: `Bearer ${token}` },
-    });
-    const data = await res.json();
+    const ctrl = new AbortController(); // 20261018：同 publishEntry 补超时+恒可见失败
+    const timer = setTimeout(() => ctrl.abort(), 30000);
+    let res;
+    let data = null;
+    try {
+      res = await fetch(`${siteUrl()}/api/subs/${entry.cloudId}/unshare`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}` },
+        signal: ctrl.signal,
+      });
+      data = await res.json();
+    } finally {
+      clearTimeout(timer);
+    }
     if (data && data.success) {
       entry.shareState = 'local';
       entry.cloudId = null;
@@ -136,12 +216,12 @@ async function unshareEntry(entry, btn) {
     } else {
       btn.disabled = false;
       btn.textContent = m('subsUnshareFail');
-      log('[VocabRadar][subs] 取消分享失败:', data && data.error);
+      console.warn('[VocabRadar][subs] 取消分享失败:', data && data.error); // 恒可见
     }
   } catch (e) {
     btn.disabled = false;
     btn.textContent = m('subsUnshareFail');
-    log('[VocabRadar][subs] 取消分享异常:', e);
+    console.warn('[VocabRadar][subs] 取消分享异常:', String(e && e.message || e)); // 恒可见
   }
 }
 
@@ -160,6 +240,29 @@ function bindAutoShareCheckbox() {
   });
 }
 
+function fmtTime(ms) {
+  try {
+    const d = new Date(Number(ms));
+    const p = (n) => String(n).padStart(2, '0');
+    return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
+  } catch { return ''; }
+}
+
+// cues → SRT 文本（20261017）：HH:MM:SS,mmm 时间轴 + 序号 + 文本块
+function buildSrt(cues) {
+  const t = (sec) => {
+    const ms = Math.max(0, Math.round(Number(sec) * 1000));
+    const h = Math.floor(ms / 3600000);
+    const m = Math.floor((ms % 3600000) / 60000);
+    const s = Math.floor((ms % 60000) / 1000);
+    const mmm = ms % 1000;
+    const p2 = (n) => String(n).padStart(2, '0');
+    return `${p2(h)}:${p2(m)}:${p2(s)},${String(mmm).padStart(3, '0')}`;
+  };
+  return cues.map((c, i) => `${i + 1}\n${t(c.start)} --> ${t(c.end)}\n${String(c.text || '').trim()}\n`)
+    .join('\n');
+}
+
 function render() {
   const box = $('subsList');
   if (!box) return;
@@ -174,19 +277,24 @@ function render() {
         ? `<span class="subs-tag subs-tag-shared">${esc(m('subsTagShared'))}</span>`
         : `<span class="subs-tag">${esc(m('subsTagLocal'))}</span>`;
       const min = r.durationSec ? Math.round(r.durationSec / 60) + 'min · ' : '';
-      // 每条右侧三分钮（用户 20261008 令）：本地=分享+删除；已分享=取消分享+删除
-      const actions = r.shareState === 'local'
-        ? `<button type="button" class="mw-btn subs-upload" data-id="${esc(r.id)}">${esc(m('subsUpload'))}</button> `
-        : `<button type="button" class="mw-btn subs-unshare" data-id="${esc(r.id)}">${esc(m('subsUnshare'))}</button> `;
-      return `<div class="subs-item">`
-        + `<div class="subs-item-main">`
-        + `<div class="subs-item-title">${esc(r.title || r.videoId || r.id)}</div>`
-        + `<div class="subs-item-meta">${esc(r.platform)} · ${esc(r.lang)} · ${esc(r.kind)} · ${esc(min)}${esc(r.model)}</div>`
-        + `</div>`
-        + `${status}`
-        + `<div class="subs-item-actions">${actions}`
+      const url = urlForEntry(r);
+      // 两行（20261018 令）：行1=时间+链接；行2=元信息标签 …… 查看·状态·其他按钮，
+      // 隔一段后最右端是删除
+      const row1 = `<div class="subs-row">`
+        + `<span class="subs-item-time">${esc(fmtTime(r.createdAt))}</span>`
+        + (url ? `<a class="subs-item-url" href="${esc(url)}" target="_blank" rel="noopener noreferrer">${esc(url)}</a>` : '')
+        + `</div>`;
+      const row2 = `<div class="subs-row">`
+        + `<span class="subs-item-meta">${esc(r.platform)} · ${esc(r.lang)} · ${esc(r.kind)} · ${esc(min)}${esc(r.model)}</span>`
+        + `<button type="button" class="mw-btn subs-view" data-id="${esc(r.id)}">${esc(m('subsView'))}</button>`
+        + status
+        + (r.shareState === 'local'
+          ? `<button type="button" class="mw-btn subs-upload" data-id="${esc(r.id)}">${esc(m('subsUpload'))}</button>`
+          : `<button type="button" class="mw-btn subs-unshare" data-id="${esc(r.id)}">${esc(m('subsUnshare'))}</button>`)
+        + `<button type="button" class="mw-btn subs-download" data-id="${esc(r.id)}">${esc(m('subsDownload'))}</button>`
         + `<button type="button" class="mw-btn subs-del" data-id="${esc(r.id)}">${esc(m('subsDelete'))}</button>`
-        + `</div></div>`;
+        + `</div>`;
+      return `<div class="subs-item" data-id="${esc(r.id)}">${row1}${row2}</div>`;
     }).join('');
     box.querySelectorAll('.subs-upload').forEach((btn) => {
       btn.addEventListener('click', () => {
@@ -206,6 +314,34 @@ function render() {
         if (entry) deleteEntry(entry);
       });
     });
+    // 查看：弹出窗口（20261017 令"预览改为弹出窗口"）——遮罩+居中对话框，× 或点遮罩关闭
+    box.querySelectorAll('.subs-view').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const entry = rows.find((r) => r.id === btn.dataset.id);
+        if (entry) openPreviewPopup(entry);
+      });
+    });
+    // 下载：有 cues（20261017 起入库带时间戳段）→ 标准 SRT；旧条目无时间戳回落 .txt
+    box.querySelectorAll('.subs-download').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const entry = rows.find((r) => r.id === btn.dataset.id);
+        if (!entry) return;
+        const baseName = String(entry.title || entry.videoId || entry.id).replace(/[\\/:*?"<>|]/g, '_');
+        let blob; let ext;
+        if (Array.isArray(entry.cues) && entry.cues.length) {
+          blob = new Blob([buildSrt(entry.cues)], { type: 'application/x-subrip;charset=utf-8' });
+          ext = 'srt';
+        } else {
+          blob = new Blob([entry.content || ''], { type: 'text/plain;charset=utf-8' });
+          ext = 'txt';
+        }
+        const a = document.createElement('a');
+        a.href = URL.createObjectURL(blob);
+        a.download = `${baseName}.${ext}`;
+        a.click();
+        setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+      });
+    });
   }).catch((e) => {
     box.innerHTML = `<div class="subs-empty">${esc(m('subsLoadFail'))}</div>`;
     log('[VocabRadar][subs] 列表读取失败:', e);
@@ -219,6 +355,219 @@ export function initSubs() {
   if (btn) btn.addEventListener('click', saveFromAsr);
   const shareAllBtn = $('btnSubsShareAll');
   if (shareAllBtn) shareAllBtn.addEventListener('click', () => shareAll(shareAllBtn));
+  const importBtn = $('btnSubsImport');
+  if (importBtn) importBtn.addEventListener('click', () => importFromBackend(importBtn));
+  purgeNoCues().then(() => render()); // 先清无时间戳旧条目再渲染（非法字幕不显示）
+}
+
+// 非法字幕不显示（20261018 令，撤"删除旧条目"按钮改为加载即清）：无 cues（无
+// 时间戳）的条目直接删除，不渲染——垃圾条目没有存在的意义
+async function purgeNoCues() {
+  try {
+    const rows = await listSubs();
+    const victims = rows.filter((r) => !Array.isArray(r.cues) || !r.cues.length);
+    for (const v of victims) {
+      try { await deleteSub(v.id); } catch (e) { log('[VocabRadar][subs] 清理旧条目失败:', v.id, e); }
+    }
+    if (victims.length) log('[VocabRadar][subs] 已清理无时间戳旧条目:', victims.length);
+  } catch (e) { log('[VocabRadar][subs] 清理旧条目异常:', e); }
+}
+
+// 预览弹窗（20261017 令"预览改为弹出窗口"）：遮罩+居中对话框，懒创建复用，
+// × 或点遮罩空白处关闭；正文 textContent 注入防注入。
+// P5（20261018）：云端消费落库条目（cloudId）在弹窗内可评价（👍/👎/★，经 SW 投票
+// 代理）与纠错（逐行编辑、行数须与时间轴一致 → derivedFrom 新版本上传成为分享者）
+function openPreviewPopup(entry) {
+  let overlay = document.getElementById('subsPreviewOverlay');
+  if (!overlay) {
+    overlay = document.createElement('div');
+    overlay.id = 'subsPreviewOverlay';
+    overlay.className = 'subs-preview-overlay';
+    overlay.addEventListener('click', (e) => {
+      if (e.target === overlay) overlay.style.display = 'none';
+    });
+    document.body.appendChild(overlay);
+  }
+  const isCloud = Number.isInteger(entry.cloudId) && entry.cloudId > 0;
+  const canFix = isCloud && Array.isArray(entry.cues) && entry.cues.length > 0;
+  overlay.innerHTML = `<div class="subs-preview-dialog">`
+    + `<div class="subs-preview-bar">`
+    + `<span class="subs-preview-title">${esc(entry.title || entry.videoId || entry.id)}</span>`
+    + (canFix ? `<button type="button" class="mw-btn subs-preview-correct">${esc(m('subsCorrect'))}</button>` : '')
+    + `<button type="button" class="mw-btn subs-preview-close">×</button>`
+    + `</div>`
+    + `<div class="subs-preview-vote" style="display:none"></div>`
+    + `<div class="subs-preview-body"></div>`
+    + `<div class="subs-preview-edit" style="display:none"></div>`
+    + `</div>`;
+  overlay.querySelector('.subs-preview-body').textContent =
+    // 20261018 用户令"预览也改成srt"：有 cues 显示标准 SRT（与下载件一致），无 cues 回落纯文本
+    Array.isArray(entry.cues) && entry.cues.length ? buildSrt(entry.cues) : (entry.content || '');
+  overlay.style.display = 'flex';
+  overlay.querySelector('.subs-preview-close').addEventListener('click', () => {
+    overlay.style.display = 'none';
+  });
+  const fixBtn = overlay.querySelector('.subs-preview-correct');
+  if (fixBtn) fixBtn.addEventListener('click', () => openCorrectEditor(entry, overlay));
+  if (isCloud) loadVoteBar(entry, overlay);
+}
+
+// 评价条：GET 票态预填；👍/👎 再点取消、★ 点同值清除。投票经 SW 代理
+// （vocabradar:subs-vote），响应即服务端最新计数——单往返、无乐观更新不撒谎
+async function loadVoteBar(entry, overlay) {
+  const box = overlay.querySelector('.subs-preview-vote');
+  if (!box) return;
+  const res = await sendMsg('vocabradar:subs-vote', { id: entry.cloudId });
+  if (!box.isConnected || overlay.style.display === 'none') return;
+  box.style.display = 'block';
+  if (!res || !res.ok) {
+    // 各结局如实一行（不静默）：未连接给引导，其余给失败
+    box.innerHTML = `<div style="font-size:.85em;opacity:.6;margin-bottom:4px">`
+      + `${esc(res && res.error === 'not-connected' ? m('subsVoteConnect') : m('subsVoteFail'))}</div>`;
+    if (res && res.error !== 'not-connected') log('[VocabRadar][subs] 票态读取失败:', res && res.error);
+    return;
+  }
+  renderVoteBar(box, res, entry);
+}
+
+// 评价图标（20261018 用户令"谁让你用 svg 了"——彩色 emoji：👍 👎 ⭐）
+const THUMB_UP = '👍';
+const THUMB_DOWN = '👎';
+const STAR = '⭐';
+
+function renderVoteBar(box, st, entry) {
+  const stars = [1, 2, 3, 4, 5].map((n) =>
+    `<span class="subs-vote-star" data-n="${n}" style="cursor:pointer;${n <= (st.myStars || 0) ? '' : 'opacity:.35;filter:grayscale(1)'}">${STAR}</span>`).join('');
+  const thumbBtn = (ic, cls, active) =>
+    `<button type="button" class="mw-btn ${cls}" style="${active ? 'color:#0a7d4f;font-weight:700' : ''}">${ic}</button>`;
+  box.innerHTML = `<div style="font-size:.9em;margin-bottom:4px;display:flex;align-items:center;gap:8px;flex-wrap:wrap">`
+    + `<span>${THUMB_UP}${st.upVotes || 0} ${THUMB_DOWN}${st.downVotes || 0} · ${STAR}${st.starAvg || 0}(${st.starCount || 0})</span>`
+    + thumbBtn(THUMB_UP, 'subs-vote-up', st.myVote === 1)
+    + thumbBtn(THUMB_DOWN, 'subs-vote-down', st.myVote === -1)
+    + `<span class="subs-vote-stars" style="display:inline-flex;align-items:center;gap:1px;font-size:15px">${stars}</span>`
+    + `</div>`;
+  box.querySelector('.subs-vote-up').addEventListener('click', () =>
+    castVote(entry, box, { vote: st.myVote === 1 ? 0 : 1 }));
+  box.querySelector('.subs-vote-down').addEventListener('click', () =>
+    castVote(entry, box, { vote: st.myVote === -1 ? 0 : -1 }));
+  box.querySelectorAll('.subs-vote-star').forEach((el) => {
+    el.addEventListener('click', () => {
+      const n = Number(el.dataset.n);
+      castVote(entry, box, { stars: st.myStars === n ? 0 : n });
+    });
+  });
+}
+
+async function castVote(entry, box, ballot) {
+  const res = await sendMsg('vocabradar:subs-vote', { id: entry.cloudId, ...ballot });
+  if (!res || !res.ok) {
+    toast(`${m('subsVoteFail')}${res && res.error ? ' (' + res.error + ')' : ''}`);
+    return;
+  }
+  renderVoteBar(box, res, entry);
+}
+
+// 纠错编辑器（方案 §5「纠错 = 上传新版本」）：cues 为权威行源（预填即逐段时间轴
+// 文本，行数天然对齐）；提交校验行数一致 → SW subs-correct（derivedFrom=cloudId）。
+// 成功后纠错版另存为本地"我分享的"新条目（cloudId=新行 id）；原消费条目保持不动
+function openCorrectEditor(entry, overlay) {
+  const cues = Array.isArray(entry.cues) ? entry.cues : [];
+  const bodyEl = overlay.querySelector('.subs-preview-body');
+  const voteEl = overlay.querySelector('.subs-preview-vote');
+  const editEl = overlay.querySelector('.subs-preview-edit');
+  bodyEl.style.display = 'none';
+  if (voteEl) voteEl.style.display = 'none';
+  editEl.style.display = 'block';
+  editEl.innerHTML = `<div style="font-size:.85em;opacity:.7;margin-bottom:4px">${esc(m('subsCorrectHint'))}</div>`
+    + `<textarea class="subs-preview-editor" style="width:100%;min-height:220px;box-sizing:border-box;font-family:inherit;font-size:inherit"></textarea>`
+    + `<div style="margin-top:6px;display:flex;gap:8px">`
+    + `<button type="button" class="mw-btn subs-correct-upload">${esc(m('subsCorrectUpload'))}</button>`
+    + `<button type="button" class="mw-btn subs-correct-cancel">${esc(m('subsCorrectCancel'))}</button></div>`;
+  const ta = editEl.querySelector('.subs-preview-editor');
+  ta.value = cues.map((c) => String(c.text || '').trim()).join('\n');
+  const backToBody = () => {
+    editEl.style.display = 'none';
+    bodyEl.style.display = '';
+    if (voteEl) voteEl.style.display = '';
+  };
+  editEl.querySelector('.subs-correct-cancel').addEventListener('click', backToBody);
+  editEl.querySelector('.subs-correct-upload').addEventListener('click', async function () {
+    const lines = ta.value.split('\n');
+    if (lines.length !== cues.length) {
+      // 行数与时间轴不一致：如实拒绝（不均匀铺时间瞎编，也不丢段错位）
+      toast(m('subsCorrectLineMismatch')
+        .replace('{lines}', String(lines.length)).replace('{cues}', String(cues.length)));
+      return;
+    }
+    const newCues = cues.map((c, i) => ({ start: c.start, end: c.end, text: lines[i].trim() }))
+      .filter((c) => c.text);
+    const content = newCues.map((c) => c.text).join('\n').trim();
+    if (!content) { toast(m('subsShareFail')); return; }
+    this.disabled = true;
+    this.textContent = m('subsCorrectUploading');
+    const res = await sendMsg('vocabradar:subs-correct', {
+      payload: {
+        platform: entry.platform, videoId: entry.videoId, lang: entry.lang,
+        kind: entry.kind || 'asr',
+        model: `manual-fix/${entry.model || 'unknown'}`,
+        durationSec: entry.durationSec, content, cues: newCues,
+        title: entry.title || '', derivedFrom: entry.cloudId,
+      },
+    });
+    this.disabled = false;
+    this.textContent = m('subsCorrectUpload');
+    if (!res || !res.ok || !res.subtitle) {
+      toast(`${m('subsShareFail')}${res && res.error ? ' (' + res.error + ')' : ''}`);
+      log('[VocabRadar][subs] 纠错上传失败:', res && res.error);
+      return;
+    }
+    try {
+      const ne = makeEntry({
+        platform: entry.platform, videoId: entry.videoId, lang: entry.lang,
+        kind: entry.kind || 'asr', title: entry.title || '',
+        durationSec: entry.durationSec,
+        model: `manual-fix/${entry.model || 'unknown'}`,
+        content, cues: newCues, cloudId: res.subtitle.id,
+      });
+      await saveSub(ne);
+      // 仅当云端行属于我（内容撞车他人先行分享时不回填，同 publishEntry 口径）
+      if (res.mine) await markShared(ne.id, res.subtitle.id, res.subtitle.content_hash);
+    } catch (e) {
+      log('[VocabRadar][subs] 纠错版入库失败:', e);
+    }
+    toast(m('subsCorrectDone'));
+    backToBody();
+    render();
+  });
+}
+
+// 从本地后端导入（20261017 用户令"本地后端有很多字幕，扩展只有三条"）：
+// 清单/详情/去重/无人声门控全在 SW（vocabradar:subs-backend-import），这里只触发+汇报
+function sendMsg(type, payload) {
+  return new Promise((resolve) => {
+    try {
+      chrome.runtime.sendMessage({ type, ...(payload || {}) }, (res) => {
+        const err = chrome.runtime.lastError; // 必须读，防未处理 lastError 告警
+        resolve(err ? { ok: false, error: err.message } : (res || { ok: false, error: 'no-response' }));
+      });
+    } catch (e) {
+      resolve({ ok: false, error: String(e && e.message || e) });
+    }
+  });
+}
+
+async function importFromBackend(btn) {
+  btn.disabled = true;
+  const oldText = btn.textContent;
+  btn.textContent = m('subsImporting');
+  const res = await sendMsg('vocabradar:subs-backend-import');
+  btn.disabled = false;
+  btn.textContent = oldText;
+  if (res && res.ok) {
+    toast(m('subsImportDone').replace('{ok}', String(res.imported || 0)).replace('{skip}', String(res.skipped || 0)));
+  } else {
+    toast(`${m('subsShareFail')}${res && res.error ? ' (' + res.error + ')' : ''}`);
+  }
   render();
 }
 
@@ -250,6 +599,8 @@ async function saveFromAsr() {
     durationSec,
     model,
     content,
+    cues: segs.map((s) => ({ start: s.start || 0, end: s.end || 0, text: (s.text || '').trim() }))
+      .filter((c) => c.text),
   });
   try {
     await saveSub(entry);

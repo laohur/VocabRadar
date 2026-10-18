@@ -26,6 +26,10 @@
 // import md5.js 作为副作用脚本，挂到 self.md5
 //   供有道翻译 sign 计算使用（sw/util.js 内的 md5Hex 消费；模块缓存保证只执行一次）
 import '../lib/vendor/md5.js';
+// i18n：SW 内"引导类"错误文案（API Key/Base URL/模型名未配置、转写超时等）随 UI 语言。
+//   fire-and-forget：initLang 读 chrome.storage 失败/超时均回退 en，不阻塞唤醒路径。
+import { initLang } from '../lib/i18n.js';
+initLang().catch(() => { /* ignore，用默认 en */ });
 // warmupDictProjection 供 SW 唤醒即预热词典投影
 // 拆分后 word-db 消息分发 / 词典初始化 / 释义清洗等由 sw/router.js 与 sw/lifecycle.js
 //   各自按需 import（同一模块缓存，只初始化一次）。

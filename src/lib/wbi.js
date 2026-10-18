@@ -174,7 +174,7 @@ async function getWbiKeys() {
   const res = await fetch('https://api.bilibili.com/x/web-interface/nav', { credentials: 'include' });
   const data = await res.json();
   if (data.code !== 0 || !data.data?.wbi_img?.img_url) {
-    throw new Error('nav 接口未返回 wbi_img');
+    throw new Error('nav endpoint returned no wbi_img');
   }
   const imgUrl = data.data.wbi_img.img_url;
   const subUrl = data.data.wbi_img.sub_url;

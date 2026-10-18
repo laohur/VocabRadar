@@ -88,17 +88,27 @@ export function buildSidebar() {
       </div>
     </div>
     <div class="beaver-footer">
+      <!-- 双排各四（20261018 用户定稿）：第一排 轨道/ASR/点赞/学习，第二排 复制/OCR/对话/评论。
+           复制自第一排挪入第二排首位；OCR 只剩图标（此前 data-i18n 覆写回"📷 OCR Frame"
+           文本致换行回归）；👍👎（P5 评价入口）占复制原位，点开在两排间展开评价行 -->
       <div class="beaver-footer-row" id="beaver-track-row">
         <select id="beaver-track-select" class="beaver-track-select" title="Track"></select>
         <button class="beaver-asr-toggle-btn" id="beaver-asr-toggle" data-i18n="asr.realtime">🎤 ASR(Live)</button>
-        <button id="beaver-copy" data-i18n="btn.copy">📋 Copy</button>
+        <button class="beaver-icon-btn" id="beaver-vote" data-i18n-title="btn.vote" title="Rate this subtitle">👍👎</button>
         <!-- export 改 learn（🎯 用户裁定图标）——导入视频草稿（字幕正文+生词）
              到扩展缓存并跳转网站「我的卷轴」，参照文本侧栏底部 learn 按钮同语义；
              跳转按本地/线上构建自动判定（getSiteUrl）。原导出文件功能移除 -->
         <button id="beaver-learn-btn" data-i18n="btn.learn" title="Import draft & open My Scrolls">🎯 <span data-i18n="btn.learn">Learn</span></button>
       </div>
+      <!-- P5 评价展开行：默认隐藏，点 👍👎 展开——左踩/中五星/右赞（赞=五星，踩=一星） -->
+      <div class="beaver-footer-row beaver-vote-row" id="beaver-vote-row">
+        <button type="button" class="beaver-vote-thumb" id="beaver-vote-down" title="-1">👎</button>
+        <span class="beaver-vote-stars" id="beaver-vote-stars"></span>
+        <button type="button" class="beaver-vote-thumb" id="beaver-vote-up" title="+1">👍</button>
+      </div>
       <div class="beaver-footer-row">
-        <button class="beaver-icon-btn" id="beaver-ocr" data-i18n="btn.ocr" data-i18n-title="btn.ocrTitle" title="OCR current frame">📷</button>
+        <button id="beaver-copy" data-i18n="btn.copy">📋 Copy</button>
+        <button class="beaver-icon-btn" id="beaver-ocr" data-i18n-title="btn.ocrTitle" title="OCR current frame">📷</button>
         <!-- 评论按钮左侧新增对话按钮 -->
         <button id="beaver-chat" data-i18n="btn.chat">💬 Chat</button>
         <button id="beaver-comment" data-i18n="btn.comment">📝 Comment</button>

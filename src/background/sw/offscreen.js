@@ -52,7 +52,7 @@ async function ensureFallbackIframe() {
   // Chromium 的后台是无 DOM 的 Service Worker；本函数仅在 chrome.offscreen 缺失
   // （即 Firefox event page）时调用，此处仅作真实诊断，不静默成功。
   if (typeof document === 'undefined' || !document.documentElement) {
-    return { ok: false, error: '后台环境无 DOM（Service Worker），无法承载 ASR 回退 iframe' };
+    return { ok: false, error: 'No DOM in background (Service Worker) — cannot host the ASR fallback iframe' };
   }
   // 幂等：已存在且文档仍在则复用（event page 未被回收时模型缓存可复用）
   if (_asrFallbackFrame && _asrFallbackFrame.isConnected && _asrFallbackFrame.contentWindow) {
@@ -68,9 +68,9 @@ async function ensureFallbackIframe() {
       let settled = false;
       const done = (r) => { if (!settled) { settled = true; resolve(r); } };
       frame.addEventListener('load', () => done({ ok: true }), { once: true });
-      frame.addEventListener('error', () => done({ ok: false, error: 'iframe load 事件报错' }), { once: true });
+      frame.addEventListener('error', () => done({ ok: false, error: 'iframe load event error' }), { once: true });
       // 超时不再假装成功：真实回报"未触发 load"
-      setTimeout(() => done({ ok: false, error: '后台页内 iframe 10 秒内未触发 load' }), 10000);
+      setTimeout(() => done({ ok: false, error: 'Fallback iframe did not fire load within 10s' }), 10000);
     });
     frame.src = chrome.runtime.getURL('src/offscreen/offscreen.html');
     document.documentElement.appendChild(frame);
@@ -154,14 +154,14 @@ async function ensureOffscreen() {
 export async function ensureOffscreenHost() {
   if (typeof chrome.offscreen !== 'undefined') {
     const ok = await ensureOffscreen();
-    if (!ok) return { ok: false, error: 'offscreen 创建失败' };
+    if (!ok) return { ok: false, error: 'Failed to create offscreen document' };
     // 用户报障（网站传 PNG 报 "Could not establish connection. Receiving end does
     //   not exist."）：建好宿主 ≠ 监听器就绪——createDocument 返回时 offscreen.js
     //   （ES module）的 onMessage 可能尚未注册，紧接着的 OFFSCREEN_* 正是这个报错。
     //   复用 waitOffscreenReady（PING 握手），OCR/链接/文档三路共用本函数，
     //   握手一次全部生效。
     const ready = await waitOffscreenReady(8000);
-    if (!ready) return { ok: false, error: 'offscreen 宿主 8 秒内无 PING 应答（监听器未就绪）' };
+    if (!ready) return { ok: false, error: 'Offscreen host did not answer PING within 8s (listener not ready)' };
     return { ok: true };
   }
   const fr = await ensureFallbackIframe();
@@ -169,7 +169,7 @@ export async function ensureOffscreenHost() {
   // Firefox 回退 iframe：load 事件后同样握手确认 offscreen.js 监听器已注册（附诊断快照）
   const ready = await waitOffscreenReady(8000);
   if (!ready) {
-    return { ok: false, error: '回退 iframe 宿主 8 秒内无 PING 应答（' + describeFallbackFrame() + '）' };
+    return { ok: false, error: 'Fallback iframe host did not answer PING within 8s (' + describeFallbackFrame() + ')' };
   }
   return { ok: true };
 }

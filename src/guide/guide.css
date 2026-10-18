@@ -1658,27 +1658,86 @@ input::placeholder { color: var(--g-muted); opacity: 1; }
   .mw-cols { flex-direction: column; }
 }
 
-/* ===== 字幕库（P3 2026-10-08，panel-subs）===== 本地条目两行式 + 状态标签 + 行内操作 */
+/* ===== 字幕库（P3 2026-10-08，panel-subs）===== 两行（20261018 令）：
+   行1=时间+链接；行2=元信息标签 …… 查看·状态·分享/下载，隔一段后最右端删除 */
 .subs-item {
-  display: flex;
-  align-items: center;
-  gap: 10px;
   padding: 8px 0;
   border-bottom: 1px solid rgba(128, 128, 128, 0.15);
 }
-.subs-item:last-child { border-bottom: none; }
-.subs-item-main { flex: 1; min-width: 0; }
-.subs-item-title {
+.subs-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.subs-row + .subs-row { margin-top: 4px; }
+.subs-item-time {
+  flex-shrink: 0;
+  font-size: 11px;
+  color: var(--text-secondary, #888);
+}
+/* 链接行内（20261017 三次令：链接承担标识） */
+.subs-item-url {
+  flex: 1 1 auto;
+  min-width: 0;
   font-size: 13px;
   font-weight: 600;
-  color: var(--text-primary, #1c1c1e);
+  color: #0a7d4f;
+  text-decoration: none;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+.subs-item-url:hover { text-decoration: underline; }
+/* 预览弹窗（20261017 令"预览改为弹出窗口"）：遮罩 + 居中对话框 */
+.subs-preview-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.45);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 2147483000;
+}
+.subs-preview-dialog {
+  width: min(680px, 92vw);
+  max-height: 80vh;
+  display: flex;
+  flex-direction: column;
+  background: var(--g-card, #ffffff);
+  color: var(--g-text, #1a1f1a);
+  border-radius: var(--g-radius, 10px);
+  box-shadow: var(--g-shadow, 0 2px 8px rgba(20, 40, 25, 0.08));
+  overflow: hidden;
+}
+.subs-preview-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--g-border, #dbe4dd);
+  font-size: 13px;
+  font-weight: 600;
+}
+.subs-preview-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.subs-preview-body {
+  padding: 12px 14px;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-size: 12.5px;
+  line-height: 1.7;
+}
 .subs-item-meta {
-  font-size: 11px;
-  color: var(--text-secondary, #888);
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: 12px;
+  color: var(--text-secondary, #555);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -1695,5 +1754,6 @@ input::placeholder { color: var(--g-muted); opacity: 1; }
   background: rgba(48, 209, 88, 0.16);
   color: #15803d;
 }
-.subs-item-actions { flex-shrink: 0; display: flex; gap: 6px; }
+/* 删除最右、与前段隔一段（20261018 令） */
+.subs-del { margin-left: 16px; }
 .subs-empty { font-size: 13px; color: var(--text-secondary, #888); padding: 8px 0; }

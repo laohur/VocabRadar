@@ -73,10 +73,9 @@ step 6 packages the result.
    trailing whitespace is cleared and runs of 3+ blank lines are collapsed
    to one; whitespace is otherwise untouched, so the output stays multi-line
    and readable.
-3. **Content-script bundling** (`bundleContentScripts`): four first-party
+3. **Content-script bundling** (`bundleContentScripts`): three first-party
    entry files — `src/content/text-hint-impl.js`,
-   `src/content/web-sidebar-impl.js`, `src/content/video-controller.js`,
-   `src/lib/bilibili-comment.js` — are bundled with **esbuild** into
+   `src/content/web-sidebar-impl.js`, `src/content/video-controller.js` — are bundled with **esbuild** into
    single-file outputs of the same names inside `dist/src/`. This is a
    concatenate-several-files-into-one step. esbuild is imported from
    `scripts/node_modules/` (installed by `npm install`).

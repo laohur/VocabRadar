@@ -5,6 +5,8 @@
 //   2. 悬浮提示显示/隐藏/避让定位（生词矩形四周 12px 缓冲，右→左、下→上翻转）
 //   3. 指针区域判定（生词 ∪ 悬浮窗，外扩 24px；移出即立即隐藏，无停留时间）
 //   4. 生词交互事件处理器：onWordHover / onWordLeave / onWordClick
+//      （20261014 用户令：hover 不再即刻上屏——停留 ≥ thState.tooltipShowDelay（默认
+//        300ms）才弹飘窗，快速划过不弹；点击视为明确意图立即上屏）
 //   5. 滚动隐藏 onScrollHide（同时隐藏悬浮提示与右键面板）
 //
 // 共享状态一律取自 core.js 的 thState（唯一属主），本文件不声明任何同名变量。
@@ -295,6 +297,68 @@ export function hideTooltip() {
   thState.tooltipTargetEl = null;
   thState.tooltipWord = '';  // 清除当前词标记，取消待填充的异步音标
   if (thState.hideTimer) { clearTimeout(thState.hideTimer); thState.hideTimer = null; }
+  cancelHoverShow();  // 隐藏即连带取消未到期的飘窗显示（20261014 停留延时）
+}
+
+// === 停留延时显示（20261014 用户令："鼠标快速划过不飘窗，停留一小段时间才飘窗"）===
+// 背景：onWordHover 原来 mouseenter 即刻 showTooltip，快速扫过一行词会连环弹窗。
+// 做法：hover 只登记待显数据并起计时（thState.tooltipShowDelay，默认 300ms，
+//   config.json tooltipShowDelay 可覆盖），到期且指针仍在该词上才上屏；
+//   翻译/音标预取不延后——卡片弹出时释义大概率已就绪，不额外等网络。
+// 状态（hoverShowTimer/hoverPending）按 core.js thState 单一属主约定存放。
+
+/** 取消未到期的飘窗显示（换词重计时 / 离开 / 隐藏时调用） */
+function cancelHoverShow() {
+  if (thState.hoverShowTimer) { clearTimeout(thState.hoverShowTimer); thState.hoverShowTimer = null; }
+  thState.hoverPending = null;
+}
+
+/** 立刻显示待显飘窗（计时到期或立即路径调用）；锚点已换/已脱离文档则丢弃
+ *  @param {boolean} checkPointer 仅计时到期路径传 true：指针已挪出生词矩形（外扩16px）
+ *    时丢弃——mouseleave 之外的兜底（离开窗口/事件丢失时不留"人已走、卡才弹"） */
+function flushHoverShow(checkPointer) {
+  const p = thState.hoverPending;
+  thState.hoverPending = null;
+  if (thState.hoverShowTimer) { clearTimeout(thState.hoverShowTimer); thState.hoverShowTimer = null; }
+  if (!p) return;
+  if (thState.tooltipTargetEl !== p.el || !p.el.isConnected) return;
+  // 坐标未知（lastPointerX/Y 初值 -1，尚未收到 pointermove）不判离，交由 mouseleave
+  if (checkPointer && thState.lastPointerX >= 0 && thState.lastPointerY >= 0) {
+    const r = p.el.getBoundingClientRect();
+    const pad = 16;
+    const x = thState.lastPointerX;
+    const y = thState.lastPointerY;
+    if (x < r.left - pad || x > r.right + pad || y < r.top - pad || y > r.bottom + pad) return;
+  }
+  showTooltip(p.data, p.rect, p.opts);
+}
+
+/**
+ * 登记飘窗显示。immediate=true（点击等明确意图）跳过延时直接上屏；
+ * 否则重新起计时——停留时长按"停在哪个词"算，划到下一个词即重计。
+ */
+function scheduleHoverShow(el, data, rect, opts, immediate) {
+  cancelHoverShow();
+  thState.hoverPending = { el, data, rect, opts };
+  const delay = (typeof thState.tooltipShowDelay === 'number') ? thState.tooltipShowDelay : 300;
+  if (immediate || delay <= 0) { flushHoverShow(false); return; }
+  thState.hoverShowTimer = setTimeout(() => {
+    thState.hoverShowTimer = null;
+    flushHoverShow(true);
+  }, delay);
+}
+
+/**
+ * 释义等异步结果到达时刷新卡片：已上屏 → 就地重渲；计时中 → 只更新待显数据
+ * （不提前上屏，否则延时被网络回调击穿）；已离开 → 作废。
+ */
+function updateHoverCard(el, data, rect, opts) {
+  if (thState.tooltipTargetEl !== el) return;  // 已换词/已离开，本次结果作废
+  if (thState.tooltip && thState.tooltip.style.display !== 'none') {
+    showTooltip(data, rect, opts);
+    return;
+  }
+  if (thState.hoverShowTimer) thState.hoverPending = { el, data, rect, opts };
 }
 
 // 指针是否已离开"生词 + 悬浮窗"联合区域。
@@ -347,7 +411,9 @@ export function onWordHover(e) {
     lemma: el.dataset.lemma || ''  // 词形还原原形（仅词形还原后命中时非空）
   };
   const rect = el.getBoundingClientRect();
-  showTooltip(data, rect, { pending: data.translations.length === 0 });
+  // 停留延时：先登记待显、到期再上屏（e.__showNow = 点击路径，立即显示）
+  scheduleHoverShow(el, data, rect, { pending: data.translations.length === 0 },
+    !!(e && e.__showNow));
 
   // 用户要求"鼠标飘过或者点击生词时候，要翻译"。
   // queryWord 异步翻译只更新 thState.wordCache，已包裹的 span 不会更新，
@@ -362,7 +428,7 @@ export function onWordHover(e) {
       data.translations = cached.translations;
       // 过滤括号不配对的截断残片
       el.dataset.translations = cached.translations.filter((s) => Boolean(s) && isBalancedParens(s)).join('；');
-      showTooltip(data, rect, { pending: false });
+      updateHoverCard(el, data, rect, { pending: false });
       return;
     }
     // 缓存未命中，触发翻译（hover 是用户主动行为）；上下文失效时跳过，避免无意义的翻译调用
@@ -373,10 +439,11 @@ export function onWordHover(e) {
       // 过滤括号不配对的截断残片
       const okT = translations.filter((s) => Boolean(s) && isBalancedParens(s));
       el.dataset.translations = okT.join('；');
-      // 仅当 tooltip 仍指向当前 span 时更新（避免快速 hover 串扰）
+      // 仅当 tooltip 仍指向当前 span 时更新（避免快速 hover 串扰）；
+      // 计时期间只刷新待显数据，不提前上屏（updateHoverCard 内判）
       if (thState.tooltipTargetEl === el) {
         data.translations = okT;
-        showTooltip(data, rect, { pending: false });
+        updateHoverCard(el, data, rect, { pending: false });
       }
       // 同步侧邻注释，保证与悬浮提示显示同一译文
       if (thState.colors.sideAnnotation && thState.enabled) {
@@ -402,9 +469,9 @@ export function onWordHover(e) {
           thState.contextInvalidated = true;
         }
         // 翻译失败移除省略号，释义区留空，不自作主张显示"暂无释义"；
-        // tooltip 仍指向当前 span 时刷新。
+        // tooltip 仍指向当前 span 时刷新（计时期间只更新待显数据）。
         if (thState.tooltipTargetEl === el) {
-          showTooltip(data, rect, { pending: false });
+          updateHoverCard(el, data, rect, { pending: false });
         }
       });
     };
@@ -423,6 +490,8 @@ export function onWordHover(e) {
 }
 
 export function onWordLeave() {
+  // 停留延时：先取消未到期的飘窗显示——快速划过即"从未上屏"（20261014）。
+  cancelHoverShow();
   // 无停留时间：pointermove 监听已覆盖大多数情况；此处兜底——mouseleave
   // 触发且指针已不在区域内（例如移向页面其他位置）则立即隐藏。
   if (pointerOutOfTooltipZone()) hideTooltip();
@@ -437,11 +506,8 @@ export function onWordClick(e) {
   // 「不拦截宿主点击」原则：包进宿主文本的 span 必须放行冒泡。
   const el = e.currentTarget;
   speak(el.dataset.word);
-  // 用户要求"点击生词时候，要翻译"：onWordHover 已处理 translations 为空时的
-  // 翻译，click 时先检查是否需要翻译，需要则复用 hover 的翻译逻辑。
-  const translations = el.dataset.translations ? el.dataset.translations.split('；') : [];
-  if (translations.length === 0) {
-    // 复用 hover 的翻译逻辑：构造 mouseenter 事件触发 onWordHover
-    onWordHover({ currentTarget: el, stopPropagation: () => {} });
-  }
+  // 用户要求"点击生词时候，要翻译"：复用 hover 的翻译逻辑（translations 空则触发翻译）。
+  // 20261014 停留延时后，点击视为明确意图 → __showNow 立即上屏（不等 300ms）；
+  // 且无论有无释义都跑一遍，保证"刚划过就点"也能立刻看到卡片。
+  onWordHover({ currentTarget: el, stopPropagation: () => {}, __showNow: true });
 }

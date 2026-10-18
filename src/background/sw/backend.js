@@ -222,7 +222,7 @@ export async function handleKuroFetch(url) {
     const idx = u.pathname.indexOf(KURO_DICT_BASE);
     const file = idx >= 0 ? u.pathname.slice(idx + KURO_DICT_BASE.length) : '';
     if (!KURO_DICT_FILES.has(file)) {
-      return { ok: false, error: 'kuroFetch: 非白名单词典文件: ' + (file || u.pathname) };
+      return { ok: false, error: 'kuroFetch: non-whitelisted dictionary file: ' + (file || u.pathname) };
     }
     const dictPath = u.pathname.slice(idx); // kuromoji@0.1.2/dict/<file>
     // 本地持久缓存优先（用户批复"文件存入本地缓存，供调用"；业界同型：
@@ -262,7 +262,7 @@ export async function handleKuroFetch(url) {
         return { ok: true, b64: abToB64(buf) };
       } catch (e) { srcErrs.push(tryUrl + ' -> ' + String((e && e.message) || e)); }
     }
-    return { ok: false, error: 'kuroFetch 全源失败: ' + srcErrs.join(' | ') };
+    return { ok: false, error: 'kuroFetch all sources failed: ' + srcErrs.join(' | ') };
   } catch (e) {
     return { ok: false, error: String(e.message || e) };
   }

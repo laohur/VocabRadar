@@ -39,7 +39,7 @@ function showReloadHint() {
     el.style.cssText = 'position:fixed;bottom:8px;left:50%;transform:translateX(-50%);background:#2e6b43;color:#fff;padding:8px 16px;border-radius:8px;font-size:13px;z-index:9999;box-shadow:0 2px 8px rgba(0,0,0,.2);';
     document.body.appendChild(el);
   }
-  el.textContent = '💡 刷新页面后生效';
+  el.textContent = t('popup.refreshToApply');
   el.style.display = 'block';
   clearTimeout(el._timer);
   el._timer = setTimeout(() => { el.style.display = 'none'; }, 3000);
@@ -52,7 +52,7 @@ function showReloadHint() {
 function withTimeout(promise, ms, label) {
   return Promise.race([
     promise,
-    new Promise((_, reject) => setTimeout(() => reject(new Error(label + ' 超时(' + ms + 'ms)')), ms))
+    new Promise((_, reject) => setTimeout(() => reject(new Error(t('popup.timeout', { label, ms }))), ms))
   ]);
 }
 

@@ -7,6 +7,9 @@
 import { resolveLlmConfig, getFreeProviders } from '../../lib/llm.js';
 import { isRunawayText } from '../../lib/runaway.js';
 import { _ts, log } from './log.js';
+// 引导类错误（API Key/Base URL/模型名未配置）随 UI 语言（20261014）；
+//   纯技术类错误按第二百三十九次裁定固定英文。
+import { t, initLang } from '../../lib/i18n.js';
 
 // 免费直连轮替游标：每次轮替请求起点在几家免费来源间轮转，分摊限流压力
 let _llmFreeCursor = 0;
@@ -151,13 +154,15 @@ export async function handleLlmChat(messages, onDelta, opts) {
  *   retryable=true 表示"本家限流/不通"（402/429/5xx/网络错），仅保留语义字段
  */
 async function llmChatOnce(cfg, messages) {
+  // 引导类错误文案随 UI 语言：await initLang（幂等，已初始化即刻返回）
+  await initLang();
   // 是否需要 Key：noKey（backend 组）与 free 格式（免费直连，无鉴权）都不需要
   const noKey = !!cfg.noKey || cfg.format === 'free';
   const isAnthropic = cfg.format === 'anthropic';
   // 不遮蔽错误：缺 baseUrl / 缺 model 都明确告知；Key 只对需账号的两类强制要求
-  if (!noKey && !cfg.apiKey) return { ok: false, error: 'API Key 未配置', needConfig: true };
-  if (!cfg.baseUrl) return { ok: false, error: 'Base URL 未配置', needConfig: true };
-  if (!cfg.model) return { ok: false, error: '模型名未配置', needConfig: true };
+  if (!noKey && !cfg.apiKey) return { ok: false, error: t('sw.noApiKey'), needConfig: true };
+  if (!cfg.baseUrl) return { ok: false, error: t('sw.noBaseUrl'), needConfig: true };
+  if (!cfg.model) return { ok: false, error: t('sw.noModel'), needConfig: true };
 
   // 三类格式的 URL / 头 / 请求体差异
   const url = cfg.baseUrl + (isAnthropic ? '/v1/messages' : '/chat/completions');
@@ -198,7 +203,7 @@ async function llmChatOnce(cfg, messages) {
     let data = null;
     try { data = JSON.parse(raw); } catch (e) {
       // 返回体不是 JSON（常见于网关错误页/限流页）→ 如实带回可重试标记
-      return { ok: false, error: '响应不是 JSON：' + raw.slice(0, 200), retryable: true };
+      return { ok: false, error: 'Response is not JSON: ' + raw.slice(0, 200), retryable: true };
     }
     // 响应解析：Anthropic 是 content[] 数组（取所有 text 块拼接），OpenAI 形状是 choices[0].message.content
     let content = '';
@@ -211,7 +216,7 @@ async function llmChatOnce(cfg, messages) {
         ? String(data.choices[0].message.content || '')
         : '';
     }
-    if (!content) return { ok: false, error: '响应中无内容：' + raw.slice(0, 200), retryable: true };
+    if (!content) return { ok: false, error: 'No content in response: ' + raw.slice(0, 200), retryable: true };
     return { ok: true, content };
   } catch (e) {
     console.error('[VocabRadar][sw][' + _ts() + '] llmChat 异常:', e);
@@ -232,12 +237,14 @@ async function llmChatOnce(cfg, messages) {
  * @param {(text: string) => void} onDelta 每收到一段增量文本回调一次
  */
 async function llmChatStreamOnce(cfg, messages, onDelta) {
+  // 引导类错误文案随 UI 语言：await initLang（幂等，已初始化即刻返回）
+  await initLang();
   // 是否需要 Key：noKey（backend 组）与 free 格式（免费直连，无鉴权）都不需要
   const noKey = !!cfg.noKey || cfg.format === 'free';
   const isAnthropic = cfg.format === 'anthropic';
-  if (!noKey && !cfg.apiKey) return { ok: false, error: 'API Key 未配置', needConfig: true };
-  if (!cfg.baseUrl) return { ok: false, error: 'Base URL 未配置', needConfig: true };
-  if (!cfg.model) return { ok: false, error: '模型名未配置', needConfig: true };
+  if (!noKey && !cfg.apiKey) return { ok: false, error: t('sw.noApiKey'), needConfig: true };
+  if (!cfg.baseUrl) return { ok: false, error: t('sw.noBaseUrl'), needConfig: true };
+  if (!cfg.model) return { ok: false, error: t('sw.noModel'), needConfig: true };
 
   const url = cfg.baseUrl + (isAnthropic ? '/v1/messages' : '/chat/completions');
   const headers = { 'Content-Type': 'application/json' };
@@ -277,7 +284,7 @@ async function llmChatStreamOnce(cfg, messages, onDelta) {
       const raw = await resp.text();
       let data = null;
       try { data = JSON.parse(raw); } catch (_e) {
-        return { ok: false, error: '响应不是 JSON：' + raw.slice(0, 200), retryable: true };
+        return { ok: false, error: 'Response is not JSON: ' + raw.slice(0, 200), retryable: true };
       }
       let content = '';
       if (isAnthropic) {
@@ -289,7 +296,7 @@ async function llmChatStreamOnce(cfg, messages, onDelta) {
           ? String(data.choices[0].message.content || '')
           : '';
       }
-      if (!content) return { ok: false, error: '响应中无内容：' + raw.slice(0, 200), retryable: true };
+      if (!content) return { ok: false, error: 'No content in response: ' + raw.slice(0, 200), retryable: true };
       if (onDelta) onDelta(content);
       return { ok: true, content };
     }
@@ -322,7 +329,7 @@ async function llmChatStreamOnce(cfg, messages, onDelta) {
         if (piece) { acc += piece; if (onDelta) onDelta(piece); }
       }
     }
-    if (!acc) return { ok: false, error: 'SSE 无内容', retryable: true };
+    if (!acc) return { ok: false, error: 'SSE returned no content', retryable: true };
     return { ok: true, content: acc };
   } catch (e) {
     console.error('[VocabRadar][sw][' + _ts() + '] llmChatStream 异常:', e);

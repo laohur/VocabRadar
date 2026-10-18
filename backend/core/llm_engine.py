@@ -37,7 +37,7 @@ log = logging.getLogger(__name__)
 # 引擎不注入任何模型路径）。
 _CMD_VALUE_FLAGS = {"-m", "--model", "--mmproj", "--host", "--port",
                     "-c", "--ctx-size", "--temp", "--top-p", "--top-k",
-                    "--min-p", "--repeat-penalty"}
+                    "--min-p", "--repeat-penalty", "-np", "--parallel"}
 
 # 三源重试链的镜像端点（llama.cpp 读 MODEL_ENDPOINT 重定向 repo 解析请求）
 _HF_MIRROR = "https://hf-mirror.com/"
@@ -364,6 +364,7 @@ class LlmEngine:
             "engine": self.cfg.get("engine", "llamacpp"),
             "mode": self.cfg.get("mode", "resident"),
             "port": self.cfg.get("port", 7788),
+            "parallel": self._parallel(),        # 并行槽位（-np，管理页设定）
             "model": str((card or {}).get("name") or ""),  # 生效卡名（总览页模型列）
             "cards": self.list_cards(),            # 卡片只读清单（管理页展示）
             "manual_stop": self._manual_stop,      # 手动停机中（惰性拉起被抑制）
@@ -497,15 +498,33 @@ class LlmEngine:
                 log.warning("提示：hf 与 hf-mirror 均不可达或仓库无法访问；"
                             "fallback_url 直链兜底只在 llama-server 启动链生效")
 
+    def _parallel(self):
+        """llama-server 并行槽位数（-np）：配置值，下限 1，默认 4。"""
+        try:
+            return max(1, int(self.cfg.get("parallel", 4)))
+        except (TypeError, ValueError):
+            return 4
+
+    def _ctx_total(self):
+        """注入 llama-server 的总 ctx：配置 ctx × 并行槽位（llama-server 把
+        总 ctx 均分各槽，放大后每槽上下文=配置 ctx；显存随总 ctx 增长）。"""
+        try:
+            ctx = int(self.cfg.get("ctx", 16384))
+        except (TypeError, ValueError):
+            ctx = 16384
+        return ctx * self._parallel()
+
     def _command_argv(self, card, exe):
         """解析卡片 command 为启动 argv——卡片命令即权威，模型交 llama.cpp
         自管（-hf 自动下载/缓存命中离线可用），引擎不注入模型路径。
 
         规则：argv[0] 忽略（统一用引擎自定位 exe，保证 GPU 版二进制）；
-        --host/--port/--ctx-size 强制配置值（后端反代依赖）；--jinja 缺失追加
-        （reasoning_content 链路依赖）；-m/--mmproj/-hf 等模型旗标与 --temp 等
-        采样旗标一律保留命令声明值，仅采样在命令未含时按 card.sampling 注入；
-        其余旗标逐 token 透传。command 空/解析失败返回 None，调用方报错。"""
+        --host/--port/--ctx-size/-np 强制配置值（后端反代依赖；ctx 按
+        parallel 放大注入——llama-server 把总 ctx 均分各槽，ctx×np 后每槽
+        上下文=配置 ctx）；--jinja/--parallel 缺失追加（reasoning_content
+        链路依赖 / 并发槽位默认 4）；-m/--mmproj/-hf 等模型旗标与 --temp
+        等采样旗标一律保留命令声明值，仅采样在命令未含时按 card.sampling
+        注入；其余旗标逐 token 透传。command 空/解析失败返回 None，调用方报错。"""
         raw = str((card or {}).get("command") or "").strip()
         if not raw:
             return None
@@ -539,7 +558,11 @@ class LlmEngine:
                 elif low == "--port":
                     argv += [low, str(self.cfg.get("port", 7788))]
                 elif low in ("-c", "--ctx-size"):
-                    argv += [low, str(self.cfg.get("ctx", 16384))]
+                    # ctx 自动放大：llama-server 把总 ctx 均分各槽，注入
+                    # ctx×np 后每槽上下文=配置 ctx（用户裁定 2026-10-14）
+                    argv += [low, str(self._ctx_total())]
+                elif low in ("-np", "--parallel"):
+                    argv += [low, str(self._parallel())]
                 elif i + 1 < len(tokens):  # 模型/采样旗标：一律保留命令声明值
                     argv += [low, tokens[i + 1]]
                 else:
@@ -551,6 +574,9 @@ class LlmEngine:
                 i += 1
         if "--jinja" not in seen:
             argv += ["--jinja"]
+        # 并发槽位缺失追加：-np 不在卡片命令时按配置注入（默认 4）
+        if "-np" not in seen and "--parallel" not in seen:
+            argv += ["--parallel", str(self._parallel())]
         # 命令未声明的采样旗标按 card.sampling 注入
         smp = (card or {}).get("sampling")
         if isinstance(smp, dict):

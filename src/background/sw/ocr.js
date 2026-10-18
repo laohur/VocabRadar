@@ -7,6 +7,9 @@
 import { downscaleImageDataUrl } from '../../lib/image-downscale.js';
 import { _ts, log } from './log.js';
 import { resolveLlmEngineCfg } from './llm.js';
+// 引导类错误（API Key/Base URL/模型名未配置）随 UI 语言（20261014）；
+//   纯技术类错误按第二百三十九次裁定固定英文。
+import { t, initLang } from '../../lib/i18n.js';
 
 // === OCR 的 LLM 引擎（视觉识别）===
 // 与 handleLlmChat 同一套 llm* 配置与三类格式分流；图片走 dataURL，
@@ -48,17 +51,19 @@ export async function handleOcrByLlm(imageDataUrl, lang) {
  * @returns {Promise<{ok:boolean, content?:string, error?:string}>}
  */
 async function llmVisionOnce(cfg, prompt, imageDataUrl) {
+  // 引导类错误文案随 UI 语言：await initLang（幂等，已初始化即刻返回）
+  await initLang();
   // noKey 来源（本地后端）免 Key 强校验；鉴权头仅在有 Key 时携带
   //   （镜像 llmTranscribeBlob），空 Bearer 不发给本地服务
   const noKey = !!cfg.noKey;
   const isAnthropic = cfg.format === 'anthropic';
-  if (!noKey && !cfg.apiKey) return { ok: false, error: 'API Key 未配置' };
-  if (!cfg.baseUrl) return { ok: false, error: 'Base URL 未配置' };
-  if (!cfg.model) return { ok: false, error: '模型名未配置' };
+  if (!noKey && !cfg.apiKey) return { ok: false, error: t('sw.noApiKey') };
+  if (!cfg.baseUrl) return { ok: false, error: t('sw.noBaseUrl') };
+  if (!cfg.model) return { ok: false, error: t('sw.noModel') };
 
   // 解析 dataURL：data:image/png;base64,xxxx
   const m = /^data:([^;]+);base64,(.*)$/s.exec(imageDataUrl || '');
-  if (!m) return { ok: false, error: 'imageDataUrl 不是 base64 dataURL' };
+  if (!m) return { ok: false, error: 'imageDataUrl is not a base64 dataURL' };
   const mime = m[1];
   const b64 = m[2];
 
@@ -108,7 +113,7 @@ async function llmVisionOnce(cfg, prompt, imageDataUrl) {
     }
     let data = null;
     try { data = JSON.parse(raw); } catch (e) {
-      return { ok: false, error: '响应不是 JSON：' + raw.slice(0, 200) };
+      return { ok: false, error: 'Response is not JSON: ' + raw.slice(0, 200) };
     }
     let content = '';
     if (isAnthropic) {
@@ -120,7 +125,7 @@ async function llmVisionOnce(cfg, prompt, imageDataUrl) {
         ? String(data.choices[0].message.content || '')
         : '';
     }
-    if (!content) return { ok: false, error: '响应中无内容：' + raw.slice(0, 200) };
+    if (!content) return { ok: false, error: 'No content in response: ' + raw.slice(0, 200) };
     return { ok: true, content };
   } catch (e) {
     console.error('[VocabRadar][sw][' + _ts() + '] ocrLLM 异常:', e);

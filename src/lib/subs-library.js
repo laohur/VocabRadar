@@ -40,7 +40,12 @@ function makeId() {
   }
 }
 
-// 组装条目：partial = {platform, videoId, lang, kind, title, durationSec, model, content, harvestedAt?}
+// 组装条目：partial = {platform, videoId, lang, kind, title, durationSec, model, content, cues?, harvestedAt?, cloudId?}
+// cues（20261017）：[{start,end,text}] 带时间戳的段落——下载 SRT 的数据源；
+//   旧条目/纯文本来源为 null（下载回落 .txt）。content 仍是不含时间的纯文本
+//   （云端发布与去重口径不变）。
+// cloudId（P5 20261018）：云端消费落库时记录来源索引行 id——投票/纠错上传按它
+//   定位版本。作者上传成功仍由 markShared 回填；两处语义都是"云端对应行"。
 // harvestedAt：SW 后台收割的完整字幕入 UNIQUE 库时间——未分享条目超 30 天由 SW 清扫
 //   （用户令：完整字幕缓存周期同 30 天）；作者手动存入的条目无此字段，不参与清扫
 export function makeEntry(partial) {
@@ -54,12 +59,38 @@ export function makeEntry(partial) {
     durationSec: Number(partial.durationSec) > 0 ? Math.round(Number(partial.durationSec)) : 0,
     model: String(partial.model || ''),
     content: String(partial.content || ''),
+    cues: Array.isArray(partial.cues) && partial.cues.length ? partial.cues : null,
     createdAt: Date.now(),
     harvestedAt: Number(partial.harvestedAt) > 0 ? Number(partial.harvestedAt) : null,
     shareState: 'local',
-    cloudId: null,
+    cloudId: Number.isInteger(partial.cloudId) && partial.cloudId > 0 ? partial.cloudId : null,
     contentHash: null,
   }
+}
+
+// 反幻觉门控（20261017 用户报 20 秒视频产出明显错误字幕）：whisper 对音乐/静音
+// 会幻觉出超量或复读文本，VAD 覆盖率门控拦不住"有人声但内容错乱"。启发式
+//（阈值可调，宁枉勿纵——垃圾字幕入库后还会被分享到云端）：
+//   ① 语速上限（20261017 用户令改字节口径："多语言字跟字之间差别大，还不如用
+//      字节平均些"——中文 1 字=3 字节、英文 1 字=1 字节，字节/秒跨语言可比；
+//      正常语速中英都在 ~15 字节/秒，阈值 60 = 4 倍余量）
+//      正文字节数 / 时长 > 60 字节/秒 → 垃圾
+//   ② 复读占比：行数 ≥ 6 且去重行数 / 总行数 < 0.5 → 垃圾
+// durationSec <= 0 时不套用①。三条产出路径（收割/轮询完成/后端导入）共用。
+export function isGarbageAsr(content, durationSec) {
+  const text = String(content || '')
+  if (!text) return true
+  const lines = text.split('\n').map((s) => s.trim()).filter(Boolean)
+  if (!lines.length) return true
+  if (Number(durationSec) > 0) {
+    const bytes = new TextEncoder().encode(text).length
+    if (bytes / Number(durationSec) > 60) return true
+  }
+  if (lines.length >= 6) {
+    const uniq = new Set(lines)
+    if (uniq.size / lines.length < 0.5) return true
+  }
+  return false
 }
 
 export function saveSub(entry) {

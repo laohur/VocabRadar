@@ -20,10 +20,11 @@ PAGES.llm = async function (main) {
   // 卡片清单由下方编辑器统一拉取（/api/llm/models），此处只留引用供下拉回填
   let cards = [];
 
-  // ---- 通用设定（默认模型 + 内部端口 + ctx + mode + idle） ----
+  // ---- 通用设定（默认模型 + 内部端口 + ctx + 并行槽位 + mode + idle） ----
   let selTouched = false;
   const port = el('input', { type: 'number', value: cfg.llm?.port ?? 7788 });
   const ctx = el('input', { type: 'number', value: cfg.llm?.ctx ?? 16384 });
+  const par = el('input', { type: 'number', value: cfg.llm?.parallel ?? 4, min: '1' });
   const mode = select([['resident', t('resident (always on)')], ['on-demand', t('on-demand')]],
     cfg.llm?.mode ?? 'resident');
   const idle = el('input', { type: 'number', value: cfg.llm?.idle_timeout ?? 600 });
@@ -42,15 +43,17 @@ PAGES.llm = async function (main) {
   const setCard = settingsCard(t('General Settings'), [
     [t('Default model'), modelSel],
     [t('Internal port'), port],
-    [t('Context length (ctx)'), ctx],
+    [t('Context length (ctx)'), ctx, t('Per-request context; total context sent to llama-server = ctx × parallel slots')],
+    [t('Parallel slots'), par, t('Concurrent inference slots (-np) on llama-server; requests beyond this queue')],
     [t('Run mode'), mode],
     [t('Idle exit (seconds, on-demand only)'), idle],
   ], (inputs, hint) => saveCfg('llm', {
     model: inputs[0].value,
     port: Number(inputs[1].value) || 7788,
     ctx: Number(inputs[2].value) || 16384,
-    mode: inputs[3].value,
-    idle_timeout: Number(inputs[4].value) || 600,
+    parallel: Math.max(1, Number(inputs[3].value) || 4),
+    mode: inputs[4].value,
+    idle_timeout: Number(inputs[5].value) || 600,
   }, hint));
   setCard.prepend(el('div', { class: 'hint' },
     t('Status: {s} · internal port {p} · saving General Settings auto-reloads llama-server', {
@@ -250,6 +253,8 @@ PAGES.translate = async function (main) {
   const cfg = (await api('/api/config')).config || {};
   const chosen = cfg.translate?.model ?? '';
   const modelSel = el('select', { onchange: () => editor.expand(modelSel.value) });
+  const par = el('input', { type: 'number', min: '1',
+    value: cfg.translate_llm?.parallel ?? 4 });
   function fillSel(models) {
     // 下拉只显卡片名；说明/下载状态看下方「模型卡片」区（选卡即展开该卡）
     const cur = modelSel.value || chosen;
@@ -263,11 +268,13 @@ PAGES.translate = async function (main) {
   }
   const setCard = settingsCard(t('Settings'), [
     [t('Translation model'), modelSel,
-     t('All entries are llama.cpp cards served by the dedicated Translate LLM engine (independent start/stop on the Overview page; first request may cold-start it).')]
+     t('All entries are llama.cpp cards served by the dedicated Translate LLM engine (independent start/stop on the Overview page; first request may cold-start it).')],
+    [t('Parallel slots'), par, t('Concurrent inference slots (-np) on the translate LLM engine; requests beyond this queue')],
   ], (_i, hint) => {
     const v = modelSel.value;
     // 联动写入：translate.model=路由选择，同时同步 translate_llm.model（实例按卡启动）
-    const patch = { translate: { model: v }, translate_llm: { model: v } };
+    const patch = { translate: { model: v },
+      translate_llm: { model: v, parallel: Math.max(1, Number(par.value) || 4) } };
     return saveCfg(null, patch, hint);
   });
   left.append(setCard);
@@ -356,12 +363,14 @@ PAGES.asr = async function (main) {
     ['int8_float16', 'int8_float16'], ['float16', 'float16'], ['bfloat16', 'bfloat16']],
     cfg.asr?.whisper_compute_type ?? '');
 
-  // ---- 通用设定（运行模式/结果缓存，全引擎共用） ----
+  // ---- 通用设定（运行模式/结果缓存/转写并发，全引擎共用） ----
   const mode = select([['resident', t('resident (always on)')], ['on-demand', t('on-demand')]],
     cfg.asr?.mode ?? 'resident');
   const cacheOn = el('input', { type: 'checkbox', checked: cfg.asr?.cache !== false ? '' : null });
+  const jslots = el('input', { type: 'number', min: '1', value: cfg.asr?.job_slots ?? 4 });
   const asrPatch = () => ({
     engine: curEngine, mode: mode.value, cache: cacheOn.checked,
+    job_slots: Math.max(1, Number(jslots.value) || 4),
     whisper_model: wmodel.value, qwen3_size: qsize.value,
     moss_quant: mquant.value, moss_model_path: mpath.value.trim(),
     wcpp_quant: wcquant.value,
@@ -369,6 +378,8 @@ PAGES.asr = async function (main) {
   const setCard = settingsCard(t('Settings'), [
     [t('Run mode'), mode],
     [t('Result cache'), cacheOn, t('Deduplicate by video_id or audio content hash')],
+    [t('Concurrent transcription slots'), jslots,
+     t('Max simultaneous transcriptions (URL jobs + uploads share the pool); CPU is near-saturated at 1, tune up mainly for CUDA')],
   ], (_i, hint) => saveCfg('asr', asrPatch(), hint));
   left.append(setCard);
 

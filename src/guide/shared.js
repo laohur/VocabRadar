@@ -77,6 +77,31 @@ const MSG = {
   subsUploading: { en: 'Uploading…', zh: '上传中…' },
   subsShareAll: { en: 'Share all', zh: '共享全部' },
   subsShareAllDone: { en: 'Shared {ok} / {total} (skipped {skip})', zh: '已共享 {ok}/{total}（跳过 {skip}）' },
+  subsOpenVideo: { en: 'Open video', zh: '打开视频' },
+  // 20261017：后端导入 + 查看/下载
+  subsImportBackend: { en: 'Import from backend', zh: '从后端导入' },
+  subsImporting: { en: 'Importing…', zh: '导入中…' },
+  subsImportDone: { en: 'Imported {ok} (skipped {skip})', zh: '已导入 {ok}（跳过 {skip}）' },
+  subsView: { en: 'View', zh: '查看' },
+  subsDownload: { en: 'Download', zh: '下载' },
+  // 20261018：云端旧数据渲染拒绝
+  subsNoTiming: { en: 'Legacy entry has no timing — cannot display', zh: '旧数据无时间戳，无法对齐显示' },
+  // 20261018 P5 评价与纠错（预览弹窗内；云端消费落库条目才有）
+  subsVoteConnect: { en: 'Connect account to rate', zh: '连接账号后可评价' },
+  subsVoteFail: { en: 'Vote failed', zh: '评价失败' },
+  subsCorrect: { en: 'Fix', zh: '纠错' },
+  subsCorrectHint: {
+    en: 'One subtitle line per row; line count must match the timeline. Uploaded as a new version (you become the sharer).',
+    zh: '每行一条字幕，行数须与时间轴一致；提交后作为新版本上传（你成为分享者）。',
+  },
+  subsCorrectUpload: { en: 'Upload fix', zh: '上传纠错版本' },
+  subsCorrectCancel: { en: 'Cancel', zh: '取消' },
+  subsCorrectUploading: { en: 'Uploading…', zh: '上传中…' },
+  subsCorrectDone: { en: 'Fix uploaded as a new version', zh: '纠错版本已上传' },
+  subsCorrectLineMismatch: {
+    en: 'Line count ({lines}) does not match the timeline ({cues})',
+    zh: '行数（{lines}）与时间轴（{cues} 段）不一致',
+  },
   subsUnshare: { en: 'Unshare', zh: '取消分享' },
   subsUnshareFail: { en: 'Unshare failed', zh: '取消分享失败' },
   subsDelete: { en: 'Delete', zh: '删除本地' },

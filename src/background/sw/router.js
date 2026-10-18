@@ -239,7 +239,13 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         });
         return true;
       }
-      sendResponse({ ok: true });
-      return true;
+      // **先应答者赢（20261017 真机根因，用户症状：账号已连接、共享字幕一直提示
+      //   Connect account first）**：Chrome 多监听器下首个 sendResponse 调用即生效。
+      //   本路由对不认识的消息不得兜底 sendResponse({ok:true})——它同步执行，会抢在
+      //   auth.js/subs-share.js 各自监听器的异步应答之前送达，调用方拿到无字段的
+      //   假成功（getToken 收到 router 的 {ok:true}，accessToken=undefined → 判未连接）。
+      //   非本路由消息一律 return false 放行，由各属主监听器（vocabradar:auth-*/subs-*）
+      //   应答；无人应答时调用方如实收到 lastError，好过假成功。
+      return false;
   }
 });

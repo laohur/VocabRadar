@@ -284,7 +284,7 @@ async function _translateInternal(word) {
   //   不符）暂存到 .text，在线/LLM/原形全败时回收兜底（见函数尾「缺口兜底」块）。
   const builtinFb = { text: null };
   try {
-    if (!_chOn.builtin) throw new Error('渠道未启用（翻译渠道未勾选）');
+    if (!_chOn.builtin) throw new Error('Translation channel disabled (builtin channel unchecked)');
     const translator = await getTranslator();
     if (translator) {
       // 反思（2026-08-12）：translate 加 10 秒超时，防止模型推理永久挂起

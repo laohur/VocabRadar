@@ -67,6 +67,16 @@ const ZH = {
   'LLM (llama.cpp)': 'LLM（llama.cpp）',
   'Model': '模型',
   'Context length (ctx)': '上下文长度 (ctx)',
+  'Per-request context; total context sent to llama-server = ctx × parallel slots':
+    '单请求上下文；实际发给 llama-server 的总上下文 = ctx × 并行槽位（每槽分得 ctx）',
+  'Parallel slots': '并行槽位',
+  'Concurrent inference slots (-np) on llama-server; requests beyond this queue':
+    'llama-server 并行推理槽位（-np）；超出的请求排队',
+  'Concurrent inference slots (-np) on the translate LLM engine; requests beyond this queue':
+    '翻译 LLM 引擎并行推理槽位（-np）；超出的请求排队',
+  'Concurrent transcription slots': '并发转写槽位',
+  'Max simultaneous transcriptions (URL jobs + uploads share the pool); CPU is near-saturated at 1, tune up mainly for CUDA':
+    '同时转写的上限（URL 任务与上传共用池）；CPU 档 1 路已近饱和，调高主要为 CUDA 场景',
   'Run mode': '运行模式',
   'resident (always on)': 'resident（常驻）',
   'on-demand': 'on-demand（按需）',

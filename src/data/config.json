@@ -5,6 +5,7 @@
   "prefixCopy": "VocabRadar🎯\n",
   "toastDuration": 2500,
   "panelHideDelay": 500,
+  "tooltipShowDelay": 300,
   "asrSegmentSec": 30,
   "asrCacheSegmentSec": 60,
   "asrFirstChunkSec": 60,

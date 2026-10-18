@@ -61,36 +61,64 @@ function clearAuth() {
   });
 }
 
-// refresh_token → 新 token 对（GoTrue 标准 grant）；失败返回 null（不遮蔽，由调用方处置）
-async function refreshByGoTrue(refreshToken) {
+// 站点按 manifest update_url 判定（与 draft-export/subs-share 同规则）——
+// 反代续签的落点：本地开发经 vite proxy 也指向线上 Worker，两态皆可达
+function siteUrl() {
   try {
-    const ctrl = new AbortController();
-    const timer = setTimeout(() => ctrl.abort(), 15000);
-    const resp = await fetch(`${SUPABASE_URL}/auth/v1/token?grant_type=refresh_token`, {
-      method: 'POST',
-      headers: {
-        apikey: SUPABASE_PUBLISHABLE_KEY,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({ refresh_token: refreshToken }),
-      signal: ctrl.signal,
-    });
-    clearTimeout(timer);
-    if (!resp.ok) return null;
-    const data = await resp.json();
-    if (!data || !data.access_token || !data.refresh_token) return null;
-    return {
-      accessToken: data.access_token,
-      refreshToken: data.refresh_token,
-      expiresAtMs: data.expires_at ? data.expires_at * 1000 : Date.now() + 3600 * 1000,
-    };
+    const mf = chrome.runtime.getManifest();
+    return mf && mf.update_url ? 'https://vocabradar.com' : 'https://localhost:3001';
   } catch (e) {
-    return null;
+    return 'https://localhost:3001';
   }
 }
 
-// 云端请求取 token 的统一入口（P3/P4 消费）：临期先续签并落盘，失败回旧值由
-// 请求方按 401 自行降级。扩展自动登录不触发任何奖励端点。
+// refresh_token → 新 token 对（GoTrue 标准 grant）。
+// **直连失败且属网络层（重置/超时）时改走反代重试**（20261017 用户真机"显示已连接但
+// Upload failed"：直连 supabase.co 被间歇重置——旧逻辑续签失败回退过期 token，必 401；
+// 反代与网站 adaptiveFetch 同策略，扩展有 <all_urls> 权限可直达 vocabradar.com）。
+// 返回 { ok:true, ...token } | { ok:false, fatal }：
+//   fatal=true  = GoTrue 明确拒绝（4xx，refresh token 已死）→ 调用方清登录态；
+//   fatal=false = 网络层失败（直连+反代皆败）→ 调用方保留旧值，下轮再试
+async function refreshByGoTrue(refreshToken) {
+  const attempt = async (base, timeoutMs) => {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+    try {
+      const resp = await fetch(`${base}/auth/v1/token?grant_type=refresh_token`, {
+        method: 'POST',
+        headers: {
+          apikey: SUPABASE_PUBLISHABLE_KEY,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ refresh_token: refreshToken }),
+        signal: ctrl.signal,
+      });
+      clearTimeout(timer);
+      if (resp.status >= 400 && resp.status < 500) return { ok: false, fatal: true };
+      if (!resp.ok) return { ok: false, fatal: false };
+      const data = await resp.json();
+      if (!data || !data.access_token || !data.refresh_token) return { ok: false, fatal: false };
+      return {
+        ok: true,
+        accessToken: data.access_token,
+        refreshToken: data.refresh_token,
+        expiresAtMs: data.expires_at ? data.expires_at * 1000 : Date.now() + 3600 * 1000,
+      };
+    } catch (e) {
+      clearTimeout(timer);
+      return { ok: false, fatal: false }; // 网络层失败（重置/超时）
+    }
+  };
+  const direct = await attempt(SUPABASE_URL, 6000);
+  if (direct.ok || direct.fatal) return direct;
+  return attempt(siteUrl() + '/api/auth-proxy', 20000);
+}
+
+// 云端请求取 token 的统一入口（P3/P4 消费）：临期先续签并落盘。
+// 续签被 GoTrue 明确判死（fatal）时**清登录态**并返回 null——账号栏经
+// storage.onChanged 即时显示未连接，如实暴露"需要重新交接"，不再回退过期
+// token 让请求方吃 401 的假"Upload failed"（用户真机 20261017）。
+// 扩展自动登录不触发任何奖励端点。
 export async function getValidAccessToken() {
   const cur = await readAuth();
   if (!cur || !cur.accessToken) return null;
@@ -98,8 +126,19 @@ export async function getValidAccessToken() {
     return cur.accessToken;
   }
   const fresh = cur.refreshToken ? await refreshByGoTrue(cur.refreshToken) : null;
-  if (!fresh) return cur.accessToken;
-  const next = { ...cur, ...fresh };
+  if (!fresh || !fresh.ok) {
+    if (fresh && fresh.fatal) {
+      await clearAuth();
+      return null;
+    }
+    return cur.accessToken; // 网络层失败：保旧值，由请求方按 401 自行降级，下轮再试
+  }
+  const next = {
+    ...cur,
+    accessToken: fresh.accessToken,
+    refreshToken: fresh.refreshToken,
+    expiresAtMs: fresh.expiresAtMs,
+  };
   await writeAuth(next);
   return next.accessToken;
 }

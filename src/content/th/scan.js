@@ -109,13 +109,15 @@ export async function startHint(settings) {
     // panelHideDelay 的 config.json 读取保持非阻塞（fire-and-forget）：该配置只影响
     //   "悬浮提示失焦后停留多久"，首屏用不到；若阻塞 await 会把「词典开始装载」
     //   硬性推后一个网络/磁盘往返。取到即覆盖 thState.panelHideDelay（默认 5000ms）。
+    // tooltipShowDelay 同批读取（20261014：飘窗停留延时，默认 300ms）。
     (async () => {
       try {
         const url = chrome.runtime.getURL('src/data/config.json');
         const res = await fetch(url);
         const cfg = await res.json();
         if (typeof cfg.panelHideDelay === 'number') thState.panelHideDelay = cfg.panelHideDelay;
-      } catch (_) { /* ignore，用默认 5000ms */ }
+        if (typeof cfg.tooltipShowDelay === 'number') thState.tooltipShowDelay = cfg.tooltipShowDelay;
+      } catch (_) { /* ignore，用默认 5000ms / 300ms */ }
     })();
     // 词典装载调度（用户裁定"网页先异步装载词典"）：不阻塞首屏扫描启动；装载异常
     //   必须捕获，不得中断启动。就绪后 rescanNow() 重扫补齐 rank/tags（重扫前所有词

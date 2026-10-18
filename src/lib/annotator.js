@@ -22,6 +22,8 @@ import { beginBatch, countChars, countTokens, countUnique, incField, incScalar, 
 import { cleanDictEntry } from './dict-clean.js';
 // 第367次：0命中诊断接 diagLog 阀门（引导页「诊断日志」开关）
 import { isDiagLog } from './log-flag.js';
+// 20261014 用户令"给用户看的一并走 i18n"：rankToStage 的"表外"随 UI 语言（th.outside）
+import { t } from './i18n.js';
 // 第三百七十次（方案A）：诊断记录器——每句注释统计/单词翻译结果上报，诊断悬浮窗读取。
 import { reportLine, reportTranslate } from './ann-diag.js';
 
@@ -499,19 +501,21 @@ let _0HitLogged = false;
 export function resetDiag() { _0HitLogged = false; }
 
 /**
- * 阶显示：rank//1000 阶，表外显示"表外"
- * NaN 防御：rank 非Finite 数字时显示"表外"，避免出现"NaN阶"
+ * 阶显示：rank//1000 阶，表外显示 th.outside（en=Outside / zh=表外）
+ * NaN 防御：rank 非Finite 数字时显示 th.outside，避免出现"NaN阶"
  * @param {number|null|undefined} rank
  * @returns {string}
  */
 export function rankToStage(rank) {
-  if (rank === null || rank === undefined) return '表外';
-  if (typeof rank !== 'number' || !isFinite(rank)) return '表外';
-  if (rank <= 0) return '表外';
+  // 20261014 用户令"给用户看的一并走 i18n"：原三处硬编码'表外'改走 th.outside，
+  //   与 th/core.js formatStage 同一口径（英文界面不再出现中文"表外"）。
+  if (rank === null || rank === undefined) return t('th.outside');
+  if (typeof rank !== 'number' || !isFinite(rank)) return t('th.outside');
+  if (rank <= 0) return t('th.outside');
   // 反思（2026-08-05 修正）：用户反馈"右键查询咋还有0阶"。
   //   旧版 Math.floor(rank/1000) 对 rank 1-999 返回"0阶"，不符合直觉。
   //   改为 1-based：rank 1-1000 → 1阶，rank 1001-2000 → 2阶，以此类推。
   // 第二百一十三次（用户："无论界面啥语言，x阶都改为 Levelx"）：词阶统一英文 Level 形态，
-  //   英文界面不再出现中文"阶"；"表外"仍按原样（调用方按需处理）。
+  //   英文界面不再出现中文"阶"；表外则随 UI 语言（20261014，见上）。
   return `Level${Math.floor((rank - 1) / 1000) + 1}`;
 }

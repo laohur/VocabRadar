@@ -11,6 +11,8 @@ import { handleOcrRecognize } from './ocr.js';
 import { llmTranscribeBlob } from './asr.js';
 import { resolveLlmEngineCfg, handleLlmChat } from './llm.js';
 import { handleBridgeTranslation } from './translate.js';
+// 引导类错误（在线转写超时提示）随 UI 语言（20261014）；纯技术类错误固定英文。
+import { t, initLang } from '../../lib/i18n.js';
 
 // === 网站素材解析（vocabradar-bridge 转发的 PARSE_MATERIAL） ===
 // 分工契约（网站阶段二 §5，各处理方不混用）：链接→SW 抓 HTML + offscreen Defuddle 提正文；
@@ -30,7 +32,7 @@ export async function handleParseMaterial(kind, payload) {
     if (!res.ok) throw new Error('fetch ' + res.status + ' ' + url);
     const html = await res.text();
     const host = await ensureOffscreenHost();   // Firefox 走后台页内回退 iframe，链接解析不再报错
-    if (!host.ok) throw new Error('offscreen 宿主不可用：' + (host.error || 'unknown'));
+    if (!host.ok) throw new Error('Offscreen host unavailable: ' + (host.error || 'unknown'));
     const resp = await chrome.runtime.sendMessage({
       type: 'OFFSCREEN_EXTRACT_TEXT',
       html: html,
@@ -84,7 +86,7 @@ export async function handleParseMaterial(kind, payload) {
       //   还原近似）则返回 null 省掉编码 CPU，外层回退原始直送；只有真变小时才送 WAV。
       async function toWavBlob() {
         const host = await ensureOffscreenHost();
-        if (!host.ok) throw new Error('offscreen 宿主不可用：' + (host.error || 'unknown'));
+        if (!host.ok) throw new Error('Offscreen host unavailable: ' + (host.error || 'unknown'));
         const resp = await chrome.runtime.sendMessage({
           type: 'OFFSCREEN_AUDIO_DECODE',
           webmB64: b64Part
@@ -127,7 +129,11 @@ export async function handleParseMaterial(kind, payload) {
       try {
         text = await llmTranscribeBlob(blob, cfg, learn, fileName, ctrl.signal);
       } catch (err) {
-        if (err && err.name === 'AbortError') throw new Error('在线转写超时（90 秒）：网络过慢或端点无响应，请稍后重试或检查后端地址');
+        if (err && err.name === 'AbortError') {
+          // 引导类提示随 UI 语言：await initLang（幂等，已初始化即刻返回）
+          await initLang();
+          throw new Error(t('sw.transcribeTimeout'));
+        }
         throw err;
       } finally {
         clearTimeout(timer);
@@ -141,7 +147,7 @@ export async function handleParseMaterial(kind, payload) {
       return { ok: true, text: onlineText, segments: null };
     } catch (e) {
       // 无本地降级，失败如实透出（不遮蔽）
-      return { ok: false, error: '在线转写失败：' + String((e && e.message) || e) };
+      return { ok: false, error: 'Online transcription failed: ' + String((e && e.message) || e) };
     }
   }
   if (kind === 'document') {
@@ -153,7 +159,7 @@ export async function handleParseMaterial(kind, payload) {
     const name = String((payload && payload.name) || '');
     if (!b64) return { ok: false, error: 'document payload missing b64' };
     const host = await ensureOffscreenHost();   // Firefox 走后台页内回退 iframe，文档解析不再报错
-    if (!host.ok) throw new Error('offscreen 宿主不可用：' + (host.error || 'unknown'));
+    if (!host.ok) throw new Error('Offscreen host unavailable: ' + (host.error || 'unknown'));
     const resp = await chrome.runtime.sendMessage({
       type: 'OFFSCREEN_PARSE_DOC',
       docKind: docKind,
