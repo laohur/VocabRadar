@@ -9,21 +9,20 @@
 //   - 拍照/录制预览位：输入区内唯一预览槽（#g-parser-media），下次拍照/录制**占用替换**；
 //     成品同时进文件列表留档（⬇ 可取），"其他方法不是清除"——上传/拖入不动预览槽
 //   - EPUB 支持（新 parser-epub.js：自研最小 ZIP 读取+DecompressionStream+spine 逐章）；
-//     旧版 .doc 无法浏览器端解析（mammoth 仅 docx）→ 如实报"请另存为 .docx"
+//     2026-10-20（用户裁定）：PDF/DOCX 解析整体移除（第三方库 eval 告警与包体），
+//     .pdf/.doc/.docx 如实报"请转成文本或 EPUB"
 //   - 链接失败隔离：批链接逐条 try/catch（单链接失败不拖垮整批），失败带 URL 定位
 //   - 录制按钮红色闪动恢复（红↔亮红背景动画，见 guide.css——旧 opacity 闪法透绿是根因）
 //
 // 解析分发（只提纯文本，全部复用既有能力，不加封装层）：
 //   - 文本      → 直接输出
 //   - 链接      → SW FETCH_TEXT（30s 超时）→ lib/main-text.js extractDefuddleFromHtml 主链
-//   - PDF       → vendor/unpdf（definePDFJSModule 预解析 vendor pdfjs.mjs）
-//   - DOCX      → vendor/mammoth.browser.min.js（UMD，script 注入取 window.mammoth）
 //   - EPUB      → parser-epub.js（自研最小 zip + spine 逐章）
 //   - HTML 文件 → 同链接（extractDefuddleFromHtml）
 //   - 文本类    → file.text() 直读（txt/md/csv/srt/vtt/json/xml…）
 //   - 图片      → OCR_RECOGNIZE（后台 offscreen，语言随 learnLanguage）
 //   - 音视频    → parser-media.js transcribeAvFile（与 asr.js 文件 ASR 同消息协议）
-//   - .doc 等未支持类型 → 按类型给可行动指引（.doc→另存 docx），不虚假承诺
+//   - PDF/DOCX/.doc → 已移除解析支持，如实指引转存文本/EPUB（不虚假承诺）
 
 import { t } from '../lib/i18n.js';
 import { extractDefuddleFromHtml } from '../lib/main-text.js';
@@ -73,34 +72,6 @@ function extractLinks(text) {
   const lines = String(text || '').split(/\n+/).map((s) => s.trim()).filter(Boolean);
   if (lines.length === 0) return null;
   return lines.every((l) => URL_RE.test(l)) ? lines : null;
-}
-
-/** 动态加载 UMD 版 mammoth（script 注入取 window.mammoth；ESM import 对 UMD 无效） */
-function loadMammoth() {
-  if (window.mammoth) return Promise.resolve(window.mammoth);
-  return new Promise((resolve, reject) => {
-    const s = document.createElement('script');
-    s.src = chrome.runtime.getURL('src/lib/vendor/mammoth.browser.min.js');
-    s.onload = () => {
-      if (window.mammoth) resolve(window.mammoth);
-      else reject(new Error('mammoth loaded but global missing'));
-    };
-    s.onerror = () => reject(new Error('mammoth.script load failed'));
-    document.head.appendChild(s);
-  });
-}
-
-// unpdf 模块缓存（模块命名空间冻结不可挂标志，模块级变量持有；pdfjs 已 definePDFJSModule 预解析）
-let _unpdfMod = null;
-/** unpdf：先经官方逃生口 definePDFJSModule 绑定 vendor pdfjs.mjs——
- *  修复"Failed to resolve module specifier 'unpdf/pdfjs'"（裸 specifier 浏览器不可解析） */
-async function loadUnpdf() {
-  if (_unpdfMod) return _unpdfMod;
-  const base = chrome.runtime.getURL('src/lib/vendor/unpdf/');
-  const mod = await import(base + 'index.mjs');
-  await mod.definePDFJSModule(() => import(base + 'pdfjs.mjs'));
-  _unpdfMod = mod;
-  return mod;
 }
 
 // === 输出区渲染（纯文本；空态/进度/失败提示经 .g-parser-center 上下左右居中） ===
@@ -250,22 +221,6 @@ async function parseLink(url) {
   return text;
 }
 
-/** PDF：unpdf extractText（mergePages 合并全页；pdfjs 经 definePDFJSModule 预解析） */
-async function parsePdf(file) {
-  const mod = await loadUnpdf();
-  const data = new Uint8Array(await file.arrayBuffer());
-  const pdf = await mod.getDocumentProxy(data);
-  const { text } = await mod.extractText(pdf, { mergePages: true });
-  return text || '';
-}
-
-/** DOCX：mammoth extractRawText */
-async function parseDocx(file) {
-  const mammoth = await loadMammoth();
-  const { value } = await mammoth.extractRawText({ arrayBuffer: await file.arrayBuffer() });
-  return value || '';
-}
-
 /** File/Blob → dataURL（图片 OCR 输入） */
 function fileToDataUrl(file) {
   return new Promise((resolve, reject) => {
@@ -332,13 +287,11 @@ async function parseSingleFile(file, idx, total) {
     setStatus(tag + t('parser.parsing'), 'OCR');
     return parseImageOcr(await fileToDataUrl(file));
   }
-  if (kind === 'pdf') {
-    setStatus(tag + t('parser.parsing'), 'PDF');
-    return parsePdf(file);
-  }
-  if (kind === 'docx') {
-    setStatus(tag + t('parser.parsing'), 'DOCX');
-    return parseDocx(file);
+  if (kind === 'pdf' || kind === 'docx' || kind === 'doc') {
+    // 2026-10-20（用户裁定）：PDF/DOCX 解析整体移除——第三方库（unpdf/pdfjs、mammoth）
+    // 带 eval 告警且包体大，如实指引转存，不虚假承诺
+    setStatus(tag + t('parser.parsing'), kind === 'pdf' ? 'PDF' : 'DOCX');
+    throw new Error(kind === 'pdf' ? t('parser.needPdf') : t('parser.needDocx'));
   }
   if (kind === 'epub') {
     // EPUB：自研最小 zip + spine 逐章（parser-epub.js，无第三方依赖）
@@ -352,10 +305,6 @@ async function parseSingleFile(file, idx, total) {
   if (kind === 'text') {
     setStatus(tag + t('parser.parsing'), '');
     return file.text();
-  }
-  if (kind === 'doc') {
-    // 旧版二进制 .doc：浏览器端无成熟解析器（mammoth 仅 docx），如实给转存指引
-    throw new Error(t('parser.needDocx'));
   }
   // 263 次（用户"尝试纯文本解析，解析失败的，注明"）：未知类型不再直接报不支持，
   //   先尝试按文本解（编码探测链），失败才进失败清单
@@ -805,7 +754,7 @@ export function initParser() {
   }
   refreshInputUI();
   autosizeInput();
-  log('Parser 已初始化（文本/批链接/PDF/DOCX/EPUB/HTML/文本类/图片OCR/音视频ASR；统一输入态可累积）');
+  log('Parser 已初始化（文本/批链接/EPUB/HTML/文本类/图片OCR/音视频ASR；统一输入态可累积）');
 }
 
 /** 页面卸载清理（撤本批全部 objectURL 与预览槽） */

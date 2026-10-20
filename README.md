@@ -23,22 +23,29 @@ Supported languages (42):
 - **Learn words from videos** — on Bilibili / YouTube, a side panel lists the
   subtitles with your new words highlighted, plus a word list for the video.
   Subtitles can also be overlaid on the video with inline translations.
+  - **Bilingual second line** — the site's own second-language subtitle track is
+    preferred and time-aligned to the main line; when the site has none, the
+    line falls back to machine translation.
   - Compact or detailed notes; click a subtitle timestamp to jump to that line.
   - One click copies the annotated subtitles into the comment / danmaku box.
 - **Learn words from the web** — new words in any page's text are highlighted,
   with hover definitions and right-click lookup; the side panel collects the
   page's new words with their example sentences.
+- **Word cards** — every card (hover, right-click, side panel) shows the word's
+  family and **related words** ranked by meaning similarity, alongside its
+  rank, tags and translation.
 - **Learn without subtitles** — subtitle-less videos, recordings and uploaded
   audio/video are transcribed **on your own machine** by the optional free
-  local companion app (Whisper); OCR reads the text in the current video frame
-  (burned-in subtitles, slides) through the companion app or your own
+  local companion app (faster-whisper, Qwen3-ASR, MOSS or whisper.cpp — pick
+  the engine in the companion app); OCR reads the text in the current video
+  frame (burned-in subtitles, slides) through the companion app or your own
   OpenAI / Anthropic-compatible key. Everything else works without it.
 - **AI chat** — a built-in chat panel works with free models, or with your own
   OpenAI / Anthropic-compatible key.
 - **Optional local companion app** — a small Python service on
   `127.0.0.1:7777` that you run yourself: local LLM chat, transcription, OCR,
-  offline translation (NLLB, 42 languages) and media/subtitle downloading.
-  Install with `python backend/scripts/install.py`, start with
+  offline translation (local Hy-MT2 / LMT-60 models) and media/subtitle
+  downloading. Install with `python backend/scripts/install.py`, start with
   `python backend/app.py`.
 - **Companion practice site** — push your collected pages and scrolls to
   [vocabradar.com](https://vocabradar.com) for review and practice.
@@ -73,9 +80,18 @@ the VocabRadar mini program (Chinese UI):
   downloads only the language you need, on demand, and verifies integrity
   (SHA-256) before use.
 - **English word lists & translations** — bundled with the extension.
+- **Translation packs** — from the Hugging Face dataset
+  [`vocabradar/WordTranslation`](https://huggingface.co/datasets/vocabradar/WordTranslation):
+  per language-pair `{word, translations}` packs, downloaded on demand and
+  integrity-checked, with a bundled English→Chinese pack as the offline
+  fallback.
+- **Related words** — from the Hugging Face dataset
+  [`vocabradar/WordEmbedding`](https://huggingface.co/datasets/vocabradar/WordEmbedding):
+  int8 word vectors used to rank a word's nearest neighbours. Nearest-neighbour
+  search runs on your device and nothing is uploaded.
 - **Translations** — online channels, Chrome's built-in Translator API, the
-  AI endpoint **you** configure, or the optional local companion app (NLLB,
-  offline); only the text you explicitly look up is sent.
+  AI endpoint **you** configure, or the optional local companion app (local
+  Hy-MT2 / LMT-60 models, offline); only the text you explicitly look up is sent.
 
 
 ## Privacy

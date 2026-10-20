@@ -106,17 +106,22 @@ step 6 packages the result.
 
 `src/lib/vendor/` contains third-party libraries used at runtime. They are
 excluded from comment stripping and are not modified by the build:
-msgpack-lite, Readability, defuddle, tesseract.js (+ wasm cores + tessdata),
-@huggingface/transformers, youtubei.js bundle, diverse-lemmas, md5, and the
-phonemize language packs described in §3.4.
+msgpack-lite, Readability, defuddle, md5, the youtubei.js bundle,
+diverse-lemmas, and the phonemize language packs described in §3.4.
 
-`src/lib/vendor/kuroshiro-dict/*.dat.bin` are kuromoji Japanese dictionary
-files. `src/data/wordfreq/*.msgpack.bin` are wordfreq (small) frequency
-tables: msgpack-serialised and gzip-compressed by our preprocessing script,
-then **renamed `.gz` → `.bin`** solely because the Microsoft Edge Add-ons
-store rejects upload archives containing any `.gz` file — the bytes are still
-gzip and are decompressed at runtime. `tessdata/*.traineddata` were
-decompressed once at packaging time and are loaded with `gzip: false`.
+(`unpdf`/PDF.js, `mammoth` (DOCX) and `@xenova/transformers` were removed in
+v0.5.0: PDF/DOCX parsing and the transformers summarisation fallback are no
+longer shipped, so the package no longer contains any `eval`/`Function`
+constructor use.)
+
+Large language data is **not** shipped in the package:
+
+- word-frequency tables are downloaded on demand from the Hugging Face dataset
+  `vocabradar/wordfreq` (SHA-256 verified before use);
+- kuromoji Japanese dictionary files are fetched from a public CDN and cached
+  in the Cache API (`kuro-dict-v1`);
+- phonemize language packs are generated into `src/lib/vendor/phonemize/` by
+  `scripts/build-phonemize.mjs` before packaging (§3.4).
 
 ## 5. First-party source files
 

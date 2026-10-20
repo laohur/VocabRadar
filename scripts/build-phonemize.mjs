@@ -172,6 +172,30 @@ for (const [name, r] of [['core', coreResult], ['语言包', langResult]]) {
 }
 
 // ---------------------------------------------------------------------------
+// AMO 校验：清掉第三方库的 `Function("return this")()` 全局探测
+//   来源：ja 包内 lodash 的 root 回退（`E||D||Function("return this")()`）。
+//   addons-linter 会报 DANGEROUS_EVAL（"The Function constructor is eval."），
+//   而 MV3 扩展页面根本没有 eval/Function 权限，这段回退在现代浏览器永不生效。
+//   globalThis 自 Chrome 71 / Firefox 65 起原生可用（本扩展最低 Firefox 115），
+//   语义等价且可被 linter 静态通过。产物是构建生成物，故在生成阶段改写（幂等）。
+// ---------------------------------------------------------------------------
+{
+  let patched = 0;
+  for (const f of fs.readdirSync(outDir).filter((n) => n.endsWith('.mjs'))) {
+    const p = path.join(outDir, f);
+    const before = fs.readFileSync(p, 'utf8');
+    const after = before
+      .replace(/Function\("return this"\)\(\)/g, 'globalThis')
+      .replace(/Function\('return this'\)\(\)/g, 'globalThis');
+    if (after !== before) {
+      fs.writeFileSync(p, after);
+      patched++;
+    }
+  }
+  console.log(`[build-phonemize] 全局探测改写：${patched} 个产物（Function("return this")() → globalThis）`);
+}
+
+// ---------------------------------------------------------------------------
 // 产物一致性校验（2026-09-04 新增，永久生效）：防止再次出现"产物 import 指向
 // 不存在的文件"类事故（此前 src/ 曾残留 phonemize-en.mjs 引用已被清扫的
 // core-A4EHYXOS.mjs，英语注音运行时 404）。三条校验：

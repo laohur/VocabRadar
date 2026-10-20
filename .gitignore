@@ -51,6 +51,8 @@ __pycache__/
 *.pyc
 .freebuff/
 .zcode/
+# 本地诊断产物（lint JSON、构建日志等，不入库）
+.dbg/
 # Edge 上传脚本本地凭据（API Key，绝不入库）
 scripts/edge_upload.local.json
 Thumbs.db

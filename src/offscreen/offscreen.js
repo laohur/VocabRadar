@@ -6,7 +6,7 @@
 //   本文件只保留三类不依赖模型的 DOM/Audio 能力：
 //     1. OFFSCREEN_AUDIO_DECODE —— 网页录音解码 + 重采样 16k（SW 无 AudioContext）
 //     2. OFFSCREEN_EXTRACT_TEXT —— Defuddle 正文提取（页面可能需要登录或无正文）
-//     3. OFFSCREEN_PARSE_DOC   —— pdf/docx/epub 文档解析（unpdf/mammoth）
+//     3. OFFSCREEN_PARSE_DOC   —— epub 文档解析（parser-epub.js；pdf/docx 已移除）
 //   另保留 OFFSCREEN_PING 就绪探针（本文件是 ES module，监听器注册晚于模块求值，
 //   创建方轮询到 ok 才能确认可应答；Firefox 隐藏 iframe 宿主同款教训）。
 
@@ -90,7 +90,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   // === B2（2026-09-10）：文档解析（网站 Creator G4 通道 B 的 document kind） ===
   // SW 转发文件字节（b64，runtime message JSON 序列化约束）到这里，
   // 用 parse-doc.js（与 guide/parser.js 同源）提取纯文本。
-  // 动态 import：unpdf/mammoth 仅在首次文档解析时加载。
+  // 动态 import：EPUB 解析模块仅在首次文档解析时加载。
   if (msg.type === 'OFFSCREEN_PARSE_DOC') {
     const _docStart = Date.now();
     console.log('[VocabRadar][offscreen][' + _ts() + '] OFFSCREEN_PARSE_DOC 收到请求, kind=' + msg.docKind + ', name=' + (msg.name || '') + ', b64 长度=' + (msg.b64 || '').length);
@@ -127,7 +127,7 @@ async function parseDocFile(msg) {
   const { parseDocBuffer } = await import('./parse-doc.js');
   const text = await parseDocBuffer(u8, msg.docKind, msg.name || '');
   if (!text || !text.trim()) {
-    throw new Error('extracted text is empty (scanned pdf or unsupported file?)');
+    throw new Error('extracted text is empty (unsupported file or no readable text?)');
   }
   return text;
 }

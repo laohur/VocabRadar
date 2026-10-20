@@ -3,7 +3,7 @@
 
 import { t } from '../lib/i18n.js';
 
-// 方案（不加第三方依赖，vendor 无 zip 库；mammoth 内置 zip 不外露）：
+// 方案（不加第三方依赖；原 mammoth 内置 zip 不外露，已于 2026-10-20 随 PDF/DOCX 移除）：
 //   自研最小 ZIP 读取器——EOCD 定位 → 中央目录遍历 → local header 取数据 →
 //   stored(0)/deflate(8) 两种压缩（deflate 用 DecompressionStream('deflate-raw')，
 //   Chrome 80+/FF 113+ 原生支持，epub 实际均为 deflate）→

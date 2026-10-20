@@ -18,7 +18,7 @@ import { t, initLang } from '../../lib/i18n.js';
 // 分工契约（网站阶段二 §5，各处理方不混用）：链接→SW 抓 HTML + offscreen Defuddle 提正文；
 //   图片→复用 OCR 链路；视频站（YouTube/B站）→ 字幕/转写有专门链路（FETCH_SUBTITLE/ASR），
 //   抓 HTML 提不出正文，明示引导走扩展页面工作流（code:'video-link'，网站侧有对应文案）；
-//   文档→offscreen parse-doc 解析（pdf/docx/epub，文件字节 b64 透传）。
+//   文档→offscreen parse-doc 解析（epub；pdf/docx 已于 2026-10-20 移除，文件字节 b64 透传）。
 // Firefox：无 chrome.offscreen → 经 ensureOffscreenHost 走后台页内
 //   回退 iframe（同宿主同协议），图片 OCR/链接/文档解析全部可用，不再是报错边界。
 export async function handleParseMaterial(kind, payload) {
@@ -152,8 +152,8 @@ export async function handleParseMaterial(kind, payload) {
   }
   if (kind === 'document') {
     // 文档解析——offscreen 侧 parse-doc.js（与 guide/parser.js 同源，
-    // 复用包内 unpdf/mammoth + parser-epub）。文件字节 b64 透传
-    // （runtime message JSON 序列化约束），offscreen 侧 atob 还原后按 docKind 分流。
+    // 复用包内 parser-epub）。PDF/DOCX 已移除，docKind 只剩 epub。
+    // 文件字节 b64 透传（runtime message JSON 序列化约束），offscreen 侧 atob 还原后按 docKind 分流。
     const docKind = String((payload && payload.docKind) || '');
     const b64 = String((payload && payload.b64) || '');
     const name = String((payload && payload.name) || '');

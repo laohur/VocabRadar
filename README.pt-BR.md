@@ -12,7 +12,7 @@ frequência de uso— e mostra o significado na hora. **42 idiomas**.
 Sem cadastro, sem conta; tudo é consultado localmente.
 
 Funções: palavras novas em vídeos (Bilibili / YouTube) e em qualquer página web,
-legendas com anotações, transcrição local (Whisper) e OCR com o aplicativo
+legendas com anotações, transcrição local (vários motores) e OCR com o aplicativo
 complementar opcional, e chat com IA.
 
 ## Instalação

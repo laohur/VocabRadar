@@ -108,7 +108,7 @@ const BUNDLE_ENTRIES = [
 const EXCLUDE_NAMES = new Set(['.DS_Store', 'Thumbs.db', 'wordbank.json']);
 
 // 注释剥离排除目录（2026-09-04 由 TERSER_EXCLUDE_DIRS 更名，语义不变）
-// - vendor：第三方库（msgpack-lite/transformers/tesseract 等）保持原样不剥离
+// - vendor：第三方库（msgpack-lite/defuddle/phonemize 等）保持原样不剥离
 //   （AMO 政策对第三方开源库豁免，且部分为压缩单行文件，重写有风险）
 // - data：数据目录（wordlists.jsonl 是 JSONL 数据、icons/ 是 PNG，均非 JS）
 const STRIP_EXCLUDE_DIRS = new Set(['vendor', 'data']);

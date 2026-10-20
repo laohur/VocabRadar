@@ -12,7 +12,7 @@ frekuensi penggunaan— dan langsung menampilkan artinya. **42 bahasa**.
 Tanpa pendaftaran, tanpa akun; semua pencarian dilakukan di perangkat.
 
 Fungsi: kata baru di video (Bilibili / YouTube) dan halaman web mana pun, takarir
-dengan catatan, transkripsi lokal (Whisper) dan OCR lewat aplikasi pendamping
+dengan catatan, transkripsi lokal (beberapa mesin) dan OCR lewat aplikasi pendamping
 opsional, serta obrolan AI.
 
 ## Instalasi

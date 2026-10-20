@@ -128,7 +128,7 @@ async function ensureOffscreen() {
     await chrome.offscreen.createDocument({
       url: 'src/offscreen/offscreen.html',
       reasons: ['BLOBS', 'DOM_PARSER', 'WORKERS'],
-      justification: 'Audio decode/resample for LLM transcription, main-text extraction, and document (pdf/docx/epub) parsing',
+      justification: 'Audio decode/resample for LLM transcription, main-text extraction, and EPUB document parsing',
     });
     return true;
   } catch (e) {

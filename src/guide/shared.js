@@ -26,12 +26,12 @@ const MSG = {
   tabParser: { en: 'Parser', zh: 'Parser' },
   parserTitle: { en: 'Document Parser', zh: '文档解析（Parser）' },
   parserDesc: {
-    en: 'Parse links / web pages / files (text, audio/video, images, PDF, DOCX and other common types) into plain text for word annotation and learning.',
-    zh: '把链接/网页/文件（文本、音视频、图片、PDF、DOCX 等常见类型）解析为纯文本，供生词标注与学习。'
+    en: 'Parse links / web pages / files (text, audio/video, images, EPUB and other common types) into plain text for word annotation and learning.',
+    zh: '把链接/网页/文件（文本、音视频、图片、EPUB 等常见类型）解析为纯文本，供生词标注与学习。'
   },
   parserInputPh: {
-    en: 'Paste text or a link here, or drop / paste a file (web page, audio/video, image, PDF, DOCX, TXT…)',
-    zh: '在此粘贴文本或链接，或拖入/粘贴文件（文本网页、音视频、图片、PDF、DOCX 等）'
+    en: 'Paste text or a link here, or drop / paste a file (web page, audio/video, image, EPUB, TXT…)',
+    zh: '在此粘贴文本或链接，或拖入/粘贴文件（文本网页、音视频、图片、EPUB 等）'
   },
   parserRun: { en: 'Parse', zh: '解析' },
   // 结果操作与输入清空按钮（parser 面板 data-key）
