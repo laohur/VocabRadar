@@ -357,6 +357,20 @@ export async function idbCountTransPair(lang, translationLang) {
   });
 }
 
+/**
+ * 清空相关词汇行（d_rel 整表）——派生缓存（可由向量包重算），related 算法
+ * 版本升级时整表清空按需重算（embeddings-engine RELATED_ALGO_VER 对账）。
+ */
+export async function idbRelClearAll() {
+  const db = await getDB();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(S_REL, 'readwrite');
+    const rq = tx.objectStore(S_REL).clear();
+    rq.onsuccess = () => resolve();
+    rq.onerror = () => reject(rq.error);
+  });
+}
+
 // === 原始文件库 rawfiles（DB_VERSION 5） ===
 // HF 数据集下载原件（WordTranslation jsonl.gz / WordEmbedding 词表+向量），仅 SW 使用。
 // 记录 = {k, kind, ...载荷, sha256, bytes, ts}；ts=下载/校验通过时间戳（30 天过期基线）。

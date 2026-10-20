@@ -2,17 +2,18 @@
 // HF WordEmbedding 相关词汇引擎（第561次，src/lib/word-db/embeddings-engine.js）
 // 职责：把 HF 数据集 vocabradar/WordEmbedding（每语一对文件：<lang>.words.txt 词表
 //   与 <lang>.int8.vector 384 维 int8 量化向量，逐行对齐、行号=词频排名）下载校验后
-//   落 rawfiles 原始文件库；查相关词汇时物化 Int8Array 矩阵做 int8 点积取 top-10
-//   近邻，剔除同族词形（与同族词汇区不重复）后取前 5，定稿写词典 d_rel 行
-//   （v="w1,w2,w3,w4,w5"），此后同词查询零计算命中。
-// 数据格式（数据集 README）：反量化 v=int8/127，量化前已 L2 归一化 → 余弦相似度
-//   = dot(a,b)/127²（int8 直接累加 384 维不会溢出 int32：127²×384≈6.2e6）。
+//   落 rawfiles 原始文件库；查相关词汇时物化 Int8Array 矩阵，按 Matryoshka 截断
+//   前 128 维算余弦（四轮裁定），跳过自身/同族词形（与同族词汇区不重复）/零范数行
+//   后排序直取前 5，定稿写词典 d_rel 行（v="w1,w2,w3,w4,w5"），此后同词查询零计算命中。
+// 数据格式（数据集 README）：反量化 v=int8/127，量化前已 L2 归一化 → 原地长余弦
+//   = dot(a,b)/127²；截断 128 维后向量非单位长，须乘逐行截断范数倒数校正
+//   （int8 直接累加 128 维不会溢出 int32：127²×128≈2.1e6）。
 // 仅 SW 上下文实际执行；CS 经 sw-channel WORD_DB_RELATED 消息路由到 swRelatedWords。
 // 30 天过期（用户裁定"原始文件过期时间设定为30天"）：同 trans-pack——ts 超期重对账
 //   files.json sha256，未变续期、变了重拉替换（重拉后物化缓存失效重算）。
 // =============================================================================
 import {
-  idbRawGet, idbRawPut, idbGet, idbUpdate
+  idbRawGet, idbRawPut, idbGet, idbUpdate, idbRelClearAll
 } from './db-ops.js';
 import { makeKey } from './key-utils.js';
 import { isSW } from './env.js';
@@ -20,8 +21,16 @@ import { EMB_BASE, EMB_FILE_RE, fetchDatasetFile, verifyDatasetFile } from './hf
 import { swLemmatizeWord, swLemmaFamily } from './lemmas-engine.js';
 
 const EMB_DIM = 384;
-const EMB_TOPK = 10;      // 用户裁定：展开选出十个向量最近的词汇
-const EMB_TAKE = 5;       // 用户裁定：从其中取五个（剔同族词形后按相似度取前 5）
+// 第561次四轮（用户笔误更正"选出向量最近的五个词汇"）：不再先取 top-10 池——
+//   相似度排序单遍扫描，跳过自身/同族词形后直接取前 5。
+const EMB_TAKE = 5;
+// 速度（用户裁定"速度慢，选多少维好"=128）：bekko 是 Matryoshka 模型（数据集
+//   README 官方支持截断 256/128/64），取前 128 维计算余弦——乘加量 1/3，近邻
+//   排序质量足够（int8 384 维本身 top-10 重合率实测 98.3%）。截断后向量非单位
+//   长，逐行预存截断范数倒数做余弦校正（materialize 一次性算好）。注意：截断
+//   只加速计算段；首查大头是向量包首次下载（一次性）与物化，与维度无关。
+//   还嫌慢可改 64（近邻开始发糊，不推荐）。
+const EMB_DIMS_USED = 128;
 const RAW_TTL_MS = 30 * 24 * 60 * 60 * 1000;   // 原始文件 30 天过期（用户裁定）
 const STATE_CAP = 1;      // 物化矩阵内存缓存语言数上限（第561次三轮用户裁定"内存里面要两个词向量干啥"：
                           // 一次只驻留一种语言，切语言即淘汰重物化；结果已落 d_rel，重复查询零计算）
@@ -55,7 +64,21 @@ function materialize(lang, rec) {
     const lw = w.toLowerCase();
     if (!index.has(lw)) index.set(lw, i);
   }
-  return { lang, mat: new Int8Array(rec.vec), words, index, N };
+  const mat = new Int8Array(rec.vec);
+  // 截断维度内逐行范数的倒数（Matryoshka 截断后向量非单位长，余弦须除回）；
+  //   全零行（数据集 meta.zero_vectors）invNorm=0 天然出局。一次性 N×128，
+  //   此后每次查询只做 128 维点积 + 两次乘法校正。
+  const invNorm = new Float32Array(N);
+  for (let i = 0; i < N; i++) {
+    let s = 0;
+    const base = i * EMB_DIM;
+    for (let j = 0; j < EMB_DIMS_USED; j++) { const v = mat[base + j]; s += v * v; }
+    invNorm[i] = s > 0 ? 1 / Math.sqrt(s) : 0;
+  }
+  // 小写词表（排序扫描逐行同族过滤用，避免查询时对正分行做 toLowerCase）
+  const lowerWords = new Array(N);
+  for (let i = 0; i < N; i++) lowerWords[i] = String(words[i] || '').toLowerCase();
+  return { lang, mat, words, lowerWords, index, N, invNorm };
 }
 
 /** 下载该语言两文件（词表+向量，并行）→ rawfiles 单记录（双 sha256 过期基线） */
@@ -141,32 +164,27 @@ export async function ensureEmbState(lang) {
   }
 }
 
-/** int8 点积 top-K（只收正分；零行/负相关天然不入选） */
-function topK(st, qBase, k) {
-  const best = [];   // [{i, s}] 按 s 升序，长度 ≤ k
-  const mat = st.mat;
-  for (let i = 0; i < st.N; i++) {
-    let s = 0;
-    const base = i * EMB_DIM;
-    for (let j = 0; j < EMB_DIM; j++) s += mat[base + j] * mat[qBase + j];
-    if (s <= 0) continue;
-    if (best.length < k) {
-      best.push({ i, s });
-      for (let b = best.length - 1; b > 0 && best[b].s < best[b - 1].s; b--) {
-        const t = best[b]; best[b] = best[b - 1]; best[b - 1] = t;
+// 第561次四轮：相关词汇算法变更（top-10 池→排序直取 5 + Matryoshka 128 维截断），
+//   d_rel 旧结果一次性清空按需重算（派生缓存）。storage 记版本号，SW 会话内只查一次。
+const RELATED_ALGO_VER = 2;
+let _relVerChecked = null;
+function ensureRelAlgoVer() {
+  if (_relVerChecked) return _relVerChecked;
+  _relVerChecked = (async () => {
+    try {
+      const { relAlgoVer = 0 } = await chrome.storage.local.get('relAlgoVer');
+      if (relAlgoVer !== RELATED_ALGO_VER) {
+        await idbRelClearAll();
+        await chrome.storage.local.set({ relAlgoVer: RELATED_ALGO_VER });
+        console.log('[VocabRadar][word-db] related 算法升级 v' + RELATED_ALGO_VER + '，d_rel 旧结果已清空（按需重算）');
       }
-    } else if (s > best[0].s) {
-      best[0] = { i, s };
-      for (let b = 0; b + 1 < best.length && best[b].s > best[b + 1].s; b++) {
-        const t = best[b]; best[b] = best[b + 1]; best[b + 1] = t;
-      }
-    }
-  }
-  return best;   // 升序存储，读取时从尾（最高分）向头取
+    } catch (_) { /* 版本校验失败不清缓存（旧值口径旧但仍可用） */ }
+  })();
+  return _relVerChecked;
 }
 
 /**
- * 查相关词汇：d_rel 缓存 → 向量近邻 top-10 → 剔同族词形取前 5 → 定稿写 d_rel。
+ * 查相关词汇：d_rel 缓存 → 向量近邻排序直取 5 → 定稿写 d_rel。
  * @param {string} lang 学习语言
  * @param {string} word 查询词（调用方已保证单词；内部仍兜底空格门控）
  * @returns {Promise<{ok:boolean, words:string[], cached?:boolean, reason?:string, error?:string}>}
@@ -176,6 +194,8 @@ export async function swRelatedWords(lang, word) {
   const key = String(lang || '').toLowerCase();
   const lower = String(word || '').trim().toLowerCase();
   if (!key || !lower || /\s/.test(lower)) return { ok: true, words: [] };
+  // 算法版本对账（变更时一次性清旧缓存）
+  await ensureRelAlgoVer();
   // ① d_rel 缓存（词典行直读，含相关词汇定稿串）
   try {
     const rec = await idbGet(makeKey(key, lower));
@@ -188,11 +208,13 @@ export async function swRelatedWords(lang, word) {
   const qi = st.index.get(lower);
   if (qi == null) return { ok: true, words: [], reason: 'oov' };
   const qBase = qi * EMB_DIM;
-  // 全零行（分词后无 token 的词，数据集 meta.zero_vectors）无语义，直接如实返回
-  let qNonZero = false;
-  for (let j = 0; j < EMB_DIM; j++) { if (st.mat[qBase + j] !== 0) { qNonZero = true; break; } }
-  if (!qNonZero) return { ok: true, words: [], reason: 'zero-vector' };
-  // ③ top-10 近邻 → 剔同族词形取前 5（与同族词汇区互不重复；同族反查失败降级为只剔自身）
+  // 查询行截断范数（全零行如实返回：分词后无 token 的词无语义）
+  let qn = 0;
+  for (let j = 0; j < EMB_DIMS_USED; j++) { const v = st.mat[qBase + j]; qn += v * v; }
+  const qInv = qn > 0 ? 1 / Math.sqrt(qn) : 0;
+  if (!qInv) return { ok: true, words: [], reason: 'zero-vector' };
+  // ③ 余弦排序单遍扫描（截断 128 维）：跳过自身/同族词形/零范数行，直接取前 5
+  //   （与同族词汇区互不重复；同族反查失败降级为只剔自身）
   const fam = new Set([lower]);
   try {
     const lm = await swLemmatizeWord(lower, key);
@@ -201,16 +223,35 @@ export async function swRelatedWords(lang, word) {
     const f = await swLemmaFamily(lemma, key, 100);
     for (const w of ((f && f.words) || [])) fam.add(String(w).toLowerCase());
   } catch (_) { /* 词形引擎不可用不阻塞近邻 */ }
-  const best = topK(st, qBase, EMB_TOPK);
+  const best = [];   // [{i, s}] 按 s 升序，长度 ≤ EMB_TAKE
+  const mat = st.mat;
+  for (let i = 0; i < st.N; i++) {
+    const base = i * EMB_DIM;
+    let s = 0;
+    for (let j = 0; j < EMB_DIMS_USED; j++) s += mat[base + j] * mat[qBase + j];
+    if (s <= 0) continue;
+    if (fam.has(st.lowerWords[i])) continue;
+    s = s * st.invNorm[i] * qInv;
+    if (best.length < EMB_TAKE) {
+      best.push({ i, s });
+      for (let b = best.length - 1; b > 0 && best[b].s < best[b - 1].s; b--) {
+        const t = best[b]; best[b] = best[b - 1]; best[b - 1] = t;
+      }
+    } else if (s > best[0].s) {
+      best[0] = { i, s };
+      for (let b = 0; b + 1 < best.length && best[b].s > best[b + 1].s; b++) {
+        const t = best[b]; best[b] = best[b + 1]; best[b + 1] = t;
+      }
+    }
+  }
   const out = [];
   const seen = new Set();
-  for (let b = best.length - 1; b >= 0 && out.length < EMB_TAKE; b--) {
+  for (let b = best.length - 1; b >= 0; b--) {
     const w = String(st.words[best[b].i] || '').trim();
     if (!w) continue;
     const lw = w.toLowerCase();
-    if (fam.has(lw) || seen.has(lw)) continue;
     // 词内含分隔符会破坏 d_rel 逗号定稿串——此类词跳过不入选
-    if (lw.indexOf(',') !== -1) continue;
+    if (fam.has(lw) || seen.has(lw) || lw.indexOf(',') !== -1) continue;
     seen.add(lw);
     out.push(w);
   }
