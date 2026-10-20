@@ -14,8 +14,11 @@
 // ============================================================
 
 import { dictState, DEFAULT_SOURCE_LANG, _ts } from './state.js';
-import { getLangProjection, getRanksProjection, bulkWriteDictionary, bulkWriteTranslations, clearByLang, countTranslationEntries } from '../word-db.js';
+import { getLangProjection, getRanksProjection, bulkWriteDictionary, bulkWriteTranslations, clearByLang, countTranslationEntries, ensureTransPackFor } from '../word-db.js';
 import { loadWordfreq, loadWordlists, loadBuiltinEnZh } from './word-loader.js';
+// 第561次：HF WordTranslation 翻译包目标语言取 transState（唯一实例，无环依赖——
+//   shared.js 不 import 任何 translator/dictionary 模块）
+import { transState } from '../translator/shared.js';
 // 第三百七十次（方案A）：诊断记录器——词典装载事件/快照上报，诊断悬浮窗「字幕」标签读取。
 import { reportDictEvent, reportDictSnap } from '../ann-diag.js';
 
@@ -372,6 +375,8 @@ export async function _loadDict(lang) {
           }
         });
       }
+      // 第561次：HF 翻译包后台确保（语言对计数判缺在引擎内，回填完成新查询自然命中）
+      _ensureTransPackBackground(meaningLang);
       } catch (e) {
         console.warn(`[VocabRadar][dictionary][${_ts()}] Stage 2 后台合并异常（词频级就绪不受影响，分项待下次装载/重建补齐）:`, e && e.message);
       } finally {
@@ -480,6 +485,9 @@ export async function _loadDict(lang) {
         if (Number(cost) >= 0.25) {
           console.log(`[VocabRadar][dictionary][${_ts()}] 词典已就绪(投影): ${dictState.dictMap.size} 词 (${cost}s)`);
         }
+        // 第561次：SLOW 完整就绪分支同样确保 HF 翻译包（该分支不经过 FAST Stage 2；
+        //   引擎内判缺+去重，重复触发无害）
+        _ensureTransPackBackground(meaningLang);
         // 第三百七十一次：SLOW 完整就绪点同补广播（与 FAST 完整分支同理由，见上）。
         try {
           if (dictState.dictMap && dictState.dictMap.size > 0 && typeof window !== 'undefined') {
@@ -543,6 +551,29 @@ export async function _loadDict(lang) {
 }
 
 /**
+ * 第561次：HF WordTranslation 翻译包后台确保（fire-and-forget，与内置英中包先行回填
+ * 同款编排）。learnLang=当前装载语言，meaningLang=transState.meaningLang（释义语言）。
+ * 引擎（word-db/trans-pack.js）自带在途去重/会话完成标记/语言对计数判缺/失败退避，
+ * 重复触发无害；HF 数据集未收录的语言对（如 de→fr）如实 warn 不遮蔽——词典缓存与
+ * 在线渠道照常兜底。成功后新查询自然命中 d_trans（无需广播：懒读字段）。
+ * @param {string} lang 学习语言
+ */
+function _ensureTransPackBackground(lang) {
+  Promise.resolve()
+    .then(() => ensureTransPackFor(lang, transState.meaningLang))
+    .then((r) => {
+      if (r && r.ok && typeof r.words === 'number') {
+        console.log(`[VocabRadar][dictionary][${_ts()}] HF 翻译包 ${lang}->${transState.meaningLang} 就绪: ${r.words} 词${r.cached ? '（缓存命中）' : '（已回填 d_trans）'}`);
+      } else if (r && r.ok && r.skipped) {
+        console.log(`[VocabRadar][dictionary][${_ts()}] HF 翻译包跳过（${r.skipped}）: ${lang}->${transState.meaningLang}`);
+      } else if (r && !r.ok) {
+        console.warn(`[VocabRadar][dictionary][${_ts()}] HF 翻译包 ${lang}->${transState.meaningLang} 未能装载（词典缓存/内置包/在线渠道照常兜底）: ${r.error}`);
+      }
+    })
+    .catch(() => { /* 引擎内部已兜底为 {ok:false}，此处仅防消息通道异常外溢 */ });
+}
+
+/**
  * 第一百四十次：从源文件重建/增量补齐词典（装载函数唯一入口）。
  * 流程：解压解码源文件 -> 内存合并为统一词条表（供本页同步查询）-> 分块 upsert 送入
  * 词典库（**不清库**：已有 translation/phonetic/lemma 字段保留，缺失条目被补上）->
@@ -570,6 +601,9 @@ async function _rebuildFromSources(lang) {
       }
     });
   }
+  // 第561次：HF WordTranslation 翻译包先行（与内置包并行；HF 成功后覆盖写为权威，
+  //   内置 en→zh 包保留作 HF 下载失败时的本地兜底）
+  _ensureTransPackBackground(lang);
   // 用户报障"非英语哪来的词表标签"：wordlists.jsonl 仅收录英文词表
   //   （IELTS/TOEFL/GRE/GMAT/SAT），此前无条件合并进任意语言——非英语词条被贴上
   //   英文考试标签。此处按 lang 门控：仅 en 装载词表源，其余语言 wl 恒空 Map。

@@ -24,8 +24,10 @@ import { getPhonetic } from '../../lib/phonetics.js';
 import {
   thState, TOOLTIP_ID, formatStage, isContextValid, speak
 } from './core.js';
-import { buildPanelHTML, hidePanel, queryWordForPanel, renderLemmaInto, bindLemmaChipClick, bindMarkButtons, showInsertFeedback } from './panel.js';
+import { buildPanelHTML, hidePanel, queryWordForPanel, renderLemmaInto, bindMarkButtons, showInsertFeedback } from './panel.js';
 import { validateSpan, unwrapSingle, backfillSideAnnotation } from './scan.js';
+// 第561次：相关词汇行异步填充（自包含模块，与 panel.js renderQueryCard 同款调用）
+import { fillRelated } from './card-related.js';
 // 悬浮提示卡片底部 chat 按钮（结构复用 buildPanelHTML，故此处也需绑定）
 import { openChatPanel } from '../../lib/chat.js';
 // 对话上下文的网页正文来源（Readability 优先），唯一实现在 lib/main-text.js
@@ -63,8 +65,7 @@ export function ensureTooltip() {
   `;
   const shadow = thState.tooltip.attachShadow({ mode: 'open' });
   shadow.innerHTML = buildCardHTML();
-  // 卡片原形 chip 点击委托（与右键面板共用 bindLemmaChipClick）
-  bindLemmaChipClick(shadow);
+  // 第561次二轮：原形 chip 退役（同族组随 renderLemmaInto 常显免点击），无点击委托
   document.documentElement.appendChild(thState.tooltip);
 
   // 用户要求"漂浮提示无停留时间，鼠标挪走一些距离就消失"：
@@ -116,7 +117,20 @@ export function showTooltip(data, anchorRect, opts) {
   }
 
   // 词形还原原形：走面板共用 renderLemmaInto，常显 chip＋小写归一
+  //  （第561次：chip 建立即自动展开同族词汇组，不用点击）
   renderLemmaInto(shadow, data.word, data.lemma);
+
+  // 第561次：相关词汇异步填充（悬浮卡 DOM 复用，先重置再填；alive 守卫防旧词
+  //   异步回写新词卡片。键值对布局下只清 .kv-value 值单元格，保留字段名列）
+  const relRow = shadow.querySelector('.related-row');
+  if (relRow) {
+    relRow.style.display = 'none';
+    const rv = relRow.querySelector('.kv-value');
+    if (rv) rv.innerHTML = '';
+  }
+  fillRelated(shadow, data.word, {
+    alive: () => !!(thState.tooltip && thState.tooltip.style.display !== 'none' && thState.tooltipWord === data.word)
+  });
 
   // 标签
   const tagsEl = shadow.querySelector('.tags-row');

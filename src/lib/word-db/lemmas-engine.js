@@ -44,6 +44,11 @@ const LEMMAS_RETRY_BACKOFF_MS = 60000;
 let _lemmasFailUntil = 0;
 // 行后台分块大小（每块一事务，块间让出事件循环，SW 保持可响应）
 const LEMMAS_ROW_CHUNK = 5000;
+// 第561次（用户裁定"词形等原始文件过期时间设定为30天"）：rawTs 基线超 30 天即
+//   后台重拉 CDN 整表幂等重写行（upsert；不阻塞查询）。无基线（历史安装）不触发，
+//   维持旧行为——下次自然重装时开始记基线。
+const RAW_TTL_MS = 30 * 24 * 60 * 60 * 1000;
+const _rawRefreshInflight = new Set(); // lang 去重（刷新期间不重复触发）
 // 冷词晋升上限：view 自有属性超过该值即原地清空重来（热集在原型上不受影响）
 const COLD_PROMOTE_CAP = 4000;
 // dictCache 记录字段：行写完后的完成标记（行数达标才认；lemmasRowCount 与 lemmas:null 同一次 merge）
@@ -104,6 +109,8 @@ async function initState(lang) {
   if (cache && typeof cache[ROW_COUNT_FIELD] === 'number' && cache[ROW_COUNT_FIELD] >= LEMMAS_MIN_WORDS) {
     st.rowsReady = true;
     enterReady(st);
+    // 第561次：原始文件 30 天过期后台重拉（不阻塞查询，失败保留旧行）
+    scheduleRawRefresh(lang);
     return st;
   }
   // 态 2：旧版迁移窗口——blob 整表在手（行尚未写完），先服务查询，行后台分块写
@@ -126,8 +133,9 @@ async function initState(lang) {
     throw new Error('词形数据下载近期失败，退避中（' + Math.ceil((_lemmasFailUntil - Date.now()) / 1000) + 's 后自动重试）');
   }
   const { wordDict, ambiguityMap, count } = await downloadLemmas(lang);
-  // 写回 blob（续传凭据）——行没写完之前 blob 就是恢复点
-  await idbDictMerge(lang, { lemmas: wordDict, ambiguity: ambiguityMap });
+  // 写回 blob（续传凭据）——行没写完之前 blob 就是恢复点；rawTs=原始文件下载基线
+  //   （第561次 30 天过期对账用）
+  await idbDictMerge(lang, { lemmas: wordDict, ambiguity: ambiguityMap, rawTs: Date.now() });
   // 第462次（修"引导页 lemmas 0 而引擎已就绪 139070"）：写入成功后广播——
   //   就绪行分项统计（lemmasSizeCached 仅读缓存、不触发下载）在下载前取数必为 0，
   //   且取数只有一次、无重取钩子；引导页监听 LEMMAS_READY 即重取。
@@ -241,6 +249,48 @@ export function scheduleHotRebuild(lang) {
   const st = _states.get(lang);
   if (!st || !st.rowsReady || st.full) return;
   st.hotBuild = buildHot(lang, st);
+}
+
+// === 第561次：词形原始文件 30 天过期重拉 ===
+// 基线 = dictCache.rawTs（下载时间，态 3 落库时写入）。触发点=会话内首次进入行就绪态
+// （initState 态 1，惰性：每天有词形查询的日子自然对账一次）。流程：重下载整表 →
+// blob 窗口期服务查询同款（先并 dictCache 再幂等重写行）→ 行写完更新 rawTs+清 blob
+// → scheduleHotRebuild 让热集跟上。失败退避（共享 _lemmasFailUntil）且保留旧行。
+
+/** 惰性对账入口（fire-and-forget，绝不阻塞查询） */
+function scheduleRawRefresh(lang) {
+  idbDictGet(lang).then((cache) => {
+    if (!cache || !cache.rawTs) return; // 无基线（历史安装）不触发，维持旧行为
+    if (Date.now() - cache.rawTs <= RAW_TTL_MS) return;
+    refreshLemmasRaw(lang).catch(() => {});
+  }).catch(() => { /* 缓存读失败下轮会话再对账 */ });
+}
+
+/** 重拉整表并幂等重写行（后台执行；期间查询照常走既有行/热集/索引，零阻塞） */
+async function refreshLemmasRaw(lang) {
+  if (_rawRefreshInflight.has(lang)) return;
+  _rawRefreshInflight.add(lang);
+  try {
+    if (Date.now() < _lemmasFailUntil) return; // 下载退避中，下轮再试
+    console.log(`[VocabRadar][词形数据] 语言 ${lang} 原始文件超 30 天，后台重拉刷新`);
+    const { wordDict, ambiguityMap, count } = await downloadLemmas(lang);
+    // blob 窗口期（续传凭据）：行没写完之前新表就是恢复点——与首装迁移同款
+    await idbDictMerge(lang, { lemmas: wordDict, ambiguity: ambiguityMap });
+    const keys = Object.keys(wordDict);
+    for (let i = 0; i < keys.length; i += LEMMAS_ROW_CHUNK) {
+      const slice = keys.slice(i, i + LEMMAS_ROW_CHUNK);
+      await idbLformPutBatch(lang, slice.map((w) => ({ word: w, lemma: wordDict[w] })));
+    }
+    // 行写完原子换基线：rawTs 续期 + 清 blob（幂等 upsert，同 k 覆盖）
+    await idbDictMerge(lang, { [ROW_COUNT_FIELD]: keys.length, lemmas: null, rawTs: Date.now() });
+    scheduleHotRebuild(lang);
+    console.log(`[VocabRadar][词形数据] 语言 ${lang} 30 天刷新完成（${keys.length} 行幂等重写，源 ${count} 词）`);
+  } catch (e) {
+    _lemmasFailUntil = Date.now() + LEMMAS_RETRY_BACKOFF_MS;
+    console.warn(`[VocabRadar][词形数据] 语言 ${lang} 30 天刷新失败（保留既有行，退避后下轮再试）:`, e && e.message);
+  } finally {
+    _rawRefreshInflight.delete(lang);
+  }
 }
 
 /**

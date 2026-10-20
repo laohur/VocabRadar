@@ -36,5 +36,7 @@ export {
   getLangProjection, getRanksProjection, bulkWriteDictionary, bulkWriteTranslations,
   handleWordDbMessage, warmupDictProjection,
   countTranslationEntries, // d_trans 按语言计数（引导页就绪行分项统计用）
-  lemmasSize // 词形数据仅读缓存计数（不触发下载，分项统计用）
+  lemmasSize, // 词形数据仅读缓存计数（不触发下载，分项统计用）
+  ensureTransPackFor, // 第561次：HF WordTranslation 翻译包确保（装载链 fire-and-forget）
+  relatedWords // 第561次：相关词汇查询（WordEmbedding 近邻，卡片异步渲染用）
 } from './word-db/sw-channel.js';

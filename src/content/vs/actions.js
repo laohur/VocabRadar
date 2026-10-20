@@ -16,7 +16,7 @@
 //       门面经 export 接驳导出 autoStartASR（引用方符号不变）。
 // =============================================================================
 
-import { buildPanelCss, buildCardInnerHTML, renderQueryCard, bindLemmaChipClick } from '../th/panel.js';
+import { buildPanelCss, buildCardInnerHTML, renderQueryCard } from '../th/panel.js';
 import { saveDraftToCache, djb2Hash, getSiteUrl } from '../ws/draft-export.js';
 import { t } from '../../lib/i18n.js';
 import { log } from './logger.js';
@@ -64,10 +64,12 @@ export async function runVideoQuery(text) {
   // 字号基准 14px（用户报"查询窗口只有 https://localhost:3001 字号才会偏大"）：
   //   本内嵌卡与文本侧栏 query 标签同构——嵌套 host 被 `#beaver-sidebar * { font-size: inherit }`
   //   锁死继承侧栏宿主 16px，卡根节点写死 14px 与右键面板/tooltip 同基准（同修详见 ws/ui.js）
+  // 第561次二轮（用户裁定"多了一个添加生词按钮"）：内嵌查询卡不再渲染 🏁/✓
+  //   My Words 标记按钮——侧栏自有 🎯 学词流与生词表管理，卡片标记收敛到悬浮/右键卡；
+  //   同族组随 renderLemmaInto 常显，无 chip 点击委托
   shadow.innerHTML = '<style>' + buildPanelCss() + '</style>'
     + '<div class="beaver-query-card" style="padding:10px 12px;background:#fbfdf9;border-radius:8px;font-size:14px;line-height:1.5;">'
-    + buildCardInnerHTML() + '</div>';
-  bindLemmaChipClick(shadow);
+    + buildCardInnerHTML({ markButtons: false }) + '</div>';
   try {
     await renderQueryCard(shadow, trimmed);
   } catch (e) {

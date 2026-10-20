@@ -19,7 +19,12 @@ const DB_NAME = 'beaver-dict';
 // 第515次：DB_VERSION 4（用户裁定"词频表中的装入内存，找不到的找索引"方案）--新增
 //   d_lform 词形还原行存储——词频表命中的词形驻内存热集，未命中走本表索引，
 //   不再整表进内存（diverse-lemmas 约 13.9 万词级，fi/pl 达 350 万词级）。
-const DB_VERSION = 4;
+// 第561次：DB_VERSION 5--①d_rel 相关词汇行（WordEmbedding 向量近邻计算结果，
+//   词频重建后可重算的派生字段，故并入 SPLIT_STORES 随 clearByLang 一并清）；
+//   ②rawfiles 原始文件库（HF 数据集 WordTranslation/WordEmbedding 下载原件，
+//   带下载时间戳供 30 天过期校验，可复取缓存）；③d_trans 增 by-lang-tlang 复合
+//   索引（翻译包按语言对计数，meaningLanguage 切换后按对新语言对判缺回填）。
+const DB_VERSION = 5;
 const STORE_NAME = 'words'; // 旧统一表：仅迁移读取用
 // 分拆存储：k=`${lang}|${word_lower}`，均带 by-lang 索引
 const S_RANK = 'd_rank';
@@ -27,13 +32,22 @@ const S_TAGS = 'd_tags';
 const S_LEMMA = 'd_lemma';
 const S_TRANS = 'd_trans';
 const S_PHON = 'd_phon';
+// 第561次：相关词汇行（WordEmbedding 向量近邻，v="w1,w2,w3,w4,w5" 逗号定稿串）。
+//   派生字段（可由向量包重算），随 clearByLang 清、重建后按需重算。
+const S_REL = 'd_rel';
 const S_META = 'meta'; // keyPath 'lang'：{lang, built:true} 构建完成标记
-const SPLIT_STORES = [S_RANK, S_TAGS, S_LEMMA, S_TRANS, S_PHON];
+const SPLIT_STORES = [S_RANK, S_TAGS, S_LEMMA, S_TRANS, S_PHON, S_REL];
 // 词形还原行存储（DB_VERSION 4 新增）：{k:`${lang}|${form_lower}`, lang, v:lemma小写}
 //   - by-lang：分语言计数/清库；
 //   - by-lang-v 复合索引 ['lang','v']：同族反查（有哪些词形还原到该 lemma）。
 //   注意：与 d_lemma（词典词条的 lemma 字段，投影用）是两回事，绝不合并。
 const S_LFORM = 'd_lform';
+// 原始文件库（DB_VERSION 5 新增）：HF 数据集下载原件（可复取缓存，非词典字段）
+//   key=`wt|<learn>_<meaning>`（WordTranslation jsonl.gz）/ `emb|<lang>`（WordEmbedding
+//   词表+向量）。记录 = {k, kind:'wt'|'emb', gz?|vec?|words?, sha256, bytes, ts(下载时间戳，
+//   30 天过期校验基线)}。不在 SPLIT_STORES：不随 clearByLang 清（跨词典重建复用），
+//   仅 idbClearAll 全清。管理引擎在 trans-pack.js / embeddings-engine.js。
+const S_RAW = 'rawfiles';
 
 // 词典整表缓存 store：key=lang，值={lang, version, words:[按频率降序], time}
 // 反思（2026-08-13 第五十一次）：用户要求"刷新页面后应从词典加载，只有词典之外的单词才需要重新构建"。
@@ -83,6 +97,22 @@ function getDB() {
           lf.createIndex('by-lang', 'lang', { unique: false });
           lf.createIndex('by-lang-v', ['lang', 'v'], { unique: false });
         }
+        // DB_VERSION 5：相关词汇行 d_rel（SPLIT_STORES 循环已建表+by-lang）；
+        //   rawfiles 原始文件库；d_trans 增 by-lang-tlang 复合索引（旧库升级时补建）。
+        if (!db.objectStoreNames.contains(S_RAW)) {
+          db.createObjectStore(S_RAW, { keyPath: 'k' });
+        }
+        try {
+          // onupgradeneeded 事务内直接取 d_trans store（v5 全新库已在 SPLIT_STORES
+          //   循环建表；v4→v5 升级路径 d_trans 已存在）——只补 by-lang-tlang 索引。
+          const tx = e.target.transaction;
+          const stT = tx.objectStore(S_TRANS);
+          if (!stT.indexNames.contains('by-lang-tlang')) {
+            stT.createIndex('by-lang-tlang', ['lang', 'tlang'], { unique: false });
+          }
+        } catch (ie) {
+          console.error('[VocabRadar][word-db] d_trans by-lang-tlang 索引补建失败:', ie);
+        }
       };
     });
     // 反思：IDB 打开失败不应缓存 rejected Promise，否则后续重试仍失败
@@ -91,7 +121,7 @@ function getDB() {
   return _dbPromise;
 }
 
-/** 单事务读五张分表并组装旧版记录形状（字段缺失语义与旧版一致：存在才带出） */
+/** 单事务读六张分表并组装旧版记录形状（字段缺失语义与旧版一致：存在才带出） */
 export async function idbGet(key) {
   const db = await getDB();
   const p = splitKey(key);
@@ -100,7 +130,7 @@ export async function idbGet(key) {
   const out = await new Promise((resolve, reject) => {
     const tx = db.transaction(SPLIT_STORES, 'readonly');
     const g = (s) => tx.objectStore(s).get(k);
-    const rqR = g(S_RANK), rqT = g(S_TAGS), rqL = g(S_LEMMA), rqTr = g(S_TRANS), rqP = g(S_PHON);
+    const rqR = g(S_RANK), rqT = g(S_TAGS), rqL = g(S_LEMMA), rqTr = g(S_TRANS), rqP = g(S_PHON), rqRel = g(S_REL);
     let done = 0;
     const rec = { key, lang: p.lang, word: p.word };
     const finish = () => {
@@ -112,15 +142,16 @@ export async function idbGet(key) {
         rec.translationLang = rqTr.result.tlang || null;
       }
       if (rqP.result && typeof rqP.result.v === 'string') rec.phonetic = rqP.result.v;
+      if (rqRel.result && typeof rqRel.result.v === 'string') rec.related = rqRel.result.v;
       resolve(rec);
     };
-    [rqR, rqT, rqL, rqTr, rqP].forEach((rq) => {
-      rq.onsuccess = () => { if (++done === 5) finish(); };
+    [rqR, rqT, rqL, rqTr, rqP, rqRel].forEach((rq) => {
+      rq.onsuccess = () => { if (++done === 6) finish(); };
       rq.onerror = () => reject(rq.error);
     });
   });
   // 无任何属性：视为不存在（与旧语义一致）
-  const hasAny = ('rank' in out) || ('tags' in out) || ('lemma' in out) || ('translation' in out) || ('phonetic' in out);
+  const hasAny = ('rank' in out) || ('tags' in out) || ('lemma' in out) || ('translation' in out) || ('phonetic' in out) || ('related' in out);
   return hasAny ? out : null;
 }
 
@@ -147,10 +178,11 @@ export async function idbGetBatch(keys) {
             if (si === 2 && typeof r.v === 'string') rec.lemma = r.v;
             if (si === 3 && typeof r.v === 'string') { rec.translation = r.v; rec.translationLang = r.tlang || null; }
             if (si === 4 && typeof r.v === 'string') rec.phonetic = r.v;
+            if (si === 5 && typeof r.v === 'string') rec.related = r.v;   // 第561次：d_rel 相关词汇（SPLIT_STORES 末位）
           }
           if (++got === SPLIT_STORES.length && --pending === 0) {
             for (const o of results) {
-              if (o && !('rank' in o) && !('tags' in o) && !('lemma' in o) && !('translation' in o) && !('phonetic' in o)) {
+              if (o && !('rank' in o) && !('tags' in o) && !('lemma' in o) && !('translation' in o) && !('phonetic' in o) && !('related' in o)) {
                 // 全空：置 null（不存在）
                 results[results.indexOf(o)] = null;
               }
@@ -176,6 +208,7 @@ export async function idbPut(record) {
     if (typeof record.lemma === 'string') w(S_LEMMA, record.lemma);
     if (typeof record.translation === 'string') w(S_TRANS, record.translation, { tlang: record.translationLang || null });
     if (typeof record.phonetic === 'string') w(S_PHON, record.phonetic);
+    if (typeof record.related === 'string') w(S_REL, record.related);   // 第561次：相关词汇定稿串
     tx.oncomplete = () => resolve();
     tx.onerror = () => reject(tx.error);
   });
@@ -193,6 +226,7 @@ export async function idbUpdate(key, patch) {
     if ('lemma' in patch) w(S_LEMMA, typeof patch.lemma === 'string' ? patch.lemma : undefined);
     if ('translation' in patch) w(S_TRANS, typeof patch.translation === 'string' ? patch.translation : undefined, { tlang: patch.translationLang || null });
     if ('phonetic' in patch) w(S_PHON, typeof patch.phonetic === 'string' ? patch.phonetic : undefined);
+    if ('related' in patch) w(S_REL, typeof patch.related === 'string' ? patch.related : undefined);
     tx.oncomplete = () => resolve();
     tx.onerror = () => reject(tx.error);
   });
@@ -228,9 +262,11 @@ export async function idbClearAll() {
   //   2. STORE_NAME（旧 words 统一表）：第119次拆表后只读迁移残留，一并清空。
   //   均为可复取缓存（版本变更后重拉重建）；用户数据（My Words/设定）在 storage.local，不受影响。
   //   d_lform（词形行，DB_VERSION 4）一并纳入：同样是可复取缓存。
-  //   反向注意：idbClearByLang 不清 d_lform——词形数据属词典源数据，词典按语言重建后
-  //   仍需保留（与 dictCache.lemmas 今日行为一致）。
-  for (const s of [...SPLIT_STORES, S_META, DICT_CACHE_STORE, STORE_NAME, S_LFORM]) {
+  //   rawfiles（HF 数据集原始文件，DB_VERSION 5）一并纳入：同样是可复取缓存（30 天
+  //   过期语义由下载时间戳保证，清后下次使用自然重拉）。
+  //   反向注意：idbClearByLang 不清 d_lform/rawfiles——词形数据与原始文件属词典源数据，
+  //   词典按语言重建后仍需保留（与 dictCache.lemmas 今日行为一致）。
+  for (const s of [...SPLIT_STORES, S_META, DICT_CACHE_STORE, STORE_NAME, S_LFORM, S_RAW]) {
     await new Promise((resolve, reject) => {
       const tx = db.transaction(s, 'readwrite');
       const rq = tx.objectStore(s).clear();
@@ -304,6 +340,53 @@ export async function idbCountTrans(lang) {
     const req = tx.objectStore(S_TRANS).index('by-lang').count(IDBKeyRange.only(lang));
     req.onsuccess = () => resolve(req.result || 0);
     req.onerror = () => reject(req.error);
+  });
+}
+
+// 第561次：翻译分表按语言对计数（by-lang-tlang 复合索引）——HF WordTranslation 翻译包
+//   回填判缺用（meaningLanguage 切换后旧目标语言的行不计入，按对新语言对判定是否回填）。
+//   tlang 为 null 的行（历史脏数据/无目标语言标记）不落入任何具体语言对区间，天然排除。
+export async function idbCountTransPair(lang, translationLang) {
+  const db = await getDB();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction([S_TRANS], 'readonly');
+    const req = tx.objectStore(S_TRANS).index('by-lang-tlang')
+      .count(IDBKeyRange.only([lang, translationLang || null]));
+    req.onsuccess = () => resolve(req.result || 0);
+    req.onerror = () => reject(req.error);
+  });
+}
+
+// === 原始文件库 rawfiles（DB_VERSION 5） ===
+// HF 数据集下载原件（WordTranslation jsonl.gz / WordEmbedding 词表+向量），仅 SW 使用。
+// 记录 = {k, kind, ...载荷, sha256, bytes, ts}；ts=下载/校验通过时间戳（30 天过期基线）。
+
+/**
+ * 读原始文件记录
+ * @param {string} k 如 'wt|en_zh' / 'emb|en'
+ * @returns {Promise<object|null>}
+ */
+export async function idbRawGet(k) {
+  const db = await getDB();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(S_RAW, 'readonly');
+    const rq = tx.objectStore(S_RAW).get(k);
+    rq.onsuccess = () => resolve(rq.result || null);
+    rq.onerror = () => reject(rq.error);
+  });
+}
+
+/**
+ * 写原始文件记录（整条覆盖；载荷含 ArrayBuffer/string，structured clone 直存）
+ * @param {object} rec 完整记录（含 k）
+ */
+export async function idbRawPut(rec) {
+  const db = await getDB();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(S_RAW, 'readwrite');
+    tx.objectStore(S_RAW).put(rec);
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error);
   });
 }
 

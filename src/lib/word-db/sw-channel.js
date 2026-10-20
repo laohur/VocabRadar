@@ -23,6 +23,11 @@ import {
 } from './db-ops.js';
 import { _projCache } from './projection-cache.js';
 import { lemmasSizeCached, swLemmatizeWord, swLemmaFamily, scheduleHotRebuild } from './lemmas-engine.js';
+// 第561次：HF 数据集引擎（WordTranslation 翻译包回填 / WordEmbedding 相关词汇近邻）。
+//   引擎仅 SW 上下文执行（db-ops getDB isSW 守卫），CS 经下方 WORD_DB_TRANS_PACK /
+//   WORD_DB_RELATED 消息路由（router.js 的 WORD_DB_ 前缀转发天然覆盖）。
+import { ensureTransPack } from './trans-pack.js';
+import { swRelatedWords } from './embeddings-engine.js';
 
 export async function getWord(lang, word) {
   if (!lang || !word) return null;
@@ -73,6 +78,37 @@ export async function lemmasSize(lang) {
     return resp && resp.ok ? (resp.size || 0) : 0;
   } catch (e) {
     return 0;
+  }
+}
+
+// 第561次：HF WordTranslation 翻译包确保（下载/回填 d_trans/30 天过期对账）——
+//   页面侧词典装载链（projection.js）fire-and-forget 触发；isSW 直调（SW 内部调用场景），
+//   CS 经 WORD_DB_TRANS_PACK 消息。失败返回 {ok:false,error} 不抛（触发方不阻塞主链）。
+export async function ensureTransPackFor(learn, meaning) {
+  if (isSW) {
+    try { return await ensureTransPack(learn, meaning); } catch (e) { return { ok: false, error: String((e && e.message) || e) }; }
+  }
+  if (!runtimeValid()) return { ok: false, error: 'runtime unavailable' };
+  try {
+    const resp = await chrome.runtime.sendMessage({ type: 'WORD_DB_TRANS_PACK', learn, meaning });
+    return resp || { ok: false, error: 'SW 未响应' };
+  } catch (e) {
+    return { ok: false, error: String((e && e.message) || e) };
+  }
+}
+
+// 第561次：相关词汇查询（WordEmbedding 向量近邻）——卡片异步渲染调用；
+//   isSW 直调，CS 经 WORD_DB_RELATED 消息。失败/超时返回 {ok:false}（卡片隐藏该行）。
+export async function relatedWords(lang, word) {
+  if (isSW) {
+    try { return await swRelatedWords(lang, word); } catch (e) { return { ok: false, words: [], error: String((e && e.message) || e) }; }
+  }
+  if (!runtimeValid()) return { ok: false, words: [], error: 'runtime unavailable' };
+  try {
+    const resp = await chrome.runtime.sendMessage({ type: 'WORD_DB_RELATED', lang, word });
+    return resp || { ok: false, words: [], error: 'SW 未响应' };
+  } catch (e) {
+    return { ok: false, words: [], error: String((e && e.message) || e) };
   }
 }
 
@@ -899,6 +935,22 @@ export async function handleWordDbMessage(msg, sender, sendResponse) {
         //   类型名带 LEMMATIZE_ 前缀，沿用 service-worker.js 既有前缀转发，无需改路由。
         sendResponse(await swLemmaFamily(msg.lemma, msg.lang || 'en', msg.limit));
         return true;
+      case 'WORD_DB_TRANS_PACK':
+        // 第561次：HF WordTranslation 翻译包确保（下载/回填 d_trans/30 天对账）。
+        //   ensureTransPack 自带在途去重/会话完成标记/失败退避，重复触发无害；
+        //   失败以 {ok:false,error} 回话（页面 fire-and-forget，不阻塞装载主链）。
+        sendResponse(await ensureTransPack(msg.learn, msg.meaning));
+        return true;
+      case 'WORD_DB_RELATED': {
+        // 第561次：相关词汇查询（d_rel 缓存 → 向量近邻计算 → 定稿写回）。
+        //   首查含向量包下载（10-24MB）与点积计算（数十 ms 级），卡片侧异步等待。
+        try {
+          sendResponse(await swRelatedWords(msg.lang, msg.word));
+        } catch (e) {
+          sendResponse({ ok: false, words: [], error: String((e && e.message) || e) });
+        }
+        return true;
+      }
       default:
         return false;
     }

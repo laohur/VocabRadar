@@ -13,9 +13,9 @@ import { primeTranslator } from '../../lib/translator.js';
 // 顶行构建器同源的品牌小图标（搜索栏左端）
 import { brandIconSVG, buildTopbarHTML, ensureTopbarCss } from '../../lib/sidebar-topbar.js';
 import { SUBTITLE_TEXT_STYLES, findStyle, SUB_DEFAULT_STYLE, BUILD_STAMP } from '../../lib/styles.js';
-// query 标签复用右键搜索卡片（唯一定义 th/panel.js：同 CSS/同结构/同渲染核心；
+// query 标签复用右键搜索卡片（唯一定义 th/panel.js 门面：同 CSS/同结构/同渲染核心；
 // ES module 按 URL 单实例，与 text-hint bundle 共享同一 thState/模块状态）
-import { buildPanelCss, buildCardInnerHTML, renderQueryCard, bindLemmaChipClick } from '../th/panel.js';
+import { buildPanelCss, buildCardInnerHTML, renderQueryCard } from '../th/panel.js';
 // query bar 可用性 = 查询栏开关 queryBarEnabled（queryEnabled 为未升级用户的兼容回退键）+ 停用规则 query 项（与网页提示解耦）
 import { suppressionFor } from '../../lib/deactivate.js';
 import { reviveSidebarIfPossible, startVideoController } from '../video-controller.js';
@@ -1104,8 +1104,8 @@ function switchTab(tab) {
 }
 
 // === query 标签——查询执行 ===
-// 结果卡复用右键搜索的唯一定义（th/panel.js：buildPanelCss/buildCardInnerHTML/
-// renderQueryCard/bindLemmaChipClick），承载在 Shadow DOM 内——卡片 CSS 不漏宿主页。
+// 结果卡复用右键搜索的唯一定义（th/panel.js 门面：buildPanelCss/buildCardInnerHTML/
+// renderQueryCard），承载在 Shadow DOM 内——卡片 CSS 不漏宿主页。
 // @param {string} text 查询文本（空则回空态提示）
 async function runSidebarQuery(text) {
   const box = _root.querySelector('#beaver-web-query-result');
@@ -1128,10 +1128,12 @@ async function runSidebarQuery(text) {
   //   用户在本站（官网）用侧栏 query 标签测试，其他站用右键面板，观感"只有本站偏大"。
   //   卡根节点写死 14px（shadow 内部声明压过外层继承，页面/侧栏 CSS 不可达），
   //   与右键面板/tooltip 同基准。视频侧栏内嵌卡同构同修。
+  // 第561次二轮（用户裁定"多了一个添加生词按钮"）：内嵌查询卡不再渲染 🏁/✓
+  //   My Words 标记按钮（与视频侧栏内嵌卡同构同修）；同族组随 renderLemmaInto
+  //   常显，无 chip 点击委托
   shadow.innerHTML = '<style>' + buildPanelCss() + '</style>'
     + '<div class="beaver-query-card" style="padding:10px 12px;background:#fbfdf9;border-radius:8px;font-size:14px;line-height:1.5;">'
-    + buildCardInnerHTML() + '</div>';
-  bindLemmaChipClick(shadow);
+    + buildCardInnerHTML({ markButtons: false }) + '</div>';
   try {
     // 内嵌卡片：无定位回调、恒可写（后两参缺省即 no-op/恒 true）
     await renderQueryCard(shadow, trimmed);

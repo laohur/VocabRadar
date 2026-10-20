@@ -442,6 +442,11 @@ const DICT = {
     // 2026-09-04（用户："词形还原即便原形也要说，右加折叠符号"）：词表原形折叠按钮 title
     'th.lemmaExpand': 'Show same-lemma words',
     'th.lemmaCollapse': 'Collapse',
+    // 第561次（用户："同族词汇要用字段名"+"单词条目增加相关词汇"）：卡片分节字段名
+    'th.familyWords': 'Word family',
+    'th.relatedWords': 'Related words',
+    // 第561次三轮（用户："同族词若过多，那就先显示五个，多了之外再展开"）：展开按钮
+    'th.familyExpand': 'Show all',
     'th.querying': 'Querying...',
     // 第一百八十五次：重复键后者生效，同步改为纯符号
     'th.notWord': 'Common word',
@@ -854,6 +859,11 @@ const DICT = {
     // 2026-09-04（用户："词形还原即便原形也要说，右加折叠符号"）：词表原形折叠按钮 title
     'th.lemmaExpand': '展开同原形词',
     'th.lemmaCollapse': '收起',
+    // 第561次（用户："同族词汇要用字段名"+"单词条目增加相关词汇"）：卡片分节字段名
+    'th.familyWords': '同族词汇',
+    'th.relatedWords': '相关词汇',
+    // 第561次三轮（用户："同族词若过多，那就先显示五个，多了之外再展开"）：展开按钮
+    'th.familyExpand': '展开全部',
     'th.querying': '查询中…',
     'th.noDef': '—',
     'th.notWord': '非生词',
