@@ -23,11 +23,11 @@ import {
 } from './db-ops.js';
 import { _projCache } from './projection-cache.js';
 import { lemmasSizeCached, swLemmatizeWord, swLemmaFamily, scheduleHotRebuild } from './lemmas-engine.js';
-// 第561次：HF 数据集引擎（WordTranslation 翻译包回填 / WordEmbedding 相关词汇近邻）。
+// 第561次：站点 CDN 数据引擎（翻译包回填 / 相关词汇预计算近邻表查表）。
 //   引擎仅 SW 上下文执行（db-ops getDB isSW 守卫），CS 经下方 WORD_DB_TRANS_PACK /
 //   WORD_DB_RELATED 消息路由（router.js 的 WORD_DB_ 前缀转发天然覆盖）。
 import { ensureTransPack } from './trans-pack.js';
-import { swRelatedWords } from './embeddings-engine.js';
+import { swRelatedWords, invalidateRelRankIndex } from './embeddings-engine.js';
 
 export async function getWord(lang, word) {
   if (!lang || !word) return null;
@@ -81,7 +81,7 @@ export async function lemmasSize(lang) {
   }
 }
 
-// 第561次：HF WordTranslation 翻译包确保（下载/回填 d_trans/30 天过期对账）——
+// 第561次：站点 CDN 翻译包确保（下载/回填 d_trans/30 天过期对账）——
 //   页面侧词典装载链（projection.js）fire-and-forget 触发；isSW 直调（SW 内部调用场景），
 //   CS 经 WORD_DB_TRANS_PACK 消息。失败返回 {ok:false,error} 不抛（触发方不阻塞主链）。
 export async function ensureTransPackFor(learn, meaning) {
@@ -772,6 +772,8 @@ export async function handleWordDbMessage(msg, sender, sendResponse) {
         const cleared = await idbClearByLang(msg.lang);
         _projCache.delete(msg.lang);
         projLocalDel(msg.lang);   // 第二百零六次：local 二级缓存同步失效
+        // 第561次五轮：rank→word 反查缓存随词典清库失效（相关词汇近邻表行对齐依赖）
+        invalidateRelRankIndex(msg.lang);
         sendResponse({ ok: true, cleared });
         return true;
       }
@@ -863,6 +865,9 @@ export async function handleWordDbMessage(msg, sender, sendResponse) {
             // 第515次：词频表换代后重建词形热集（热集=词频表∩词形行）——
             //   无状态/行未就绪为 no-op；fire-and-forget，不阻塞重建回执。
             scheduleHotRebuild(msg.lang);
+            // 第561次五轮：词频表换代 → rank 全局序可能位移，rank→word 反查缓存失效
+            //   （相关词汇近邻表按 rank 行对齐，反查必须跟随当前词典）
+            invalidateRelRankIndex(msg.lang);
           }
           sendResponse({ ok: true, written: (msg.entries || []).length });
         } catch (e) {
@@ -919,6 +924,7 @@ export async function handleWordDbMessage(msg, sender, sendResponse) {
         await idbClearAll();
         _projCache.clear();
         projLocalClearAll();   // 第二百零六次：local 二级缓存同步整清
+        invalidateRelRankIndex(null);   // 第561次五轮：rank→word 反查缓存整清
         sendResponse({ ok: true });
         return true;
       // 第515次：DICT_CACHE_GET/SET 与 LEMMAS_GET 死分支删除（用户裁定）——
@@ -936,7 +942,7 @@ export async function handleWordDbMessage(msg, sender, sendResponse) {
         sendResponse(await swLemmaFamily(msg.lemma, msg.lang || 'en', msg.limit));
         return true;
       case 'WORD_DB_TRANS_PACK':
-        // 第561次：HF WordTranslation 翻译包确保（下载/回填 d_trans/30 天对账）。
+        // 第561次：站点 CDN 翻译包确保（下载/回填 d_trans/30 天对账）。
         //   ensureTransPack 自带在途去重/会话完成标记/失败退避，重复触发无害；
         //   失败以 {ok:false,error} 回话（页面 fire-and-forget，不阻塞装载主链）。
         sendResponse(await ensureTransPack(msg.learn, msg.meaning));

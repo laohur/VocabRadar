@@ -1,7 +1,8 @@
 // =============================================================================
 // offscreen 宿主生命周期
 // 职责：Chromium chrome.offscreen 文档 / Firefox 后台页内回退 iframe 二选一宿主，
-//   加上 PING 就绪探针。OCR（EXTRACT_TEXT/PARSE_DOC/AUDIO_DECODE）三族消息共用。
+//   加上 PING 就绪探针。（EXTRACT_TEXT/AUDIO_DECODE 两族消息共用；PARSE_DOC 已随
+//   第561次八轮 EPUB/文档解析移除。）
 // 唯一状态：_asrFallbackFrame（Firefox 回退 iframe 引用）只在本文件读写。
 // =============================================================================
 import { _ts, log } from './log.js';
@@ -128,7 +129,7 @@ async function ensureOffscreen() {
     await chrome.offscreen.createDocument({
       url: 'src/offscreen/offscreen.html',
       reasons: ['BLOBS', 'DOM_PARSER', 'WORKERS'],
-      justification: 'Audio decode/resample for LLM transcription, main-text extraction, and EPUB document parsing',
+      justification: 'Audio decode/resample for LLM transcription and main-text extraction',
     });
     return true;
   } catch (e) {

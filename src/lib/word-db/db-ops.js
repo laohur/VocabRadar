@@ -21,7 +21,7 @@ const DB_NAME = 'beaver-dict';
 //   不再整表进内存（diverse-lemmas 约 13.9 万词级，fi/pl 达 350 万词级）。
 // 第561次：DB_VERSION 5--①d_rel 相关词汇行（WordEmbedding 向量近邻计算结果，
 //   词频重建后可重算的派生字段，故并入 SPLIT_STORES 随 clearByLang 一并清）；
-//   ②rawfiles 原始文件库（HF 数据集 WordTranslation/WordEmbedding 下载原件，
+//   ②rawfiles 原始文件库（站点翻译包/近邻表下载原件，
 //   带下载时间戳供 30 天过期校验，可复取缓存）；③d_trans 增 by-lang-tlang 复合
 //   索引（翻译包按语言对计数，meaningLanguage 切换后按对新语言对判缺回填）。
 const DB_VERSION = 5;
@@ -42,7 +42,7 @@ const SPLIT_STORES = [S_RANK, S_TAGS, S_LEMMA, S_TRANS, S_PHON, S_REL];
 //   - by-lang-v 复合索引 ['lang','v']：同族反查（有哪些词形还原到该 lemma）。
 //   注意：与 d_lemma（词典词条的 lemma 字段，投影用）是两回事，绝不合并。
 const S_LFORM = 'd_lform';
-// 原始文件库（DB_VERSION 5 新增）：HF 数据集下载原件（可复取缓存，非词典字段）
+// 原始文件库（DB_VERSION 5 新增）：站点/数据集下载原件（可复取缓存，非词典字段）
 //   key=`wt|<learn>_<meaning>`（WordTranslation jsonl.gz）/ `emb|<lang>`（WordEmbedding
 //   词表+向量）。记录 = {k, kind:'wt'|'emb', gz?|vec?|words?, sha256, bytes, ts(下载时间戳，
 //   30 天过期校验基线)}。不在 SPLIT_STORES：不随 clearByLang 清（跨词典重建复用），
@@ -343,7 +343,7 @@ export async function idbCountTrans(lang) {
   });
 }
 
-// 第561次：翻译分表按语言对计数（by-lang-tlang 复合索引）——HF WordTranslation 翻译包
+// 第561次：翻译分表按语言对计数（by-lang-tlang 复合索引）——站点翻译包
 //   回填判缺用（meaningLanguage 切换后旧目标语言的行不计入，按对新语言对判定是否回填）。
 //   tlang 为 null 的行（历史脏数据/无目标语言标记）不落入任何具体语言对区间，天然排除。
 export async function idbCountTransPair(lang, translationLang) {
@@ -372,7 +372,7 @@ export async function idbRelClearAll() {
 }
 
 // === 原始文件库 rawfiles（DB_VERSION 5） ===
-// HF 数据集下载原件（WordTranslation jsonl.gz / WordEmbedding 词表+向量），仅 SW 使用。
+// 站点/数据集下载原件（翻译包 translations_*.json.gz / 近邻表 related.bin），仅 SW 使用。
 // 记录 = {k, kind, ...载荷, sha256, bytes, ts}；ts=下载/校验通过时间戳（30 天过期基线）。
 
 /**

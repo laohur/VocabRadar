@@ -696,7 +696,7 @@
           <span class="group-name" data-key="parserTitle">文档解析（Parser）</span>
         </div>
         <div class="group-body">
-          <p class="style-desc" data-key="parserDesc">把链接/网页/文件（文本、音视频、图片、EPUB 等常见类型）解析为纯文本，供生词标注与学习。</p>
+          <p class="style-desc" data-key="parserDesc">把链接/网页/文件（文本、音视频、图片等常见类型）解析为纯文本，供生词标注与学习。第561次八轮起不再解析文档（EPUB/PDF/DOCX 已移除）。</p>
           <!-- 第一行：上传文件（ASR 先例） + Capture + 录制（来源三选一，value 与 ASR 栏一致） -->
           <div class="g-source-row">
             <button class="func-btn" id="g-parser-upload" data-key="uploadAv">📁 上传文件</button>
@@ -709,7 +709,7 @@
             <span class="g-radio-label" data-key="ws.recordFromEnd">)</span>
             <!-- 隐藏文件选择器（「上传文件」触发；拖入/Ctrl+V 粘贴不走它），multiple 多选累计 -->
             <input type="file" id="g-parser-file-input" multiple hidden
-                   accept=".txt,.md,.markdown,.html,.htm,.xml,.json,.csv,.srt,.vtt,.epub,text/*,audio/*,video/*,image/*">
+                   accept=".txt,.md,.markdown,.html,.htm,.xml,.json,.csv,.srt,.vtt,text/*,audio/*,video/*,image/*">
           </div>
           <!-- 中部：左右两栏（左=大输入框+解析按钮，右=纯文本结果） -->
           <div class="g-parser-cols">
@@ -718,7 +718,7 @@
                    多行皆链接=批量链接；拖入/Ctrl+V 粘贴/上传 = 替换本批输入（多文件为一批） -->
               <div id="g-parser-inputwrap" class="g-parser-inputwrap">
                 <textarea id="g-parser-input" class="g-parser-input" spellcheck="false"></textarea>
-                <div class="g-parser-ph" data-key="parserInputPh">在此粘贴文本或链接，或拖入/粘贴文件（文本网页、音视频、图片、EPUB 等）</div>
+                <div class="g-parser-ph" data-key="parserInputPh">在此粘贴文本或链接，或拖入/粘贴文件（文本网页、音视频、图片等）</div>
               </div>
               <!-- 258 次：拍照/录制预览位（仅一个，下次拍照/录制占用替换；文件列表仍留档全量） -->
               <div id="g-parser-media" class="g-parser-media" hidden></div>

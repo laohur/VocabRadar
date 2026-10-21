@@ -8,21 +8,20 @@
 //     替换语义废除）；"清除按钮可以清除所有"→ ✕ 清文本+文件+预览全部
 //   - 拍照/录制预览位：输入区内唯一预览槽（#g-parser-media），下次拍照/录制**占用替换**；
 //     成品同时进文件列表留档（⬇ 可取），"其他方法不是清除"——上传/拖入不动预览槽
-//   - EPUB 支持（新 parser-epub.js：自研最小 ZIP 读取+DecompressionStream+spine 逐章）；
-//     2026-10-20（用户裁定）：PDF/DOCX 解析整体移除（第三方库 eval 告警与包体），
-//     .pdf/.doc/.docx 如实报"请转成文本或 EPUB"
+//   - 第561次八轮（用户裁定"移除 EPUB，不再解析文档"）：EPUB 解析（parser-epub.js）
+//     与文档文件解析整体移除——pdf/docx/doc/epub 统一报"不再解析文档"（parser.js
+//     不再引入 parser-epub；网站桥 document kind 同步关闭，见 sw/parse-material.js）
 //   - 链接失败隔离：批链接逐条 try/catch（单链接失败不拖垮整批），失败带 URL 定位
 //   - 录制按钮红色闪动恢复（红↔亮红背景动画，见 guide.css——旧 opacity 闪法透绿是根因）
 //
 // 解析分发（只提纯文本，全部复用既有能力，不加封装层）：
 //   - 文本      → 直接输出
 //   - 链接      → SW FETCH_TEXT（30s 超时）→ lib/main-text.js extractDefuddleFromHtml 主链
-//   - EPUB      → parser-epub.js（自研最小 zip + spine 逐章）
 //   - HTML 文件 → 同链接（extractDefuddleFromHtml）
 //   - 文本类    → file.text() 直读（txt/md/csv/srt/vtt/json/xml…）
 //   - 图片      → OCR_RECOGNIZE（后台 offscreen，语言随 learnLanguage）
 //   - 音视频    → parser-media.js transcribeAvFile（与 asr.js 文件 ASR 同消息协议）
-//   - PDF/DOCX/.doc → 已移除解析支持，如实指引转存文本/EPUB（不虚假承诺）
+//   - PDF/DOCX/.doc/EPUB → 已移除解析支持（不再解析文档），如实报 parser.docRemoved
 
 import { t } from '../lib/i18n.js';
 import { extractDefuddleFromHtml } from '../lib/main-text.js';
@@ -51,14 +50,15 @@ const VIDEO_EXTS = new Set(['mp4', 'webm', 'mkv', 'mov', 'avi', 'm4v', 'flv', 't
 // 输入/输出框高度上限（与输出框一致，到底再内部滚动）
 const BOX_MAX_HEIGHT = 560;
 
-/** 文件类型判定（mime 优先，扩展名兜底）→ pdf|docx|doc|epub|html|text|image|audio|video|null */
+/** 文件类型判定（mime 优先，扩展名兜底）→ document|html|text|image|audio|video|null
+ *  第561次八轮：pdf/docx/doc/epub 归并为单一 'document'（不再解析文档，如实拒绝） */
 function detectParserKind(file) {
   const mt = (file.type || '').toLowerCase();
   const ext = ((file.name || '').split('.').pop() || '').toLowerCase();
-  if (mt === 'application/pdf' || ext === 'pdf') return 'pdf';
-  if (mt.includes('officedocument.wordprocessingml.document') || ext === 'docx') return 'docx';
-  if (mt === 'application/msword' || ext === 'doc') return 'doc';
-  if (mt === 'application/epub+zip' || ext === 'epub') return 'epub';
+  if (mt === 'application/pdf' || ext === 'pdf') return 'document';
+  if (mt.includes('officedocument.wordprocessingml.document') || ext === 'docx') return 'document';
+  if (mt === 'application/msword' || ext === 'doc') return 'document';
+  if (mt === 'application/epub+zip' || ext === 'epub') return 'document';
   if (mt === 'text/html' || ['html', 'htm', 'xhtml'].includes(ext)) return 'html';
   if (mt.startsWith('image/') || ['png', 'jpg', 'jpeg', 'gif', 'bmp', 'webp'].includes(ext)) return 'image';
   if (mt.startsWith('audio/') || AUDIO_EXTS.has(ext)) return 'audio';
@@ -287,16 +287,11 @@ async function parseSingleFile(file, idx, total) {
     setStatus(tag + t('parser.parsing'), 'OCR');
     return parseImageOcr(await fileToDataUrl(file));
   }
-  if (kind === 'pdf' || kind === 'docx' || kind === 'doc') {
-    // 2026-10-20（用户裁定）：PDF/DOCX 解析整体移除——第三方库（unpdf/pdfjs、mammoth）
-    // 带 eval 告警且包体大，如实指引转存，不虚假承诺
-    setStatus(tag + t('parser.parsing'), kind === 'pdf' ? 'PDF' : 'DOCX');
-    throw new Error(kind === 'pdf' ? t('parser.needPdf') : t('parser.needDocx'));
-  }
-  if (kind === 'epub') {
-    // EPUB：自研最小 zip + spine 逐章（parser-epub.js，无第三方依赖）
-    const { parseEpub } = await import('./parser-epub.js');
-    return parseEpub(file, (stage, detail) => setStatus(tag + stage, detail));
+  if (kind === 'document') {
+    // 第561次八轮（用户裁定"移除 EPUB，不再解析文档"）：pdf/docx/doc/epub 统一拒绝——
+    //   parser-epub.js 与 offscreen parse-doc.js 已删除，如实报不再解析文档
+    setStatus(tag + t('parser.parsing'), 'DOC');
+    throw new Error(t('parser.docRemoved'));
   }
   if (kind === 'html') {
     setStatus(tag + t('parser.parsing'), 'HTML');

@@ -147,7 +147,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       // link → SW fetch HTML（host_permissions <all_urls>，不受页面 CSP 限制）
       //        → offscreen 用 main-text.extractDefuddleFromHtml 提取正文；
       // image → 复用 OCR_RECOGNIZE 链路（LLM 视觉）；asr → 在线转写；
-      // document → offscreen parse-doc 解析（epub；pdf/docx 已移除，文件字节 b64 透传）；
+      // （document 文档解析已于第561次八轮整体移除——送入落 parse-material 尾部 ok:false）
       // 视频/音频链接 → 引导走扩展自身字幕/转写工作流（code:'video-link'）；
       // 其余类型这里兜底明示错误（不静默）。分工契约见 docs/桥接网站.md §4.2。
       handleParseMaterial(msg.kind, msg.payload)

@@ -18,7 +18,8 @@
 //   sw/lifecycle.js      onInstalled/onStartup/action 点击 + 存量规则迁移
 // ASR/OCR 一律走在线引擎：分片 ASR_AUDIO_SEGMENT → handleSegmentByLlm，整段 ASR_LLM_FILE，
 //   OCR → handleOcrByLlm（引擎 provider 默认 local-backend）。offscreen document 仍保留
-//   （AUDIO_DECODE/EXTRACT_TEXT/PARSE_DOC 三类非模型能力 + PING 探针）。
+//   （AUDIO_DECODE/EXTRACT_TEXT 两类非模型能力 + PING 探针；PARSE_DOC 已随
+//   第561次八轮 EPUB/文档解析移除）。
 // ASR 任务代理：content script 受页面 CSP 不能直连 backend，经 SW 调
 //   POST /api/asr/jobs（提交 URL）与 GET /api/asr/jobs/<id>?after=N
 //   （增量轮询：下载/转写进度 + 新增转写段）。

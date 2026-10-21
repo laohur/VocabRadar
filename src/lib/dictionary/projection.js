@@ -16,8 +16,8 @@
 import { dictState, DEFAULT_SOURCE_LANG, _ts } from './state.js';
 import { getLangProjection, getRanksProjection, bulkWriteDictionary, bulkWriteTranslations, clearByLang, countTranslationEntries, ensureTransPackFor } from '../word-db.js';
 import { loadWordfreq, loadWordlists, loadBuiltinEnZh } from './word-loader.js';
-// 第561次：HF WordTranslation 翻译包目标语言取 transState（唯一实例，无环依赖——
-//   shared.js 不 import 任何 translator/dictionary 模块）
+// 第561次：翻译包（站点 CDN，data/<src>/translations_<dst>.json.gz）目标语言取
+//   transState（唯一实例，无环依赖——shared.js 不 import 任何 translator/dictionary 模块）
 import { transState } from '../translator/shared.js';
 // 第三百七十次（方案A）：诊断记录器——词典装载事件/快照上报，诊断悬浮窗「字幕」标签读取。
 import { reportDictEvent, reportDictSnap } from '../ann-diag.js';
@@ -354,19 +354,29 @@ export async function _loadDict(lang) {
       //   内置包来源，阈值 + 会话节流双保险。节流 _transBackfilled 挂 dictState（SW 冷
       //   启动重置，每会话最多补一次；重复补装幂等 upsert 无害）。完成后新查询自然命中，
       //   本就绪行统计若晚于补装则直接显示真实词数。
+      //   第561次五轮（用户裁定"英中翻译包用之前的"）：内置英中包恢复 en→zh 权威——
+      //   期间 HF 翻译包曾覆盖写过 en→zh（transAlgoVer<2 的库），按版本对账无条件
+      //   覆盖回填一次把内置定稿值写回（在线缓存词不在内置包者保留），随即记版本，
+      //   此后回归既有计数判缺口径。HF 包侧对 en→zh 已在 trans-pack 引擎门控跳过。
       if (meaningLang === 'en' && !dictState._transBackfilled) {
         dictState._transBackfilled = true;
         Promise.resolve().then(async () => {
           try {
             const cnt = await countTranslationEntries(meaningLang);
-            if (cnt >= 1000) {
+            let ver = 0;
+            try { ({ transAlgoVer: ver } = await chrome.storage.local.get('transAlgoVer')); } catch (_) {}
+            const needMigration = ver !== TRANS_ALGO_VER;
+            if (cnt >= 1000 && !needMigration) {
               console.log(`[VocabRadar][dictionary][${_ts()}] d_trans 已有 ${cnt} 条，跳过内置翻译包补装`);
               return;
             }
             const zhMap = await loadBuiltinEnZh();
             if (zhMap.size > 0) {
               const ok = await bulkWriteTranslations(meaningLang, zhMap, 'zh');
-              console.log(`[VocabRadar][dictionary][${_ts()}] 内置英中翻译包补装${ok ? '完成' : '部分失败'}: ${zhMap.size} 词（补前 d_trans ${cnt} 条）`);
+              console.log(`[VocabRadar][dictionary][${_ts()}] 内置英中翻译包补装${ok ? '完成' : '部分失败'}: ${zhMap.size} 词（补前 d_trans ${cnt} 条${needMigration ? '，transAlgoVer 迁移回写内置定稿' : ''}）`);
+              if (needMigration) {
+                try { await chrome.storage.local.set({ transAlgoVer: TRANS_ALGO_VER }); } catch (_) {}
+              }
             } else {
               console.warn(`[VocabRadar][dictionary][${_ts()}] 内置翻译包补装失败：源装载为空（见上方告警），释义暂走在线`);
             }
@@ -375,7 +385,7 @@ export async function _loadDict(lang) {
           }
         });
       }
-      // 第561次：HF 翻译包后台确保（语言对计数判缺在引擎内，回填完成新查询自然命中）
+      // 第561次：翻译包后台确保（语言对计数判缺在引擎内，回填完成新查询自然命中）
       _ensureTransPackBackground(meaningLang);
       } catch (e) {
         console.warn(`[VocabRadar][dictionary][${_ts()}] Stage 2 后台合并异常（词频级就绪不受影响，分项待下次装载/重建补齐）:`, e && e.message);
@@ -485,7 +495,7 @@ export async function _loadDict(lang) {
         if (Number(cost) >= 0.25) {
           console.log(`[VocabRadar][dictionary][${_ts()}] 词典已就绪(投影): ${dictState.dictMap.size} 词 (${cost}s)`);
         }
-        // 第561次：SLOW 完整就绪分支同样确保 HF 翻译包（该分支不经过 FAST Stage 2；
+        // 第561次：SLOW 完整就绪分支同样确保翻译包（该分支不经过 FAST Stage 2；
         //   引擎内判缺+去重，重复触发无害）
         _ensureTransPackBackground(meaningLang);
         // 第三百七十一次：SLOW 完整就绪点同补广播（与 FAST 完整分支同理由，见上）。
@@ -551,10 +561,17 @@ export async function _loadDict(lang) {
 }
 
 /**
- * 第561次：HF WordTranslation 翻译包后台确保（fire-and-forget，与内置英中包先行回填
+ * 第561次五轮：翻译源版本对账。1=HF 翻译包权威覆盖期（曾把 en→zh 写成 HF 值），
+ * 2=英中恢复内置包权威（用户裁定"英中翻译包用之前的"）——版本不符时 Stage 2
+ * 补装块无条件覆盖回填内置英中包一次（HF 包侧 en→zh 已在 trans-pack 门控跳过）。
+ */
+const TRANS_ALGO_VER = 2;
+
+/**
+ * 第561次：翻译包后台确保（fire-and-forget，与内置英中包先行回填
  * 同款编排）。learnLang=当前装载语言，meaningLang=transState.meaningLang（释义语言）。
  * 引擎（word-db/trans-pack.js）自带在途去重/会话完成标记/语言对计数判缺/失败退避，
- * 重复触发无害；HF 数据集未收录的语言对（如 de→fr）如实 warn 不遮蔽——词典缓存与
+ * 重复触发无害；站点未发布释义语言（非 en/zh，如 de→fr）如实 skip 不遮蔽——词典缓存与
  * 在线渠道照常兜底。成功后新查询自然命中 d_trans（无需广播：懒读字段）。
  * @param {string} lang 学习语言
  */
@@ -563,11 +580,11 @@ function _ensureTransPackBackground(lang) {
     .then(() => ensureTransPackFor(lang, transState.meaningLang))
     .then((r) => {
       if (r && r.ok && typeof r.words === 'number') {
-        console.log(`[VocabRadar][dictionary][${_ts()}] HF 翻译包 ${lang}->${transState.meaningLang} 就绪: ${r.words} 词${r.cached ? '（缓存命中）' : '（已回填 d_trans）'}`);
+        console.log(`[VocabRadar][dictionary][${_ts()}] 翻译包 ${lang}->${transState.meaningLang} 就绪: ${r.words} 词${r.cached ? '（缓存命中）' : '（已回填 d_trans）'}`);
       } else if (r && r.ok && r.skipped) {
-        console.log(`[VocabRadar][dictionary][${_ts()}] HF 翻译包跳过（${r.skipped}）: ${lang}->${transState.meaningLang}`);
+        console.log(`[VocabRadar][dictionary][${_ts()}] 翻译包跳过（${r.skipped}）: ${lang}->${transState.meaningLang}`);
       } else if (r && !r.ok) {
-        console.warn(`[VocabRadar][dictionary][${_ts()}] HF 翻译包 ${lang}->${transState.meaningLang} 未能装载（词典缓存/内置包/在线渠道照常兜底）: ${r.error}`);
+        console.warn(`[VocabRadar][dictionary][${_ts()}] 翻译包 ${lang}->${transState.meaningLang} 未能装载（词典缓存/内置包/在线渠道照常兜底）: ${r.error}`);
       }
     })
     .catch(() => { /* 引擎内部已兜底为 {ok:false}，此处仅防消息通道异常外溢 */ });
@@ -580,6 +597,51 @@ function _ensureTransPackBackground(lang) {
  * 末块同事务写入 __built__ + expected 实际值。
  * @param {string} lang
  */
+
+// === 第561次七轮：跨上下文写库信号量（用户裁定"应该有个信号量说谁负责写"） ===
+// guide 页与网页内容脚本各自的重建此前各写一遍（词典 36k 行 ×2、内置包 40k 词 ×2），
+// upsert 幂等但写库翻倍（用户实测初始化写库 56s）。锁 = storage 键 {lang, token, ts}：
+// 首个声明者 leader 负责写，后来者 follower 跳过写入只留本页内存词典；TTL 防写方
+// 崩溃死锁；storage 异常退回旧"各自写"行为（幂等无害）。
+const REBUILD_LOCK_KEY = 'dictRebuildLock';
+const TRANS_BACKFILL_LOCK_KEY = 'transBackfillLock';
+const CTX_LOCK_TTL_MS = 5 * 60 * 1000;
+
+/**
+ * 声明写锁：无人持锁（或锁已过期）时写入自家 token 并复读确认（双开竞态下后写者
+ * 胜出，先写者读回 token 被顶即降级 follower）；锁被他人新鲜持有时返回 follower。
+ * @param {string} key storage 键
+ * @param {string} lang 服务语言
+ * @returns {Promise<{role:'leader'|'follower', token:string|null}>}
+ */
+async function acquireCtxLock(key, lang) {
+  try {
+    const box = await chrome.storage.local.get(key);
+    const lock = box[key];
+    const now = Date.now();
+    if (lock && lock.lang === lang && now - lock.ts < CTX_LOCK_TTL_MS) {
+      return { role: 'follower', token: null };
+    }
+    const token = now.toString(36) + Math.random().toString(36).slice(2, 8);
+    await chrome.storage.local.set({ [key]: { lang, token, ts: now } });
+    const box2 = await chrome.storage.local.get(key);
+    if (box2[key] && box2[key].token === token) return { role: 'leader', token };
+    return { role: 'follower', token: null };
+  } catch (_) {
+    return { role: 'leader', token: null };   // storage 不可用：退回旧各自写行为
+  }
+}
+
+/** 释放写锁（仅当锁仍属于自己的 token；防误删后来者的锁） */
+async function releaseCtxLock(key, token) {
+  if (!token) return;
+  try {
+    const box = await chrome.storage.local.get(key);
+    const lock = box[key];
+    if (lock && lock.token === token) await chrome.storage.local.remove(key);
+  } catch (_) { /* ignore */ }
+}
+
 async function _rebuildFromSources(lang) {
   const startTime = Date.now();
   // 第三百四十七次（用户："好像还是一齐最后显示，而不是有啥字段显示啥"+"内置的翻译按道理
@@ -587,10 +649,15 @@ async function _rebuildFromSources(lang) {
   //   被词频远程拉取（分钟级）+ 全量写库串行绑死；翻译源是包内本地 jsonl（秒级），提前
   //   fire-and-forget 并行跑，d_trans 秒级满仓（页侧 347 渐进渲染下一次 tick 即亮翻译数）。
   //   失败仅 warn 不影响重建主链（与原位置同语义）；upsert 幂等，与 340 自愈 b 补装并发
-  //   双写无害。
+  //   双写无害。第561次七轮：40k 词写库同样受信号量约束（单写者，follower 跳过）。
   if (lang === 'en') {
     Promise.resolve().then(async () => {
+      const claim = await acquireCtxLock(TRANS_BACKFILL_LOCK_KEY, lang);
       try {
+        if (claim.role === 'follower') {
+          console.log(`[VocabRadar][dictionary][${_ts()}] 内置英中包回填信号量在他人手中，本页跳过（leader 已写 d_trans）`);
+          return;
+        }
         const zhMap = await loadBuiltinEnZh();
         if (zhMap.size > 0) {
           const zhOk = await bulkWriteTranslations(lang, zhMap, 'zh');
@@ -598,11 +665,13 @@ async function _rebuildFromSources(lang) {
         }
       } catch (e) {
         console.warn(`[VocabRadar][dictionary][${_ts()}] 内置英中翻译包先行回填异常（释义走在线）:`, e && e.message);
+      } finally {
+        await releaseCtxLock(TRANS_BACKFILL_LOCK_KEY, claim.token);
       }
     });
   }
-  // 第561次：HF WordTranslation 翻译包先行（与内置包并行；HF 成功后覆盖写为权威，
-  //   内置 en→zh 包保留作 HF 下载失败时的本地兜底）
+  // 第561次：翻译包先行（与内置包并行；站点包成功后覆盖写为权威，
+  //   内置 en→zh 包保留作下载失败时的本地兜底）
   _ensureTransPackBackground(lang);
   // 用户报障"非英语哪来的词表标签"：wordlists.jsonl 仅收录英文词表
   //   （IELTS/TOEFL/GRE/GMAT/SAT），此前无条件合并进任意语言——非英语词条被贴上
@@ -650,6 +719,22 @@ async function _rebuildFromSources(lang) {
   reportDictEvent('rebuild-done', { size: dictState.dictMap.size, wf: wf.size, wl: wl.size, cost, lang });
 
   // 装载完成送入词典--分块 upsert + 末块原子标记（含 expected 实际值 + dataVersion 数据版本）。
+  // 第561次七轮（用户裁定"应该有个信号量说谁负责写"）：跨上下文写库信号量——guide 页
+  //   与网页内容脚本各自的重建此前各写一遍 36k+ 行（upsert 幂等但写库翻倍，初始化
+  //   56s×2）。信号量 = storage 锁 {lang, token, ts}：首个声明者（leader）负责写库
+  //   与构建标记，其余（follower）只建本页内存词典（每页必须有本页 Map，跳过的只是
+  //   IDB 写入与写后校验）；锁带 TTL 防写方崩溃死锁，storage 不可用退回旧各自写行为。
+  // 第561次八轮（用户裁定"加载完成就能用，不用等写完"）：写库整体转后台
+  //   fire-and-forget——此刻内存词典已完整可用，本函数立即返回，
+  //   _kickRebuildBackground 的 vr-dict-rebuilt 广播与 rebuildPending 清空不再等
+  //   写库完成；写完仅日志校验不二次广播（数据同源页侧无感）。写库中途被打断
+  //   （SW 被杀/页关）→ 无 __built__ 标记，下次装载自愈重建（既有语义不变）。
+  const claim = await acquireCtxLock(REBUILD_LOCK_KEY, lang);
+  if (claim.role === 'follower') {
+    console.log(`[VocabRadar][dictionary][${_ts()}] 写库信号量在他人手中，本页只建内存词典（IDB 由 leader 后台写入）`);
+    return dictState.dictMap;
+  }
+  void (async () => {
     try {
       // 2026-09-08：包内 meta.json 退役后无远程版本号可比对，dataVersion 固定 0
       //   （= 未记录预处理版本，加载侧版本比对自动跳过）；数据完整性由 expected
@@ -659,11 +744,7 @@ async function _rebuildFromSources(lang) {
       if (ok === false) {
         console.warn(`[VocabRadar][dictionary][${_ts()}] 送入词典部分失败（未打构建标记，下次加载将重装）`);
       } else {
-        console.log(`[VocabRadar][dictionary][${_ts()}] 词典已存入词典库（upsert 不清库 + __built__/expected=${wf.size}/dataVersion=v${dataVersion} 同事务原子）`);
-        // 反思（2026-09-04）：内置英中翻译包回填——仅 learnLanguage=en。
-        //   第三百四十七次：此块整体上移到函数开头 fire-and-forget 并行先行（原被词频
-        //   远程拉取+全量写库串行绑死，全新库下翻译数字陪绑到最后才出，违背"有啥字段
-        //   显示啥"）；失败语义不变（仅 warn，translator 未命中走在线兜底）。
+        console.log(`[VocabRadar][dictionary][${_ts()}] 词典已存入词典库（后台写完成：upsert 不清库 + __built__/expected=${wf.size}/dataVersion=v${dataVersion} 同事务原子）`);
         // 第一百五十三次：写后校验--直读投影确认持久化真实生效（cnt 应≈wf.size）
         try {
           const proj2 = await getLangProjection(lang);
@@ -671,9 +752,12 @@ async function _rebuildFromSources(lang) {
           console.log(`[VocabRadar][dictionary][${_ts()}] 写后校验: 库内 ${cnt2} / 期望 ${wf.size}${cnt2 >= wf.size ? ' ✅' : ' ❌ 未持久化!'}`);
         } catch (e) { /* ignore */ }
       }
-  } catch (e) {
-    console.warn(`[VocabRadar][dictionary][${_ts()}] 送入词典失败（忽略，本次内存词典仍可用）:`, e && e.message);
-  }
+    } catch (e) {
+      console.warn(`[VocabRadar][dictionary][${_ts()}] 送入词典失败（忽略，本次内存词典仍可用）:`, e && e.message);
+    } finally {
+      await releaseCtxLock(REBUILD_LOCK_KEY, claim.token);
+    }
+  })();
   return dictState.dictMap;
 }
 

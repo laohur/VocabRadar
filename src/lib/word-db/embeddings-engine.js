@@ -1,156 +1,192 @@
 // =============================================================================
-// HF WordEmbedding 相关词汇引擎（第561次，src/lib/word-db/embeddings-engine.js）
-// 职责：把 HF 数据集 vocabradar/WordEmbedding（每语一对文件：<lang>.words.txt 词表
-//   与 <lang>.int8.vector 384 维 int8 量化向量，逐行对齐、行号=词频排名）下载校验后
-//   落 rawfiles 原始文件库；查相关词汇时物化 Int8Array 矩阵，按 Matryoshka 截断
-//   前 128 维算余弦（四轮裁定），跳过自身/同族词形（与同族词汇区不重复）/零范数行
-//   后排序直取前 5，定稿写词典 d_rel 行（v="w1,w2,w3,w4,w5"），此后同词查询零计算命中。
-// 数据格式（数据集 README）：反量化 v=int8/127，量化前已 L2 归一化 → 原地长余弦
-//   = dot(a,b)/127²；截断 128 维后向量非单位长，须乘逐行截断范数倒数校正
-//   （int8 直接累加 128 维不会溢出 int32：127²×128≈2.1e6）。
+// 相关词汇近邻表引擎（第561次五轮重构，src/lib/word-db/embeddings-engine.js）
+// 契约：VocabRadar/data-pipeline.md §7.3「词向量近邻表」——管线预先算好每词
+//   余弦 Top-10 邻居（dot>0、去自身、去全零行，相似度降序），产物
+//   data/related/<lang>.bin = 8 字节头（magic 'VRRD' + version u16 + K u16，LE）
+//   + N×K uint16 LE。行对齐：第 i 行 = 词频表 rank=i+1 的词（含跨桶重复词占位，
+//   与词典 rank 全局递增计数严格一致）；值 = 邻居词的 rank-1，0xFFFF 哨兵。
+// 运行时只查表不算向量（用户裁定"运行时不需要再算了"；此前 int8 矩阵物化/
+//   点积计算路径随本轮整体删除——向量本体不再下载，内存与速度问题一并消失）。
+// 分发（六轮裁定"近邻表从网站中获得"）：按契约 §7.1/§7.4 分层——HF 只做构建期
+//   数据源，运行时一律从自有域名消费：网站随站部署 web/public/data/<lang>/
+//   related.bin.gz（gz 容器与网站端一致，Firefox DecompressionStream 不支持
+//   brotli），扩展拉 <site>/data/<lang>/related.bin.gz 解压校验后落 rawfiles；
+//   下载失败静默降级（相关词汇行隐藏，日志明示），不阻塞。
+// 链路：词 → 词典 rank（d_rank 行）→ 表行 → 邻居 rank → rank→word 反查（d_rank
+//   投影反转，SW 会话缓存，词典重建时失效）→ 滤同族词形（与同族词汇区不重复）
+//   取前 5 → 定稿写词典 d_rel 行，此后同词查询零开销命中。
 // 仅 SW 上下文实际执行；CS 经 sw-channel WORD_DB_RELATED 消息路由到 swRelatedWords。
-// 30 天过期（用户裁定"原始文件过期时间设定为30天"）：同 trans-pack——ts 超期重对账
-//   files.json sha256，未变续期、变了重拉替换（重拉后物化缓存失效重算）。
+// 30 天过期（用户裁定）：ts 超期重新拉取（站点数据随构建更新，无独立 sha 基线，
+//   manifest.bytes/K + 表头 VRRD/K/N 双校验保完整性）。
 // =============================================================================
 import {
-  idbRawGet, idbRawPut, idbGet, idbUpdate, idbRelClearAll
+  idbRawGet, idbRawPut, idbGet, idbUpdate, idbRelClearAll, idbGetRanksProjection
 } from './db-ops.js';
 import { makeKey } from './key-utils.js';
 import { isSW } from './env.js';
-import { EMB_BASE, EMB_FILE_RE, fetchDatasetFile, verifyDatasetFile } from './hf-file.js';
 import { swLemmatizeWord, swLemmaFamily } from './lemmas-engine.js';
 
-const EMB_DIM = 384;
-// 第561次四轮（用户笔误更正"选出向量最近的五个词汇"）：不再先取 top-10 池——
-//   相似度排序单遍扫描，跳过自身/同族词形后直接取前 5。
+// 展示条数（用户裁定"选出向量最近的五个词汇"）：表存 Top-10，展示滤同族后取前 5
 const EMB_TAKE = 5;
-// 速度（用户裁定"速度慢，选多少维好"=128）：bekko 是 Matryoshka 模型（数据集
-//   README 官方支持截断 256/128/64），取前 128 维计算余弦——乘加量 1/3，近邻
-//   排序质量足够（int8 384 维本身 top-10 重合率实测 98.3%）。截断后向量非单位
-//   长，逐行预存截断范数倒数做余弦校正（materialize 一次性算好）。注意：截断
-//   只加速计算段；首查大头是向量包首次下载（一次性）与物化，与维度无关。
-//   还嫌慢可改 64（近邻开始发糊，不推荐）。
-const EMB_DIMS_USED = 128;
 const RAW_TTL_MS = 30 * 24 * 60 * 60 * 1000;   // 原始文件 30 天过期（用户裁定）
-const STATE_CAP = 1;      // 物化矩阵内存缓存语言数上限（第561次三轮用户裁定"内存里面要两个词向量干啥"：
-                          // 一次只驻留一种语言，切语言即淘汰重物化；结果已落 d_rel，重复查询零计算）
 const FAIL_BACKOFF_MS = 10 * 60 * 1000;
+const FETCH_TIMEOUT_MS = 30000;                // 单次拉取超时（几百 KB gz 足够）
+// 表头魔数：文件前 4 字节为 ASCII 'V','R','R','D'（0x56,0x52,0x52,0x44），
+// 契约"LE u32"= 小端读出 0x44525256（'D' 为最高字节）。第561次七轮修：此前把
+// u32 字面量写成大端读法 0x56525244，校验永不通过＝查表恒失败（相近词不显示）。
+const TABLE_MAGIC = 0x44525256;
 
-// 每语言物化状态：{lang, mat:Int8Array(N*384), words:string[], index:Map<lower,i>, N}
-const _states = new Map();
+// 站点数据源判定（与 src/content/ws/draft-export.js getSiteUrl 同款推导，双处常量
+// 需同步）：商店安装（manifest 带 update_url）→ 线上站；本地开发 → 本地站。
+const SITE_URL_LOCAL = 'https://localhost:3001';
+const SITE_URL_ONLINE = 'https://vocabradar.com';
+function siteUrl() {
+  try {
+    const m = chrome.runtime.getManifest();
+    return (m && m.update_url) ? SITE_URL_ONLINE : SITE_URL_LOCAL;
+  } catch (_) { return SITE_URL_LOCAL; }
+}
+
+/** 拉取并解压近邻表（站点 gz 容器 → 原始 .bin；带超时防源挂起拖死链路） */
+async function fetchRelatedGz(lang) {
+  const url = siteUrl() + '/data/' + lang + '/related.bin.gz';
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), FETCH_TIMEOUT_MS);
+  try {
+    const res = await fetch(url, { credentials: 'omit', cache: 'no-store', signal: ctrl.signal });
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    const gz = await res.arrayBuffer();
+    if (!gz || gz.byteLength === 0) throw new Error('empty response');
+    const stream = new Response(gz).body.pipeThrough(new DecompressionStream('gzip'));
+    return await new Response(stream).arrayBuffer();
+  } catch (e) {
+    throw new Error(String((e && e.name === 'AbortError') ? ('超时 ' + FETCH_TIMEOUT_MS + 'ms') : ((e && e.message) || e)) + '（' + url + '）');
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+// 每语言近邻表状态：{lang, bin:ArrayBuffer, dv:DataView, K, N}
+const _tables = new Map();
+// 每语言 rank→word 反查数组（词典 rank 与表行对齐的桥，词典重建时失效）
+const _rankIndex = new Map();
 const _inflight = new Map();
 const _failUntil = new Map();
 
-/** 淘汰最旧物化语言（Map 插入序=装载序） */
-function _evictStates() {
-  while (_states.size > STATE_CAP) {
-    const oldest = _states.keys().next();
-    if (oldest.done) break;
-    _states.delete(oldest.value);
+/** 词典重建后失效 rank→word 反查缓存（sw-channel BULK_WRITE 末块/清库分支调用） */
+export function invalidateRelRankIndex(lang) {
+  if (lang) _rankIndex.delete(String(lang).toLowerCase());
+  else _rankIndex.clear();
+}
+
+/**
+ * rank→word 反查数组（下标=rank-1；跨桶重复词各占其 rank 位，与管线行对齐一致）。
+ * 取数 = d_rank 投影（SW 投影缓存命中则零扫库），反转一次后会话内复用。
+ */
+async function getRankIndex(lang) {
+  const hit = _rankIndex.get(lang);
+  if (hit) return hit;
+  const proj = await idbGetRanksProjection(lang);
+  const ranks = (proj && proj.ranks) || {};
+  const arr = [];
+  for (const word in ranks) {
+    const r = ranks[word];
+    if (Number.isInteger(r) && r >= 1) arr[r - 1] = word;
+  }
+  _rankIndex.set(lang, arr);
+  return arr;
+}
+
+/** 校验近邻表头并取出 N/K（契约：magic 'VRRD' + version u16 + K u16 + N×K uint16） */
+function validateTable(lang, buf) {
+  if (!buf || buf.byteLength < 8) throw new Error('relTable ' + lang + ' 文件过小: ' + (buf ? buf.byteLength : 0));
+  const dv = new DataView(buf);
+  const magic = dv.getUint32(0, true);
+  if (magic !== TABLE_MAGIC) throw new Error('relTable ' + lang + ' magic 不符: 0x' + magic.toString(16));
+  const ver = dv.getUint16(4, true);
+  const k = dv.getUint16(6, true);
+  if (k < 1 || k > 64) throw new Error('relTable ' + lang + ' K 非法: ' + k);
+  const body = buf.byteLength - 8;
+  if (body % (k * 2) !== 0) throw new Error('relTable ' + lang + ' 大小非 K×2 整数倍: ' + body);
+  return { ver, K: k, N: body / (k * 2) };
+}
+
+/**
+ * 拉取近邻表清单（related.manifest.json，明文）——字节数/K 校验基准。
+ * 清单不可得时返回 null 并告警：表头 VRRD/K/N 严格校验仍在，不阻塞功能。
+ */
+async function fetchRelManifest(lang) {
+  const url = siteUrl() + '/data/' + lang + '/related.manifest.json';
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), 10000);
+  try {
+    const res = await fetch(url, { credentials: 'omit', cache: 'no-store', signal: ctrl.signal });
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    const j = await res.json();
+    return (j && typeof j === 'object') ? j : null;
+  } catch (e) {
+    console.warn('[VocabRadar][word-db] relTable ' + lang + ' manifest 不可得，本次仅做表头校验: ' + ((e && e.message) || e));
+    return null;
+  } finally {
+    clearTimeout(timer);
   }
 }
 
-/** rawfiles 记录 → 物化矩阵态（split 词表 + 小写索引，首见优先=高频优先） */
-function materialize(lang, rec) {
-  const N = Math.floor(rec.vec.byteLength / EMB_DIM);
-  if (N <= 0 || rec.vec.byteLength % EMB_DIM !== 0) {
-    throw new Error('embPack ' + lang + ' 向量文件大小非 ' + EMB_DIM + ' 的整数倍: ' + rec.vec.byteLength);
+/** 从站点拉取近邻表 → rawfiles 记录（表头严格校验 + manifest 字节数/K 对账） */
+async function downloadRelTable(lang) {
+  const [buf, mf] = await Promise.all([fetchRelatedGz(lang), fetchRelManifest(lang)]);
+  const meta = validateTable(lang, buf);
+  // 用户裁定"站点单源 + manifest 字节数/结构校验"：站点无 sha256，
+  //   以 manifest.bytes（明文 .bin 长度）与 manifest.k 作完整性闸门；不符即拒、不落库。
+  if (mf) {
+    if (Number.isFinite(mf.bytes) && mf.bytes !== buf.byteLength) {
+      throw new Error('relTable ' + lang + ' 字节数不符: ' + buf.byteLength + ' ≠ manifest ' + mf.bytes);
+    }
+    if (Number.isFinite(mf.k) && mf.k !== meta.K) {
+      throw new Error('relTable ' + lang + ' K 不符: ' + meta.K + ' ≠ manifest ' + mf.k);
+    }
   }
-  const words = String(rec.words).split('\n');
-  const index = new Map();
-  for (let i = 0; i < words.length; i++) {
-    const w = words[i].trim();
-    if (!w) continue;
-    const lw = w.toLowerCase();
-    if (!index.has(lw)) index.set(lw, i);
-  }
-  const mat = new Int8Array(rec.vec);
-  // 截断维度内逐行范数的倒数（Matryoshka 截断后向量非单位长，余弦须除回）；
-  //   全零行（数据集 meta.zero_vectors）invNorm=0 天然出局。一次性 N×128，
-  //   此后每次查询只做 128 维点积 + 两次乘法校正。
-  const invNorm = new Float32Array(N);
-  for (let i = 0; i < N; i++) {
-    let s = 0;
-    const base = i * EMB_DIM;
-    for (let j = 0; j < EMB_DIMS_USED; j++) { const v = mat[base + j]; s += v * v; }
-    invNorm[i] = s > 0 ? 1 / Math.sqrt(s) : 0;
-  }
-  // 小写词表（排序扫描逐行同族过滤用，避免查询时对正分行做 toLowerCase）
-  const lowerWords = new Array(N);
-  for (let i = 0; i < N; i++) lowerWords[i] = String(words[i] || '').toLowerCase();
-  return { lang, mat, words, lowerWords, index, N, invNorm };
-}
-
-/** 下载该语言两文件（词表+向量，并行）→ rawfiles 单记录（双 sha256 过期基线） */
-async function downloadEmb(lang) {
-  const fw = 'data/' + lang + '.words.txt';
-  const fv = 'data/' + lang + '.int8.vector';
-  const [rw, rv] = await Promise.all([
-    fetchDatasetFile(EMB_BASE, EMB_FILE_RE, fw),
-    fetchDatasetFile(EMB_BASE, EMB_FILE_RE, fv)
-  ]);
-  if (!rw.ok) throw new Error('embPack 词表下载失败: ' + rw.error);
-  if (!rv.ok) throw new Error('embPack 向量下载失败: ' + rv.error);
   const rec = {
-    k: 'emb|' + lang, kind: 'emb',
-    vec: rv.buf, words: new TextDecoder('utf-8').decode(rw.buf),
-    sha256Vec: rv.sha256, sha256Words: rw.sha256,
-    bytes: (rv.bytes || 0) + (rw.bytes || 0), ts: Date.now()
+    k: 'rel|' + lang, kind: 'rel', bin: buf,
+    ver: meta.ver, K: meta.K, N: meta.N,
+    bytes: buf.byteLength, ts: Date.now()
   };
   await idbRawPut(rec);
   return rec;
 }
 
-/** 30 天过期对账（双文件各自比对；任一变化即整记录重拉） */
-async function refreshIfExpired(lang, rec) {
-  const expired = !rec.ts || (Date.now() - rec.ts > RAW_TTL_MS);
-  if (!expired) return rec;
-  const fw = 'data/' + lang + '.words.txt';
-  const fv = 'data/' + lang + '.int8.vector';
-  const [vw, vv] = await Promise.all([
-    verifyDatasetFile(EMB_BASE, EMB_FILE_RE, fw, rec.sha256Words),
-    verifyDatasetFile(EMB_BASE, EMB_FILE_RE, fv, rec.sha256Vec)
-  ]);
-  if (!vw.ok || !vv.ok) {
-    // 对账失败保守保留旧包不续期（下轮再对账），日志明示不遮蔽
-    console.warn('[VocabRadar][word-db] embPack ' + lang + ' 30天对账失败（保留旧包）: '
-      + [vw.error, vv.error].filter(Boolean).join(' | '));
-    return rec;
-  }
-  if (!vw.changed && !vv.changed) {
-    const kept = Object.assign({}, rec, { ts: Date.now() });
-    await idbRawPut(kept);
-    return kept;
-  }
-  console.log('[VocabRadar][word-db] embPack ' + lang + ' 源有更新（30天对账 sha256 变化），重拉');
-  return downloadEmb(lang);
+/** 30 天过期：站点数据随构建更新、无独立 sha 基线，超期直接重拉（manifest 字节数 + 表头重校验） */
+async function refreshRelTableIfExpired(lang, rec) {
+  if (rec.ts && Date.now() - rec.ts <= RAW_TTL_MS) return rec;
+  console.log('[VocabRadar][word-db] relTable ' + lang + ' 超 30 天，重新拉取');
+  return downloadRelTable(lang);
 }
 
 /**
- * 确保语言向量态就绪（下载/过期对账/物化），失败抛错由调用方兜底。
+ * 确保语言近邻表就绪（下载/过期对账），失败抛错由调用方兜底。
  * @param {string} lang 语言码
  */
-export async function ensureEmbState(lang) {
+export async function ensureRelTable(lang) {
   const key = String(lang || '').toLowerCase();
-  if (!/^[a-z]{2,3}$/.test(key)) throw new Error('embPack: bad lang: ' + key);
-  if (!isSW) throw new Error('embPack: SW only');
-  const hit = _states.get(key);
+  if (!/^[a-z]{2,3}$/.test(key)) throw new Error('relTable: bad lang: ' + key);
+  if (!isSW) throw new Error('relTable: SW only');
+  const hit = _tables.get(key);
   if (hit) return hit;
   if (_inflight.has(key)) return _inflight.get(key);
   if (Date.now() < (_failUntil.get(key) || 0)) {
-    throw new Error('embPack: 近期失败退避中（' + Math.ceil(((_failUntil.get(key) || 0) - Date.now()) / 1000) + 's 后自动重试）');
+    throw new Error('relTable: 近期失败退避中（' + Math.ceil(((_failUntil.get(key) || 0) - Date.now()) / 1000) + 's 后自动重试）');
   }
   const p = (async () => {
-    let rec = await idbRawGet('emb|' + key);
-    if (!rec || !rec.vec || typeof rec.words !== 'string') {
-      rec = await downloadEmb(key);
+    let rec = await idbRawGet('rel|' + key);
+    if (!rec || !rec.bin) {
+      rec = await downloadRelTable(key);
     } else {
-      rec = await refreshIfExpired(key, rec);
+      rec = await refreshRelTableIfExpired(key, rec);
     }
-    const st = materialize(key, rec);
-    _states.set(key, st);
-    _evictStates();
-    console.log('[VocabRadar][word-db] embPack ' + key + ' 就绪: ' + st.N + ' 词 × ' + EMB_DIM + ' 维 int8（内存物化 ' + (rec.vec.byteLength / 1048576).toFixed(1) + 'MiB）');
+    const meta = validateTable(key, rec.bin);
+    const st = { lang: key, bin: rec.bin, dv: new DataView(rec.bin), K: meta.K, N: meta.N };
+    _tables.set(key, st);
+    console.log('[VocabRadar][word-db] relTable ' + key + ' 就绪: ' + meta.N + ' 词 × Top' + meta.K + '（v' + meta.ver + '，' + (rec.bin.byteLength / 1024).toFixed(1) + 'KB）');
     return st;
   })();
   _inflight.set(key, p);
@@ -164,9 +200,9 @@ export async function ensureEmbState(lang) {
   }
 }
 
-// 第561次四轮：相关词汇算法变更（top-10 池→排序直取 5 + Matryoshka 128 维截断），
-//   d_rel 旧结果一次性清空按需重算（派生缓存）。storage 记版本号，SW 会话内只查一次。
-const RELATED_ALGO_VER = 2;
+// 第561次五轮：相关词汇改查预计算近邻表（此前为运行时向量点积），d_rel 旧结果
+//   一次性清空按需重算（派生缓存）。storage 记版本号，SW 会话内只查一次。
+const RELATED_ALGO_VER = 3;
 let _relVerChecked = null;
 function ensureRelAlgoVer() {
   if (_relVerChecked) return _relVerChecked;
@@ -176,7 +212,7 @@ function ensureRelAlgoVer() {
       if (relAlgoVer !== RELATED_ALGO_VER) {
         await idbRelClearAll();
         await chrome.storage.local.set({ relAlgoVer: RELATED_ALGO_VER });
-        console.log('[VocabRadar][word-db] related 算法升级 v' + RELATED_ALGO_VER + '，d_rel 旧结果已清空（按需重算）');
+        console.log('[VocabRadar][word-db] related 算法升级 v' + RELATED_ALGO_VER + '（预计算近邻表查表），d_rel 旧结果已清空');
       }
     } catch (_) { /* 版本校验失败不清缓存（旧值口径旧但仍可用） */ }
   })();
@@ -184,11 +220,12 @@ function ensureRelAlgoVer() {
 }
 
 /**
- * 查相关词汇：d_rel 缓存 → 向量近邻排序直取 5 → 定稿写 d_rel。
+ * 查相关词汇：d_rel 缓存 → 近邻表查表（rank 定位行）→ 滤同族取前 5 → 定稿写 d_rel。
  * @param {string} lang 学习语言
  * @param {string} word 查询词（调用方已保证单词；内部仍兜底空格门控）
  * @returns {Promise<{ok:boolean, words:string[], cached?:boolean, reason?:string, error?:string}>}
- *   words 空 = 该词无向量（词表外/全零行）或近邻全为同族——如实返回不写缓存。
+ *   words 空 = 表外 OOV（无 rank 即无表行，契约 §4）/行越界/近邻全为同族/表未发布
+ *   ——如实返回不写缓存。
  */
 export async function swRelatedWords(lang, word) {
   const key = String(lang || '').toLowerCase();
@@ -197,24 +234,23 @@ export async function swRelatedWords(lang, word) {
   // 算法版本对账（变更时一次性清旧缓存）
   await ensureRelAlgoVer();
   // ① d_rel 缓存（词典行直读，含相关词汇定稿串）
+  let rec = null;
   try {
-    const rec = await idbGet(makeKey(key, lower));
+    rec = await idbGet(makeKey(key, lower));
     if (rec && typeof rec.related === 'string' && rec.related) {
       return { ok: true, words: rec.related.split(','), cached: true };
     }
-  } catch (_) { /* 缓存读失败走计算 */ }
-  // ② 向量态就绪（首次含下载，卡片侧异步等待不阻塞交互）
-  const st = await ensureEmbState(key);
-  const qi = st.index.get(lower);
-  if (qi == null) return { ok: true, words: [], reason: 'oov' };
-  const qBase = qi * EMB_DIM;
-  // 查询行截断范数（全零行如实返回：分词后无 token 的词无语义）
-  let qn = 0;
-  for (let j = 0; j < EMB_DIMS_USED; j++) { const v = st.mat[qBase + j]; qn += v * v; }
-  const qInv = qn > 0 ? 1 / Math.sqrt(qn) : 0;
-  if (!qInv) return { ok: true, words: [], reason: 'zero-vector' };
-  // ③ 余弦排序单遍扫描（截断 128 维）：跳过自身/同族词形/零范数行，直接取前 5
-  //   （与同族词汇区互不重复；同族反查失败降级为只剔自身）
+  } catch (_) { /* 缓存读失败走查表 */ }
+  // ② 词的 rank（词典行自带；表外 OOV 无 rank 即无表行——契约 §7.3 行对齐）
+  const rank = (rec && typeof rec.rank === 'number') ? rec.rank : null;
+  if (rank == null || rank < 1) return { ok: true, words: [], reason: 'oov' };
+  // ③ 近邻表就绪 + 行定位（row = rank-1）
+  const table = await ensureRelTable(key);
+  const rowIdx = rank - 1;
+  if (rowIdx >= table.N) return { ok: true, words: [], reason: 'row-out-of-range' };
+  const rankArr = await getRankIndex(key);
+  // ④ 同族词形过滤（表按管线规则只去自身；展示端先还原原形再反查同族，与同族
+  //   词汇区互不重复；反查失败降级为只剔自身）
   const fam = new Set([lower]);
   try {
     const lm = await swLemmatizeWord(lower, key);
@@ -222,41 +258,23 @@ export async function swRelatedWords(lang, word) {
     fam.add(String(lemma).toLowerCase());
     const f = await swLemmaFamily(lemma, key, 100);
     for (const w of ((f && f.words) || [])) fam.add(String(w).toLowerCase());
-  } catch (_) { /* 词形引擎不可用不阻塞近邻 */ }
-  const best = [];   // [{i, s}] 按 s 升序，长度 ≤ EMB_TAKE
-  const mat = st.mat;
-  for (let i = 0; i < st.N; i++) {
-    const base = i * EMB_DIM;
-    let s = 0;
-    for (let j = 0; j < EMB_DIMS_USED; j++) s += mat[base + j] * mat[qBase + j];
-    if (s <= 0) continue;
-    if (fam.has(st.lowerWords[i])) continue;
-    s = s * st.invNorm[i] * qInv;
-    if (best.length < EMB_TAKE) {
-      best.push({ i, s });
-      for (let b = best.length - 1; b > 0 && best[b].s < best[b - 1].s; b--) {
-        const t = best[b]; best[b] = best[b - 1]; best[b - 1] = t;
-      }
-    } else if (s > best[0].s) {
-      best[0] = { i, s };
-      for (let b = 0; b + 1 < best.length && best[b].s > best[b + 1].s; b++) {
-        const t = best[b]; best[b] = best[b + 1]; best[b + 1] = t;
-      }
-    }
-  }
+  } catch (_) { /* 词形引擎不可用不阻塞查表 */ }
+  // ⑤ 读 Top-K 邻居（邻居 rank-1 → 反查词）滤同族取前 5
+  const off = 8 + rowIdx * table.K * 2;
   const out = [];
   const seen = new Set();
-  for (let b = best.length - 1; b >= 0; b--) {
-    const w = String(st.words[best[b].i] || '').trim();
-    if (!w) continue;
+  for (let i = 0; i < table.K && out.length < EMB_TAKE; i++) {
+    const v = table.dv.getUint16(off + i * 2, true);
+    if (v === 0xFFFF) continue;   // 哨兵：无更多邻居
+    const w = rankArr[v];         // 值 = 邻居 rank-1，反查数组下标即 rank-1
+    if (!w) continue;             // 词频表更新后 rank 越界/缺词——跳过（30天对账会刷新表）
     const lw = w.toLowerCase();
-    // 词内含分隔符会破坏 d_rel 逗号定稿串——此类词跳过不入选
     if (fam.has(lw) || seen.has(lw) || lw.indexOf(',') !== -1) continue;
     seen.add(lw);
     out.push(w);
   }
   if (out.length === 0) return { ok: true, words: [] };
-  // ④ 定稿写 d_rel（派生字段：clearByLang 随词典重建清掉，重建后按需重算）
+  // ⑥ 定稿写 d_rel（派生字段：clearByLang 随词典重建清掉，重建后按需重查）
   try {
     await idbUpdate(makeKey(key, lower), { related: out.join(',') });
   } catch (e) {
