@@ -167,8 +167,16 @@ export const LLM_DEFAULT_PROVIDER = 'pollinations';
 //      故模板带 {text} 占位（{text} = 该词/选区，{lang} = 释义语言）；
 //   2. 侧栏（文本侧栏正文、视频侧栏字幕）—— 讨论对象是整篇正文，正文另由面板顶部
 //      「The context is」上下文区承载，提问语只需指向"上面的文本"，故模板不含 {text}。
-export const CHAT_WORD_PROMPT = 'Please explain "{text}" in {lang}.';
-export const CHAT_SIDEBAR_PROMPT = 'Please summarise the text above in {lang}.';
+// 20261022 优化（调研 kiss-translator / openai-translator / chatGPTBox 的同类提示词）：
+//   · 单词模板给模型一个紧凑输出契约（词性/核心释义/例句），并利用单词入口默认携带的
+//     网页正文上下文消歧义——语境义优先（kiss-translator "Context first" 同思路）；
+//     上下文被用户关掉时，条件句自动退化为普通释义，不致跑偏；
+//   · 摘要模板限定"只总结要点、不解读不添加"（openai-translator "summarize, don't
+//     interpret"），防弱模型（默认免费源多为 7B 级）跑题加戏；
+//   · 两条模板都保持两句话内的短度：它们会原样预填进输入框给用户看和改，
+//     复杂的输出格式契约（词典卡、JSON 之类）应放 system 位而非此处。
+export const CHAT_WORD_PROMPT = 'Explain "{text}" in {lang} as a dictionary entry: part of speech, core meanings, and one example sentence with a {lang} translation. If the context above shows how it is used, give that meaning first.';
+export const CHAT_SIDEBAR_PROMPT = 'Summarize the text above in {lang}: only the key points, concise and faithful to the original. Do not interpret or add anything.';
 // 翻译提示词兜底模板：正常走 config.json 出厂值 > storage > 此常量 三级优先，
 //   由 translator/index.js 组装（{text} = 选中文本，{lang} = 释义语言名），SW 端只做哑管道直发。
 //   约束句式防 LLM 输出解释/引号等冗余内容。
