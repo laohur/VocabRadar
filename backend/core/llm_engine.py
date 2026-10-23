@@ -2,9 +2,11 @@
 
 - 启动：卡片 command 即权威，llama-server -hf <repo>:<quant> 自动下载/管理
   模型（hub 缓存 %USERPROFILE%/.cache/huggingface/hub）
-- 三源健壮性：启动前串行探测 hf 官方 → hf-mirror → fallback_url，选定首个
-  可达源仅启动一次，失败如实上抛不换源（试错启动会在 hub 缓存制造
-  *.downloadInProgress 残骸）
+- 源选择：llama.cpp 缓存清单（-cl）命中即 --offline 离线直启（-hf 或 -mu）；
+  未命中再串行探测 hf 官方 → hf-mirror → fallback_url，选定首个可达源仅
+  启动一次，失败如实上抛不换源（试错启动会在 hub 缓存制造
+  *.downloadInProgress 残骸）。离线 -hf 不带 --offline 会因联网解析 commit
+  失败而加载断言崩溃（b10964/b11429 实测同病），故缓存命中必带 --offline
 - 生命周期：resident（Flask 启动即后台拉起）/ on-demand（首请求拉起 + 空闲 idle_timeout 退出）
 - backend 对外反代其 /v1/*；llm 实例 7788、translate_llm 实例 7789（翻译
   专用，与对话 LLM 分开启停，互不牵连）
@@ -46,16 +48,31 @@ _HF_MIRROR = "https://hf-mirror.com/"
 _HF_API = "https://huggingface.co/api/models/"
 _HF_MIRROR_API = "https://hf-mirror.com/api/models/"
 
+# llama.cpp 缓存清单（-cl）条目行：`   1. org/name:Q4_K_M` 或直链 URL——整行
+# 单 token（允许行首序号）且含 "/"（repo id 与 URL 均含）才认作条目
+_CL_ENTRY_RE = re.compile(r"^\s*(?:\d+\.\s*)?(\S+)\s*$")
+# 缓存清单 TTL（秒）：status 轮询 installed 高频，复用防频繁起子进程；
+# 预下载线程结束后主动失效
+_CACHE_LIST_TTL = 10
+
+
+# 直连探测 opener：屏蔽系统/环境代理。探测必须反映 llama-server（cpp-httplib
+# 不走系统代理）的真实可达性——否则本机代理在跑而 llama-server 直连不通时，
+# 探测误判可选，拉起即崩溃（2026-10-23 实测：urllib 经系统代理探测 hf 通，
+# llama-server 直连失败）
+_NO_PROXY_OPENER = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+
 
 def _probe_http_ok(url, timeout=6):
     """单 URL 可达性探测——GET + Range: bytes=0-0（API 端点忽略 Range 返
-    200；直链只取首分片，防整文件下载），200/206 即可达。"""
+    200；直链只取首分片，防整文件下载），200/206 即可达。强制直连
+    （ProxyHandler({})），代理可达≠直连可达，只认 llama-server 视角。"""
     req = urllib.request.Request(url, headers={
         "User-Agent": "VocabRadar-backend/1.0",
         "Range": "bytes=0-0",
     })
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as r:
+        with _NO_PROXY_OPENER.open(req, timeout=timeout) as r:
             return r.status in (200, 206)
     except Exception:
         return False
@@ -153,6 +170,30 @@ def _card_hf_args(card):
             quant = val.partition(":")[2]
         i += 1
     return repo, quant, want_mmproj
+
+
+def _cache_has_repo(entries, repo, quant):
+    """缓存清单是否含 repo[:quant]（-cl 条目形如 org/name[:quant]）。声明
+    quant 时须精确命中 repo:quant——快照缺该 quant 文件时离线必失败，宁可
+    误判未装走在线链；未声明 quant（-hf 交 llama.cpp 自选）命中裸 repo 或
+    任一 quant 条目即可。"""
+    if not entries or not repo:
+        return False
+    low = {e.lower() for e in entries}
+    r = str(repo).strip().strip("/").lower()
+    if not r:
+        return False
+    q = str(quant or "").strip().lower()
+    return f"{r}:{q}" in low if q else r in low or any(e.startswith(r + ":") for e in low)
+
+
+def _cache_has_url(entries, url, mmproj_url=""):
+    """缓存清单是否含直链（-mu 下载在 -cl 清单按 URL 记名）。mmproj_url
+    非空时一并核验——缺 mmproj 的离线直启对视觉卡不完整，宁走在线补齐。"""
+    if not entries or not url:
+        return False
+    low = {e.lower() for e in entries}
+    return url.lower() in low and (not mmproj_url or mmproj_url.lower() in low)
 
 
 def _sibling_field(s, key):
@@ -346,6 +387,8 @@ class LlmEngine:
         self._last_lines = collections.deque(maxlen=8)
         # 手动预下载状态（管理页「下载」按钮）：卡片名 -> {state, progress, source, error}
         self._downloads = {}
+        # llama.cpp 缓存清单 TTL 缓存 (时刻, 条目集)：-cl 子进程结果复用
+        self._cl_cache = None
         if self.cfg.get("mode", "resident") == "on-demand":
             threading.Thread(target=self._idle_watch, daemon=True).start()
 
@@ -396,6 +439,33 @@ class LlmEngine:
         return next((h for h in cands
                      if os.path.splitext(h)[1] not in (".dll", ".so", ".dylib")), None)
 
+    def _cached_entries(self):
+        """llama.cpp 缓存清单（`llama-server -cl`，llama.cpp 自己的可用性视角）：
+        条目集合（repo[:quant] 或直链 URL），TTL 内复用。exe 缺失或执行失败
+        返回 None，调用方降级目录判定——不遮蔽、不断链。"""
+        now = time.time()
+        if self._cl_cache and now - self._cl_cache[0] < _CACHE_LIST_TTL:
+            return self._cl_cache[1]
+        exe = self.server_path()
+        if not exe:
+            return None
+        flags = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
+        try:
+            out = subprocess.run([exe, "-cl"], capture_output=True, timeout=15,
+                                 creationflags=flags)
+            if out.returncode != 0:
+                raise RuntimeError(f"exit {out.returncode}")
+        except Exception as e:
+            log.warning("读取 llama-server 缓存清单失败（%s），退回目录判定", e)
+            return None
+        entries = set()
+        for line in (out.stdout or b"").decode("utf-8", "replace").splitlines():
+            m = _CL_ENTRY_RE.match(line)
+            if m and "/" in m.group(1):
+                entries.add(m.group(1))
+        self._cl_cache = (now, entries)
+        return entries
+
     def current_card(self):
         """当前生效卡片——llm.model 为卡片名（匹配 cards[].name），
         未命中或为空回落首卡；无卡片返回 None（start() 报错）。
@@ -411,10 +481,20 @@ class LlmEngine:
         return cards[0] if cards else None
 
     def card_installed(self, card):
-        """installed 判定=hub 缓存存在 models--<org>--<name> 目录
-        （模型交 llama.cpp 自管，引擎不持有 models/ 落盘视图）。"""
-        repo = str((card or {}).get("hf_repo") or "").strip()
-        return bool(repo) and _repo_cache_path(repo) is not None
+        """installed 判定=llama.cpp 缓存清单（-cl 权威视角）含该卡模型：
+        repo[:quant] 条目或 fallback_url 直链条目（want_mmproj 时连 mmproj
+        一并核验）。残缺下载目录不再误报已装；清单不可得退回目录存在判定
+        （旧口径，宁滥勿缺）。"""
+        repo, quant, want_mmproj = _card_hf_args(card)
+        if not repo:
+            return False
+        entries = self._cached_entries()
+        if entries is not None:
+            fb = str((card or {}).get("fallback_url") or "").strip()
+            fb_mmproj = str((card or {}).get("fallback_mmproj_url") or "").strip()
+            return (_cache_has_repo(entries, repo, quant)
+                    or _cache_has_url(entries, fb, fb_mmproj if want_mmproj else ""))
+        return _repo_cache_path(repo) is not None
 
     def list_cards(self):
         """卡片只读清单（管理页展示数据源）：name/desc/installed。"""
@@ -497,6 +577,7 @@ class LlmEngine:
                 # 双源都进不去时给出可读指引（直链兜底仅启动链支持）
                 log.warning("提示：hf 与 hf-mirror 均不可达或仓库无法访问；"
                             "fallback_url 直链兜底只在 llama-server 启动链生效")
+        self._cl_cache = None  # 预下载落盘（成败皆然）缓存清单即失效，installed/离线直启即时刷新
 
     def _parallel(self):
         """llama-server 并行槽位数（-np）：配置值，下限 1，默认 4。"""
@@ -590,17 +671,41 @@ class LlmEngine:
     # ---- 生命周期 ----
 
     def _pick_source(self, card, args):
-        """启动前串行探测三个下载源，选定首个可达源后仅启动一次，失败如实
-        上抛不换源（逐源试错启动会在 hub 缓存制造 *.downloadInProgress 残骸）。
+        """启动前选定源：llama.cpp 缓存清单（-cl）离线直启优先，未命中再串行
+        探测三个在线源，选定首个可用源后仅启动一次，失败如实上抛不换源
+        （逐源试错启动会在 hub 缓存制造 *.downloadInProgress 残骸）。
         返回 (tag, env, argv)：
-        - hub 缓存命中：离线直启不探测（断网时探测反而误判，缓存本身够用）
+        - 清单含 repo[:quant]：-hf + --offline 离线直启（-cl 是 llama.cpp 自己
+          的可用性视角，断网不误判；离线 -hf 不带 --offline 会因联网解析
+          commit 失败而加载断言崩溃，b10964/b11429 实测三起同因）
+        - 清单含 fallback_url（want_mmproj 时连 mmproj 一并核验）：-mu(+ -mmu)
+          + --offline 离线直启
         - hf 官方 API 可达：原命令（-hf 官方源）
         - hf-mirror API 可达：MODEL_ENDPOINT 指向镜像（llama.cpp 读它重定向）
         - fallback_url 直链可达：-hf 换 -mu（多模态卡加 -mmu）
         全不可达：RuntimeError 附各源探测结果。"""
-        repo = str(card.get("hf_repo") or "").strip()
-        if _repo_cache_path(repo) is not None:
-            log.info("hub 缓存命中 %s，离线直启（不探测）", repo)
+        repo, quant, want_mmproj = _card_hf_args(card)
+        fb = str(card.get("fallback_url") or "").strip()
+        fb_mmproj = str(card.get("fallback_mmproj_url") or "").strip()
+        entries = self._cached_entries()
+        if entries is not None:
+            if _cache_has_repo(entries, repo, quant):
+                log.info("hub 缓存命中 %s，离线直启（--offline，不探测）",
+                         f"{repo}:{quant}" if quant else repo)
+                return "hf缓存", None, (args if "--offline" in args
+                                        else args + ["--offline"])
+            if fb and _cache_has_url(entries, fb, fb_mmproj if want_mmproj else ""):
+                args3 = self._swap_hf_to_url(args, fb, fb_mmproj if want_mmproj else "")
+                if args3 is not None:
+                    log.info("fallback_url 缓存命中，离线直启（--offline，不探测）")
+                    if "--offline" not in args3:
+                        args3.append("--offline")
+                    return "fallback_url缓存", None, args3
+                log.warning("fallback_url 缓存命中但 command 未含 -hf，无法改写 -mu，落在线链")
+            # 清单在手但两种缓存皆未命中：不可能离线直启，落在线三源链
+        elif _repo_cache_path(repo) is not None:
+            # -cl 不可得（exe 缺失/执行失败）退回目录存在判定（旧口径），宁误判不断链
+            log.info("hub 缓存目录命中 %s（-cl 清单不可得，退回目录判定）", repo)
             return "hf", None, args
         misses = []
         if _probe_http_ok(_HF_API + repo):
@@ -610,12 +715,10 @@ class LlmEngine:
             log.info("hf 官方源不可达，hf-mirror 可达，选定镜像源")
             return "hf-mirror", dict(os.environ, MODEL_ENDPOINT=_HF_MIRROR), args
         misses.append("hf-mirror 不可达")
-        fb = str(card.get("fallback_url") or "").strip()
         if not fb:
             misses.append("未配置 fallback_url")
         else:
-            args3 = self._swap_hf_to_url(args, fb,
-                                         str(card.get("fallback_mmproj_url") or "").strip())
+            args3 = self._swap_hf_to_url(args, fb, fb_mmproj if want_mmproj else "")
             if args3 is None:
                 misses.append("卡片 command 未含 -hf，无法改写为 fallback_url 直链")
             elif _probe_http_ok(fb):
@@ -623,12 +726,14 @@ class LlmEngine:
                 return "fallback_url", None, args3
             else:
                 misses.append("fallback_url 不可达")
-        raise RuntimeError("三个下载源均不可达：" + "；".join(misses))
+        hint = ("；llama.cpp 缓存中亦无该模型（-cl 清单视角），无法离线直启"
+                if entries is not None else "")
+        raise RuntimeError("三个下载源均不可达：" + "；".join(misses) + hint)
 
     def start(self, timeout=180):
         """拉起 llama-server 并等 /health 就绪（幂等，可并发调用）。
 
-        ①先探测三源选定启动（_pick_source），失败如实上抛不换源；
+        ①缓存离线直启优先、未命中再探测三源选定启动（_pick_source），失败如实上抛不换源；
         ②幂等判定以 /health 200 为准，进程活着但未就绪（加载中）不算成功，
         清场走完整拉起；③启动中并发 start() 让位等待首个拉起结束再判成败
         （防双 Popen 双占端口、防假成功提前返回）。下载/加载期健康等待按

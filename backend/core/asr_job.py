@@ -118,6 +118,13 @@ log = logging.getLogger(__name__)
 _HOLE_MIN_SEC = 30
 _NO_SPEECH_PROB = 0.6
 
+# 第564次窗口合并：相邻覆盖间隔 < 此值且合并后 ≤max_sec 先并入同窗——每窗
+#   一拉子进程，合并摊薄模型冷载（~0.55s/次）。VAD min_silence 默认 2s +
+#   两端 speech_pad 400ms，残留间隔 ≥1.2s；取 3s 可并掉停顿 ≤3.8s 的相邻
+#   utterance。更长停顿不合：窗内静音越久幻觉面越大，且跨 max_sec 会回切
+#   能量谷、反而可能切在词中。
+_WINDOW_MERGE_GAP = 3.0
+
 
 def _looks_hallucinated(text):
     """通用反幻觉启发（fw 之外引擎的补转过滤，评审 2026-10 §1.4）：
@@ -717,9 +724,10 @@ def _advance_progress(job, coverage, end):
 
 
 def _split_windows(coverage, audio, sr=16000, max_sec=60.0):
-    """覆盖区间 → 转写窗口：≤max_sec 的区间原样；超长区间按能量谷二分
-    （silero utterance 级区间通常 <30s，罕见超长如长段连续讲话——切在
-    中部附近最安静处，避免切在词中间）。"""
+    """覆盖区间 → 转写窗口：相邻间隔 < _WINDOW_MERGE_GAP 且合并后 ≤max_sec
+    先并入同窗（第564次，摊薄每窗一拉的子进程/模型冷载）；≤max_sec 的区间
+    原样；超长区间按能量谷二分（silero utterance 级区间通常 <30s，罕见超长
+    如长段连续讲话——切在中部附近最安静处，避免切在词中间）。"""
     import numpy as np
     frames = max(1, len(audio) // (sr // 10))  # 100ms 帧粒度
     rms = None
@@ -727,8 +735,15 @@ def _split_windows(coverage, audio, sr=16000, max_sec=60.0):
     if len(audio) >= win:
         n = len(audio) // win
         rms = np.sqrt((audio[:n * win].reshape(n, win) ** 2).mean(axis=1))
-    out = []
+    cov = []
     for a, b in coverage or []:
+        if cov and a - cov[-1][1] < _WINDOW_MERGE_GAP \
+                and b - cov[-1][0] <= max_sec:
+            cov[-1] = (cov[-1][0], b)
+        else:
+            cov.append((a, b))
+    out = []
+    for a, b in cov:
         if b - a <= max_sec:
             out.append((a, b))
             continue
@@ -771,7 +786,9 @@ def _windowed_segments(job, handle, audio, coverage, covered_total, language=Non
                 raise _JobCancelled()
             seg = {"start": round(s["start"], 3), "end": round(s["end"], 3),
                    "text": (s.get("text") or "").strip()}
-            if seg["text"]:
+            # 第564次：合并窗含静音间隙，主路径与补转同口径过通用启发
+            #   （评审 2026-10 §1.4），压静音段幻觉
+            if seg["text"] and not _looks_hallucinated(seg["text"]):
                 job["segments"].append(seg)
         _advance_progress(job, coverage, b)
         while b >= next_log_mark:

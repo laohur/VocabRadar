@@ -31,7 +31,7 @@ import { initMyWords, syncMyWordsFromStorage, setMyWordsLearnLang } from './my-w
 // 账号（P1c 2026-10-08：连接网站账号/断开/状态行，独立标签 panel-account）独立模块
 import { initAccount, disposeAccount } from './account.js';
 // 字幕库（P3 2026-10-08：本地字幕列表/上传分享/删除本地，独立标签 panel-subs）独立模块
-import { initSubs, disposeSubs } from './subs-library-ui.js';
+import { initSubs, disposeSubs, autoImportOnce } from './subs-library-ui.js';
 // 渠道状态行模块 ch-health.js（状态拉取/渲染独立成模块，控制本文件行数）
 import { initChHealth, refreshChHealth } from './ch-health.js';
 // 对话大模型来源预置表（与后台共用同一份，避免地址/模型名两处不一致）
@@ -784,6 +784,8 @@ async function init() {
       document.querySelectorAll('.guide-tab').forEach((t) => t.classList.toggle('active', t === tab));
       document.querySelectorAll('.guide-panel').forEach((p) => p.classList.toggle('active', p.dataset.panel === name));
       log('切换子标签:', name);
+      // 打开字幕列表自动从后端导入一次（20261022 令；会话内仅首次生效）
+      if (name === 'subs') autoImportOnce();
     });
   });
 

@@ -28,7 +28,7 @@ import { getAnnotations, getRankMax, rankToStage, resetDiag } from '../../lib/an
 // 渲染端词面定位（Unicode 词界/CJK 子串，修 ASCII \b 对重音/CJK 词失配——2026-10-05）
 import { findWordPositions } from '../../lib/tokenizer.js';
 // 视频侧栏字幕注释的翻译优先级档（2=视频侧栏，先于网页正文批量）
-import { PRIO_VIDEO } from '../../lib/translator.js';
+import { PRIO_VIDEO, PRIO_LOW } from '../../lib/translator.js';
 import { lemmaFamily } from '../../lib/lemmatizer.js';
 // 用户"评论带上[注音]"：补 getPhoneticsBatch——评论组装前批量预取注音
 // 注音包裹为半角方括号 [x]（20260930 曾误改 /x/，同日用户裁定改回 [x]）
@@ -256,17 +256,20 @@ function createEmptySlot() {
 // 改法：slot 滑入可视区（±400px 预取）才触发 collectAnnotationsForSlot；首屏另行直算
 // 当前播放附近 ±60 行＋顶部 40 行（面板初始在顶，observer 覆盖；播放跟随滚到中间时由滚动触发）。
 // ASR 单条插入仍直接注释（单行无队列压力）。无 IntersectionObserver 时回退全量（旧行为）。
+// 延伸（20261022 用户裁定"当前屏幕附近优先扫描，扫完还要延伸的而不是不动了"）：
+//   近旁直算与可视区触发之外，后台从当前播放行向外逐环补注全部未注释槽，见 scheduleExtendScan。
 let _lazyObserver = null;
 
-/** 单槽触发注释（幂等：每槽只 arm 一次，触发后即 unobserve） */
-function lazyFireSlot(slot) {
+/** 单槽触发注释（幂等：每槽只 arm 一次，触发后即 unobserve）。
+ *  prio：翻译优先级档——可视区/播放点近旁走默认 PRIO_VIDEO，后台延伸链走 PRIO_LOW。 */
+function lazyFireSlot(slot, prio = PRIO_VIDEO) {
   if (!slot) return;
   if (slot.dataset.annArmed === '1') return;
   const idx = Number(slot.dataset.idx);
   if (!isFinite(idx) || idx < 0) return;
   slot.dataset.annArmed = '1';
   try { if (_lazyObserver) _lazyObserver.unobserve(slot); } catch (_) { /* ignore */ }
-  collectAnnotationsForSlot(slot, idx);
+  collectAnnotationsForSlot(slot, idx, prio);
 }
 
 /**
@@ -319,6 +322,65 @@ function armLazyAnnotation() {
       try { observer.observe(slot); } catch (_) { lazyFireSlot(slot); }
     }
   }
+  // 近旁直算+可视区布防完成后，启动向外延伸的后台补注链
+  scheduleExtendScan(curIdx);
+}
+
+// === 延伸扫描（扫完近旁继续向外，而不是停在可视区等滚动）===
+// 用户裁定："当前屏幕附近优先扫描，扫完还要延伸的而不是不动了。"懒注释的近旁
+//   直算（±60+顶部40）与 observer 滑入触发只覆盖"看到过的"行——不滚动/seek 跨跳
+//   的行永远不会被注释（"有些生词并没有扫"）。延伸链从当前播放行向外逐环
+//   （前环+后环交替，ring 递增）分批补注未注释槽，直到全清：
+//   - 优先级序（20261022 用户定稿）：字幕当前(PRIO_VIDEO=2) > 网页当前页
+//     (PRIO_WEB=1) > 字幕剩余(本链 PRIO_LOW=0) ≥ 网页剩余——网页扫描只做视口
+//     ±1 屏、无"剩余"流；ASR/OCR 后台请求默认也落 0 档，与本链 FIFO 混排。
+//   - 扫出即显示（用户裁定"只要扫出来就应该显示，之后有啥字段补啥字段"）：
+//     生词判定走本地词典（rank/标签/原形，毫秒级），扫到即高亮上屏/进生词表；
+//     缺译文 pending 占位，译文按 PRIO_LOW 在队列慢慢出、onAsyncTranslate 回填。
+//     故本链不做冷却限速（曾 6 槽/1.5s 被用户否："生词绝大部分是本地词典，
+//     即便如此限速也不应当这么慢"），只按 requestIdleCallback 空闲分批防主线程
+//     卡顿（同 th/scan.js 的批次节奏；无 rIC 回退 setTimeout）。
+//   - 每批从 ring=1 重扫（已注释槽只查一个 dataset 标记，开销可忽略），天然自愈：
+//     ASR 中插/位移漏掉的槽后续批次仍会补到。
+//   - 换集/开关重臂（armLazyAnnotation 再入）经 cancelExtendScan gen++ 作废旧链；
+//     双语/注释关闭即停（重开走 rerenderPanelOnly 重臂，链自然重启）。
+let _extendGen = 0;
+const EXTEND_BATCH = 40;   // 每个空闲批补注槽数（同 th/scan 50 节点/批量级）
+
+function scheduleExtendScan(curIdx) {
+  cancelExtendScan();
+  const gen = _extendGen;
+  const base = curIdx >= 0 ? curIdx : 0;
+  const queueTick = () => {
+    if (gen !== _extendGen) return;
+    if ('requestIdleCallback' in window) requestIdleCallback(tick, { timeout: 200 });
+    else setTimeout(tick, 30);
+  };
+  const tick = () => {
+    if (gen !== _extendGen) return;
+    if (_bilingual || _noAnnotation) return;   // 注释管线旁路/关闭：停链（重开时重臂）
+    const slots = _windowSlots;
+    const len = slots ? slots.length : 0;
+    if (!len) return;
+    let fired = 0;
+    for (let ring = 1; ring < len && fired < EXTEND_BATCH; ring++) {
+      // 前后环交替（先播放方向，后已播方向），由近及远
+      for (const i of [base + ring, base - ring]) {
+        if (i < 0 || i >= len) continue;
+        const slot = slots[i];
+        if (!slot || slot.dataset.annArmed === '1') continue;
+        lazyFireSlot(slot, PRIO_LOW);
+        if (++fired >= EXTEND_BATCH) break;
+      }
+    }
+    // 没打满本批额度 = 环扫完全清 → 停；否则空闲后再批
+    if (fired >= EXTEND_BATCH) queueTick();
+  };
+  queueTick();
+}
+
+function cancelExtendScan() {
+  _extendGen++;
 }
 
 // === 面板点击事件委托 ===
@@ -1278,13 +1340,15 @@ async function fillPhoneticAsync(line, word, context) {
 //   并在换集（sub 被移出 getSubtitlesRef()）后跳过陈旧 push。
 
 // 返回 sub 的注释 Promise（缓存命中复用，未命中创建）。无副作用（不 push 生词表）。
-function ensureAnnotations(sub) {
+// prio：翻译优先级档（可视区/近旁 PRIO_VIDEO，后台延伸 PRIO_LOW），仅在缓存未命中
+//   首次创建时生效——已入队请求不可改档。
+function ensureAnnotations(sub, prio = PRIO_VIDEO) {
   let p = _annotationsCache.get(sub);
   if (p) return p;
   const text = (typeof sub.text === 'string') ? sub.text : '';
   p = (_noAnnotation || !text)
     ? Promise.resolve([])
-    : getAnnotations(text, getRankThreshold(), _seenWords, onAsyncTranslate, PRIO_VIDEO);
+    : getAnnotations(text, getRankThreshold(), _seenWords, onAsyncTranslate, prio);
   _annotationsCache.set(sub, p);
   return p;
 }
@@ -1294,12 +1358,12 @@ function ensureAnnotations(sub) {
 // 用户要求"默认不注释表外词，取消了注释表外词，生词表依然有表外词"。
 //   根因：getAnnotations 返回所有注释（含表外词），collectAnnotations 未过滤直接 push。
 //   当 getAnnotateOov()=false 时，过滤掉 rank=null 的表外词，只收集词典内单词。
-async function collectAnnotations(sub) {
+async function collectAnnotations(sub, prio = PRIO_VIDEO) {
   // 双语字幕（第514次）：注释管线整体旁路——渲染与生词表数据侧收集一并停
   //   （appendASRSubtitle 结尾的直调也经此处拦截）；关闭双语后
   //   rerenderPanelOnly 清缓存重算恢复。
   if (_bilingual) return [];
-  const anns = await ensureAnnotations(sub);
+  const anns = await ensureAnnotations(sub, prio);
   const subIdx = getSubtitlesRef().indexOf(sub);
   if (subIdx === -1) return anns;  // sub 已被换集移除，不收集
   if (!_collectedSubs.has(sub)) {
@@ -1360,12 +1424,12 @@ function fillBilingualSlot(slot, sub) {
   }).catch(() => { /* 译文失败静默：原文完整展示 */ });
 }
 
-async function collectAnnotationsForSlot(slot, subIdx) {
+async function collectAnnotationsForSlot(slot, subIdx, prio = PRIO_VIDEO) {
   const sub = getSubtitlesRef()[subIdx];
   if (!sub) return;
   // 双语字幕（第514次）：注释管线旁路——纯文本正文 + 整句译文
   if (_bilingual) { fillBilingualSlot(slot, sub); return; }
-  const anns = await collectAnnotations(sub);
+  const anns = await collectAnnotations(sub, prio);
   // 首批诊断：打印首条字幕文本+阈值+命中生词数
   if (subIdx === 0) {
     const text = (typeof sub.text === 'string') ? sub.text : '';
@@ -1500,9 +1564,13 @@ async function buildPanelBody() {
   if (getActiveTab() === 'subtitle') {
     body = await buildSubtitleBody();
   } else if (getActiveTab() === 'words') {
-    // 整个生词表（含无译文词，释义列显示"-"）
+    // 整个生词表（含无译文词）。20261022 用户裁定：复制格式同样跟随详略开关——
+    //   简略=word(短释义)（无译文兜底"-"），与字幕页复制同口径，杜绝
+    //   "没选详细注释，复制却是详细注释"；详细维持四段完整格式。
     for (const a of _allAnnotations) {
-      body += `${formatAnnotationLine(a)}\n`;
+      body += _detailMode
+        ? `${formatAnnotationLine(a)}\n`
+        : `${formatAnnotationSide(a)}\n`;
     }
   } else {
     toast(t('toast.learnNoCopy'));

@@ -36,7 +36,7 @@ export async function resolveLlmEngineCfg(engine) {
 }
 
 // LLM 文本翻译（翻译渠道候选之一）——直接复用聊天的 LLM 配置；
-//   提示词只要求输出译文本身，词条级短文本，max_tokens 默认 1024 足够。
+//   提示词只要求输出译文本身，词条级短文本，max_tokens 显式 1024 足够。
 //   提示词哑管道：content 侧 translator/index.js 三级优先组装（config.json
 //   llmTranslatePrompt ＞ storage ＞ 常量，{lang} 用语言名）后随消息下发，
 //   本端非空即直发；空则用下方硬编码兜底。
@@ -53,6 +53,7 @@ export async function handleLlmTranslate(text, target, prompt) {
   // 译文失控校验随 attempts 循环逐家执行：某家 200 但输出退化重复（如
   //   "ooo呜呜呜呜呜…"）判失败并换下一家免费来源，而不是把乱串当成功直通。
   const out = await handleLlmChat([{ role: 'user', content: msg }], null, {
+    maxTokens: 1024,
     validate: (c) => (isRunawayText(c, text)
       ? '译文输出失控（退化重复）：' + String(c || '').trim().slice(0, 60)
       : '')
@@ -63,13 +64,20 @@ export async function handleLlmTranslate(text, target, prompt) {
 
 // 对话统一注入系统提示词——回答保持简洁；要求翻译时只输出译文本身
 //   （专门翻译窗口 handleLlmTranslate 的 "Output ONLY the translation" 正是对话
-//   链路缺的约束）；配合流式输出消除长输出黑盒等待，openai 请求体加
-//   max_tokens 1024 硬约束（与 anthropic 分支既有上限对齐）。
+//   链路缺的约束）；配合流式输出消除长输出黑盒等待，max_tokens 硬约束见
+//   LLM_MAX_TOKENS（对话/生成类 2048；翻译由 handleLlmTranslate 显式 1024）。
 const LLM_CHAT_SYSTEM = 'You are a concise assistant in a vocabulary-learning browser extension. '
   + 'Keep answers short and to the point. '
   + 'When the user asks for a translation, output ONLY the translation itself: '
   + 'no commentary, no quotes, no explanations. '
   + 'Respond in the language the user used unless they ask otherwise.';
+
+// max_tokens 硬约束（openai 与 anthropic 分支共用）：对话/材料生成类 2048——
+//   表格/清单/代码类回答 1024 会截断，流式有逐字进度无黑盒等待，非流式的
+//   parse-material 生成/润色同样受益；翻译词条级短文本 1024 足够，由
+//   handleLlmTranslate 经 opts.maxTokens 显式传入。思考型模型吃 token 导致
+//   正文为空的问题在后端卡片 command --reasoning-budget 0 处关闭（20261023）。
+const LLM_MAX_TOKENS = 2048;
 
 /**
  * 代理 LLM 对话请求
@@ -86,10 +94,11 @@ const LLM_CHAT_SYSTEM = 'You are a concise assistant in a vocabulary-learning br
  * @param {Array<{role: string, content: string}>} messages 对话上下文
  * @param {(text: string) => void} [onDelta] 传入即走流式（SSE 逐 chunk 回调），
  *   不传保持非流式行为（LLM_TRANSLATE 词条翻译仍走非流式）。
- * @param {{validate?: (content: string) => string}} [opts] 逐家结果校验钩子
+ * @param {{validate?: (content: string) => string, maxTokens?: number}} [opts] 逐家结果校验钩子
  *   （仅非流式路径执行；流式 delta 已逐段外推无法回收）：返回非空字符串即判
  *   该家失败（retryable）——免费轮替换下一家，全失败时以最后一次的错误如实返回。
  *   翻译用途传输出失控检测（handleLlmTranslate）；对话不传，行为不变。
+ *   maxTokens 覆盖默认上限（LLM_MAX_TOKENS=2048），翻译显式 1024。
  * @returns {Promise<{ok: boolean, content?: string, error?: string, needConfig?: boolean}>}
  *   needConfig=true 表示尚未配置，前端应显示"打开设置"按钮而非只报错
  */
@@ -123,12 +132,14 @@ export async function handleLlmChat(messages, onDelta, opts) {
     }
   }
 
+  // max_tokens 上限：opts.maxTokens 显式覆盖（翻译 1024），默认对话/生成 2048
+  const maxTokens = (opts && opts.maxTokens > 0) ? opts.maxTokens : LLM_MAX_TOKENS;
   let last = { ok: false, error: 'no attempt' };
   for (let i = 0; i < attempts.length; i++) {
     // 传了 onDelta 走流式；turns 已含系统提示词，两路都必须用 turns
     last = onDelta
-      ? await llmChatStreamOnce(attempts[i], turns, onDelta)
-      : await llmChatOnce(attempts[i], turns);
+      ? await llmChatStreamOnce(attempts[i], turns, onDelta, maxTokens)
+      : await llmChatOnce(attempts[i], turns, maxTokens);
     // 逐家内容校验（非流式）：HTTP 200 但内容失控（退化重复）与限流同待遇——
     //   标记 retryable 换下一家；单一家配置时即以校验错误如实返回，不展示乱串
     if (last.ok && !onDelta && opts && typeof opts.validate === 'function') {
@@ -150,10 +161,11 @@ export async function handleLlmChat(messages, onDelta, opts) {
  * 发起一次 LLM 请求（单来源）
  * @param {object} cfg resolveLlmConfig 的结果
  * @param {Array<{role: string, content: string}>} messages 对话上下文
+ * @param {number} maxTokens 输出 token 上限（对话 2048 / 翻译 1024，见 LLM_MAX_TOKENS）
  * @returns {Promise<{ok: boolean, content?: string, error?: string, needConfig?: boolean, retryable?: boolean}>}
  *   retryable=true 表示"本家限流/不通"（402/429/5xx/网络错），仅保留语义字段
  */
-async function llmChatOnce(cfg, messages) {
+async function llmChatOnce(cfg, messages, maxTokens) {
   // 引导类错误文案随 UI 语言：await initLang（幂等，已初始化即刻返回）
   await initLang();
   // 是否需要 Key：noKey（backend 组）与 free 格式（免费直连，无鉴权）都不需要
@@ -180,12 +192,12 @@ async function llmChatOnce(cfg, messages) {
     // Anthropic 的 system 不能混在 messages 里，须提到顶层字段
     const sys = messages.filter((m) => m && m.role === 'system').map((m) => String(m.content || '')).join('\n');
     const turns = messages.filter((m) => m && m.role !== 'system');
-    const payload = { model: cfg.model, max_tokens: 1024, messages: turns, stream: false };
+    const payload = { model: cfg.model, max_tokens: maxTokens, messages: turns, stream: false };
     if (sys) payload.system = sys;
     body = JSON.stringify(payload);
   } else {
-    // max_tokens 1024 硬约束（与 anthropic 分支既有上限对齐），防对话翻译输出超长无响应
-    body = JSON.stringify({ model: cfg.model, messages, max_tokens: 1024, stream: false });
+    // max_tokens 上限 maxTokens（对话 2048/翻译 1024，见 LLM_MAX_TOKENS），防输出失控刷屏
+    body = JSON.stringify({ model: cfg.model, messages, max_tokens: maxTokens, stream: false });
   }
 
   log('[VocabRadar][sw][' + _ts() + '] llmChat provider=' + cfg.provider + ' format=' + cfg.format
@@ -216,7 +228,14 @@ async function llmChatOnce(cfg, messages) {
         ? String(data.choices[0].message.content || '')
         : '';
     }
-    if (!content) return { ok: false, error: 'No content in response: ' + raw.slice(0, 200), retryable: true };
+    if (!content) {
+      // 思考型模型会把预算全花在 reasoning_content 上（正文为空）——如实点名思考，
+      //   不与真正的"响应无内容"混作一谈（20261023 Qwen3.5 实测教训）
+      const m0 = data && data.choices && data.choices[0] && data.choices[0].message;
+      return { ok: false, error: (m0 && m0.reasoning_content
+        ? 'No content, only reasoning_content (thinking consumed max_tokens): '
+        : 'No content in response: ') + raw.slice(0, 200), retryable: true };
+    }
     return { ok: true, content };
   } catch (e) {
     console.error('[VocabRadar][sw][' + _ts() + '] llmChat 异常:', e);
@@ -228,15 +247,16 @@ async function llmChatOnce(cfg, messages) {
 /**
  * LLM 流式请求（单来源）——SSE 逐 chunk 经 onDelta 回调，
  *   聊天气泡原地增长，消除长输出黑盒等待。请求形状与 llmChatOnce 一致
- *   （system 提示词 + max_tokens 1024 硬约束 + stream: true）。
+ *   （system 提示词 + max_tokens 上限 maxTokens（2048）+ stream: true）。
  * 未产出任何 delta 前的失败（HTTP 非 200 /
  *   返回非 SSE / SSE 无内容）标记 retryable；已产出部分内容后中断则不重试
  *   （重发会重复输出），部分内容以 content 如实带回，由上层展示。
  * @param {object} cfg 同 llmChatOnce
  * @param {Array<{role: string, content: string}>} messages 已含 system 的对话上下文
  * @param {(text: string) => void} onDelta 每收到一段增量文本回调一次
+ * @param {number} maxTokens 输出 token 上限（对话 2048，见 LLM_MAX_TOKENS）
  */
-async function llmChatStreamOnce(cfg, messages, onDelta) {
+async function llmChatStreamOnce(cfg, messages, onDelta, maxTokens) {
   // 引导类错误文案随 UI 语言：await initLang（幂等，已初始化即刻返回）
   await initLang();
   // 是否需要 Key：noKey（backend 组）与 free 格式（免费直连，无鉴权）都不需要
@@ -257,19 +277,22 @@ async function llmChatStreamOnce(cfg, messages, onDelta) {
   }
   let body;
   if (isAnthropic) {
-    // Anthropic 的 system 提到顶层字段；max_tokens 必填（流式同样 1024 上限）
+    // Anthropic 的 system 提到顶层字段；max_tokens 必填（流式同样 maxTokens 上限）
     const sys = messages.filter((m) => m && m.role === 'system').map((m) => String(m.content || '')).join('\n');
     const turns = messages.filter((m) => m && m.role !== 'system');
-    const payload = { model: cfg.model, max_tokens: 1024, messages: turns, stream: true };
+    const payload = { model: cfg.model, max_tokens: maxTokens, messages: turns, stream: true };
     if (sys) payload.system = sys;
     body = JSON.stringify(payload);
   } else {
-    body = JSON.stringify({ model: cfg.model, messages, max_tokens: 1024, stream: true });
+    body = JSON.stringify({ model: cfg.model, messages, max_tokens: maxTokens, stream: true });
   }
 
   log('[VocabRadar][sw][' + _ts() + '] llmChatStream provider=' + cfg.provider + ' format=' + cfg.format
     + ' model=' + cfg.model + ' turns=' + messages.length);
   let acc = '';
+  // 思考型模型（如 Qwen3.5，--jinja 下思考走 delta.reasoning_content）：流里出现过
+  //   reasoning_content 而正文为空收场时，报错点名思考耗尽，不误报"无内容"
+  let sawReasoning = false;
   try {
     const resp = await fetch(url, { method: 'POST', headers, credentials: 'omit', cache: 'no-store', body });
     if (!resp.ok) {
@@ -323,13 +346,19 @@ async function llmChatStreamOnce(cfg, messages, onDelta) {
           if (acc) return { ok: false, error: msg, content: acc };
           return { ok: false, error: msg, retryable: true };
         }
+        const dl = (!isAnthropic && j.choices && j.choices[0] && j.choices[0].delta) || null;
+        if (dl && dl.reasoning_content) sawReasoning = true;
         const piece = isAnthropic
           ? (j.type === 'content_block_delta' && j.delta ? String(j.delta.text || '') : '')
-          : (j.choices && j.choices[0] && j.choices[0].delta ? String(j.choices[0].delta.content || '') : '');
+          : (dl ? String(dl.content || '') : '');
         if (piece) { acc += piece; if (onDelta) onDelta(piece); }
       }
     }
-    if (!acc) return { ok: false, error: 'SSE returned no content', retryable: true };
+    if (!acc) {
+      return { ok: false, error: sawReasoning
+        ? 'SSE returned reasoning_content only: thinking consumed max_tokens, no answer content'
+        : 'SSE returned no content', retryable: true };
+    }
     return { ok: true, content: acc };
   } catch (e) {
     console.error('[VocabRadar][sw][' + _ts() + '] llmChatStream 异常:', e);

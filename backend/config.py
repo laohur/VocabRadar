@@ -100,6 +100,10 @@ _LMT60_17B_CARD = {
 
 # 出厂内置的 LLM 模型卡片（llama-server -hf 自动下载，HF hub 缓存；fallback_url
 # 走 ModelScope 镜像）。默认不选卡（llm.model 为空），管理页选卡后才落 config.json。
+# Qwen3/Qwen3.5 系模板默认开思考（--jinja 下思考走 delta.reasoning_content）：思考
+# 吃满 max_tokens 会正文为空、扩展侧报 "SSE returned no content"（20261023 实测），
+# 故卡级统一 --reasoning off 默认关思考（与 MiniCPM-V 4.7 卡同款）；管理页测试窗的
+# 请求级 chat_template_kwargs 仍可勾选开启。
 _BUILTIN_CARDS = [
     {
         "name": "unsloth/Qwen3-0.6B-GGUF:Q4_K_M",
@@ -107,7 +111,7 @@ _BUILTIN_CARDS = [
         "desc_en": "smallest & fastest chat/translate model (text-only, no vision OCR; Q4_K_M, smaller)" + _INFER_SUFFIX_EN,
         "hf_repo": "unsloth/Qwen3-0.6B-GGUF",
         "fallback_url": "https://modelscope.cn/models/unsloth/Qwen3-0.6B-GGUF/resolve/master/Qwen3-0.6B-Q4_K_M.gguf",
-        "command": "llama-server -hf unsloth/Qwen3-0.6B-GGUF:Q4_K_M --jinja --host 127.0.0.1 --port 7788 -c 16384",
+        "command": "llama-server -hf unsloth/Qwen3-0.6B-GGUF:Q4_K_M --reasoning off --jinja --host 127.0.0.1 --port 7788 -c 16384",
         "sampling": {
             "temperature": 0.7,
             "top_p": 0.8,
@@ -123,7 +127,7 @@ _BUILTIN_CARDS = [
         "hf_repo": "unsloth/Qwen3.5-0.8B-GGUF",
         "fallback_url": "https://modelscope.cn/models/unsloth/Qwen3.5-0.8B-GGUF/resolve/master/Qwen3.5-0.8B-Q4_K_M.gguf",
         "fallback_mmproj_url": "https://modelscope.cn/models/unsloth/Qwen3.5-0.8B-GGUF/resolve/master/mmproj-F16.gguf",
-        "command": "llama-server -hf unsloth/Qwen3.5-0.8B-GGUF:Q4_K_M --image-min-tokens 1024 --jinja --host 127.0.0.1 --port 7788 -c 16384",
+        "command": "llama-server -hf unsloth/Qwen3.5-0.8B-GGUF:Q4_K_M --image-min-tokens 1024 --reasoning off --jinja --host 127.0.0.1 --port 7788 -c 16384",
         "sampling": {
             "temperature": 0.7,
             "top_p": 0.8,
@@ -165,7 +169,7 @@ _BUILTIN_CARDS = [
         "hf_repo": "unsloth/Qwen3.5-2B-GGUF",
         "fallback_url": "https://modelscope.cn/models/unsloth/Qwen3.5-2B-GGUF/resolve/master/Qwen3.5-2B-Q4_K_M.gguf",
         "fallback_mmproj_url": "https://modelscope.cn/models/unsloth/Qwen3.5-2B-GGUF/resolve/master/mmproj-F16.gguf",
-        "command": "llama-server -hf unsloth/Qwen3.5-2B-GGUF:Q4_K_M --image-min-tokens 1024 --jinja --host 127.0.0.1 --port 7788 -c 16384",
+        "command": "llama-server -hf unsloth/Qwen3.5-2B-GGUF:Q4_K_M --image-min-tokens 1024 --reasoning off --jinja --host 127.0.0.1 --port 7788 -c 16384",
         "sampling": {
             "temperature": 0.7,
             "top_p": 0.8,
@@ -181,7 +185,7 @@ _BUILTIN_CARDS = [
         "hf_repo": "unsloth/Qwen3.5-4B-GGUF",
         "fallback_url": "https://modelscope.cn/models/unsloth/Qwen3.5-4B-GGUF/resolve/master/Qwen3.5-4B-Q4_K_M.gguf",
         "fallback_mmproj_url": "https://modelscope.cn/models/unsloth/Qwen3.5-4B-GGUF/resolve/master/mmproj-F16.gguf",
-        "command": "llama-server -hf unsloth/Qwen3.5-4B-GGUF:Q4_K_M --image-min-tokens 1024 --jinja --host 127.0.0.1 --port 7788 -c 16384",
+        "command": "llama-server -hf unsloth/Qwen3.5-4B-GGUF:Q4_K_M --image-min-tokens 1024 --reasoning off --jinja --host 127.0.0.1 --port 7788 -c 16384",
         "sampling": {
             "temperature": 0.7,
             "top_p": 0.8,
@@ -197,7 +201,7 @@ _BUILTIN_CARDS = [
         "hf_repo": "unsloth/Qwen3.5-9B-GGUF",
         "fallback_url": "https://modelscope.cn/models/unsloth/Qwen3.5-9B-GGUF/resolve/master/Qwen3.5-9B-Q4_K_M.gguf",
         "fallback_mmproj_url": "https://modelscope.cn/models/unsloth/Qwen3.5-9B-GGUF/resolve/master/mmproj-F16.gguf",
-        "command": "llama-server -hf unsloth/Qwen3.5-9B-GGUF:Q4_K_M --image-min-tokens 1024 --jinja --host 127.0.0.1 --port 7788 -c 16384",
+        "command": "llama-server -hf unsloth/Qwen3.5-9B-GGUF:Q4_K_M --image-min-tokens 1024 --reasoning off --jinja --host 127.0.0.1 --port 7788 -c 16384",
         "sampling": {
             "temperature": 0.7,
             "top_p": 0.8,

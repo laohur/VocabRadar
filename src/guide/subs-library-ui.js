@@ -1,16 +1,22 @@
 // VocabRadar 引导页 字幕库 模块（2026-10-08 P3：独立标签 panel-subs，仿 account.js）
 // 职责（方案 §3.1 生产体系；管理面在网站「我的分享」——扩展保持薄、稳定）：
 //   - 列表：本地字幕库（IndexedDB vocabradar-subs，lib/subs-library.js）按时间倒序，
-//     每条显示 标题/平台/语言/时长/模型 + 状态（本地/已分享）
+//     行1=链接+视频标题、行2=时间+元信息+按钮（20261022 令）
+//   - 打开列表自动从后端导入一次（20261022 令：会话内首个打开触发，仅真有新导入
+//     才 toast；后端不可达静默——自动动作不刷屏，手动按钮保留完整汇报）
+//   - 视频标题回填：存量条目（后端导入/收割/云端消费）title 普遍为空，对可出链的
+//     bilibili/youtube 条目按平台公开接口取标题写回条目（取一次，会话内不重试）
 //   - 上传分享：chrome.runtime.sendMessage('vocabradar:auth-get-token') 取有效 token
 //     （续签在 SW，auth.js 单一属主）→ POST <站点>/api/subs/publish → 回填 shared
 //   - 删除本地：仅删本地记录，云端一概不动（20261008 用户裁定）；confirm 防误删
 //   - 未连接账号时上传按钮提示先到「账号」标签连接
 import { $, m, log } from './shared.js';
 import { S, toast } from './guide-common.js';
-import { listSubs, deleteSub, markShared, makeEntry, saveSub } from '../lib/subs-library.js';
+import { listSubs, getSub, deleteSub, markShared, makeEntry, saveSub } from '../lib/subs-library.js';
 
 let _inited = false;
+let _autoImported = false; // 打开列表自动导入：每页面会话只触发一次
+let _importBusy = false; // 手动/自动导入并发只跑一个
 
 function siteUrl() {
   try {
@@ -278,13 +284,15 @@ function render() {
         : `<span class="subs-tag">${esc(m('subsTagLocal'))}</span>`;
       const min = r.durationSec ? Math.round(r.durationSec / 60) + 'min · ' : '';
       const url = urlForEntry(r);
-      // 两行（20261018 令）：行1=时间+链接；行2=元信息标签 …… 查看·状态·其他按钮，
-      // 隔一段后最右端是删除
-      const row1 = `<div class="subs-row">`
-        + `<span class="subs-item-time">${esc(fmtTime(r.createdAt))}</span>`
-        + (url ? `<a class="subs-item-url" href="${esc(url)}" target="_blank" rel="noopener noreferrer">${esc(url)}</a>` : '')
-        + `</div>`;
+      // 两行（20261022 令）：行1=链接+视频标题（标题吃剩余宽度，超长省略，
+      //   hover 原生 tooltip 出全文）；行2=时间+元信息 …… 查看·状态·其他按钮，
+      //   隔一段后最右端是删除
+      const row1 = (url || r.title) ? `<div class="subs-row">`
+        + (url ? `<a class="subs-item-url" href="${esc(url)}" target="_blank" rel="noopener noreferrer" title="${esc(url)}">${esc(url)}</a>` : '')
+        + (r.title ? `<span class="subs-item-title" title="${esc(r.title)}">${esc(r.title)}</span>` : '')
+        + `</div>` : '';
       const row2 = `<div class="subs-row">`
+        + `<span class="subs-item-time">${esc(fmtTime(r.createdAt))}</span>`
         + `<span class="subs-item-meta">${esc(r.platform)} · ${esc(r.lang)} · ${esc(r.kind)} · ${esc(min)}${esc(r.model)}</span>`
         + `<button type="button" class="mw-btn subs-view" data-id="${esc(r.id)}">${esc(m('subsView'))}</button>`
         + status
@@ -342,10 +350,67 @@ function render() {
         setTimeout(() => URL.revokeObjectURL(a.href), 5000);
       });
     });
+    // 视频标题回填（20261022 令"链接后面放上视频标题"）：fire-and-forget，取到
+    // 写回条目后就地更新该行 span（不整表重渲染，避免闪烁/丢滚动）
+    backfillTitles(rows);
   }).catch((e) => {
     box.innerHTML = `<div class="subs-empty">${esc(m('subsLoadFail'))}</div>`;
     log('[VocabRadar][subs] 列表读取失败:', e);
   });
+}
+
+// ---- 视频标题回填（20261022 令"链接后面放上视频标题"）----
+// 存量条目 title 普遍为空（后端导入 title:''、侧栏收割/云端消费未带页面标题），
+// 列表对无标题且可出链的 bilibili/youtube 条目按平台公开接口取标题（SW 不经手——
+// 引导页有 <all_urls> host 权限，跨域直取不涉 CORS）：
+//   bilibili  /x/web-interface/view（bvid 或 ep_id，番剧 ep 返回所属季标题）
+//   youtube   oembed（公开无 Key，watch 与 shorts 路径都认）
+// 取到写回条目（title 上限同 makeEntry 200 字）就地更新；失败本会话不重试，
+// 下次打开再试。web/local 无可靠标题源，不取。
+const _titleTried = new Set();
+
+function fetchVideoTitle(entry) {
+  const url = urlForEntry(entry);
+  if (!url) return Promise.resolve('');
+  if (entry.platform === 'youtube') {
+    return fetch(`https://www.youtube.com/oembed?url=${encodeURIComponent(url)}&format=json`)
+      .then((res) => (res.ok ? res.json() : null))
+      .then((d) => (d && d.title ? String(d.title) : ''))
+      .catch(() => '');
+  }
+  if (entry.platform === 'bilibili') {
+    const bv = url.match(/\/video\/(BV[0-9A-Za-z]+)/);
+    const ep = url.match(/\/bangumi\/play\/ep(\d+)/);
+    const q = bv ? `bvid=${bv[1]}` : (ep ? `ep_id=${ep[1]}` : '');
+    if (!q) return Promise.resolve('');
+    return fetch(`https://api.bilibili.com/x/web-interface/view?${q}`)
+      .then((res) => (res.ok ? res.json() : null))
+      .then((d) => (d && d.data && d.data.title ? String(d.data.title) : ''))
+      .catch(() => '');
+  }
+  return Promise.resolve('');
+}
+
+function backfillTitles(rows) {
+  for (const r of rows) {
+    if (r.title || _titleTried.has(r.id)) continue;
+    if (r.platform !== 'bilibili' && r.platform !== 'youtube') continue;
+    _titleTried.add(r.id);
+    fetchVideoTitle(r).then((title) => {
+      if (!title) return;
+      // 读-改-写（不用取标题前的快照整条覆盖）：取标题期间条目可能被分享
+      //   （shareState/cloudId 已回填）或删除——只补 title，其余以库内现值为准；
+      //   已删除不复活
+      getSub(r.id).then((cur) => {
+        if (!cur) return;
+        cur.title = title.slice(0, 200);
+        return saveSub(cur).then(() => {
+          const el = document.querySelector(`.subs-item[data-id="${CSS.escape(r.id)}"] .subs-item-title`);
+          if (el) el.textContent = cur.title;
+        });
+      }).catch((e) => log('[VocabRadar][subs] 标题回写失败:', r.id, e));
+    });
+  }
 }
 
 export function initSubs() {
@@ -542,7 +607,9 @@ function openCorrectEditor(entry, overlay) {
 }
 
 // 从本地后端导入（20261017 用户令"本地后端有很多字幕，扩展只有三条"）：
-// 清单/详情/去重/无人声门控全在 SW（vocabradar:subs-backend-import），这里只触发+汇报
+// 清单/详情/去重/无人声门控全在 SW（vocabradar:subs-backend-import），这里只触发+汇报。
+// 手动（按钮）/自动（打开列表）两路共用：_importBusy 并发只跑一个（自动撞上手动
+//   在跑则本次静默跳过——手动路本身会汇报+刷新）
 function sendMsg(type, payload) {
   return new Promise((resolve) => {
     try {
@@ -556,11 +623,19 @@ function sendMsg(type, payload) {
   });
 }
 
+async function requestBackendImport() {
+  if (_importBusy) return null;
+  _importBusy = true;
+  const res = await sendMsg('vocabradar:subs-backend-import');
+  _importBusy = false;
+  return res;
+}
+
 async function importFromBackend(btn) {
   btn.disabled = true;
   const oldText = btn.textContent;
   btn.textContent = m('subsImporting');
-  const res = await sendMsg('vocabradar:subs-backend-import');
+  const res = await requestBackendImport();
   btn.disabled = false;
   btn.textContent = oldText;
   if (res && res.ok) {
@@ -569,6 +644,24 @@ async function importFromBackend(btn) {
     toast(`${m('subsShareFail')}${res && res.error ? ' (' + res.error + ')' : ''}`);
   }
   render();
+}
+
+// 打开字幕列表自动导入一次（20261022 令）：每页面会话首个打开触发；自动动作
+// 不刷屏——仅真有新导入（imported>0）才 toast+刷新，后端不可达等失败只
+// console.warn（手动「从后端导入」按钮保留完整汇报）
+export function autoImportOnce() {
+  if (_autoImported) return;
+  _autoImported = true;
+  requestBackendImport().then((res) => {
+    if (res && res.ok) {
+      if ((res.imported || 0) > 0) {
+        toast(m('subsImportDone').replace('{ok}', String(res.imported || 0)).replace('{skip}', String(res.skipped || 0)));
+        render();
+      }
+    } else if (res) {
+      console.warn('[VocabRadar][subs] 自动导入失败:', res.error); // 恒可见
+    }
+  });
 }
 
 // ASR 转写结果一键入库（方案 §3.1：先落本地库，审阅后上传）。
