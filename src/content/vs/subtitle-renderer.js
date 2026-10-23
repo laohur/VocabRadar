@@ -1535,10 +1535,25 @@ export async function onCopy() {
 export async function buildSubtitleBody(includeAnns = true) {
   let body = '';
   // 整个字幕面板：每条字幕 + 其下所有注释（格式随详略模式，见函数头）
-  for (let i = 0; i < getSubtitlesRef().length; i++) {
-    const sub = getSubtitlesRef()[i];
+  // 混源适配（用户裁定"字幕来源多样，有的带说话人，有的不带"）：同一列表可能
+  //   站点官方轨（无 speaker）+ ASR moss 补段（带 speaker）+ 旧缓存回放段（无）
+  //   混存。只要列表里出现任一带 speaker 的段，无 speaker 的段就显式标
+  //   `Speaker ?`——不标会让 LLM 把无标签行误并给某个已标说话人或当旁白，
+  //   显式未知才是如实口径；全部无 speaker（纯站点轨/纯旧缓存）则一行标签不加。
+  const subsRef = getSubtitlesRef();
+  const hasSpeaker = subsRef.some((s) => s && typeof s.speaker === 'number' && s.speaker >= 0);
+  for (let i = 0; i < subsRef.length; i++) {
+    const sub = subsRef[i];
     if (!sub) continue;
-    body += `${formatTime(sub.start)} ${sub.text || ''}\n`;
+    // 说话人前缀（方案 D）：段带 speaker（moss diarization）时拼 1-based 标签，
+    //   聊天上下文据此区分多人；混源时无 speaker 段标 Speaker ?（未知）
+    let spk = '';
+    if (typeof sub.speaker === 'number' && sub.speaker >= 0) {
+      spk = `Speaker ${sub.speaker + 1}: `;
+    } else if (hasSpeaker) {
+      spk = 'Speaker ?: ';
+    }
+    body += `${formatTime(sub.start)} ${spk}${sub.text || ''}\n`;
     // includeAnns 且页内注释按钮开（!_noAnnotation）才带注释
     //   （用户："显示的是啥就是啥"）——注释按钮 off 时复制只有正文，与页内一致
     if (!includeAnns || _noAnnotation) continue;
@@ -1789,6 +1804,9 @@ export async function appendASRSubtitle(seg) {
     end: videoEnd,
     text: seg.text
   };
+  // 说话人标签（方案 D，可选字段）：仅 backend moss 引擎的段带 speaker；
+  //   只存字段不进页面/overlay 渲染——Speaker 标签仅在复制/导出/聊天文本中拼出
+  if (typeof seg.speaker === 'number' && seg.speaker >= 0) sub.speaker = seg.speaker;
 
   // 按 start 时间查找插入位置（二分查找）
   let lo = 0, hi = getSubtitlesRef().length;

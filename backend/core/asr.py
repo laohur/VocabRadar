@@ -203,6 +203,43 @@ def _cuda_ready():
     return gi["cuda_devices"] > 0 and gi["cublas_loadable"]
 
 
+# ---- moss 硬件探测（B3+B1，2026-10-23 裁定）：CPU-only 跑 moss 极慢
+#      （用户在 video 项目实测），须随硬件选引擎——transcribe_cpp 自带
+#      设备枚举，直接探测不猜 ----
+
+_MOSS_HW = None
+
+
+def moss_hw_info():
+    """moss 硬件概况（模块级缓存；/api/status 与管理页 moss 卡共用）。
+
+    transcribe_cpp.backends() 枚举注册设备：device_type ∈ cpu/gpu/igpu/accel。
+    gpu = 存在任一非 CPU 设备（vulkan/cuda/rocm…均算——transcribe_cpp
+    backend="auto" 自会择优，这里只判“有没有得用”，不替用户选卡；
+    仅 CPU → 管理页明示极慢并建议 faster-whisper，不静默换引擎）。
+    transcribe_cpp 未装/枚举异常：available=False，不阻塞 status。"""
+    global _MOSS_HW
+    if _MOSS_HW is None:
+        hw = {"available": False, "gpu": False, "devices": []}
+        try:
+            import transcribe_cpp as _tc
+            hw["available"] = True
+            for d in (_tc.backends() or []):
+                if (getattr(d, "device_type", "") or "") == "cpu":
+                    continue
+                hw["gpu"] = True
+                if len(hw["devices"]) < 4:  # 列表限长：够管理页展示即可
+                    hw["devices"].append({
+                        "name": (getattr(d, "name", "") or "")[:80],
+                        "kind": getattr(d, "kind", "") or "",
+                        "memory_total": int(getattr(d, "memory_total", 0) or 0),
+                    })
+        except Exception as e:
+            log.warning("moss 硬件探测失败（按无 GPU 处理）：%s", e)
+        _MOSS_HW = hw
+    return _MOSS_HW
+
+
 def _device_tag(cfg):
     """缓存标签设备维度：CUDA 生效路径加 @cuda（CPU/CUDA 数值有微差，不混
     缓存）；cpu 与「要 cuda 但环境不满足必回落」同走 CPU，共用无后缀标签。"""
@@ -284,9 +321,17 @@ class AsrEngine:
 
     @property
     def engine_name(self):
-        """当前配置引擎（加载与否无关；job/api 层据此分流）。"""
-        eng = (self.cfg.get("engine") or "faster-whisper").strip()
-        return eng if eng in ASR_ENGINES else "faster-whisper"
+        """当前配置引擎（加载与否无关；job/api 层据此分流）。
+
+        未填/非法引擎时按硬件预选默认（B3，2026-10-23 裁定）：有非 CPU
+        设备（transcribe_cpp 枚举，moss 可用）→ moss（唯一带说话人分离，
+        聊天说话人标签方案 D 依赖它）；纯 CPU → faster-whisper（CPU 可跑
+        的默认回落档，moss CPU 极慢——用户在 video 项目实测）。已显式
+        配置的引擎一律尊重，不擅改。"""
+        eng = (self.cfg.get("engine") or "").strip()
+        if eng in ASR_ENGINES:
+            return eng
+        return "moss" if moss_hw_info().get("gpu") else "faster-whisper"
 
     def _engine_model_name(self):
         """当前引擎的模型展示名（状态行/缓存标签共用）。"""
@@ -311,6 +356,11 @@ class AsrEngine:
         """
         engine = self.engine_name
         with self._lock:
+            if engine == "moss" and not moss_hw_info().get("gpu"):
+                # B1（2026-10-23）：CPU-only 跑 moss 极慢，加载前明示——
+                # 不遮蔽、不擅换引擎（换不换由用户在管理页决定）
+                log.warning("MOSS 未探测到非 CPU 设备，CPU 推理极慢；"
+                            "建议管理页将默认引擎改选 faster-whisper")
             if force:
                 self._manual_stop = False
                 config.set_engine_stopped("asr", False)  # 持久化用户启动设定（stopped:false）
@@ -436,6 +486,10 @@ class AsrEngine:
             "device_effective": self._device_effective,
             "device_note": self._device_note,
             "gpu": gpu_info(),
+            # B3+B1（2026-10-23）：moss 硬件概况与 CPU 警告（管理页 moss 卡
+            # 与总览直接消费；CPU 跑 moss 极慢须让用户看见，不遮蔽）
+            "moss_hw": moss_hw_info(),
+            "moss_cpu_warning": engine == "moss" and not moss_hw_info().get("gpu"),
         }
 
     # ---- 推理 ----

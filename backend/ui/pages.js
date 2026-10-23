@@ -538,6 +538,29 @@ PAGES.asr = async function (main) {
         t('q4_K_M = default, fastest tier; q8_0 = higher quality, larger file.')));
       engineDetail.append(field(t('MOSS model path (optional)'), mpath,
         t('Leave empty for models/ inside the backend directory; the gguf auto-downloads on first use (HuggingFace, hf-mirror fallback). Or fill in a local file path.')));
+      // B3+B1（2026-10-23）：moss 硬件探测透出——有非 CPU 设备照常；
+      // 仅 CPU 明示"极慢"并给一键改默认（不静默换引擎，换不换由用户点）
+      const mhw = st.moss_hw || {};
+      if (mhw.available && mhw.gpu) {
+        const names = (mhw.devices || []).map((d) => d.name || d.kind).filter(Boolean);
+        engineDetail.append(el('div', { class: 'hint' },
+          t('Compute devices: {list}', { list: names.join(', ') || t('GPU available') })));
+      } else if (mhw.available) {
+        engineDetail.append(el('div', { class: 'hint' },
+          t('Warning: no usable GPU device detected (CPU only). MOSS on CPU is extremely slow — speaker diarization is only available with MOSS, but faster-whisper is much faster on CPU.')));
+        engineDetail.append(el('button', {
+          class: 'btn', onclick: async () => {
+            viewEngine = 'faster-whisper';
+            await saveCfg('asr', Object.assign(asrPatch(), { engine: 'faster-whisper' }), detailHint);
+            curEngine = 'faster-whisper';
+            renderEngineList();
+            renderEngineDetail();  // 详情区随新默认重渲染（B1 提示消失）
+          },
+        }, t('Use faster-whisper as default')));
+      } else {
+        engineDetail.append(el('div', { class: 'hint' },
+          t('transcribe-cpp not installed — MOSS unavailable until backend setup completes.')));
+      }
       dlBtn = el('button', { class: 'btn',
         onclick: () => startDl('moss', mquant.value, dlBtn) }, t('Download'));
       mquant.addEventListener('change', () => {

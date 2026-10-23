@@ -181,6 +181,12 @@ const ZH = {
   '0.6B = default tier (~1.35GB); 1.7B = quality tier (~2.15GB). First use downloads the tool (~103MB) and model from GitHub releases; GPU (DML+Vulkan) required — falls back to faster-whisper on CPU-only machines.':
     '0.6B = 默认档（约 1.35GB）；1.7B = 质量档（约 2.15GB）。首次使用自动从 GitHub Releases 下载工具（约 103MB）与模型包；需 GPU（DML+Vulkan）——纯 CPU 机器不可用，请回落 faster-whisper。',
   'MOSS quant': 'MOSS 量化',
+  // B3+B1（2026-10-23）：moss 硬件探测透出词条
+  'Compute devices: {list}': '计算设备：{list}',
+  'GPU available': '有可用 GPU',
+  'Warning: no usable GPU device detected (CPU only). MOSS on CPU is extremely slow — speaker diarization is only available with MOSS, but faster-whisper is much faster on CPU.': '警告：未探测到可用 GPU 设备（仅 CPU）。CPU 跑 MOSS 极慢——说话人分离只有 MOSS 支持，但 faster-whisper 在 CPU 上快得多。',
+  'Use faster-whisper as default': '改用 faster-whisper 作为默认引擎',
+  'transcribe-cpp not installed — MOSS unavailable until backend setup completes.': 'transcribe-cpp 未安装——后端环境装好前 MOSS 不可用。',
   'q4_K_M = default, fastest tier; q8_0 = higher quality, larger file.':
     'q4_K_M = 默认，最快档；q8_0 = 质量更高，文件更大。',
   'MOSS model path (optional)': 'MOSS 模型路径（可选）',

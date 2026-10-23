@@ -176,7 +176,9 @@ export const LLM_DEFAULT_PROVIDER = 'pollinations';
 //   · 两条模板都保持两句话内的短度：它们会原样预填进输入框给用户看和改，
 //     复杂的输出格式契约（词典卡、JSON 之类）应放 system 位而非此处。
 export const CHAT_WORD_PROMPT = 'Explain "{text}" in {lang} as a dictionary entry: part of speech, core meanings, and one example sentence with a {lang} translation. If the context above shows how it is used, give that meaning first.';
-export const CHAT_SIDEBAR_PROMPT = 'Summarize the text above in {lang}: only the key points, concise and faithful to the original. Do not interpret or add anything.';
+export const CHAT_SIDEBAR_PROMPT = 'Summarize the text above in {lang}: only the key points, concise and faithful to the original. Do not interpret or add anything. The text is video subtitles and may involve multiple speakers; never attribute the whole content to a single speaker unless explicit "Speaker N:" labels or clear textual evidence say otherwise.';
+// 说话人约束（方案 D）：同步生效于 config.json chatSidebarPrompt（出厂值第一优先，
+//   只改此处不生效——见 chat.js 第357次三级取数注释）
 // 翻译提示词兜底模板：正常走 config.json 出厂值 > storage > 此常量 三级优先，
 //   由 translator/index.js 组装（{text} = 选中文本，{lang} = 释义语言名），SW 端只做哑管道直发。
 //   约束句式防 LLM 输出解释/引号等冗余内容。

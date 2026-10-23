@@ -786,6 +786,10 @@ def _windowed_segments(job, handle, audio, coverage, covered_total, language=Non
                 raise _JobCancelled()
             seg = {"start": round(s["start"], 3), "end": round(s["end"], 3),
                    "text": (s.get("text") or "").strip()}
+            # 说话人透传（方案 D）：仅 moss 返回可选 speaker（int ≥0），
+            #   其余引擎无该键，快照/缓存按原样序列化自然兼容
+            if isinstance(s.get("speaker"), int) and s["speaker"] >= 0:
+                seg["speaker"] = s["speaker"]
             # 第564次：合并窗含静音间隙，主路径与补转同口径过通用启发
             #   （评审 2026-10 §1.4），压静音段幻觉
             if seg["text"] and not _looks_hallucinated(seg["text"]):
@@ -862,9 +866,13 @@ def _fill_holes(job, handle, engine, audio, coverage, language=None):
                 # 通用幻觉过滤：空文本、近重复串（同字重复/同句复读）不收
                 if not text or _looks_hallucinated(text):
                     continue
-                job["segments"].append({"start": round(float(s["start"]), 3),
-                                        "end": round(float(s["end"]), 3),
-                                        "text": text})
+                fill = {"start": round(float(s["start"]), 3),
+                        "end": round(float(s["end"]), 3),
+                        "text": text}
+                # 说话人透传（方案 D）：与主路径同口径，可选字段语义
+                if isinstance(s.get("speaker"), int) and s["speaker"] >= 0:
+                    fill["speaker"] = s["speaker"]
+                job["segments"].append(fill)
                 added += 1
     job["coverage"] = sorted(coverage + [[a, b] for a, b in holes])
     if added:

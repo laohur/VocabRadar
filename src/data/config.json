@@ -27,7 +27,7 @@
   "annotateRepeat": false,
   "chatContextMaxBytes": 100000,
   "chatWordPrompt": "Explain \"{text}\" in {lang} as a dictionary entry: part of speech, core meanings, and one example sentence with a {lang} translation. If the context above shows how it is used, give that meaning first.",
-  "chatSidebarPrompt": "Summarize the text above in {lang}: only the key points, concise and faithful to the original. Do not interpret or add anything.",
+  "chatSidebarPrompt": "Summarize the text above in {lang}: only the key points, concise and faithful to the original. Do not interpret or add anything. The text is video subtitles and may involve multiple speakers; never attribute the whole content to a single speaker unless explicit \"Speaker N:\" labels or clear textual evidence say otherwise.",
   "llmTranslatePrompt": "Translate \"{text}\" into {lang}. Output only the translation: no explanations, no quotes.",
   "llmProvider": "pollinations",
   "llmBaseUrl": "",

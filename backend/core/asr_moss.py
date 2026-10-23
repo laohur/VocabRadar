@@ -11,8 +11,10 @@
   默认路径缺失时自动补拉（hf 官方 → hf-mirror 双源，落 backend/models/，
   .gitignore 已盖该目录）；moss_model_path 显式路径仍只查找不下载——
   用户指定路径不代下，未就绪即报错（不遮蔽）。
-- 唯一带说话人分离的引擎（diarize="on"）：speaker_id 随段返回，字幕暂不透出
-  （扩展端段落结构无说话人字段），缓存条目留待后续需要时启用。
+- 唯一带说话人分离的引擎（diarize="on"）：speaker_id 随段返回。本引擎段结构
+  自带可选 `speaker` 字段（int ≥0 有效；-1/缺失=模型未给出，如实不透出），
+  下游 asr_job segments 与扩展端字幕条目按"可选字段"语义兼容——其他引擎
+  无该字段不受影响（聊天说话人标签方案 D 第一步，调研见 docs/聊天说话人混淆调研.md）。
 """
 
 import logging
@@ -93,11 +95,17 @@ class MossEngine:
             text = (getattr(seg, "text", "") or "").strip()
             if not text:
                 continue
-            out.append({
+            item = {
                 "start": round(offset + (getattr(seg, "t0_ms", 0) or 0) / 1000.0, 3),
                 "end": round(offset + (getattr(seg, "t1_ms", 0) or 0) / 1000.0, 3),
                 "text": text,
-            })
+            }
+            # 说话人分离透出（diarize="on" 常规有效）：speaker_id 为 int，
+            #   -1/异常视为模型未给出，不携带该键——下游按可选字段兼容
+            sid = getattr(seg, "speaker_id", None)
+            if isinstance(sid, int) and sid >= 0:
+                item["speaker"] = sid
+            out.append(item)
         return out
 
     def close(self):

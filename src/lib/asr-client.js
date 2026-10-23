@@ -256,7 +256,11 @@ async function pollJobOnceInner() {
       if (_jobSeenSegs.has(segKey)) continue;
       _jobSeenSegs.add(segKey);
       if (text && end > batchEnd) batchEnd = end;
-      batch.push({ start: s.start, end, text });
+      // 说话人透传（方案 D，可选字段）：仅 backend moss 引擎返回 speaker（int ≥0），
+      //   其余引擎/旧缓存无该键——下游 appendASRSubtitle 与缓存按可选字段兼容
+      const segItem = { start: s.start, end, text };
+      if (typeof s.speaker === 'number' && s.speaker >= 0) segItem.speaker = s.speaker;
+      batch.push(segItem);
     }
     // 第437次：msgStart 改用本批最小 start（batch 已按 start 排序，取 batch[0]），
     //   不再用 _jobListenEnd——后者只增不减，幻觉段把窗口推后后，后续正常段的
@@ -266,7 +270,12 @@ async function pollJobOnceInner() {
     _jobListenEnd = Math.max(_jobListenEnd, batchEnd);
     for (const seg of batch) {
       if (!seg.text) continue;
-      if (_onText) { try { _onText({ start: seg.start, end: seg.end, text: seg.text }); } catch (e) { /* ignore */ } }
+      if (_onText) {
+        // 说话人随段透传给字幕条目（appendASRSubtitle 存 sub.speaker，方案 D）
+        const out = { start: seg.start, end: seg.end, text: seg.text };
+        if (typeof seg.speaker === 'number' && seg.speaker >= 0) out.speaker = seg.speaker;
+        try { _onText(out); } catch (e) { /* ignore */ }
+      }
     }
     if (_cacheAsr && _cache && batchEnd > msgStart) {
       // 构造 mergeOrAddSegment 期望的消息形态：listen 窗口 [msgStart, batchEnd]；
@@ -277,7 +286,9 @@ async function pollJobOnceInner() {
         text: batch.map((s) => s.text).filter(Boolean).join(' '),
         chunks: batch.filter((s) => s.text).map((s) => ({
           timestamp: [Math.max(0, s.start - msgStart), Math.max(0, s.end - msgStart)],
-          text: s.text
+          text: s.text,
+          // 说话人随 chunk 入缓存（回放路径带出，可选字段）
+          ...(typeof s.speaker === 'number' && s.speaker >= 0 ? { speaker: s.speaker } : {})
         }))
       });
       if (_cache.totalListened - _lastSavedTotalListened >= _cacheSegmentSec) {
@@ -684,7 +695,9 @@ function mergeOrAddSegment(cache, msg) {
       const ts1 = (c.timestamp && typeof c.timestamp[1] === 'number') ? c.timestamp[1] : (ts0 + 5);
       const ct = (c.text || '').trim();
       if (!ct) continue;
-      chunks.push({ start: listenStart + ts0, end: listenStart + ts1, text: ct });
+      chunks.push({ start: listenStart + ts0, end: listenStart + ts1, text: ct,
+                    // 说话人随 chunk 保留（可选字段，方案 D）
+                    ...(typeof c.speaker === 'number' && c.speaker >= 0 ? { speaker: c.speaker } : {}) });
     }
     if (chunks.length > 0) {
       speechStart = chunks[0].start;
@@ -764,7 +777,10 @@ function replayCachedSegsFromCache(cache, onText) {
       const chunksSorted = seg.chunks.slice().sort((a, b) => (a.start || 0) - (b.start || 0));
       for (const ch of chunksSorted) {
         if (!ch.text) continue;
-        try { onText({ start: ch.start, end: ch.end, text: ch.text }); } catch (e) { /* ignore */ }
+        // 说话人随 chunk 回放（可选字段，方案 D）
+        const out = { start: ch.start, end: ch.end, text: ch.text };
+        if (typeof ch.speaker === 'number' && ch.speaker >= 0) out.speaker = ch.speaker;
+        try { onText(out); } catch (e) { /* ignore */ }
       }
     } else if (seg.text) {
       try { onText({ start: seg.speechStart, end: seg.speechEnd, text: seg.text }); } catch (e) { /* ignore */ }

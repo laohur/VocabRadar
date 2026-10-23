@@ -20,6 +20,10 @@
 import { LANG_NAMES, t } from './i18n.js';
 // 第二百零七次：上下文按字节上限截断（超出取当前阅读位置附近文本）
 import { capContextByBytes } from './main-text.js';
+// 方案 D 之 A 部分：视频元数据块（标题/博主/简介）+ 说话人不确定约束，
+//   治"多人误判一人"幻觉（docs/聊天说话人混淆调研.md）；
+//   文本侧栏轻量版（2026-10-23 裁定）：非视频页用 Page info 块只做主题锚定
+import { getVideoMeta, formatVideoMetaBlock, getPageMeta, formatPageMetaBlock } from './video-meta.js';
 import { CHAT_WORD_PROMPT, CHAT_SIDEBAR_PROMPT } from './llm.js';
 
 // 第357次（用户："让 config.json 生效…我手动调的为准"）：三项对话参数
@@ -491,6 +495,19 @@ export async function openChatPanel(text, kind, contextText) {
     }
     if (!cap) cap = 10000;
     ctxClipped = capContextByBytes(ctxRaw, cap);
+  }
+  // 方案 D：仅侧栏入口（上下文=网页正文或字幕）加元数据块。视频页判定在
+  //   getVideoMeta 内（URL 形态 + <video> 在场），非视频页回落 Page info
+  //   轻量块（仅主题锚定，无说话人文案——文本侧栏 2026-10-23 裁定）。
+  //   元数据放上下文头部（用户可编辑，不想要可删）；元数据自身不计字节上限——
+  //   它是少量锚点信息，截断只作用在正文上。视频侧栏入口传的是 text 不传
+  //   contextText（字幕经 MAX_TEXT 截断的原口径不变），故判 kind 而非 contextText。
+  if (ctxClipped && kind === 'sidebar') {
+    try {
+      let block = formatVideoMetaBlock(getVideoMeta());
+      if (!block) block = formatPageMetaBlock(getPageMeta());
+      if (block) ctxClipped = block + ctxClipped;
+    } catch (e) { /* 元数据抓取失败不影响聊天主链路 */ }
   }
   ensureChatPanel();
   // 每次打开都是新话题：清空历史与气泡
