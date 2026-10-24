@@ -21,6 +21,8 @@ import { escapeHtml, makeVideoKey, parsePlatformVideo } from './dom-utils.js';
 import { t } from '../../lib/i18n.js';
 import { toast } from './toast.js';
 import { getRoot, getSubtitlesRef, getActiveVideo, getVideoLearnLang, updateSubtitles } from '../video-sidebar.js';
+// 无字幕终态钳位（apply() 此后不写 height/maxHeight，让外框回到内容自适应 ≈200px）
+import { setNoSubbed } from './sidebar-layout.js';
 
 // === 加载提示（字幕到达前显示） ===
 // 加载态：仅显示 header + 骨架动画，隐藏 tabs/toolbar/footer
@@ -38,6 +40,9 @@ let _autoChainActive = false;
 export function setAutoChainActive(v) { _autoChainActive = !!v; }
 
 export function showLoading(msg) {
+  // 新一轮探测开始：复位无字幕终态，让高度同步回到正常的视频等高锁高逻辑
+  // （上一集若因无字幕解锁了高度，新集骨架应先撑到视频等高，而非继承上一集的内容自适应）
+  try { setNoSubbed(false); } catch (_) { /* ignore */ }
   const _root = getRoot();
   if (!_root) return;
   const panel = _root.querySelector('#beaver-subtitle-panel');
@@ -123,6 +128,11 @@ export function showNoSubtitle(msg) {
   log('显示无字幕提示（保留 tabs 可切换）');
   // 用户裁定"有时候还会自动折叠"=不可接受：撤销无字幕自动折叠。
   // 启动折叠/首批内容展开一次的既定策略不变；此后任何时刻都尊重用户当前展开态。
+  // 2026-10-24：用户反馈"有时候没有字幕，视频侧栏还是老高"——锁在视频等高(≈600px)而面板
+  //   只显示一行提示(≈100px)，大块空白。写入无字幕终态：apply() 不再写 height/maxHeight，让
+  //   外框回到内容自适应(≈200px)。云端命中时 cloudRender→updateSubtitles→showLoading 会复位；
+  //   本地字幕由 tracks 链路驱动也不经过这里的无字幕分支，不会误触发。
+  try { setNoSubbed(true); } catch (_) { /* ignore */ }
 }
 
 // === P4 云端获取（2026-10-17，方案 §3.2 消费体系） ===

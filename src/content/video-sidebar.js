@@ -65,7 +65,8 @@ import {
   injectIntoPage, startReinjectGuard, startSyncHeight,
   wireUnifiedFormEvents, handleDragResize, stopHeightSync, teardownLayout,
   getSidebarCollapsedFlag,
-  setNoSubAutoCollapseDone
+  setNoSubAutoCollapseDone,
+  setSizeFrozen
 } from './vs/sidebar-layout.js';
 // 注入时机分档——getInjectTiming 读档位、waitForBiliCommentsThen 档3等待；
 // 档位定义与判读矩阵见 vs/inject-timing.js 文件头注释
@@ -387,6 +388,11 @@ export async function startSidebar(video, options = {}) {
     // 换集须重启高度同步：清旧资源（timers + resize 监听）并重置同步状态后
     //   重新走 0/500/1500/3000ms 测量流程为新视频计算高度；只清内联样式不清状态
     //   会导致 startSyncHeight 直接 return，高度塌陷。
+    // 冻结一并解除：ASR 曾启动过的页面 _sizeFrozen 恒为 true（asr-flow 只置 true
+    //   不置 false，"不因 ASR 停止解冻"裁定针对同集停止瞬间），apply() 永久停写
+    //   ——清空高度后将无人回写，外框退化为内容自适应，字幕全量渲染把容器撑成
+    //   内容高（用户反馈"侧栏显示全部字幕直到结束"）。换集重建外框必须解冻。
+    setSizeFrozen(false);
     if (_root.style.display !== 'none') {
       stopHeightSync();
       _root.style.height = '';
@@ -407,6 +413,12 @@ export async function startSidebar(video, options = {}) {
     if (_asrActive) {
       try { stopASRInternal(true); } catch (_) { /* ignore */ }
     }
+    // 重建骨架前复位高度同步与冻结：_heightSyncStarted 残留会让重建后
+    //   injectIntoPage 内的 startSyncHeight 直接 return——新骨架无任何内联
+    //   高度，字幕全量渲染把容器撑成内容高（"侧栏显示全部字幕直到结束"
+    //   的另一根因）。冻结（ASR 曾启动）同理，换集重建外框时一并解冻。
+    stopHeightSync();
+    setSizeFrozen(false);
     _root = null;
     _video = null;
     _timeListener = null;
@@ -439,6 +451,9 @@ export async function startSidebar(video, options = {}) {
       #beaver-sidebar.beaver-floating{position:fixed;width:min(320px,calc(100vw - 32px));height:min(569px,calc(100vh - 48px));top:20px;right:16px;}
       /* 折叠态清 min-height/height，防空白大块（与 sidebar.css 同步） */
       #beaver-sidebar.beaver-collapsed{min-height:auto;height:auto;max-height:none;}
+      /* 内嵌形态高度硬上限：外框任何时刻不超一屏（与 sidebar.css 同步；
+         JS 高度管理失效时防字幕全量渲染撑开容器） */
+      #beaver-sidebar:not([data-mode="float"]):not(.beaver-collapsed){max-height:calc(100vh - 16px)!important;}
       #beaver-sidebar .beaver-header{display:flex;align-items:center;justify-content:space-between;padding:10px 14px;background:var(--beaver-bg-soft,#f5f8f3);flex-shrink:0;}
       #beaver-sidebar .beaver-tabs{display:flex;background:var(--beaver-bg-soft,#f5f8f3);flex-shrink:0;}
       /* 工具栏 hidden 规则 + 非面板行 flex-shrink:0（与 sidebar.css 一致，防缓存缺规则） */

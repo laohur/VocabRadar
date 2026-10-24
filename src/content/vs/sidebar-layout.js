@@ -272,6 +272,10 @@ let _sizeFrozen = false;
 // showNoSubtitle，此前每次都把用户手动展开的侧栏再折叠回去（"折叠展开前后高度变化"的
 // 主要来源之一）。改为每次换集/新字幕到达前最多自动折叠一次。
 let _noSubAutoCollapseDone = false;
+// 无字幕终态（setNoSubbed(true) 写入）——apply() 不写 height/maxHeight、不锁高，让外框回到
+//   内容自适应（header+tabs+toolbar+panel 提示+footer ≈ 200px），避免"没有字幕侧栏还撑在视频
+//   等高(≈600px)"大块空白。真实字幕到达由 updateSubtitles 补回 false 回到正常锁高逻辑。
+let _noSubbed = false;
 // Shorts 对位函数引用，展开折叠时重新对位一次（视频未滚动则尺寸与折叠前一致）
 let _shortsRealign = null;
 // 用户裁定"视频侧栏很矮…16:9竖侧栏"：浮动形态默认身形统一为
@@ -1081,6 +1085,16 @@ export function startSyncHeight() {
     //     锚点未就绪：读数只是过渡值，沿用"只增不减"避免跳动，且不落锁待补高。
     // isSpanStartReady() 这一附加条件已随错误前提删除。
     const _anchorReady = isSpanAnchorReady();
+    // 无字幕终态且高度已锁到视频等高——解除锁定并回到内容自适应：清掉内联 height/maxHeight，
+    //   让 flex 子元素自然堆叠（min-height:200px 兜底），解锁供下一次字幕回来时按视频等高重写。
+    if (_noSubbed && _heightLocked) {
+      _heightLocked = false;
+      getRoot().style.height = '';
+      getRoot().style.maxHeight = '';
+      _heightSyncMaxH = 0;
+      log('[size] 无字幕终态→解锁回到内容自适应');
+    }
+    if (_noSubbed) return;
     if (h > 100 && (_anchorReady ? (h !== _heightSyncMaxH) : (h > _heightSyncMaxH))) {
       // 折叠期间不写高度（展开时按折叠前精确值还原）
       // 用户拖动/调尺寸接管后不写（尺寸归用户）
@@ -1488,6 +1502,14 @@ export function setSizeFrozen(v) { _sizeFrozen = v; }
 
 // 换集重置自动折叠配额（setTracks 重试期间最多自动折叠一次）
 export function setNoSubAutoCollapseDone(v) { _noSubAutoCollapseDone = v; }
+
+/**
+ * 无字幕终态钳位——showNoSubtitle 成功后调用（true）：apply() 此后不再写 height/maxHeight，
+ *   让外框回到内容自适应（约 200px），不卡在视频等高。真实字幕到达时由 updateSubtitles
+ *   补回 false，回到正常视频等高锁高。只在 panel innerHTML 已置换为无字幕提示（+ 云端报价
+ *   挂载后）写入；不能在 showLoading / 云端探测中间态写，否则探测期侧栏会被压到看不出。
+ */
+export function setNoSubbed(v) { _noSubbed = !!v; }
 
 // 切到文本形态时整体隐藏标记（bindEvents 派发 beaver-toggle-form 后置 true）
 export function setHiddenByFormSwitch(v) { _hiddenByFormSwitch = v; }

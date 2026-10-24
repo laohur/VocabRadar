@@ -7,6 +7,13 @@
 /** 根元素获取器（由 video-sidebar.js init 注入：() => _root） */
 let _getRoot = () => null;
 
+// ASR 外框亏损补偿状态：本轮补偿前的外框高度快照（hide 时还原）。
+// 历史缺陷（用户反馈"有时候视频侧栏过长"）：补偿只涨不缩——ASR 结束后外框
+// 永久停留在补偿后高度；且上限 96% 视口与"点赞行同底"规则高度脱钩，B站上
+// 一补偿即冲过点赞行逼近一屏。现改为：补偿前快照、隐藏时还原；上限与
+// startSyncHeight.apply 同口径（视口高 − 侧栏顶偏移），绝不超过一屏可见区。
+let _preGrowHeight = null;
+
 /**
  * 注入依赖（幂等，重复调用以最后一次为准）。
  * @param {{getRoot: () => HTMLElement|null}} deps
@@ -33,11 +40,17 @@ export function showASRProgress(stage, detail) {
     const deficit = PANEL_FLOOR - (root.clientHeight - _fixedRowsHeight(root));
     if (deficit > 0 && root.dataset.mode !== 'float') {
       const cur = parseInt(root.style.height, 10) || root.getBoundingClientRect().height;
-      const grown = Math.min(Math.round(cur + deficit), Math.round(window.innerHeight * 0.96));
+      // 硬上限：视口可见高度（扣除侧栏顶部偏移），与 startSyncHeight.apply 同
+      // 口径——无论怎么补偿都不可超过一屏（用户裁定"不可无限伸长，超过一屏"）。
+      const sidebarTop = Math.max(0, root.getBoundingClientRect().top);
+      const cap = Math.max(100, window.innerHeight - sidebarTop);
+      const grown = Math.min(Math.round(cur + deficit), cap);
       if (grown > cur) {
+        // 首次补偿前快照原高，供 hideASRProgress 还原（ASR 结束后外框回规则高度）
+        if (_preGrowHeight === null) _preGrowHeight = Math.round(cur);
         root.style.height = grown + 'px';
         root.style.maxHeight = grown + 'px';
-        console.log('[VocabRadar][video-sidebar][size] ASR 进度出现 → 外框亏损补偿 +' + (grown - cur) + 'px（防字幕区压穿）');
+        console.log('[VocabRadar][video-sidebar][size] ASR 进度出现 → 外框亏损补偿 +' + (grown - cur) + 'px（防字幕区压穿，隐藏时还原）');
       }
     }
   } catch (e) { /* ignore */ }
@@ -59,6 +72,20 @@ export function hideASRProgress() {
   if (!root) return;
   const bar = root.querySelector('#beaver-asr-progress');
   if (bar) bar.style.display = 'none';
+  // 还原外框：ASR 期间的外框亏损补偿在此收回，外框回到补偿前高度
+  // （"有时候视频侧栏过长"修复：此前只涨不缩，ASR 跑过一次就永久变长）。
+  // 仅当外框仍高于快照时还原，防误伤他处写入/折叠态（height 内联为空即跳过）。
+  if (_preGrowHeight !== null) {
+    try {
+      const cur = parseInt(root.style.height, 10) || 0;
+      if (cur > _preGrowHeight) {
+        root.style.height = _preGrowHeight + 'px';
+        root.style.maxHeight = _preGrowHeight + 'px';
+        console.log('[VocabRadar][video-sidebar][size] ASR 进度隐藏 → 外框还原 ' + _preGrowHeight + 'px');
+      }
+    } catch (e) { /* ignore */ }
+    _preGrowHeight = null;
+  }
 }
 
 /** 设置进度条填充百分比 (0-100)；NaN/越界防御后写入 */

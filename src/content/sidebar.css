@@ -124,6 +124,19 @@
   box-shadow: var(--beaver-shadow-2); /* elevation-2 浮动卡片 */
 }
 
+/* === 内嵌形态高度硬上限 ===
+ * 用户裁定"无论如何不可无限伸长，超过一屏"（2026-10-23 反馈"侧栏显示
+ * 全部字幕直到结束"）。JS 高度管理失效时（ASR 冻结未解/重建竞态），内联
+ * height/maxHeight 缺失 → 高度退化为内容自适应，字幕全量渲染把容器撑到
+ * 数千 px。本规则兜底：外框任何时刻不超一屏，超出部分由面板内部滚动消化。
+ * 正常态无感知：JS 写入的内联 maxHeight（≤90vh）恒小于本上限——本规则的
+ * !important 使其恒为硬顶（压过非 important 内联值），但正常态下取值不变；
+ * 折叠态由 .beaver-collapsed 的 max-height:none !important 豁免（特异性同级、
+ * 且本规则显式排除 .beaver-collapsed）；float/Shorts 形态尺寸自管，排除在外。 */
+#beaver-sidebar:not([data-mode="float"]):not(.beaver-collapsed) {
+  max-height: calc(100vh - 16px) !important;
+}
+
 /* 子元素防御性重置：防止页面 *{} 或 div{} 等通配/元素选择器污染。
  * 所有文字不加粗（font-weight: inherit → normal），字号跟随 #beaver-sidebar。
  * 例外用 #beaver-sidebar 前缀提高特异性来覆盖。 */

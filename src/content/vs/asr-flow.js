@@ -174,6 +174,9 @@ export async function toggleASR(clickX, clickY) {
     console.log('[VocabRadar][asr][' + new Date().toLocaleTimeString('en-GB', { hour12: false }) + '.' + String(Date.now() % 1000).padStart(3, '0') + '] 已启动');
     // ASR 启动成功 → 本页会话冻结自动重塑（startSyncHeight/对位/补测停写）。
     // 不随 ASR 停止解冻——用户裁定"不因 asr 等活动重塑窗口"，解冻会让停止瞬间再次改写。
+    // （例外：换集重建外框时由 startSidebar 统一解冻——见 video-sidebar.js 换集分支。
+    //   否则冻结遇上换集清空高度后 apply 永久停写，外框退化为内容自适应，
+    //   字幕全量渲染把容器撑成内容高——"侧栏显示全部字幕直到结束"根因。）
     setSizeFrozen(true);
     // 用户裁定：闸门停用（恢复开关见 _gateEnabled）
     installPlaybackGate();
