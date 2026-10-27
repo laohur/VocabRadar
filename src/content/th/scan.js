@@ -545,7 +545,8 @@ export function scanSubtree(root, onDone) {
       }
       // 防递归注释：跳过本扩展自身创建的元素（sidebar、overlay、tooltip、panel）
       // 否则 TreeWalker 会扫描 sidebar 内的注释文本，对注释结果再次注释
-      // OCR 面板（#beaver-ocr-panel）也跳过：由 showOcrResultPanel 手动调 scanSubtree 注释
+      // #beaver-ocr-panel 选择器保留：OCR 结果面板已拆除（OCR 改写字幕轨道，
+      //   见 vs/ocr.js），防扩展更新后旧 content script 残留面板被扫描误入
       // 诊断面板（#beaver-debug-panel）也跳过：防止面板自身文本被高亮，干扰诊断
       // 坑：XML/SVG 等特殊节点的 parentElement 没有 closest 方法，调用会抛 TypeError；
       //   异常从 acceptNode 冒出会中断 walker.nextNode() 循环 → scanSubtree 的 done()

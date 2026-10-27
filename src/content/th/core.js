@@ -52,10 +52,6 @@ export const PROCESSED_ATTR = 'data-beaver-done';
 export const FLEX_WRAP_CLASS = 'beaver-flex-wrap';
 export const TOOLTIP_ID = 'beaver-hint-tooltip';
 export const PANEL_ID = 'beaver-context-panel';
-// OCR 结果面板：右键图片/视频 OCR 识别结果展示
-//   light DOM（非 Shadow），文本节点可被 TreeWalker 扫描注释生词
-//   不自动消失（onScrollHide 跳过），仅关闭按钮/Escape 关闭
-export const OCR_PANEL_ID = 'beaver-ocr-panel';
 export const STYLE_ID = 'beaver-hint-styles';
 
 // 2026-10-05：原 WORD_G_PATTERN/SELECT_PATTERN（页面扫描自有英文选词正则）已随
@@ -136,7 +132,6 @@ export const thState = {
   wordCache: new Map(),
   tooltip: null,
   panel: null,
-  ocrPanel: null,
   observer: null,
   hideTimer: null,
   panelHideDelay: 5000,

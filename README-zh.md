@@ -8,11 +8,11 @@
 
 ## 这是啥
 
-VocabRadar 是 Chrome / Edge / Firefox 的浏览器扩展。它扫描你正在看的视频或网页，根据词频判断你可能不认识的词并标注释义。支持 **42 种语言**。免注册、无账号，所有查询在本地进行，浏览记录不上传。
+VocabRadar 是 Chrome / Edge / Firefox 的浏览器扩展。它扫描你正在看的视频或网页，根据词频判断你可能不认识的词并标注释义。支持 **110 种语言**。免注册、无账号，所有查询在本地进行，浏览记录不上传。
 
-支持的语言（42 种）：
+支持的语言（110 种）：
 
-`ar bg bn ca cs da de el en es fa fi fil fr he hi hu id is it ja ko lt lv mk ms nb nl pl pt ro ru sh sk sl sv ta tr uk ur vi zh`
+`af am ar arz as ast az azb ba be bew bg bn bo bs ca ce ceb ckb cs cy da de dv el en eo es et eu fa fi fil fr fy ga gl gmh gu ha he hi hr hu hy id ig is it ja ka kk km kn ko ku ky la lb lo lt lv mg mk ml mn mr ms mt my nb ne new nl nn no nrm oc or pa pl pnb ps pt ro ru sd sh si sk sl so sq sr sv sw ta te tg th tr tt ug uk ur uz vi war yi zh`
 
 ## 能干些啥
 
@@ -48,7 +48,7 @@ VocabRadar 是 Chrome / Edge / Firefox 的浏览器扩展。它扫描你正在�
 ## 数据来源
 
 - **词频数据**——来自 Hugging Face 数据集
-  [`vocabradar/wordfreq`](https://huggingface.co/datasets/vocabradar/wordfreq)：上述 42 种语言的清洗词频表，源自 [wordfreq](https://github.com/rspeer/wordfreq) 3.0.2（MIT）。扩展按需下载你所学的语言，使用前校验完整性（SHA-256）。
+  [`vocabradar/VocabFreq`](https://huggingface.co/datasets/vocabradar/VocabFreq)：上述各语言的自建词频表（语料取自 FineWeb2-HQ+ / UltraFineWeb-L3 / Wikipedia，700 个百分之一贝尔频段）。扩展按需下载你所学的语言，使用前校验完整性（SHA-256）。
 - **英文词表与释义**——随扩展本地打包。
 - **翻译包**——来自 Hugging Face 数据集
   [`vocabradar/WordTranslation`](https://huggingface.co/datasets/vocabradar/WordTranslation)：按语言对的 `{word, translations}` 词条包，按需下载并校验完整性；内置英中包作为离线兜底。

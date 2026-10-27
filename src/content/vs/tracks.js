@@ -3,12 +3,15 @@
 // -----------------------------------------------------------------------------
 // 职责：setTracks()（填充轨道下拉框 + 自动加载链路：直取 → 9s/22s 模拟切轨，
 //       至多 4 次可见尝试）、ensureASRTrackOption()（无多轨道时保底 ASR 选项）、
-//       onTrackSelect()（用户切换轨道：ASR 轨道按覆盖率启动识别，常规轨道下载字幕）。
+//       onTrackSelect()（用户切换轨道：ASR 轨道按覆盖率启动识别，常规轨道下载字幕，
+//       OCR 轨道展示截帧识别段）、isOCRTrackSelected()/selectOCRTrack()（OCR 轨
+//       查询与自动切轨，vs/ocr.js 写入分流用）。
 // 状态内聚：_tracks（轨道列表）、_trackFetchFn（按轨道下载函数）、
 //       setTracks._retryTimer/onTrackSelect._selToken（函数属性令牌）随函数迁入，
-//       仅本模块读写；_asrTrackIndex/_userPickedASR 仍属门面（asr-flow 同用），
-//       经 getAsrTrackIndex/setAsrTrackIndex/getUserPickedASR/setUserPickedASR 接驳。
+//       仅本模块读写；_asrTrackIndex/_userPickedASR/_ocrTrackIndex/_userPickedOCR
+//       仍属门面（asr-flow 同用），经 get/set 接驳。
 // 关系：依赖 ./asr-flow.js（toggleASR/stopASRInternal/loadASRCacheIfAny）、
+//       ./ocr-store.js（loadOCRStore，OCR 轨数据源）、
 //       ./loading.js（showLoading/showNoSubtitle/setAutoChainActive）、./logger.js、
 //       ./dom-utils.js（makeVideoKey）、../../lib/asr-client.js（getASRCoverage）、
 //       ./sidebar-layout.js（getSidebarCollapsedFlag/toggleSidebarCollapse）；
@@ -22,6 +25,7 @@
 
 import { getASRCoverage } from '../../lib/asr-client.js';
 import { makeVideoKey } from './dom-utils.js';
+import { loadOCRStore } from './ocr-store.js';
 import { log } from './logger.js';
 import { showLoading, showNoSubtitle, setAutoChainActive } from './loading.js';
 import { toggleASR, stopASRInternal, loadASRCacheIfAny } from './asr-flow.js';
@@ -29,6 +33,7 @@ import { getSidebarCollapsedFlag, toggleSidebarCollapse } from './sidebar-layout
 import {
   getRoot, getSubtitlesRef, getActiveVideo, isASRActive, updateSubtitles,
   getUserPickedASR, setUserPickedASR, getAsrTrackIndex, setAsrTrackIndex,
+  getOcrTrackIndex, setOcrTrackIndex, getUserPickedOCR, setUserPickedOCR,
   getAsrCacheLoaded, getUserPickedTrack, setUserPickedTrack
 } from '../video-sidebar.js';
 
@@ -83,6 +88,16 @@ export function setTracks(tracks, pickedIndex, fetchFn) {
   asrOpt.textContent = 'ASR';
   sel.appendChild(asrOpt);
 
+  // 添加 OCR 轨道（与 ASR 并列的伪轨，常驻）：展示 ocr_store 的截帧识别段
+  //   （20261027 用户裁定"OCR 是跟 ASR 并列的字幕轨道，不混入其他轨"）
+  setOcrTrackIndex(_tracks.length);
+  const _ocrTrackIndex = getOcrTrackIndex();
+  _tracks.push({ languageCode: 'ocr', name: 'OCR', isOCR: true });
+  const ocrOpt = document.createElement('option');
+  ocrOpt.value = String(_ocrTrackIndex);
+  ocrOpt.textContent = 'OCR';
+  sel.appendChild(ocrOpt);
+
   // 始终显示 select 和 label（因为有 ASR 选项）
   sel.style.display = '';
   if (label) label.style.display = '';
@@ -91,7 +106,10 @@ export function setTracks(tracks, pickedIndex, fetchFn) {
   //   _userPickedASR=true 时保持 ASR 选中，否则用 pickedIndex。
   if (getUserPickedASR() && _asrTrackIndex >= 0) {
     sel.value = String(_asrTrackIndex);
-    log('轨道选择器已设置:', _tracks.length, '条轨道(含ASR), 保持用户已选 ASR');
+    log('轨道选择器已设置:', _tracks.length, '条轨道(含ASR/OCR), 保持用户已选 ASR');
+  } else if (getUserPickedOCR() && _ocrTrackIndex >= 0) {
+    sel.value = String(_ocrTrackIndex);
+    log('轨道选择器已设置:', _tracks.length, '条轨道(含ASR/OCR), 保持用户已选 OCR');
   } else {
     // 第421次：用户手选的常规轨道优先恢复（身份串匹配；不在当前列表则失效走默认链）
     //   ——setTracks 会因 ASR 字幕异步到达等场景被再次调用，此前 sel.value=pickedIndex
@@ -116,10 +134,10 @@ export function setTracks(tracks, pickedIndex, fetchFn) {
   /** 模拟用户切走再切回目标轨道 */
   const __mimicSwitch = async (targetIdx) => {
     if (!getRoot() || isASRActive()) return false;
-    // 找一个非目标的普通轨道；纯 ASR 视频则用 ASR 项当"另一轨"
+    // 找一个非目标的普通轨道（ASR/OCR 伪轨不算）；纯伪轨视频则用 ASR 项当"另一轨"
     let other = -1;
     for (let i = 0; i < _tracks.length; i++) {
-      if (i !== targetIdx && !_tracks[i].isASR) { other = i; break; }
+      if (i !== targetIdx && !_tracks[i].isASR && !_tracks[i].isOCR) { other = i; break; }
     }
     const _asrTrackIndex2 = getAsrTrackIndex();
     if (other < 0 && _asrTrackIndex2 >= 0 && _asrTrackIndex2 !== targetIdx) other = _asrTrackIndex2;
@@ -164,7 +182,7 @@ export function setTracks(tracks, pickedIndex, fetchFn) {
       const cur = parseInt(sel.value, 10);
       if (!(cur >= 0 && cur < _tracks.length)) { setAutoChainActive(false); return; }
       const trk = _tracks[cur];
-      if (!trk || trk.isASR || !_trackFetchFn) { setAutoChainActive(false); return; }
+      if (!trk || trk.isASR || trk.isOCR || !_trackFetchFn) { setAutoChainActive(false); return; }
       const round = __ROUNDS[__round];
       log(`setTracks 自动加载(${__round + 1}/${__ROUNDS.length}${round.mimic ? ' ·模拟切轨' : ''}):`, cur, trk.languageCode);
       if (round.mimic) await __mimicSwitch(cur);
@@ -209,10 +227,17 @@ export function ensureASRTrackOption() {
   opt.value = '0';
   opt.textContent = 'ASR';
   sel.appendChild(opt);
+  // OCR 伪轨常驻（与 ASR 并列）：B站单轨场景同样可见可选
+  setOcrTrackIndex(1);
+  _tracks.push({ languageCode: 'ocr', name: 'OCR', isOCR: true });
+  const ocrOpt = document.createElement('option');
+  ocrOpt.value = '1';
+  ocrOpt.textContent = 'OCR';
+  sel.appendChild(ocrOpt);
   sel.style.display = '';
   if (label) label.style.display = '';
   row.style.display = 'flex';
-  log('ensureASRTrackOption: 已添加 ASR 轨道选项');
+  log('ensureASRTrackOption: 已添加 ASR/OCR 轨道选项');
 }
 
 // 用户切换字幕轨道
@@ -239,6 +264,7 @@ export async function onTrackSelect(idx, opts = {}) {
   if (_tracks && _tracks[idx] && _tracks[idx].isASR) {
     // 用户手动选 ASR 轨道，置标记防止后续 setTracks 覆盖选中态
     setUserPickedASR(true);
+    setUserPickedOCR(false);                     // 与 OCR 选中互斥
     if (opts.fromUser) setUserPickedTrack(null);  // ASR 与常规手选互斥，只留一个
     if (isASRActive()) {
       log('用户选择 ASR 轨道, ASR 已运行, 仅同步选中态');
@@ -270,9 +296,33 @@ export async function onTrackSelect(idx, opts = {}) {
     return;
   }
 
+  // === OCR 轨道被选中：展示 OCR 截帧识别段（ocr_store 为唯一真相源） ===
+  // 20261027 用户裁定"OCR 是跟 ASR 并列的字幕轨道，不混入其他轨"：
+  //   与常规轨同口径（ASR 运行中先停止——ASR onText 持续 append 会污染当前显示轨），
+  //   loadOCRStore 全量上屏；空轨如实显示无字幕（点 📷 截帧识别积累）。
+  if (_tracks && _tracks[idx] && _tracks[idx].isOCR) {
+    setUserPickedOCR(true);
+    setUserPickedASR(false);                     // 与 ASR 选中互斥
+    if (opts.fromUser) setUserPickedTrack(null); // OCR 与常规手选互斥，只留一个
+    if (isASRActive()) stopASRInternal(true);
+    // 用户/系统切轨 = 自动链路停止（与常规轨同口径，不与自动链抢）
+    clearTimeout(setTracks._retryTimer);
+    setAutoChainActive(false);
+    const subs = await loadOCRStore(makeVideoKey());
+    if (subs.length > 0) {
+      log('选择 OCR 轨道:', subs.length, '段截帧识别结果');
+      await updateSubtitles(subs);
+    } else {
+      if (panel) showNoSubtitle();
+      log('OCR 轨道为空（点 📷 截帧识别积累）');
+    }
+    return;
+  }
+
   // === 常规轨道：如 ASR 运行中则先停止（跳过恢复，新轨道会自己加载字幕）===
   // 用户切换到常规轨道，清除 ASR 选中标记
   setUserPickedASR(false);
+  setUserPickedOCR(false);
   if (isASRActive()) {
     stopASRInternal(true);
   }
@@ -314,4 +364,26 @@ export async function onTrackSelect(idx, opts = {}) {
     console.error('[VocabRadar][video-sidebar][' + new Date().toLocaleTimeString('en-GB', { hour12: false }) + '.' + String(Date.now() % 1000).padStart(3, '0') + '] 轨道切换失败:', e);
     if (panel) showNoSubtitle('Error: ' + e.message);
   }
+}
+
+// 当前选中的轨道是否为 OCR 伪轨（vs/ocr.js 写入分流用：选中→appendASRSubtitle 实时上屏）
+export function isOCRTrackSelected() {
+  const ocrIdx = getOcrTrackIndex();
+  if (ocrIdx < 0) return false;
+  const _root = getRoot();
+  const sel = _root && _root.querySelector('#beaver-track-select');
+  return !!sel && parseInt(sel.value, 10) === ocrIdx;
+}
+
+// 自动切到 OCR 轨（vs/ocr.js 识别完成、当前不在 OCR 轨且 ASR 未运行时调用）。
+//   fromUser:false——系统切轨不冒充用户手选，不记录 _userPickedTrack；
+//   _userPickedOCR 置位由 onTrackSelect OCR 分支负责（setTracks 重建后保持选中）。
+export async function selectOCRTrack() {
+  const ocrIdx = getOcrTrackIndex();
+  if (ocrIdx < 0) return false;
+  const _root = getRoot();
+  const sel = _root && _root.querySelector('#beaver-track-select');
+  if (sel) sel.value = String(ocrIdx);
+  await onTrackSelect(ocrIdx, { fromUser: false });
+  return true;
 }

@@ -22,8 +22,9 @@ import { b64ToU8 } from '../b64.js';
 import { decode as msgpackDecode } from '../vendor/msgpack-lite.js';
 
 /**
- * 通过 background Service Worker 拉 wordfreq 数据文件（2026-09-08 HF dataset CDN 化）
- * 背景：42 语 small_*.msgpack.gz 不随包，改由 HF dataset vocabradar/wordfreq 拉取。
+ * 通过 background Service Worker 拉词频数据文件（2026-09-08 HF dataset CDN 化）
+ * 背景：词频 small_*.msgpack.gz 不随包，改由 HF dataset 按需拉取（2026-10-26 换源
+ *   vocabradar/VocabFreq）。
  *   content script 受宿主页面 CSP connect-src 约束（B站/YouTube 等不放行
  *   huggingface.co），须由 SW 代理 fetch（含 files.json SHA-256 校验，见
  *   service-worker.js handleWfFetch；SW 恒为 secure context，crypto.subtle 可用）。
@@ -41,7 +42,9 @@ import { decode as msgpackDecode } from '../vendor/msgpack-lite.js';
 // HF 数据源 URL（仅日志指路：值恒为 HF 主源，**不代表本次实际请求地址**——实际
 //   fetch 在 SW 端双源回退（huggingface.co → hf-mirror.com，wf.js WF_SOURCES），
 //   页面端无从得知 SW 选了哪个源，故日志中一律标注"指路 URL"）
-const WF_HF_URL = 'https://huggingface.co/datasets/vocabradar/wordfreq/resolve/main/';
+// 源沿革（2026-10-26）：vocabradar/wordfreq（42 语）→ vocabradar/VocabFreq（111 语，
+//   自建管线）；布局/编码/files.json 结构不变，语言码沿用扩展口径（fil 等，无需映射）。
+const WF_HF_URL = 'https://huggingface.co/datasets/vocabradar/VocabFreq/resolve/main/';
 
 function fetchWfViaBackground(file) {
   const url = WF_HF_URL + file;
@@ -106,7 +109,9 @@ function fetchWfViaBackground(file) {
  */
 export async function loadWordfreq(lang) {
   // 2026-09-08（用户批复"删包内 42 语 .bin"+ HF dataset）：词频包不再随扩展分发，
-  //   改经 SW 从 HF dataset vocabradar/wordfreq 拉取（files.json SHA-256 校验在 SW 端）。
+  //   改经 SW 从 HF dataset 按需拉取（files.json SHA-256 校验在 SW 端）。
+  //   2026-10-26 换源 vocabradar/VocabFreq（111 语，自建管线）；数据集语言码与扩展
+  //   口径一致（上游已统一用 fil，无需映射），wfInstalled 基线键即数据集码。
   const file = `data/small_${lang}.msgpack.gz`;
   // 第二百四十七次（用户"后台多次拉取词频文件。应当打印地址链接"）：拉取日志带上完整
   //   下载地址（WF_HF_URL+file，与失败日志同口径——网络失败要说明白是啥链接连不上；
@@ -170,18 +175,13 @@ export async function loadWordfreq(lang) {
   // === cBpack 格式检测 ===
   // 反思（2026-08-02 修正）：wordfreq 3.0.2 的 small_*.msgpack.gz 使用 cBpack 格式，
   //   不是简单的 {word:freq} 字典或 [word1,word2,...] 数组。
-  //   cBpack 结构：
-  //     [header, bucket1, bucket2, ..., bucket600]
-  //   - header = {format:'cB', version:1}
+  //   cBpack 结构（换源 VocabFreq 后编码不变，桶数 600→700，header 多 lang/sources 字段）：
+  //     [header, bucket1, bucket2, ..., bucketN]
+  //   - header = {format:'cB', version:1, ...}
   //   - bucket[index] = 该频率等级的单词列表（按字母序）
   //   - index 对应 -cB（centibels），freq = 10^(-index/100)
-  //   - index=1 -> cB=-1 -> freq≈0.977（近100%，基本为空）
-  //   - index=110 -> cB=-110 -> freq≈10^(-1.1)≈0.079（"the"约7-8%）
-  //   - index=600 -> cB=-600 -> freq=10^(-6)（百万分之一）
-  //   - 601 是 bucket 数（1 header + 600 buckets），不是词数！
-  //   - 总词数 = 所有 bucket 内单词数之和（英文约 50000+）
-  //   旧版假设是 {word:freq} 对象，用 Object.keys 把数组索引当 key ->
-  //   map.set("0",1)... 而 lookup("the")=undefined -> 所有词判为表外。
+  //   - 桶数是 header+桶，不是词数！总词数 = 所有桶内单词数之和（遍历按数组实际长度，
+  //     不写死桶数——600/700 两代数据同一循环兼容）。
   if (Array.isArray(freqObj) && freqObj.length > 0 &&
       freqObj[0] && typeof freqObj[0] === 'object' &&
       String(freqObj[0].format) === 'cB') {
@@ -226,8 +226,8 @@ export async function loadWordfreq(lang) {
   console.log(`[VocabRadar][dictionary][${_ts()}] wordfreq[${lang}] 构建完成: ${map.size} 词`);
   // 2026-09-09（用户裁定："先校验sha256算文件，再读取后校验词数。从远程的meta拉取的
   //   词数才是正确的"）：sha256 在 SW 端验文件，词数在解码后比对 SW 随包回传的远程
-  //   meta.json kept（languages[lang].kept，en=28811）。不匹配=数据发布事故，弃包返回
-  //   空 Map 且**不写** wfInstalled 基线（坏 sha 不进基线，等下次对账/更新重拉）。
+  //   meta.json kept（languages[lang].kept，随库演进不写死）。不匹配=数据发布事故，
+  //   弃包返回空 Map 且**不写** wfInstalled 基线（坏 sha 不进基线，等下次对账/更新重拉）。
   //   kept 缺省（SW 端 meta 拉取失败）只告警不阻塞——sha256 已保文件完整性。
   if (r.kept != null) {
     if (map.size !== r.kept) {
@@ -239,16 +239,19 @@ export async function loadWordfreq(lang) {
     console.warn(`[VocabRadar][dictionary][${_ts()}] wordfreq[${lang}] 无 kept 词数基准（meta.json 不可得），词数校验跳过`);
   }
   // 2026-09-08（用户批复"HF 数据更新自动重建"）：成功拉取并解码后，把 SW 校验过的
-  //   sha256/bytes 写入 storage.wfInstalled[lang]（SW checkWfUpdates 每 24h 轮询比对的
-  //   基线），并清除 wfUpdates[lang] 待处理标记。失败路径（返回空 Map）不写——保持
+  //   sha256/bytes 写入 storage.wfInstalled[lang]（SW checkWfUpdates 每 7 天轮询比对
+  //   的基线），并清除 wfUpdates[lang] 待处理标记。失败路径（返回空 Map）不写——保持
   //   旧基线，等下次更新检测或重装触发重拉。
+  // 2026-10-27：基线补记安装来源 src（mirror/site/hf，源自洽裁定"哪个源出来的用
+  //   哪个源的校验"）——checkWfUpdates 按同源清单对账，避免站点/HF 清单各自演进时
+  //   跨源比对假报更新。
   try {
     if (r && r.sha256) {
       const { wfInstalled = {}, wfUpdates = {} } = await chrome.storage.local.get(['wfInstalled', 'wfUpdates']);
-      wfInstalled[lang] = { sha256: r.sha256, bytes: r.bytes || 0, ts: Date.now() };
+      wfInstalled[lang] = { sha256: r.sha256, bytes: r.bytes || 0, ts: Date.now(), src: r.src || 'mirror' };
       delete wfUpdates[lang];
       await chrome.storage.local.set({ wfInstalled, wfUpdates });
-      console.log(`[VocabRadar][dictionary][${_ts()}] wordfreq[${lang}] 已记录源版本 sha256=${String(r.sha256).slice(0, 8)}…（更新轮询基线）`);
+      console.log(`[VocabRadar][dictionary][${_ts()}] wordfreq[${lang}] 已记录源版本 sha256=${String(r.sha256).slice(0, 8)}…（源 ${r.src || 'mirror'}，更新轮询基线）`);
     }
   } catch (e) {
     console.warn(`[VocabRadar][dictionary][${_ts()}] wordfreq[${lang}] 记录源版本失败（不影响装载）:`, e);

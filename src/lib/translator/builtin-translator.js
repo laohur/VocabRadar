@@ -156,8 +156,8 @@ async function _createTranslatorOnce() {
 /**
  * 手势入口 prime：在用户手势上下文中创建 Translator 实例并缓存
  * 2026-09-09 第二百四十二次（用户："浏览器翻译需要手势，右键查询等地方加手势再用"）：
- *   调用时机=th/panel.js 的 showContextPanel（右键菜单查词）与 showOcrResultPanel
- *   （OCR 查词）——两者均由页面内交互触发（右键/按钮点击），距手势 1-3s，transient
+ *   调用时机=th/panel.js 的 showContextPanel（右键菜单查词）——由页面内交互触发
+ *   （右键点击），距手势 1-3s，transient
  *   activation（约 5s 窗口）仍有效，此处 create 可成功。创建后 translate() 无需手势，
  *   自动注释场景直接复用单例。清冷却强制重试：即使启动探测/上次 create 失败也重试。
  * @returns {Promise<Object|null>} Translator 实例（失败 null，调用方无需 await）

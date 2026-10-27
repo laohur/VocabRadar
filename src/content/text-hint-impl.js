@@ -3,7 +3,8 @@
 // 实现按功能拆分到 src/content/th/ 下 4 个模块（详见各子模块头部注释）：
 //   - th/core.js    共享状态（thState 唯一属主）/常量/正则/样式注入/配色/朗读等工具
 //   - th/tooltip.js 悬浮卡片（hover 浮层）：ensureTooltip/showTooltip/onWordHover/onWordClick 等
-//   - th/panel.js   右键查询面板与 OCR 结果面板：showContextPanel/showOcrResultPanel/ocrVideoFrame 等
+//   - th/panel.js   右键查询面板：showContextPanel 等
+//     （原 OCR 结果面板已拆除，OCR 结果改写入字幕轨道，见 vs/ocr.js）
 //   - th/scan.js    扫描/注释/生命周期：startHint/stopHint/扫描分批/侧邻注释/MutationObserver/诊断
 // 全局共享状态只在 th/core.js 定义一份（原模块级变量 _xxx 统一为 thState.xxx），
 // 其余模块通过 import { thState } 读写（getter/setter 接缝）。
@@ -37,19 +38,13 @@
 // refreshAnnExtraCss——个性化/用户条目文本规则刷新（门面直通，引用方零改动）
 export { updateColors, applyTextStyleClass, refreshAnnExtraCss } from './th/core.js';
 
-// 右键查词面板 / OCR 结果面板 / 视频帧 OCR（来源：th/panel.js）
+// 右键查词面板（来源：th/panel.js）
 // 必须动态转发而非静态 re-export：panel.js 连带 dictionary/translator/lemmatizer/
 //   phonetics/chat 等重依赖，静态引入会把整串拖进启动模块图，抵消 scan.js 惰性化收益。
-//   调用方（text-hint.js）对前两个函数均为 fire-and-forget（忽略返回值），Promise
-//   转发兼容；ocrVideoFrame 当前无外部调用方，保留转发不删功能。
+//   （原 showOcrResultPanel/ocrVideoFrame 转发已随 OCR 结果面板拆除——OCR 结果
+//     改写入字幕轨道，见 vs/ocr.js → appendASRSubtitle。）
 export function showContextPanel(text, clientX, clientY) {
   return import('./th/panel.js').then((m) => m.showContextPanel(text, clientX, clientY));
-}
-export function showOcrResultPanel(text, clientX, clientY, info = '') {
-  return import('./th/panel.js').then((m) => m.showOcrResultPanel(text, clientX, clientY, info));
-}
-export function ocrVideoFrame(clientX, clientY) {
-  return import('./th/panel.js').then((m) => m.ocrVideoFrame(clientX, clientY));
 }
 
 // 生命周期、设置入口与诊断（来源：th/scan.js）

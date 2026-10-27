@@ -30,25 +30,37 @@ export const UI_LANGS = ['en', 'zh', 'fr', 'es', 'pt', 'ja', 'ru', 'id', 'ar', '
 
 // （第二百二十五次：旧别名 SUPPORTED_LANGS 已删除——全库引用已统一为 UI_LANGS）
 
-// === 目标/释义语言列表：wordfreq 全部支持的语言（42种） ===
+// === 目标/释义语言列表：词频源 VocabFreq（HF dataset vocabradar/VocabFreq，111 语）覆盖的语言 ===
 // 用于 #learnLanguage 和 #meaningLanguage 下拉菜单
-// 与 preprocess.mjs 动态扫描的 small_*.msgpack.bin 文件列表一致（集合一致，顺序仅供展示）
-// 注：UI语言仅10种，但目标/释义语言扩展到42种（用户要求"几十种"）
-// 第二百二十八次（用户："三种语言列表都从规模往下排"）：按语言使用规模（总使用人数）
-//   从大到小排序，替代原字母序；仅影响下拉展示顺序，词典/词频按语言代码取用不受影响。
-//   更正（2026-10-10，用户："假的，这是给定的"）：上句排序依据不实——本列表顺序为
-//   给定列表，并非按总使用人数（或任何人数口径）排出。
+// 词频来源（2026-10-26）：vocabradar/wordfreq（42 语，wordfreq 3.0.2 派生）→ vocabradar/VocabFreq
+//   （自建管线 FineWeb2-HQ+/UltraFineWeb-L3/Wikipedia，111 语，700 cB 桶）。
+// 集合口径：VocabFreq 数据树 data/small_<code>.msgpack.gz 全集 111 文件，扣除
+//   - `simple`：Simple English（HF 标 language_bcp47 变体，非独立语言）不入选。
+//   语言码与扩展口径一致（上游 v7 曾以 tl=Tagalog 短暂发布，2026-10-26 起已统一改回
+//   fil，与扩展存量键/WordEmbedding 近邻表对齐，无需映射）。
+//   合计 110 语。集合一致性脚本复核见本次变更（build 前人工跑一次即可）。
+// 排序：前 42 语为给定历史顺序（第二百二十八次，用户给定，勿重排）；其后 68 语按码序追加。
+// 注：UI语言仅10种，但目标/释义语言扩展到110种
 export const TRANSLATE_LANGS = [
   'en', 'zh', 'hi', 'es', 'fr', 'ar', 'bn', 'pt', 'ru', 'ur',
   'id', 'de', 'ja', 'tr', 'fil', 'vi', 'ta', 'ko', 'fa', 'it',
   'ms', 'pl', 'uk', 'nl', 'ro', 'sh', 'el', 'hu', 'cs', 'sv',
   'he', 'bg', 'da', 'fi', 'nb', 'sk', 'ca', 'lt', 'sl', 'mk',
-  'lv', 'is'
+  'lv', 'is',
+  // VocabFreq 净新增 68 语（码序；词频/名称取自 vocabradar/VocabFreq v7）
+  'af', 'am', 'arz', 'as', 'ast', 'az', 'azb', 'ba', 'be', 'bew',
+  'bo', 'bs', 'ce', 'ceb', 'ckb', 'cy', 'dv', 'eo', 'et', 'eu',
+  'fy', 'ga', 'gl', 'gmh', 'gu', 'ha', 'hr', 'hy', 'ig', 'ka',
+  'kk', 'km', 'kn', 'ku', 'ky', 'la', 'lb', 'lo', 'mg', 'ml',
+  'mn', 'mr', 'mt', 'my', 'ne', 'new', 'nn', 'no', 'nrm', 'oc',
+  'or', 'pa', 'pnb', 'ps', 'sd', 'si', 'so', 'sq', 'sr', 'sw',
+  'te', 'tg', 'th', 'tt', 'ug', 'uz', 'war', 'yi'
 ];
 
 // === 各语言英文名称（第二百二十八次，用户："释义语言统一英文名称"） ===
 // 释义语言下拉用英文名统一呈现（学习语言/界面语言下拉仍用本地化名 LANG_NAMES）。
-// 覆盖 TRANSLATE_LANGS 全部 42 种，键集合与之一致。
+// 覆盖 TRANSLATE_LANGS 全部 110 种，键集合与之一致。
+// 英文名取自 vocabradar/VocabFreq README 语言表（language 列）。
 export const LANG_NAMES_EN = {
   en: 'English', zh: 'Chinese', hi: 'Hindi', es: 'Spanish', fr: 'French',
   ar: 'Arabic', bn: 'Bengali', pt: 'Portuguese', ru: 'Russian', ur: 'Urdu',
@@ -58,12 +70,31 @@ export const LANG_NAMES_EN = {
   sh: 'Serbo-Croatian', el: 'Greek', hu: 'Hungarian', cs: 'Czech', sv: 'Swedish',
   he: 'Hebrew', bg: 'Bulgarian', da: 'Danish', fi: 'Finnish', nb: 'Norwegian Bokmål',
   sk: 'Slovak', ca: 'Catalan', lt: 'Lithuanian', sl: 'Slovenian', mk: 'Macedonian',
-  lv: 'Latvian', is: 'Icelandic'
+  lv: 'Latvian', is: 'Icelandic',
+  // VocabFreq 净新增 68 语（英文名，码序与 TRANSLATE_LANGS 追加段一致）
+  af: 'Afrikaans', am: 'Amharic', arz: 'Egyptian Arabic', as: 'Assamese',
+  ast: 'Asturian', az: 'Azerbaijani', azb: 'South Azerbaijani', ba: 'Bashkir',
+  be: 'Belarusian', bew: 'Betawi', bo: 'Tibetan', bs: 'Bosnian',
+  ce: 'Chechen', ceb: 'Cebuano', ckb: 'Central Kurdish', cy: 'Welsh',
+  dv: 'Dhivehi', eo: 'Esperanto', et: 'Estonian', eu: 'Basque',
+  fy: 'West Frisian', ga: 'Irish', gl: 'Galician', gmh: 'Middle High German',
+  gu: 'Gujarati', ha: 'Hausa', hr: 'Croatian', hy: 'Armenian',
+  ig: 'Igbo', ka: 'Georgian', kk: 'Kazakh', km: 'Khmer',
+  kn: 'Kannada', ku: 'Kurdish', ky: 'Kyrgyz', la: 'Latin',
+  lb: 'Luxembourgish', lo: 'Lao', mg: 'Malagasy', ml: 'Malayalam',
+  mn: 'Mongolian', mr: 'Marathi', mt: 'Maltese', my: 'Myanmar',
+  ne: 'Nepali', new: 'Newari', nn: 'Norwegian Nynorsk', no: 'Norwegian',
+  nrm: 'Norman', oc: 'Occitan', or: 'Odia', pa: 'Punjabi',
+  pnb: 'Western Punjabi', ps: 'Pashto', sd: 'Sindhi', si: 'Sinhala',
+  so: 'Somali', sq: 'Albanian', sr: 'Serbian', sw: 'Swahili',
+  te: 'Telugu', tg: 'Tajik', th: 'Thai', tt: 'Tatar',
+  ug: 'Uyghur', uz: 'Uzbek', war: 'Waray', yi: 'Yiddish'
 };
 
 // === 各语言的本地化名称（用于下拉菜单显示） ===
 // 反思（2026-08-02）：用户在自己母语中看到的语言名称，便于识别
-// LANG_NAMES 覆盖全部42种语言（含UI_LANGS 的10种 + 额外32种）
+// LANG_NAMES 覆盖全部110种语言（含UI_LANGS 的10种 + 其余目标/释义语言）
+// 自称名取自 vocabradar/VocabFreq README 语言表（native name 列）。
 export const LANG_NAMES = {
   // === UI 前10种语言 ===
   en: 'English',
@@ -76,7 +107,7 @@ export const LANG_NAMES = {
   pt: 'Português',
   ru: 'Русский',
   ja: '日本語',
-  // === 额外32种语言（wordfreq 支持，UI 不显示但目标/释义语言可选） ===
+  // === 其余语言（原 wordfreq 32 种 + VocabFreq 净新增 68 种，均为目标/释义语言可选） ===
   bg: 'Български',
   ca: 'Català',
   cs: 'Čeština',
@@ -108,7 +139,76 @@ export const LANG_NAMES = {
   tr: 'Türkçe',
   uk: 'Українська',
   ur: 'اردو',
-  vi: 'Tiếng Việt'
+  vi: 'Tiếng Việt',
+  // VocabFreq 净新增 68 语（自称名，码序与 TRANSLATE_LANGS 追加段一致）
+  af: 'Afrikaans',
+  am: 'አማርኛ',
+  arz: 'مصرى',
+  as: 'অসমীয়া',
+  ast: 'asturianu',
+  az: 'azərbaycan',
+  azb: 'تۆرکجه',
+  ba: 'башҡортса',
+  be: 'беларуская',
+  bew: 'Basa Betawi',
+  bo: 'བོད་ཡིག',
+  bs: 'bosanski',
+  ce: 'нохчийн',
+  ceb: 'Cebuano',
+  ckb: 'کوردی',
+  cy: 'Cymraeg',
+  dv: 'ދިވެހި',
+  eo: 'Esperanto',
+  et: 'eesti',
+  eu: 'euskara',
+  fy: 'Frysk',
+  ga: 'Gaeilge',
+  gl: 'galego',
+  gmh: 'Mittelhochdeutsch',
+  gu: 'ગુજરાતી',
+  ha: 'Harshen Hausa',
+  hr: 'hrvatski',
+  hy: 'հայերեն',
+  ig: 'Asụsụ Igbo',
+  ka: 'ქართული',
+  kk: 'қазақша',
+  km: 'ខ្មែរ',
+  kn: 'ಕನ್ನಡ',
+  ku: 'kurdî',
+  ky: 'кыргызча',
+  la: 'Latina',
+  lb: 'Lëtzebuergesch',
+  lo: 'ພາສາລາວ',
+  mg: 'Malagasy',
+  ml: 'മലയാളം',
+  mn: 'монгол',
+  mr: 'मराठी',
+  mt: 'Malti',
+  my: 'မြန်မာ',
+  ne: 'नेपाली',
+  new: 'नेपाल भाषा',
+  nn: 'norsk nynorsk',
+  no: 'norsk',
+  nrm: 'Normaund',
+  oc: 'occitan',
+  or: 'ଓଡ଼ିଆ',
+  pa: 'ਪੰਜਾਬੀ',
+  pnb: 'پنجابی',
+  ps: 'پښتو',
+  sd: 'سنڌي',
+  si: 'සිංහල',
+  so: 'Soomaaliga',
+  sq: 'shqip',
+  sr: 'српски',
+  sw: 'Kiswahili',
+  te: 'తెలుగు',
+  tg: 'тоҷикӣ',
+  th: 'ไทย',
+  tt: 'татарча',
+  ug: 'ئۇيغۇرچە',
+  uz: 'oʻzbekcha',
+  war: 'Winaray',
+  yi: 'ייִדיש'
 };
 
 const DICT = {
@@ -153,6 +253,7 @@ const DICT = {
     'ocr.noVideo': 'No video found for OCR',
     'ocr.unknownErr': 'Unknown error',
     'ocr.noText': 'No text recognized',
+    'ocr.storedTrack': 'OCR saved to the OCR track (ASR is running — switch tracks to view)',
     // 第二百五十三次：Parser 栏功能提示；第二百五十五次接线——todo* 占位键退役，换解析过程键
     'parser.parsing': 'Parsing…',
     'parser.fetching': 'Fetching page…',
@@ -517,8 +618,6 @@ const DICT = {
     'vc.renderFail': 'Subtitle render failed: ',
     'vc.startFail': 'Start failed: ',
     'ws.diagOpenFail': 'Failed to open diagnostics: ',
-    'ocr.title': 'VocabRadar · OCR result',
-    'ocr.recognizing': 'Recognizing video frame…',
     'asr.jobFailed': 'backend job failed: ',
     'asr.resubmitFailed': 'backend job lost, resubmit failed: ',
     'asr.llmFail': 'LLM transcription failed',
@@ -527,6 +626,8 @@ const DICT = {
     'popup.timeout': '{label} timed out ({ms}ms)',
     'guide.title': 'VocabRadar · Guide',
     'sw.noApiKey': 'API key not configured',
+    'sw.ocrNotConnected': 'Connect your vocabradar.com account first — the official backend authenticates via site login (guide page → Account)',
+    'sw.ocrBackendDown': 'Local backend not running ({reason}) — start the backend, or switch the OCR model source to Official in the guide page',
     'sw.noBaseUrl': 'Base URL not configured',
     'sw.noModel': 'Model name not configured',
     'sw.anthropicNoAsr': 'Anthropic has no audio transcription endpoint — use an OpenAI-compatible source',
@@ -574,6 +675,7 @@ const DICT = {
     'ocr.noVideo': '未找到视频，无法 OCR',
     'ocr.unknownErr': '未知错误',
     'ocr.noText': '未识别到文字',
+    'ocr.storedTrack': 'OCR 已存入 OCR 字幕轨（ASR 识别中，稍后可切换轨道查看）',
     // 第二百五十三次：Parser 栏功能提示；第二百五十五次接线——todo* 占位键退役，换解析过程键
     'parser.parsing': '解析中…',
     'parser.fetching': '抓取网页…',
@@ -912,8 +1014,6 @@ const DICT = {
     'vc.renderFail': '字幕渲染失败：',
     'vc.startFail': '启动失败：',
     'ws.diagOpenFail': '诊断打开失败：',
-    'ocr.title': 'VocabRadar · OCR 识别结果',
-    'ocr.recognizing': '正在识别视频帧...',
     'asr.jobFailed': 'backend 任务失败：',
     'asr.resubmitFailed': 'backend 任务丢失且重提失败：',
     'asr.llmFail': 'LLM 转写失败',
@@ -922,6 +1022,8 @@ const DICT = {
     'popup.timeout': '{label} 超时（{ms}ms）',
     'guide.title': 'VocabRadar · 引导',
     'sw.noApiKey': 'API Key 未配置',
+    'sw.ocrNotConnected': '请先连接网站账号——官方后端使用 vocabradar.com 登录态鉴权（引导页 → 账号）',
+    'sw.ocrBackendDown': '本地后端未启动（{reason}）：请先启动河狸后端服务，或在引导页把 OCR 模型来源改为官方后端',
     'sw.noBaseUrl': 'Base URL 未配置',
     'sw.noModel': '模型名未配置',
     'sw.anthropicNoAsr': 'Anthropic 无音频转写端点，请改用 OpenAI 兼容来源',

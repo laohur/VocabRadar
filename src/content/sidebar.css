@@ -139,11 +139,20 @@
 
 /* 子元素防御性重置：防止页面 *{} 或 div{} 等通配/元素选择器污染。
  * 所有文字不加粗（font-weight: inherit → normal），字号跟随 #beaver-sidebar。
- * 例外用 #beaver-sidebar 前缀提高特异性来覆盖。 */
+ * 例外用 #beaver-sidebar 前缀提高特异性来覆盖。
+ * 出血根治（2026-10-27，用户"说过几百遍了，出血量不够"）：本重置特异性 (1,0,0)，
+ *   恒压过本文件所有裸类名规则 (0,1,0)——margin/padding 两行在列曾把全文件
+ *   ~50 条出血声明（.beaver-panel 8px、.beaver-sub-item 6px 10px + margin 0 10px、
+ *   注释词头/标签/footer/弹层……）整体压成 0，字幕文字贴满左右边缘即本症；
+ *   文本侧栏无此重置故"文本侧栏正常"。历史"页面规则压缩声明值"实为自压，
+ *   历次 !important 补钉（词头/词表条目）只是逐点复活。实测（computed style）
+ *   确认后移除这两行：侧栏 DOM 只发 div/span/button/select/label/input 等
+ *   无 UA 外距元素，页面 *{}(0,0,0)/元素选择器(0,0,1) 本就输给裸类名(0,1,0)，
+ *   ID 级页面规则(≥1,0,1) 重置在时也防不住——防御零收益纯自伤。
+ *   字号/字重等继承归一保留：放开会让 0.85em/0.9em 弱化字阶一次性生效，
+ *   视觉变化超出本次出血范围，留待用户裁定。 */
 #beaver-sidebar * {
   box-sizing: border-box;
-  margin: 0;
-  padding: 0;
   font-family: inherit;
   font-size: inherit;
   font-weight: inherit;
@@ -296,7 +305,10 @@
 .beaver-panel {
   flex: 1;
   overflow-y: auto;
-  padding: 8px;
+  /* 出血口径对齐文本侧栏（web-sidebar.css .beaver-web-panel-scroll，用户定稿
+   * "左右一空格≈4px、上下半空格≈2px"）：面板内距 2px 4px。旧值 8px 加上
+   * 条目 10px 会叠加成 28px（用户"离那么远干啥，参照文本侧栏"）。 */
+  padding: 2px 4px;
   /* ASR 进度行出现时（用户反馈"切换 ASR 后字幕区压缩为无"），固定外框下
    * flex 把面板挤到 0 高。地板 120px 保证字幕区始终可见；
    * 配合 vs-asr-progress 的外框亏损补偿（见该文件），不足部分一次性补进外框。 */
@@ -322,10 +334,13 @@
 /* 字幕条目：active 用柔和灰绿背景 + inset 阴影左侧主色条（非 border-left）。
  * 用户要求「该行只有当前字幕才改色」「不同含义颜色不要混淆」——
  * active 不用马卡龙绿（与注释词头背景同色会混淆），改灰绿柔和高亮，
- * 把马卡龙绿让给注释词头突出用。 */
+ * 把马卡龙绿让给注释词头突出用。
+ * 出血口径对齐文本侧栏（web-sidebar.css .beaver-web-sub-item，空隙规格定稿）：
+ * 条目 padding 0 2px、水平 margin 归零（避免与面板 4px 叠加），块级布局
+ * 用 2px 下边距替代文本侧栏 flex gap 2px 的段间距。 */
 .beaver-sub-item {
-  padding: 6px 10px;
-  margin: 0 10px 2px;
+  padding: 0 2px;
+  margin: 0 0 2px;
   border-radius: var(--beaver-radius-sm);
   transition: background 0.15s;
 }
@@ -346,10 +361,12 @@
   line-height: 1.5;
 }
 
-/* 字幕正文：grid 第二列自动占位。 */
+/* 字幕正文：grid 第二列自动占位。pre-wrap 保 OCR 条目内的换行
+ * （LLM 视觉识别按行输出 \n；ASR/站点字幕无换行不受影响）。 */
 .beaver-sub-content {
   min-width: 0;
   word-break: break-word;
+  white-space: pre-wrap;
 }
 
 /* 双语字幕译文行（subtitle-renderer.js fillBilingualSlot，第514次）：
@@ -591,9 +608,15 @@
 }
 
 /* 生词表条目：整体一段自然换行（与注释行同理，不用 flex）——
- * 用户要求 word/trans/tags/rank 整体一段自然换行。 */
+ * 用户要求 word/trans/tags/rank 整体一段自然换行。
+ * 出血口径对齐文本侧栏（web-sidebar.css .beaver-web-word-item：padding 0 2px、
+ * margin 归零，"与句子条目一致…margin 归零"），块级布局用 2px 下边距替代
+ * 文本侧栏 flex gap。2026-10-27 曾按"页面规则压缩"误判加 !important——出血
+ * 根治（`#beaver-sidebar *` 重置移除 margin/padding）后裸值即生效，且
+ * !important 会压死词表精简模式 #beaver-word-panel.beaver-word-only
+ * .beaver-word-item 的 2px 0 紧凑变体 (2,1,0)，故回退为裸值走正常级联。 */
 .beaver-word-item {
-  padding: 6px 10px;
+  padding: 0 2px;
   margin-bottom: 2px;
   border-radius: var(--beaver-radius-sm);
 }

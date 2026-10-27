@@ -83,13 +83,16 @@ export const LLM_PROVIDERS = [
     model: 'qwen3.5-0.8b'
   },
   {
-    // 官方后端占位（plan 阶段三上线）：域名未定，先占 api.vocabradar.com，上线时改此一处
-    //   即可（引导页 placeholder 随表走）。鉴权方式阶段三再定，暂按 openai 格式留 Key 框。
-    //   20261017 用户裁定"官方暂无 ASR，只有拉取已存在的字幕"——标签加未上线标注防误选
+    // 官方后端：api.vocabradar.com，openai 格式。鉴权走官网登录态——请求带
+    //   Authorization: Bearer <accessToken>（SW 侧 getValidAccessToken 自动续签，
+    //   同 subs-share 口径），不靠 API Key（20261027 用户裁定"官方后端靠登录不靠
+    //   key"，OCR 默认此源；label 去掉未上线标注）。authLogin 标记供引导页
+    //   Key 框占位与服务检测分流（登录态探测）。
     id: 'official-backend',
     format: 'openai',
     group: 'backend',
-    label: { en: 'Official (not yet live)', zh: '官方（未上线）' },
+    authLogin: true,
+    label: { en: 'Official', zh: '官方' },
     baseUrl: 'https://api.vocabradar.com/v1',
     model: 'qwen3.5-0.8b'
   },
@@ -173,10 +176,14 @@ export const LLM_DEFAULT_PROVIDER = 'pollinations';
 //     上下文被用户关掉时，条件句自动退化为普通释义，不致跑偏；
 //   · 摘要模板限定"只总结要点、不解读不添加"（openai-translator "summarize, don't
 //     interpret"），防弱模型（默认免费源多为 7B 级）跑题加戏；
+//   · 第568次：摘要输出格式美化——主要观点逐条列出（每行一条 "- " 起头）。聊天面板
+//     .msg 为 white-space:pre-wrap 纯文本渲染（chat.js），不解析 markdown，故用平文本
+//     列表而非 markdown 语法；同步生效于 config.json chatSidebarPrompt 出厂值（第一
+//     优先，只改此处不生效——见 chat.js 第357次三级取数注释）；
 //   · 两条模板都保持两句话内的短度：它们会原样预填进输入框给用户看和改，
 //     复杂的输出格式契约（词典卡、JSON 之类）应放 system 位而非此处。
 export const CHAT_WORD_PROMPT = 'Explain "{text}" in {lang} as a dictionary entry: part of speech, core meanings, and one example sentence with a {lang} translation. If the context above shows how it is used, give that meaning first.';
-export const CHAT_SIDEBAR_PROMPT = 'Summarize the text above in {lang}: only the key points, concise and faithful to the original. Do not interpret or add anything. The text is video subtitles and may involve multiple speakers; never attribute the whole content to a single speaker unless explicit "Speaker N:" labels or clear textual evidence say otherwise.';
+export const CHAT_SIDEBAR_PROMPT = 'Summarize the text above in {lang} as a bullet list: one line per main point, starting with "- ". Only the key points, concise and faithful to the original. Do not interpret or add anything. The text is video subtitles and may involve multiple speakers; never attribute the whole content to a single speaker unless explicit "Speaker N:" labels or clear textual evidence say otherwise.';
 // 说话人约束（方案 D）：同步生效于 config.json chatSidebarPrompt（出厂值第一优先，
 //   只改此处不生效——见 chat.js 第357次三级取数注释）
 // 翻译提示词兜底模板：正常走 config.json 出厂值 > storage > 此常量 三级优先，

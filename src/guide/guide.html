@@ -149,16 +149,18 @@
           </div>
           <!-- 第445次：原第401次「本地后端地址」填空行删除（backendBaseUrl 键、
                guide.js 存取、SW 端口扫描一并裁撤，backend 组形制统一） -->
+          <!-- 第568次：两提示词出厂模板加长（第563/567次），单行 input 放不下——
+               改 textarea：label 在上占满行，3 行起步、纵向可拖高（guide.css .field textarea） -->
           <div class="field-row tight">
-            <div class="field inline" style="flex:1 1 480px;">
+            <div class="field" style="flex:1 1 480px;">
               <label for="chatWordPrompt" data-key="fieldChatWordPrompt">单词类查询提示词（{} = 选中文本，{lang} = 释义语言）</label>
-              <input id="chatWordPrompt" type="text" style="flex:1 1 200px; min-width:200px;">
+              <textarea id="chatWordPrompt" rows="3" style="width:100%; resize:vertical;"></textarea>
             </div>
           </div>
           <div class="field-row tight">
-            <div class="field inline" style="flex:1 1 480px;">
+            <div class="field" style="flex:1 1 480px;">
               <label for="chatSidebarPrompt" data-key="fieldChatSidebarPrompt">侧栏提示词（{lang} = 释义语言；正文作为上下文另行发送）</label>
-              <input id="chatSidebarPrompt" type="text" style="flex:1 1 200px; min-width:200px;">
+              <textarea id="chatSidebarPrompt" rows="3" style="width:100%; resize:vertical;"></textarea>
             </div>
           </div>
           <!-- 2026-09-02 Background 行细项紧邻：标签与填空紧邻，不再推至行尾 -->

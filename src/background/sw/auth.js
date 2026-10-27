@@ -62,8 +62,9 @@ function clearAuth() {
 }
 
 // 站点按 manifest update_url 判定（与 draft-export/subs-share 同规则）——
-// 反代续签的落点：本地开发经 vite proxy 也指向线上 Worker，两态皆可达
-function siteUrl() {
+// 反代续签的落点：本地开发经 vite proxy 也指向线上 Worker，两态皆可达。
+// 导出供 wf.js 站点登录源（词频第三路）等云端取数模块复用，站点判定单一口径。
+export function siteUrl() {
   try {
     const mf = chrome.runtime.getManifest();
     return mf && mf.update_url ? 'https://vocabradar.com' : 'https://localhost:3001';

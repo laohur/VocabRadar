@@ -2,11 +2,13 @@
 // SW OCR（LLM 视觉识别）
 // 职责：图片入口统一缩放（handleOcrRecognize，全部 OCR 调用的收口）+
 //   LLM 视觉单次请求（llmVisionOnce，镜像 llmChatOnce 的 URL/头/解析）。
-// OCR 一律走 LLM 视觉（用户裁定"扩展不再保留这两个模型"；引擎 provider 默认 local-backend）。
+// OCR 一律走 LLM 视觉（用户裁定"扩展不再保留这两个模型"）；引擎 provider 默认
+//   official-backend（官网登录态鉴权，20261027 用户裁定"默认 ocr 用官方后端"）。
 // =============================================================================
 import { downscaleImageDataUrl } from '../../lib/image-downscale.js';
 import { _ts, log } from './log.js';
 import { resolveLlmEngineCfg } from './llm.js';
+import { getValidAccessToken } from './auth.js';
 // 引导类错误（API Key/Base URL/模型名未配置）随 UI 语言（20261014）；
 //   纯技术类错误按第二百三十九次裁定固定英文。
 import { t, initLang } from '../../lib/i18n.js';
@@ -41,7 +43,8 @@ export async function handleOcrByLlm(imageDataUrl, lang) {
   const out = await llmVisionOnce(cfg, OCR_LLM_PROMPT, imageDataUrl);
   if (!out.ok) {
     log('[VocabRadar][sw][' + _ts() + '] OCR(LLM) 失败: ' + out.error);
-    return { ok: false, error: 'OCR(LLM): ' + out.error };
+    // code 透传（如 not-connected）：content/guide 端按码分支提示，不靠字符串匹配
+    return { ok: false, error: 'OCR(LLM): ' + out.error, code: out.code };
   }
   return { ok: true, text: out.content };
 }
@@ -53,11 +56,19 @@ export async function handleOcrByLlm(imageDataUrl, lang) {
 async function llmVisionOnce(cfg, prompt, imageDataUrl) {
   // 引导类错误文案随 UI 语言：await initLang（幂等，已初始化即刻返回）
   await initLang();
-  // noKey 来源（本地后端）免 Key 强校验；鉴权头仅在有 Key 时携带
-  //   （镜像 llmTranscribeBlob），空 Bearer 不发给本地服务
+  // 鉴权分流：官方后端走官网登录态（getValidAccessToken 自动续签/清态），
+  //   免 API Key（20261027 用户裁定"官方后端靠登录不靠 key"）；noKey 来源
+  //   （本地后端）免 Key 强校验；其余来源无 Key 如实报错。
   const noKey = !!cfg.noKey;
+  const isOfficial = cfg.provider === 'official-backend';
   const isAnthropic = cfg.format === 'anthropic';
-  if (!noKey && !cfg.apiKey) return { ok: false, error: t('sw.noApiKey') };
+  let authToken = null;
+  if (isOfficial) {
+    authToken = await getValidAccessToken();
+    if (!authToken) return { ok: false, error: t('sw.ocrNotConnected'), code: 'not-connected' };
+  } else if (!noKey && !cfg.apiKey) {
+    return { ok: false, error: t('sw.noApiKey') };
+  }
   if (!cfg.baseUrl) return { ok: false, error: t('sw.noBaseUrl') };
   if (!cfg.model) return { ok: false, error: t('sw.noModel') };
 
@@ -69,7 +80,10 @@ async function llmVisionOnce(cfg, prompt, imageDataUrl) {
 
   const url = cfg.baseUrl + (isAnthropic ? '/v1/messages' : '/chat/completions');
   const headers = { 'Content-Type': 'application/json' };
-  if (isAnthropic) {
+  if (isOfficial) {
+    // 官方后端：官网登录态 Bearer（token 已在上方校验非空）
+    headers['Authorization'] = 'Bearer ' + authToken;
+  } else if (isAnthropic) {
     headers['x-api-key'] = cfg.apiKey;
     headers['anthropic-version'] = '2023-06-01';
     headers['anthropic-dangerous-direct-browser-access'] = 'true';
@@ -129,6 +143,13 @@ async function llmVisionOnce(cfg, prompt, imageDataUrl) {
     return { ok: true, content };
   } catch (e) {
     console.error('[VocabRadar][sw][' + _ts() + '] ocrLLM 异常:', e);
-    return { ok: false, error: String(e.message || e) };
+    // 网络层失败如实报因（e.cause 先例见 sw/backend.js handleFetchText）：
+    //   本地后端没启动时 Chrome 抛 TypeError("Failed to fetch")，不点名用户无从下手
+    const msg = String((e && e.message) || e);
+    const cause = e && e.cause ? String((e.cause && e.cause.message) || e.cause) : '';
+    if (cfg.provider === 'local-backend' && msg.includes('Failed to fetch')) {
+      return { ok: false, error: t('sw.ocrBackendDown', { reason: cause || 'connection refused' }) };
+    }
+    return { ok: false, error: cause ? msg + ' (' + cause + ')' : msg };
   }
 }

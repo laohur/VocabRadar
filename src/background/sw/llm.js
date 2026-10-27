@@ -15,15 +15,16 @@ import { t, initLang } from '../../lib/i18n.js';
 let _llmFreeCursor = 0;
 
 // ASR-LLM 与 OCR-LLM 各自独立的 LLM 配置（asrLlm* / ocrLlm* 键，与聊天
-//   llm* 配置分开、可单独下拉配置），provider 缺省 local-backend（河狸后端，免 key）。
+//   llm* 配置分开、可单独下拉配置）。storage 无值（从未打开引导页）时缺省：
+//   ASR 走本地后端（local-backend 免 key）；OCR 走官方后端（official-backend，
+//   官网登录态鉴权）——20261027 用户裁定"默认 ocr 用官方后端"。
 export async function resolveLlmEngineCfg(engine) {
   const keys = (engine === 'asr')
     ? { p: 'asrLlmProvider', b: 'asrLlmBaseUrl', m: 'asrLlmModel', k: 'asrLlmApiKey' }
     : { p: 'ocrLlmProvider', b: 'ocrLlmBaseUrl', m: 'ocrLlmModel', k: 'ocrLlmApiKey' };
   const res = await new Promise((resolve) => {
     chrome.storage.local.get(
-      // storage 无值（从未打开引导页）时默认走河狸后端（local-backend 免 key）
-      { [keys.p]: 'local-backend', [keys.b]: '', [keys.m]: '', [keys.k]: '' },
+      { [keys.p]: (engine === 'asr' ? 'local-backend' : 'official-backend'), [keys.b]: '', [keys.m]: '', [keys.k]: '' },
       (r) => resolve(r || {})
     );
   });

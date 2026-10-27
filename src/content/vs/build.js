@@ -26,7 +26,7 @@ export function buildSidebar() {
     ${buildTopbarHTML({ form: 'video' })}
     <!-- 语言设置浮层：点击🌐按钮展开，含三种语言下拉菜单 -->
     <!-- 参照 BeaverWord/web AppTopBar.vue 三种语言设计 -->
-    <!-- 界面语言(UI_LANGS 10种) + 目标语言(TRANSLATE_LANGS 42种) + 释义语言(42种) -->
+    <!-- 界面语言(UI_LANGS 10种) + 目标语言(TRANSLATE_LANGS 110种) + 释义语言(110种) -->
     <div class="beaver-lang-panel" id="beaver-lang-panel">
       <div class="beaver-lang-row">
         <label class="beaver-lang-label" data-i18n="popup.learnLang">Target Language</label>

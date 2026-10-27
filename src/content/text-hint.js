@@ -602,16 +602,6 @@ async function _hintBoot() {
       sendResponse({ ok: true });
       return true;
     });
-
-    // 监听 sidebar OCR 结果事件（同页面 content script 通信）：
-    //   'beaver-ocr-result' → showOcrResultPanel 显示结果面板（light DOM，
-    //   生词受文本提示注释，不自动消失）。
-    window.addEventListener('beaver-ocr-result', (e) => {
-      if (!_impl) return;
-      const detail = e.detail || {};
-      _impl.showOcrResultPanel(detail.text || '', _lastClickX, _lastClickY, detail.info || '')
-        .catch((e) => console.error('[VocabRadar][text-hint] OCR 结果面板加载失败', e));
-    });
   } catch (e) {
     console.error('[VocabRadar][text-hint] 加载失败', e);
   }

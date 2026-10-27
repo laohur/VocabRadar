@@ -10,13 +10,13 @@ Companion site: <https://vocabradar.com>
 
 VocabRadar is a browser extension for Chrome / Edge / Firefox. It scans what you
 are watching or reading, flags the words you probably don't know — judged by
-word frequency — and shows their meanings on the spot. **42 languages**
+word frequency — and shows their meanings on the spot. **110 languages**
 supported. No sign-up, no account; lookups run locally and your browsing is
 never uploaded.
 
-Supported languages (42):
+Supported languages (110):
 
-`ar bg bn ca cs da de el en es fa fi fil fr he hi hu id is it ja ko lt lv mk ms nb nl pl pt ro ru sh sk sl sv ta tr uk ur vi zh`
+`af am ar arz as ast az azb ba be bew bg bn bo bs ca ce ceb ckb cs cy da de dv el en eo es et eu fa fi fil fr fy ga gl gmh gu ha he hi hr hu hy id ig is it ja ka kk km kn ko ku ky la lb lo lt lv mg mk ml mn mr ms mt my nb ne new nl nn no nrm oc or pa pl pnb ps pt ro ru sd sh si sk sl so sq sr sv sw ta te tg th tr tt ug uk ur uz vi war yi zh`
 
 ## What it can do
 
@@ -74,9 +74,9 @@ the VocabRadar mini program (Chinese UI):
 ## Data sources
 
 - **Word-frequency data** — from the Hugging Face dataset
-  [`vocabradar/wordfreq`](https://huggingface.co/datasets/vocabradar/wordfreq):
-  cleaned frequency lists for the 42 languages above, derived from
-  [wordfreq](https://github.com/rspeer/wordfreq) 3.0.2 (MIT). The extension
+  [`vocabradar/VocabFreq`](https://huggingface.co/datasets/vocabradar/VocabFreq):
+  self-built frequency lists for the languages above (built from FineWeb2-HQ+,
+  UltraFineWeb-L3 and Wikipedia, 700 centibel bands). The extension
   downloads only the language you need, on demand, and verifies integrity
   (SHA-256) before use.
 - **English word lists & translations** — bundled with the extension.

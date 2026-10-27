@@ -161,9 +161,10 @@ function injectOverlayStyles() {
   line-height: 1.5;
   display: none;
 }
-/* 字幕正文容器 */
+/* 字幕正文容器（pre-wrap 保 OCR 条目内的换行，同侧栏 .beaver-sub-content 口径） */
 #beaver-subtitle-overlay .beaver-overlay-subtitle {
   word-break: break-word;
+  white-space: pre-wrap;
 }
 /* 字幕正文生词高亮（首次/后续配色复用 CSS 变量）。
  * 词块 deco 装饰线由 applyWordColorVars 按生词条目（textStyle）派生为三个变量

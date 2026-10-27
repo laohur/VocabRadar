@@ -20,7 +20,8 @@ import { pickCleanShortTrans, splitTransLines } from '../../lib/dict-clean.js';
 import { getPhonetic } from '../../lib/phonetics.js';
 import { t } from '../../lib/i18n.js';
 import { thState, PANEL_ID, formatStage, isContextValid, speak } from './core.js';
-import { renderLemmaInto } from './card-build.js';
+// 结构自愈需要整卡重建（2026-10-27 右键报障，见 renderQueryCard 内守卫注释）
+import { renderLemmaInto, buildPanelHTML, buildCardInnerHTML } from './card-build.js';
 import { fillRelated } from './card-related.js';
 import { bindMarkButtons } from './card-mark.js';
 // 卡内 chat 按钮——对话面板唯一实现在 lib/chat.js（lib 层，无循环）
@@ -118,6 +119,26 @@ export async function renderQueryCard(root, trimmed, onUpdate, isAlive, opts) {
   const refresh = (typeof onUpdate === 'function') ? onUpdate : () => {};
   const alive = (typeof isAlive === 'function') ? isAlive : () => true;
   const q = (sel) => root.querySelector(sel);
+
+  // === 结构自愈守卫（2026-10-27 右键报障"Cannot set properties of null (setting
+  //   'textContent')"，卡片拉不起来）===
+  //   本函数硬性假设 root 含 buildCardInnerHTML() 骨架（.word/.phonetic-row/.stage/
+  //   .trans-row/.tags-row 五处无守卫直写）。用户环境出现过骨架缺失——扩展多次重载后
+  //   旧页面模块注册表新旧混居、或宿主页面/其他扩展动过注入 DOM 时，thState.panel 的
+  //   影子内容可能与运行代码错位，缺失即整卡渲染中断（"拉不起来"且只有一行难懂的
+  //   TypeError）。处置：渲染前探测五处骨架，缺失则如实 console.error 列明缺哪些，
+  //   并**就地重建**（面板/悬浮有 .panel-header 用整卡 buildPanelHTML；侧栏内嵌卡用
+  //   buildCardInnerHTML）后继续渲染——运行代码自建的结构必与自身假设一致，自愈即根治。
+  const _missing = ['.word', '.phonetic-row', '.stage', '.trans-row', '.tags-row']
+    .filter((sel) => !q(sel));
+  if (_missing.length) {
+    console.error('[VocabRadar][text-hint] 查询卡结构不完整（缺失: ' + _missing.join(', ') + '），就地重建 root 后继续渲染');
+    // 重建按 root 身份取整卡/卡体：面板与悬浮的影子 root 带 .panel-header + 样式表，
+    //   影子为空时选择器判不出，须按 thState 身份判定——否则右键面板会重建成无样式卡体
+    const _shellRoot = root === (thState.panel && thState.panel.shadowRoot)
+      || root === (thState.tooltip && thState.tooltip.shadowRoot);
+    root.innerHTML = (_shellRoot || q('.panel-header')) ? buildPanelHTML() : buildCardInnerHTML();
+  }
 
   let word = trimmed;
   // panel-header 固定显示品牌（左）+ 词阶（右）。

@@ -147,6 +147,12 @@ let _userPickedASR = false;
 //   setTracks 重建下拉时优先恢复选中（用户手动选轨最高优先，不被默认链覆盖）。
 //   仅本页会话内存有效（与 _userPickedASR 同口径）；换集/重建/改语言重拉时重置。
 let _userPickedTrack = null;
+// OCR 在轨道下拉框中的索引（-1=未添加；与 _asrTrackIndex 同口径，经 get/setOcrTrackIndex 接驳）。
+//   OCR 是与 ASR 并列的独立伪轨（tracks.js 常驻追加），选中时展示 ocr_store 的段。
+let _ocrTrackIndex = -1;
+// 用户手动选择 OCR 轨道标记：与 _userPickedASR 同口径——setTracks 重建下拉时
+//   保持 OCR 选中态不被覆盖；选其他轨/换集/重建/destroy 时重置 false。
+let _userPickedOCR = false;
 
 // config 参数
 let _cfg = {
@@ -184,6 +190,10 @@ export function getUserPickedASR() { return _userPickedASR; }
 export function setUserPickedASR(v) { _userPickedASR = !!v; }
 export function getUserPickedTrack() { return _userPickedTrack; }
 export function setUserPickedTrack(v) { _userPickedTrack = v || null; }
+export function getOcrTrackIndex() { return _ocrTrackIndex; }
+export function setOcrTrackIndex(v) { _ocrTrackIndex = (typeof v === 'number' && isFinite(v)) ? v : -1; }
+export function getUserPickedOCR() { return _userPickedOCR; }
+export function setUserPickedOCR(v) { _userPickedOCR = !!v; }
 export function getAsrTrackIndex() { return _asrTrackIndex; }
 export function setAsrTrackIndex(v) { _asrTrackIndex = v; }
 // 状态接驳（vs/bind-events.js 经门面 getter/setter 读写）
@@ -378,6 +388,7 @@ export async function startSidebar(video, options = {}) {
     resetRenderState();
     _asrCacheLoaded = false;
     _userPickedASR = false;  // 换集重置用户 ASR 选中标记（stopASRInternal 已清，此处双保险）
+    _userPickedOCR = false;  // 换集重置用户 OCR 选中标记
     _userPickedTrack = null;  // 换集重置用户手选轨道（新集走四层链默认）
     setNoSubAutoCollapseDone(false);  // 换集重置自动折叠配额
     // 换集时立即清空生词表 DOM，与字幕区 showLoading 同步重置——否则若新字幕
@@ -426,6 +437,7 @@ export async function startSidebar(video, options = {}) {
     resetRenderState();
     _asrCacheLoaded = false;
     _userPickedASR = false;  // 重建重置用户 ASR 选中标记
+    _userPickedOCR = false;  // 重建重置用户 OCR 选中标记
     _userPickedTrack = null;  // 重建重置用户手选轨道
   }
 
@@ -787,6 +799,7 @@ export function destroySidebar() {
   _asrCacheLoaded = false;
   _asrActive = false;
   _userPickedASR = false;  // 同步重置用户 ASR 选中标记
+  _userPickedOCR = false;  // 同步重置用户 OCR 选中标记
   _userPickedTrack = null;  // 同步重置用户手选轨道
 }
 

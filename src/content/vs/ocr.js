@@ -2,8 +2,7 @@
 // vs/ocr.js —— OCR 截帧识别子模块
 // -----------------------------------------------------------------------------
 // 职责：OCR 按钮点击处理（canvas 截取当前视频帧 → OCR_RECOGNIZE 消息经 SW 转发到
-//       offscreen Tesseract.js → 结果以 'beaver-ocr-result' 自定义事件发给
-//       text-hint.js 显示）。
+//       LLM 视觉识别 → 结果以 {start,text} 条目写入字幕轨道 appendASRSubtitle）。
 // 关系：依赖 ./dom-utils.js（flashButton）；因需使用门面的 toast/getActiveVideo/
 //       getRoot/getVideoLearnLang（读写 _cfg/_video/_root/_videoLearnLang），
 //       对门面构成受控循环 import——本模块顶层仅初始化自身 let 状态与函数声明，
@@ -12,21 +11,24 @@
 //       原 L2918 `_videoLearnLang` 改走 getVideoLearnLang()。
 // =============================================================================
 
-import { toast, getActiveVideo, getRoot, getVideoLearnLang } from '../video-sidebar.js';
-import { flashButton } from './dom-utils.js';
+import { toast, getActiveVideo, getRoot, getVideoLearnLang, isASRActive } from '../video-sidebar.js';
+import { appendASRSubtitle } from './subtitle-renderer.js';
+import { isOCRTrackSelected, selectOCRTrack } from './tracks.js';
+import { saveOCRSegment } from './ocr-store.js';
+import { flashButton, makeVideoKey } from './dom-utils.js';
 // OCR 用户可见提示走 i18n（用户："英文哪来的中文提示？"）
 import { t } from '../../lib/i18n.js';
 
 let _ocrRunning = false;     // OCR 进行中
 
 // === OCR 按钮：点击识别当前视频帧 ===
-// 用户要求"ocr改为之前，点击识别当前帧，受文本提示影响"：上传图片识别在很多
-//   视频上无法右键使用，回归点击截取当前视频帧（canvas.drawImage(video)），
-//   结果通过自定义事件发送到 text-hint.js 显示在 OCR 结果面板（不自动消失，
-//   生词受文本提示注释）。
-//   流程：canvas 截帧 → dataURL → OCR_RECOGNIZE → SW → offscreen Tesseract.js → 返回
-//   结果通过 window.dispatchEvent 发送 'beaver-ocr-result' 事件，text-hint.js 监听
-//   并调用 showOcrResultPanel 显示（light DOM 面板，生词被 processTextNode 注释）。
+// 用户裁定"OCR 内容当作字幕而不是孤立窗口"+"OCR 是跟 ASR 并列的字幕轨道"：
+//   识别结果不弹孤立面板（#beaver-ocr-panel 已拆除），改入 OCR 独立字幕轨道——
+//   段先存 ocr_store（ocr_cache_${videoKey}，唯一真相源），再按当前轨分流上屏：
+//   已在 OCR 轨 → appendASRSubtitle 实时上屏（排序/注释/高亮/overlay 全链复用）；
+//   ASR 识别中 → 不打断仅存轨提示；其余轨道 → 自动切到 OCR 轨全量展示。
+//   时间戳取截帧瞬间 currentTime（等待识别期间播放会继续），end=start+5。
+//   流程：canvas 截帧 → dataURL → OCR_RECOGNIZE → SW → LLM 视觉识别 → 返回。
 export async function onOcrClick() {
   if (_ocrRunning) {
     console.log('[VocabRadar][video-sidebar] OCR 跳过: 正在运行中');
@@ -55,6 +57,8 @@ export async function onOcrClick() {
     canvas.height = video.videoHeight;
     const ctx = canvas.getContext('2d');
     ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+    // 时间戳取截帧瞬间的 currentTime：等待识别期间播放会继续，不能用响应时刻
+    const ocrTime = video.currentTime;
     const dataUrl = canvas.toDataURL('image/png');
     console.log('[VocabRadar][video-sidebar] OCR 截帧完成: dataUrl 长度=' + dataUrl.length + ' (' + ((dataUrl.length / 1024).toFixed(0)) + 'KB)');
 
@@ -76,17 +80,31 @@ export async function onOcrClick() {
     const result = resp.text || '';
     console.log('[VocabRadar][video-sidebar] OCR 响应: 耗时=' + _ocrCost + 's, 结果长度=' + result.length + ', 前50字=' + JSON.stringify(result.slice(0, 50)));
 
-    // 通过自定义事件发送到 text-hint.js（同页面 content script 通信）
-    // text-hint.js 监听 'beaver-ocr-result' 事件，调用 showOcrResultPanel 显示结果
-    // 结果面板为 light DOM，生词受文本提示注释（高亮+侧邻注释），不自动消失
-    window.dispatchEvent(new CustomEvent('beaver-ocr-result', {
-      detail: {
-        text: result,
-        info: result.trim() ? '' : t('ocr.noText')
-      }
-    }));
     if (!result.trim()) {
       console.log('[VocabRadar][video-sidebar] OCR 未识别到文字（结果为空）');
+      toast(t('ocr.noText'));
+      return;
+    }
+
+    // OCR 独立字幕轨道写入（见文件头注释）：段入 ocr_store 后按当前轨分流
+    const seg = { start: ocrTime, end: ocrTime + 5, text: result };
+    try {
+      await saveOCRSegment(makeVideoKey(), seg);
+    } catch (e) {
+      console.warn('[VocabRadar][video-sidebar] OCR 段存轨失败:', e);
+    }
+    if (isOCRTrackSelected()) {
+      // ① 已在 OCR 轨：实时上屏（fire-and-forget，同 asr-flow.js onText 口径）
+      appendASRSubtitle(seg).catch((e) =>
+        console.warn('[VocabRadar][video-sidebar] OCR 字幕写入轨道失败:', e));
+    } else if (isASRActive()) {
+      // ② ASR 识别中：不打断当前 ASR 轨显示，仅存轨提示
+      toast(t('ocr.storedTrack'));
+    } else {
+      // ③ 其余轨道：自动切到 OCR 轨全量展示（点 📷 即见结果）
+      try { await selectOCRTrack(); } catch (e) {
+        console.warn('[VocabRadar][video-sidebar] OCR 自动切轨失败:', e);
+      }
     }
   } catch (e) {
     const _ocrCost = ((Date.now() - _ocrStart) / 1000).toFixed(2);

@@ -1,4 +1,4 @@
-// 文本提示 · 面板模块（右键查词面板 + OCR 结果面板）
+// 文本提示 · 面板模块（右键查词面板）
 //
 // 本文件职责（第561次拆分后为门面 + 面板宿主）：
 //   1. 门面 re-export：卡片构建（card-build.js）、查询渲染核心（query-card.js）、
@@ -6,32 +6,26 @@
 //      import 路径保持 './panel.js' 不变，符号名不变。
 //   2. 右键查词面板（#beaver-context-panel，Shadow DOM）：创建、显示/隐藏、
 //      定位（两遍法 + 动态 max-height）
-//   3. OCR 结果面板（#beaver-ocr-panel，light DOM 便于 TreeWalker 扫描）：
-//      创建、显示/隐藏、定位、视频截帧 OCR 入口
+//   （原第3项 OCR 结果面板 #beaver-ocr-panel 已拆除：OCR 结果改写入字幕轨道，
+//     见 vs/ocr.js → appendASRSubtitle）
 //
 // 查询卡片内容渲染走 query-card.js renderQueryCard；卡片结构/样式/词形同族组
 //   走 card-build.js；🏁/✓ 标记按钮走 card-mark.js；相关词汇行走 card-related.js。
 //
 // 共享状态一律取自 core.js 的 thState（唯一属主），本文件不声明任何同名变量。
-// 模块级副作用：ensurePanel 的 document mousedown(capture)/keydown、
-//   ensureOcrPanel 的 document mousedown(capture)/keydown——均由 `if (_xxx) return`
-//   幂等守卫保证只注册一次。
+// 模块级副作用：ensurePanel 的 document mousedown(capture)/keydown——
+//   由 `if (_xxx) return` 幂等守卫保证只注册一次。
 //
 // 跨模块调用（受控循环 import，两端均为函数声明，顶层不调用）：
 //   → tooltip.js: hideTooltip（ensurePanel 的 mousedown 同时管 tooltip 与 panel）
-//   → scan.js: processTextNode（OCR 文本注释生词）
 //   ← tooltip.js / ws/ui.js / vs/actions.js（消费门面导出）
 import { primeTranslator } from '../../lib/translator.js';
-import { t } from '../../lib/i18n.js';
 import {
-  thState, PANEL_ID, OCR_PANEL_ID, HIGHLIGHT_CLASS, PROCESSED_ATTR
+  thState, PANEL_ID, HIGHLIGHT_CLASS
 } from './core.js';
 import { hideTooltip } from './tooltip.js';
-import { processTextNode } from './scan.js';
 // 右键面板点击外部关闭需识别 Chat 面板（独立 fixed 浮层）
 import { CHAT_PANEL_ID } from '../../lib/chat.js';
-// OCR 面板标题行品牌小图标（唯一定义在 sidebar-topbar.js）
-import { brandIconSVG } from '../../lib/sidebar-topbar.js';
 // 查询渲染核心与选段清洗（extractCleanSelText 供 showContextPanel 过滤插入节点，
 //   setLastQueryRange 保存 show in page 插入锚点——query-card.js 私有状态唯一写入口）
 import { renderQueryCard, extractCleanSelText, setLastQueryRange } from './query-card.js';
@@ -220,207 +214,3 @@ export function hidePanel() {
   if (thState.panel) thState.panel.style.display = 'none';
 }
 
-// === OCR 结果面板 ===
-// 右键图片/视频 OCR 识别结果展示，light DOM（非 Shadow），文本节点可被 TreeWalker 扫描注释生词。
-// 用户要求"识别结果受文本提示，不自动消失"——OCR 文本经过生词高亮+侧邻注释；
-//   仅关闭按钮/Escape/点击外部关闭，onScrollHide 不隐藏 thState.ocrPanel。
-
-/**
- * 创建 OCR 结果面板（light DOM）
- * 结构：header(标题+关闭按钮) + content(.beaver-ocr-text 文本节点)
- * 文本节点会被 processTextNode 注释生词（手动调 scanSubtree）
- */
-export function ensureOcrPanel() {
-  if (thState.ocrPanel) return;
-  thState.ocrPanel = document.createElement('div');
-  thState.ocrPanel.id = OCR_PANEL_ID;
-  thState.ocrPanel.style.cssText = `
-    position: fixed !important;
-    z-index: 2147483647 !important;
-    background: #fbfdf9 !important;
-    color: #1a1f1a !important;
-    border-radius: 16px !important;
-    box-shadow: 0 4px 12px rgba(26,31,26,.12), 0 1px 3px rgba(26,31,26,.08) !important;
-    padding: 0 !important;
-    font-family: -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif !important;
-    font-size: 14px !important;
-    line-height: 1.6 !important;
-    min-width: 300px !important;
-    max-width: 480px !important;
-    display: none !important;
-    overflow: hidden !important;
-    flex-direction: column !important;
-  `;
-  thState.ocrPanel.innerHTML = `
-    <div style="display:flex;justify-content:space-between;align-items:center;padding:10px 14px;background:#f5f8f3;border-radius:16px 16px 0 0;flex-shrink:0;">
-      <span style="font-size:13px;color:#424942;display:inline-flex;align-items:center;gap:6px;">${brandIconSVG()}<span>${t('ocr.title')}</span></span>
-      <button class="beaver-ocr-close" style="background:none;border:0;cursor:pointer;font-size:18px;color:#424942;padding:0 4px;">✕</button>
-    </div>
-    <div class="beaver-ocr-text" style="padding:12px 14px;overflow-y:auto;flex:1 1 auto;white-space:pre-wrap;word-break:break-word;"></div>
-  `;
-  document.documentElement.appendChild(thState.ocrPanel);
-  // 关闭按钮
-  thState.ocrPanel.querySelector('.beaver-ocr-close').addEventListener('click', () => hideOcrPanel());
-  // 点击外部关闭（mousedown capture 阶段，与 thState.panel 一致）
-  document.addEventListener('mousedown', (e) => {
-    if (thState.ocrPanel && thState.ocrPanel.style.display !== 'none') {
-      const path = e.composedPath ? e.composedPath() : [e.target];
-      if (path.indexOf(thState.ocrPanel) === -1) hideOcrPanel();
-    }
-  }, true);
-  // Escape 关闭
-  document.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape' && thState.ocrPanel && thState.ocrPanel.style.display !== 'none') hideOcrPanel();
-  });
-}
-
-export function hideOcrPanel() {
-  if (thState.ocrPanel) thState.ocrPanel.style.display = 'none';
-}
-
-/**
- * 显示 OCR 结果面板
- * @param {string} text OCR 识别文本
- * @param {number} clientX 右键点击 X（视口坐标）
- * @param {number} clientY 右键点击 Y
- * @param {string} info 提示信息（如"未识别到文字"，text 为空时显示）
- * 识别文本放入 .beaver-ocr-text 文本节点，手动遍历调 processTextNode
- *   注释生词（侧邻注释+高亮）。不自动消失，关闭按钮/Escape/点击外部关闭。
- */
-export function showOcrResultPanel(text, clientX, clientY, info = '') {
-  // 手势入口 prime 内置翻译（同 showContextPanel）：OCR 面板由侧栏按钮点击触发，
-  //   按钮在手势上下文中，距点击仍在 activation 窗口内；force=true 同右键口径。
-  primeTranslator({ force: true });
-  ensureOcrPanel();
-  const textEl = thState.ocrPanel.querySelector('.beaver-ocr-text');
-  // 清空旧内容（含已注释的 .beaver-word span）
-  textEl.innerHTML = '';
-  if (!text || !text.trim()) {
-    textEl.textContent = info || t('ocr.noText');
-    textEl.style.color = '#72797a';
-    textEl.style.fontStyle = 'italic';
-  } else {
-    textEl.textContent = text.trim();
-    textEl.style.color = '';
-    textEl.style.fontStyle = '';
-    // 手动调 processTextNode 注释生词（侧邻注释+高亮）。scanSubtree 跳过
-    //   #beaver-ocr-panel（防递归），这里直接对 textEl 逐文本节点处理。
-    //   文本提示未启用（thState.enabled=false）则不注释。
-    if (thState.enabled) {
-      // 标记 textEl 未处理，让 TreeWalker 接受
-      textEl.removeAttribute(PROCESSED_ATTR);
-      // 遍历 textEl 的文本节点并注释
-      const walker = document.createTreeWalker(textEl, NodeFilter.SHOW_TEXT);
-      const nodes = [];
-      while (walker.nextNode()) nodes.push(walker.currentNode);
-      // processTextNode 是 async，串行处理
-      (async () => {
-        for (const tn of nodes) {
-          if (!thState.enabled) break;
-          if (!tn.isConnected) continue;
-          await processTextNode(tn);
-        }
-        // 注释生词后面板高度变化，重新定位避免溢出
-        if (clientX !== null && clientX !== undefined) {
-          positionOcrPanel(clientX, clientY);
-        }
-      })();
-    }
-  }
-  thState.ocrPanel.style.display = 'flex';
-  positionOcrPanel(clientX, clientY);
-}
-
-// 与 positionPanel 同步采用方向定位 + 动态 max-height。
-//   OCR 文本经异步注释生词后面板高度变化，需重新定位。
-//   比较点击点上下空间：上方大→向上展开（底锚定），下方大→向下展开（顶锚定）。
-export function positionOcrPanel(clientX, clientY) {
-  if (!thState.ocrPanel) return;
-  const MARGIN = 16;
-  const vw = window.innerWidth;
-  const vh = window.innerHeight;
-  let left = (typeof clientX === 'number') ? clientX : MARGIN;
-  let top = (typeof clientY === 'number') ? clientY : MARGIN;
-
-  // 水平：测宽度后右侧溢出翻转到左侧 + 兜底
-  let rect = thState.ocrPanel.getBoundingClientRect();
-  if (left + rect.width > vw - MARGIN) left = left - rect.width;
-  left = Math.max(MARGIN, Math.min(left, vw - rect.width - MARGIN));
-
-  // 垂直方向：比较上下空间，空间大的一侧展开
-  const spaceBelow = vh - top - MARGIN;
-  const spaceAbove = top - MARGIN;
-  const downward = spaceBelow >= spaceAbove;
-  const maxH = Math.max(120, downward ? spaceBelow : spaceAbove);
-
-  // 第一遍：设 max-height 触发重排，临时定位避免闪烁
-  thState.ocrPanel.style.maxHeight = maxH + 'px';
-  thState.ocrPanel.style.left = left + 'px';
-  thState.ocrPanel.style.top = (downward ? top : Math.max(MARGIN, top - maxH)) + 'px';
-
-  // 第二遍：重测受 max-height 约束后的实际高度，锚定到点击点
-  rect = thState.ocrPanel.getBoundingClientRect();
-  if (downward) {
-    top = Math.min(top, vh - rect.height - MARGIN);
-    if (top < MARGIN) top = MARGIN;
-  } else {
-    top = top - rect.height;
-    if (top < MARGIN) top = MARGIN;
-  }
-  thState.ocrPanel.style.top = top + 'px';
-}
-
-/**
- * 右键视频 OCR：截取右键位置 video 当前帧 → OCR → 显示结果面板
- * @param {number} clientX 右键点击 X（用于定位 video 和面板）
- * @param {number} clientY 右键点击 Y
- * 用 elementFromPoint 找右键位置的 video 元素，
- *   找不到回退页面可见 video。截帧后走 OCR_RECOGNIZE 流程；OCR 语言随 learnLanguage
- *   （zh→chi_sim，其余→eng，见 service-worker）。
- */
-export async function ocrVideoFrame(clientX, clientY) {
-  // 找右键位置的 video 元素
-  let video = null;
-  if (typeof clientX === 'number' && typeof clientY === 'number') {
-    const el = document.elementFromPoint(clientX, clientY);
-    if (el && el.tagName === 'VIDEO') video = el;
-  }
-  // 回退：页面中最大的可见 video
-  if (!video) {
-    const videos = Array.from(document.querySelectorAll('video'));
-    video = videos.find((v) => v.videoWidth > 0 && v.videoHeight > 0);
-  }
-  if (!video) {
-    showOcrResultPanel('', clientX, clientY, t('ocr.noVideo'));
-    return;
-  }
-  // 显示加载提示
-  showOcrResultPanel('', clientX, clientY, t('ocr.recognizing'));
-  try {
-    const canvas = document.createElement('canvas');
-    canvas.width = video.videoWidth;
-    canvas.height = video.videoHeight;
-    const ctx = canvas.getContext('2d');
-    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-    const dataUrl = canvas.toDataURL('image/png');
-    // OCR 语言随 learnLanguage（zh→chi_sim，其余→eng）
-    const ocrLang = await new Promise((resolve) => {
-      chrome.storage.local.get({ learnLanguage: 'en' }, (res) => resolve(res.learnLanguage || 'en'));
-    });
-    const resp = await chrome.runtime.sendMessage({
-      type: 'OCR_RECOGNIZE',
-      imageDataUrl: dataUrl,
-      lang: ocrLang
-    });
-    if (!resp || !resp.ok) {
-      const errMsg = resp && resp.error ? resp.error : t('ocr.unknownErr');
-      showOcrResultPanel('', clientX, clientY, t('ocr.failPrefix') + errMsg);
-      return;
-    }
-    const result = resp.text || '';
-    showOcrResultPanel(result, clientX, clientY, result.trim() ? '' : t('ocr.noText'));
-  } catch (e) {
-    const errMsg = String(e && e.message ? e.message : e);
-    showOcrResultPanel('', clientX, clientY, t('ocr.failPrefix') + errMsg);
-  }
-}

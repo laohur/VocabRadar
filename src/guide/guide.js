@@ -410,7 +410,7 @@ async function loadSettings() {
     asrLlmModel: 'whisper-1',   // LLM 转写模型（用户自管，有错就报；本地后端忽略此值）
     asrLlmBaseUrl: '',   // 转写 API 接口地址（后台 resolveLlmEngineCfg('asr') 消费）
     asrLlmApiKey: '',    // 转写 API Key
-    ocrLlmProvider: 'openai',   // OCR 视觉识别 API 来源（provider id；本地后端免 Key）
+    ocrLlmProvider: 'official-backend',   // OCR 视觉识别 API 来源（官方后端，登录鉴权——20261027 用户裁定，与 SW 缺省对齐）
     ocrLlmBaseUrl: '',
     ocrLlmModel: '',
     ocrLlmApiKey: '',
@@ -501,7 +501,7 @@ function renderAll(res) {
   // OCR API 细项回填（provider id 下拉裁 free 组；地址/模型 placeholder 随来源给预置值）
   const ocrAllowed = ['backend', 'openai', 'anthropic'];
   const _ocrP = getProvider(res.ocrLlmProvider);
-  const _ocrId = ocrAllowed.includes(_ocrP.group || _ocrP.format) ? _ocrP.id : 'openai';
+  const _ocrId = ocrAllowed.includes(_ocrP.group || _ocrP.format) ? _ocrP.id : 'official-backend';
   renderEngineProviderSelect($('ocrLlmProvider'), _ocrId, ocrAllowed);
   applyEngineProviderHints('ocr', $('ocrLlmProvider').value);
   if (_ocrId !== (res.ocrLlmProvider || '')) chrome.storage.local.set({ ocrLlmProvider: _ocrId });
@@ -654,7 +654,7 @@ function applyLlmProviderHints(id) {
   const key = $('llmApiKey');
   if (base) base.placeholder = p.baseUrl || 'https://your-endpoint/v1';
   if (model) model.placeholder = p.model || 'model-name';
-  if (key) key.placeholder = (p.noKey || p.format === 'free') ? 'no need' : 'sk-...';
+  if (key) key.placeholder = (p.noKey || p.format === 'free') ? 'no need' : (p.authLogin ? 'login' : 'sk-...');
 }
 
 // 服务连通探测：检测单位是服务（当前选中的 provider），不是模型。backend 组探
@@ -721,7 +721,22 @@ async function detectService(kind) {
   const apiKey = String(($(ids.key) && $(ids.key).value) || '').trim();
   const isAnthropic = (p.format === 'anthropic');
   let res;
-  if ((p.group || '') === 'backend' || p.format === 'backend') {
+  if (p.authLogin) {
+    // 官方后端（登录鉴权）：探测扩展登录态而非 HTTP 端点——token 续签/清态
+    //   全在 SW（sw/auth.js），登录在主站完成后经 auth-handoff 回传
+    const ping = await new Promise((resolve) => {
+      try {
+        chrome.runtime.sendMessage({ type: 'vocabradar:auth-ping' }, (r) => {
+          const err = chrome.runtime.lastError;   // 必须读
+          resolve(err ? { ok: false, error: err.message } : (r || { ok: false, error: 'no response' }));
+        });
+      } catch (e) {
+        resolve({ ok: false, error: String((e && e.message) || e) });
+      }
+    });
+    const connected = !!(ping && ping.ok && ping.connected);
+    res = { ok: connected, error: connected ? undefined : 'not connected', ms: 0 };
+  } else if ((p.group || '') === 'backend' || p.format === 'backend') {
     // backend 组探健康端点（baseUrl 去 /v1）
     res = await probeServiceUrl(base.replace(/\/v1$/i, '') + '/api/health');
   } else if (!p.noKey && p.format !== 'free' && !apiKey) {
@@ -750,7 +765,7 @@ function applyEngineProviderHints(prefix, id, modelPlaceholder) {
   const key = $(prefix + 'LlmApiKey');
   if (base) base.placeholder = p.baseUrl || 'https://your-endpoint/v1';
   if (model) model.placeholder = modelPlaceholder || p.model || 'model-name';
-  if (key) key.placeholder = p.noKey ? 'no need' : 'sk-...';
+  if (key) key.placeholder = p.noKey ? 'no need' : (p.authLogin ? 'login' : 'sk-...');
 }
 
 
